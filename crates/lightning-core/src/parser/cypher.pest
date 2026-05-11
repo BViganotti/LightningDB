@@ -1,0 +1,116 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+
+query = { SOI ~ EXPLAIN_OP? ~ union_query ~ (";" ~ union_query)* ~ EOI }
+EXPLAIN_OP = { ^"EXPLAIN" | ^"PROFILE" }
+union_query = { statement ~ (UNION_OP ~ statement)* }
+UNION_OP = { ^"UNION" ~ ^"ALL"? }
+statement = { transaction_statement | ddl_statement | checkpoint_statement | ( (match_clause | optional_match_clause | with_clause | where_clause | unwind_clause | create_clause | merge_clause | delete_clause | set_clause | call_clause)+ ~ return_clause? | return_clause ) }
+transaction_statement = { begin_tx | commit_tx | rollback_tx }
+checkpoint_statement = { ^"CHECKPOINT" }
+begin_tx = { ^"BEGIN" ~ ^"TRANSACTION"? }
+commit_tx = { ^"COMMIT" ~ ^"TRANSACTION"? }
+rollback_tx = { ^"ROLLBACK" ~ ^"TRANSACTION"? }
+ddl_statement = _{ create_node_table | create_rel_table | drop_table | copy_statement }
+create_node_table = { ^"CREATE" ~ ^"NODE" ~ ^"TABLE" ~ table_name ~ "(" ~ column_def ~ ("," ~ column_def)* ~ ("," ~ primary_key_def)? ~ ")" }
+create_rel_table = { ^"CREATE" ~ ^"REL" ~ ^"TABLE" ~ table_name ~ "(" ~ ^"FROM" ~ table_name ~ ^"TO" ~ table_name ~ ("," ~ column_def)* ~ ")" }
+drop_table = { ^"DROP" ~ ^"TABLE" ~ table_name }
+copy_statement = { ^"COPY" ~ table_name ~ (copy_from | copy_to) }
+copy_from = { ^"FROM" ~ string_literal ~ ( "(" ~ copy_option ~ ("," ~ copy_option)* ~ ")" )? }
+copy_to = { ^"TO" ~ string_literal ~ ( "(" ~ copy_option ~ ("," ~ copy_option)* ~ ")" )? }
+copy_option = { variable ~ "=" ~ literal }
+column_def = { variable ~ data_type }
+data_type = { ^"INT64" | ^"INT32" | ^"DOUBLE" | ^"FLOAT" | ^"STRING" | ^"BOOL" | ^"DATE" | ^"TIMESTAMP" | list_type | struct_type }
+list_type = { ^"LIST" ~ "(" ~ data_type ~ ")" }
+struct_type = { ^"STRUCT" ~ "(" ~ variable ~ data_type ~ ("," ~ variable ~ data_type)* ~ ")" }
+primary_key_def = { ^"PRIMARY" ~ ^"KEY" ~ "(" ~ variable ~ ")" }
+table_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+clause = _{ match_clause | optional_match_clause | with_clause | unwind_clause | create_clause | merge_clause | delete_clause | set_clause | call_clause | return_clause }
+
+optional_match_clause = { ^"OPTIONAL" ~ ^"MATCH" ~ pattern ~ ("," ~ pattern)* }
+with_clause = { ^"WITH" ~ projection_items ~ where_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+
+unwind_clause = { ^"UNWIND" ~ expression ~ AS_OP ~ variable }
+
+create_clause = { ^"CREATE" ~ pattern }
+merge_clause = { ^"MERGE" ~ pattern ~ (on_create_clause | on_match_clause)* }
+on_create_clause = { ^"ON" ~ ^"CREATE" ~ ^"SET" ~ property_assignment ~ ("," ~ property_assignment)* }
+on_match_clause = { ^"ON" ~ ^"MATCH" ~ ^"SET" ~ property_assignment ~ ("," ~ property_assignment)* }
+delete_clause = { ^"DELETE" ~ variable ~ ("," ~ variable)* }
+set_clause = { ^"SET" ~ property_assignment ~ ("," ~ property_assignment)* }
+property_assignment = { property_lookup ~ "=" ~ expression }
+
+match_clause = { ^"MATCH" ~ pattern ~ ("," ~ pattern)* }
+
+call_clause = { ^"CALL" ~ procedure_name ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" ~ (yield_clause)? }
+procedure_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+yield_clause = { ^"YIELD" ~ yield_item ~ ("," ~ yield_item)* }
+yield_item = { variable ~ (AS_OP ~ variable)? }
+pattern = { shortest_path_pattern | (node_pattern ~ (relationship_chain)*) }
+shortest_path_pattern = { "shortestPath" ~ "(" ~ node_pattern ~ relationship_chain ~ node_pattern ~ ")" }
+node_pattern = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
+relationship_chain = { relationship_pattern ~ node_pattern }
+relationship_pattern = { left_arrow? ~ "-" ~ "[" ~ variable? ~ labels? ~ var_len_bounds? ~ properties? ~ "]" ~ "-" ~ right_arrow? }
+var_len_bounds = { "*" ~ (range | number_literal)? }
+range = { number_literal? ~ ".." ~ number_literal? }
+
+left_arrow = { "<" }
+right_arrow = { ">" }
+
+labels = { ":" ~ label_name ~ ("|" ~ label_name)* }
+label_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+variable = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+properties = { "{" ~ property_item ~ ("," ~ property_item)* ~ "}" }
+property_item = { property_key ~ ":" ~ expression }
+property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+where_clause = { ^"WHERE" ~ expression }
+
+return_clause = { ^"RETURN" ~ ^"DISTINCT"? ~ projection_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+order_by_clause = { ^"ORDER" ~ ^"BY" ~ sort_item ~ ("," ~ sort_item)* }
+sort_item = { expression ~ (ASC | DESC)? }
+ASC = { ^"ASC" | ^"ASCENDING" }
+DESC = { ^"DESC" | ^"DESCENDING" }
+skip_clause = { ^"SKIP" ~ number_literal }
+limit_clause = { ^"LIMIT" ~ number_literal }
+star = { "*" }
+projection_items = { star | (projection_item ~ ("," ~ projection_item)*) }
+
+expression = { logical_or_expr }
+logical_or_expr = { logical_and_expr ~ (or_op ~ logical_and_expr)* }
+or_op = { ^"OR" }
+logical_and_expr = { not_expr ~ (and_op ~ not_expr)* }
+and_op = { ^"AND" }
+not_expr = { (not_op)* ~ comparison_expr }
+not_op = { ^"NOT" }
+comparison_expr = { arithmetic_expr ~ ( comparison_operator ~ arithmetic_expr | string_predicate )? }
+string_predicate = { contains_op | starts_with_op | ends_with_op }
+contains_op = { ^"CONTAINS" ~ arithmetic_expr }
+starts_with_op = { ^"STARTS" ~ ^"WITH" ~ arithmetic_expr }
+ends_with_op = { ^"ENDS" ~ ^"WITH" ~ arithmetic_expr }
+arithmetic_expr = { atom ~ ( arithmetic_operator ~ atom )* }
+
+comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
+arithmetic_operator = { "+" | "-" | "*" | "/" | "%" }
+
+atom = { exists_subquery | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+parameter = @{ "$" ~ variable }
+exists_subquery = { ^"EXISTS" ~ "{" ~ (match_clause ~ where_clause?)+ ~ "}" }
+case_expression = { ^"CASE" ~ expression? ~ when_then_clause+ ~ else_clause? ~ ^"END" }
+when_then_clause = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
+else_clause = { ^"ELSE" ~ expression }
+function_call = { variable ~ "(" ~ (star | (expression ~ ("," ~ expression)*)) ~ ")" }
+property_lookup = { variable ~ "." ~ property_key }
+parenthesized_expression = { "(" ~ expression ~ ")" }
+
+literal = { string_literal | number_literal | boolean_literal | null_literal }
+list_literal = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+string_literal = @{ ("'" ~ (!"'" ~ ANY)* ~ "'") | ("\"" ~ (!"\"" ~ ANY)* ~ "\"") }
+number_literal = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+boolean_literal = @{ (^"TRUE" | ^"FALSE") ~ !ASCII_ALPHANUMERIC }
+null_literal = @{ ^"NULL" ~ !ASCII_ALPHANUMERIC }
+
+AS_OP = _{ ^"AS" }
+projection_item = { expression ~ (AS_OP ~ variable)? }

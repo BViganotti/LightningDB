@@ -1,0 +1,5 @@
+/target
+.fusion_mcp.db
+.fusion/
+*.lbug
+*.patch

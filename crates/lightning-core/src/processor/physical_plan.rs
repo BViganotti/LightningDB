@@ -1,0 +1,614 @@
+use crate::planner::binder::{BoundExpression, BoundProjectionItem};
+use crate::planner::logical_plan::LogicalOperator;
+use crate::processor::evaluator::ExpressionEvaluator;
+use crate::processor::{DataChunk, PhysicalOperator, Value};
+use crate::storage::undo_buffer::UndoBuffer;
+use crate::{LightningError, Result};
+use arrow::array::{Float64Array, UInt32Array, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+pub struct PhysicalPlanner {
+    pub db: Arc<crate::Database>,
+    pub read_ts: u64,
+    pub tx_id: u64,
+    pub undo_buffer: Arc<UndoBuffer>,
+    pub masks: HashMap<String, Arc<RwLock<crate::processor::operators::semi_mask::SemiMask>>>,
+}
+
+impl PhysicalPlanner {
+    pub fn new(
+        db: Arc<crate::Database>,
+        read_ts: u64,
+        tx_id: u64,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            db,
+            read_ts,
+            tx_id,
+            undo_buffer,
+            masks: HashMap::new(),
+        }
+    }
+
+    pub fn plan(&mut self, op: LogicalOperator) -> Result<Box<dyn PhysicalOperator + Send + Sync>> {
+        match op {
+            LogicalOperator::Scan(table_name, var, mask_info, projected_idxs, pushdown_filter) => {
+                let table = {
+                    let storage = self.db.storage_manager.read();
+                    storage
+                        .get_table(&table_name)
+                        .ok_or_else(|| {
+                            LightningError::Internal(format!("Table {} not found", table_name))
+                        })?
+                        .clone()
+                };
+                let num_rows = {
+                    let cat = self.db.catalog.read();
+                    cat.get_node_table(&table_name)
+                        .map(|t| t.num_rows)
+                        .or_else(|| cat.get_rel_table(&table_name).map(|t| t.num_rows))
+                        .unwrap_or(0)
+                };
+                // Use next_row_id as the effective row count if catalog num_rows is stale
+                let effective_num_rows = if num_rows == 0 {
+                    table.next_row_id.load(std::sync::atomic::Ordering::SeqCst)
+                } else {
+                    num_rows
+                };
+                let mut scan = crate::processor::operators::scan::PhysicalScan::new(
+                    table,
+                    var.clone(),
+                    self.db.buffer_manager.clone(),
+                    effective_num_rows,
+                    self.read_ts,
+                );
+                if let Some((mask_id, col_idx)) = mask_info {
+                    let mask = self
+                        .masks
+                        .get(&mask_id)
+                        .ok_or_else(|| crate::LightningError::Internal("Mask not found".into()))?
+                        .clone();
+                    scan = scan.with_mask(mask, col_idx);
+                }
+                if let Some(idxs) = projected_idxs {
+                    scan = scan.with_projected_idxs(idxs);
+                }
+                if let Some(filter) = pushdown_filter {
+                    let planned_filter = self.plan_expression(
+                        &LogicalOperator::Scan(table_name.clone(), var.clone(), None, None, None),
+                        &filter,
+                    )?;
+
+                    if let Some(candidates) =
+                        self.extract_trigram_candidates(&planned_filter, &scan.table)
+                    {
+                        if scan.mask.is_none() {
+                            let mask = Arc::new(RwLock::new(
+                                crate::processor::operators::semi_mask::SemiMask::new(),
+                            ));
+                            {
+                                let mut m = mask.write();
+                                for id in candidates {
+                                    m.insert(id);
+                                }
+                            }
+                            scan = scan.with_mask(mask, None);
+                        } else {
+                            let mask_col = scan.mask_column_idx;
+                            let existing_mask = scan.mask.as_ref().unwrap().clone();
+                            let mask = Arc::new(RwLock::new(
+                                crate::processor::operators::semi_mask::SemiMask::new(),
+                            ));
+                            {
+                                let existing = existing_mask.read();
+                                let mut m = mask.write();
+                                for id in candidates {
+                                    if existing.contains(id) {
+                                        m.insert(id);
+                                    }
+                                }
+                            }
+                            scan = scan.with_mask(mask, mask_col);
+                        }
+                    }
+
+                    scan = scan.with_filter(planned_filter);
+                }
+                Ok(Box::new(scan))
+            }
+            LogicalOperator::Filter(child, expr) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::filter::PhysicalFilter::new(planned_child, expr),
+                ))
+            }
+            LogicalOperator::Projection(child, items) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::projection::PhysicalProjection::new(
+                        planned_child,
+                        items,
+                    ),
+                ))
+            }
+            LogicalOperator::Join(left, right, join_cond) => {
+                let planned_left = self.plan(*left)?;
+                let planned_right = self.plan(*right)?;
+                let is_cross_join = matches!(
+                    join_cond,
+                    BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
+                );
+                if is_cross_join {
+                    Ok(Box::new(
+                        crate::processor::operators::hash_join::HashJoin::new_cross_join(
+                            planned_left,
+                            planned_right,
+                        ),
+                    ))
+                } else {
+                    Ok(Box::new(
+                        crate::processor::operators::hash_join::HashJoin::new(
+                            planned_left,
+                            planned_right,
+                            0,
+                            0,
+                        ),
+                    ))
+                }
+            }
+            LogicalOperator::Aggregate {
+                child,
+                group_by_cols,
+                aggregates,
+                ..
+            } => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::aggregate::Aggregate::new(
+                        planned_child,
+                        group_by_cols,
+                        aggregates,
+                    ),
+                ))
+            }
+            LogicalOperator::Sort(child, items) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
+                ))
+            }
+            LogicalOperator::Unwind(child, expr, alias) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::unwind::PhysicalUnwind::new(
+                        planned_child,
+                        expr.clone(),
+                        alias.clone(),
+                    ),
+                ))
+            }
+            LogicalOperator::Limit(child, limit) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::limit_skip::PhysicalLimit::new(
+                        planned_child,
+                        limit as usize,
+                    ),
+                ))
+            }
+            LogicalOperator::Skip(child, skip) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::limit_skip::PhysicalSkip::new(
+                        planned_child,
+                        skip as usize,
+                    ),
+                ))
+            }
+            LogicalOperator::CreateNode(child, pat) => {
+                let planned_child = child.map(|c| self.plan(*c)).transpose()?;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(&pat.table_name).unwrap().clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalCreate::new(
+                        pat.table_name,
+                        self.db.catalog.clone(),
+                        self.db.storage_manager.clone(),
+                        table,
+                        pat.properties,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        planned_child,
+                        self.tx_id,
+                    ),
+                ))
+            }
+            LogicalOperator::CreateRel(child, pat) => {
+                let (src_idx, dst_idx) = if let Some(ref child_op) = child {
+                    let positions = self.compute_variable_positions(child_op)?;
+                    let src_idx = positions.get(&pat.src_variable).copied().unwrap_or(0);
+                    let dst_idx = positions.get(&pat.dst_variable).copied().unwrap_or(1);
+                    (src_idx, dst_idx)
+                } else {
+                    (0, 1)
+                };
+                let planned_child = child.map(|c| self.plan(*c)).transpose()?;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(&pat.table_name).unwrap().clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalCreateRel::new(
+                        pat.table_name,
+                        table,
+                        src_idx,
+                        dst_idx,
+                        pat.properties,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        planned_child,
+                        self.tx_id,
+                    ),
+                ))
+            }
+            LogicalOperator::Delete(child, vars) => {
+                let planned_child = self.plan(*child)?;
+                let table_name = &vars[0].1;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(table_name).unwrap().clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalDelete::new(
+                        planned_child,
+                        table,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        self.tx_id,
+                    ),
+                ))
+            }
+            LogicalOperator::Set(child, assignments) => {
+                let planned_child = self.plan(*child)?;
+                let table_name = &assignments[0].table_name;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(table_name).unwrap().clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalSet::new(
+                        planned_child,
+                        assignments,
+                        table,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        self.tx_id,
+                    ),
+                ))
+            }
+            LogicalOperator::CreateTableNode {
+                name,
+                columns,
+                primary_key,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_node(
+                    name,
+                    columns,
+                    primary_key,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::CreateTableRel {
+                name,
+                from_table,
+                to_table,
+                columns,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_rel(
+                    name,
+                    from_table,
+                    to_table,
+                    columns,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::DropTable(name) => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_drop(
+                    name,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::Merge {
+                child,
+                pattern,
+                on_create_assignments,
+                on_match_assignments,
+            } => {
+                let planned_child = self.plan(*child)?;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(&pattern.table_name).unwrap().clone();
+                let num_rows = {
+                    let cat = self.db.catalog.read();
+                    cat.get_node_table(&pattern.table_name).unwrap().num_rows
+                };
+                let effective_num_rows = if num_rows == 0 {
+                    table.next_row_id.load(std::sync::atomic::Ordering::SeqCst)
+                } else {
+                    num_rows
+                };
+                let table_name = pattern.table_name.clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalMerge::new(
+                        table_name,
+                        table,
+                        pattern,
+                        on_create_assignments,
+                        on_match_assignments,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        self.tx_id,
+                        self.read_ts,
+                        effective_num_rows,
+                    ),
+                ))
+            }
+
+            LogicalOperator::Union(left, right, is_all) => {
+                let l = self.plan(*left)?;
+                let r = self.plan(*right)?;
+                Ok(Box::new(
+                    crate::processor::operators::union::PhysicalUnion::new(l, r, is_all),
+                ))
+            }
+            LogicalOperator::SingleRow => Ok(Box::new(
+                crate::processor::operators::scan::PhysicalSingleRow::new(),
+            )),
+            _ => Err(LightningError::Internal(format!(
+                "Operator not implemented in PhysicalPlanner: {:?}",
+                op
+            ))),
+        }
+    }
+
+    fn get_table_num_columns(&self, table_name: &str) -> usize {
+        let cat = self.db.catalog.read();
+        if let Some(node_table) = cat.get_node_table(table_name) {
+            node_table.properties.len()
+        } else if let Some(rel_table) = cat.get_rel_table(table_name) {
+            rel_table.properties.len()
+        } else {
+            2
+        }
+    }
+
+    fn compute_variable_positions(
+        &self,
+        op: &LogicalOperator,
+    ) -> Result<std::collections::HashMap<String, usize>> {
+        let mut positions = std::collections::HashMap::new();
+        self.collect_variable_positions(op, 0, &mut positions)?;
+        Ok(positions)
+    }
+
+    fn collect_variable_positions(
+        &self,
+        op: &LogicalOperator,
+        start_col: usize,
+        positions: &mut std::collections::HashMap<String, usize>,
+    ) -> Result<usize> {
+        match op {
+            LogicalOperator::Scan(table_name, var, ..) => {
+                let num_cols = self.get_table_num_columns(table_name);
+                positions.insert(var.clone(), start_col);
+                Ok(num_cols)
+            }
+            LogicalOperator::Filter(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Join(left, right, ..) => {
+                let left_cols = self.collect_variable_positions(left, start_col, positions)?;
+                self.collect_variable_positions(right, start_col + left_cols, positions)
+            }
+            LogicalOperator::RecursiveJoin {
+                child,
+                src_var,
+                dst_var,
+                ..
+            } => {
+                let child_cols = self.collect_variable_positions(child, start_col, positions)?;
+                positions.insert(src_var.clone(), start_col);
+                positions.insert(dst_var.clone(), start_col + 1);
+                Ok(child_cols + 2)
+            }
+            LogicalOperator::Projection(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Aggregate { child, .. } => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Limit(child, ..)
+            | LogicalOperator::TopK(child, ..)
+            | LogicalOperator::Sort(child, ..)
+            | LogicalOperator::Skip(child, ..)
+            | LogicalOperator::Flatten(child)
+            | LogicalOperator::Distinct(child, ..)
+            | LogicalOperator::Accumulate(child)
+            | LogicalOperator::Profile(child)
+            | LogicalOperator::Explain(child) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::CreateNode(child_opt, ..) => {
+                if let Some(child) = child_opt {
+                    self.collect_variable_positions(child, start_col, positions)
+                } else {
+                    Ok(0)
+                }
+            }
+            LogicalOperator::Set(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Delete(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::SemiMasker(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Unwind(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Subquery(child) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::UnwindDedup(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::OptionalMatch(child, inner) => {
+                let child_cols = self.collect_variable_positions(child, start_col, positions)?;
+                self.collect_variable_positions(inner, start_col + child_cols, positions)
+            }
+            LogicalOperator::With(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Intersect {
+                probe_child,
+                build_children,
+                ..
+            } => {
+                let mut col_offset = start_col;
+                col_offset +=
+                    self.collect_variable_positions(probe_child, col_offset, positions)?;
+                for build_child in build_children {
+                    col_offset +=
+                        self.collect_variable_positions(build_child, col_offset, positions)?;
+                }
+                Ok(col_offset - start_col)
+            }
+            LogicalOperator::AllShortestPaths { child, .. } => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Merge { child, .. } => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::Union(left, right, _) => {
+                let left_cols = self.collect_variable_positions(left, start_col, positions)?;
+                self.collect_variable_positions(right, start_col + left_cols, positions)
+            }
+            LogicalOperator::SemiJoin(child, ..) => {
+                self.collect_variable_positions(child, start_col, positions)
+            }
+            LogicalOperator::IndexScan(..) => Ok(0),
+            LogicalOperator::CreateRel(child_opt, _) => {
+                if let Some(child) = child_opt {
+                    self.collect_variable_positions(child, start_col, positions)
+                } else {
+                    Ok(0)
+                }
+            }
+            LogicalOperator::Call(_) => Ok(0),
+            LogicalOperator::CountRelTable { .. }
+            | LogicalOperator::CreateSequence { .. }
+            | LogicalOperator::CreateMacro { .. }
+            | LogicalOperator::CreateTableNode { .. }
+            | LogicalOperator::CreateTableRel { .. }
+            | LogicalOperator::DropTable(_)
+            | LogicalOperator::CopyFrom { .. }
+            | LogicalOperator::CopyTo { .. }
+            | LogicalOperator::Transaction(_)
+            | LogicalOperator::Checkpoint
+            | LogicalOperator::SingleRow => Ok(0),
+        }
+    }
+
+    pub fn plan_expression(
+        &self,
+        _op: &LogicalOperator,
+        _expr: &BoundExpression,
+    ) -> Result<BoundExpression> {
+        Ok(_expr.clone())
+    }
+
+    fn extract_trigram_candidates(
+        &self,
+        expr: &BoundExpression,
+        table: &crate::storage::storage_manager::Table,
+    ) -> Option<Vec<u64>> {
+        table.flush_trigram_workers();
+
+        match expr {
+            BoundExpression::Function(name, args, _)
+                if name.to_uppercase() == "CONTAINS" && args.len() == 2 =>
+            {
+                let col_name = if let BoundExpression::PropertyLookup(_, prop_idx, _) = &args[0] {
+                    if *prop_idx < table.columns.len() {
+                        Some(&table.columns[*prop_idx].name)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let pattern =
+                    if let BoundExpression::Literal(crate::parser::ast::Literal::String(s)) =
+                        &args[1]
+                    {
+                        Some(s)
+                    } else {
+                        None
+                    };
+
+                if let (Some(c), Some(p)) = (col_name, pattern) {
+                    let indexes = table.trigram_indexes.read();
+                    if let Some(idx) = indexes.get(c) {
+                        let result = idx.query_with_adaptive_threshold(p);
+                        if let Some(r) = result {
+                            if r.use_index {
+                                return Some(r.candidates);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            BoundExpression::Logical(left, op, right) => match op {
+                crate::parser::ast::LogicalOperator::And => {
+                    let l_cand = self.extract_trigram_candidates(left, table);
+                    let r_cand = self.extract_trigram_candidates(right, table);
+                    match (l_cand, r_cand) {
+                        (Some(l), Some(r)) => {
+                            let mut l_set: std::collections::HashSet<_> = l.into_iter().collect();
+                            let mut res = Vec::new();
+                            for id in r {
+                                if l_set.remove(&id) {
+                                    res.push(id);
+                                }
+                            }
+                            res.sort_unstable();
+                            Some(res)
+                        }
+                        (Some(l), None) => Some(l),
+                        (None, Some(r)) => Some(r),
+                        (None, None) => None,
+                    }
+                }
+                crate::parser::ast::LogicalOperator::Or => {
+                    let l_cand = self.extract_trigram_candidates(left, table);
+                    let r_cand = self.extract_trigram_candidates(right, table);
+                    if let (Some(l), Some(r)) = (l_cand, r_cand) {
+                        let mut res = l;
+                        res.extend(r);
+                        res.sort_unstable();
+                        res.dedup();
+                        Some(res)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}

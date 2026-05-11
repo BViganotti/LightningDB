@@ -1,0 +1,11 @@
+[package]
+name = "lightning-arrow"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+lightning-types.workspace = true
+arrow.workspace = true
+thiserror.workspace = true

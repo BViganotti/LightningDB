@@ -1,0 +1,508 @@
+use crate::processor::Value;
+use crate::Result;
+use arrow::array::{Array, ArrayRef};
+use std::sync::Arc;
+
+pub trait AggregateFunction: Send + Sync {
+    fn name(&self) -> &str;
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()>;
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()>;
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()>;
+    fn finalize(&self) -> Result<Value>;
+    fn clone_box(&self) -> Box<dyn AggregateFunction>;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+pub struct Count {
+    count: u64,
+}
+
+impl Count {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl AggregateFunction for Count {
+    fn name(&self) -> &str {
+        "COUNT"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        for i in row_indices {
+            if !values[0].is_null(*i) {
+                self.count += 1;
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        self.count += (values.len() - values.null_count()) as u64;
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_count) = other.as_any().downcast_ref::<Count>() {
+            self.count += other_count.count;
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::Number(self.count as f64))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self { count: self.count })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct CountStar {
+    count: u64,
+}
+
+impl CountStar {
+    pub fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl AggregateFunction for CountStar {
+    fn name(&self) -> &str {
+        "COUNT_STAR"
+    }
+    fn update(&mut self, _values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        self.count += row_indices.len() as u64;
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        self.count += values.len() as u64;
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_count) = other.as_any().downcast_ref::<CountStar>() {
+            self.count += other_count.count;
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::Number(self.count as f64))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self { count: self.count })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+use std::collections::HashSet;
+
+pub struct CountDistinct {
+    values: HashSet<String>,
+}
+
+impl CountDistinct {
+    pub fn new() -> Self {
+        Self {
+            values: HashSet::new(),
+        }
+    }
+}
+
+impl AggregateFunction for CountDistinct {
+    fn name(&self) -> &str {
+        "COUNT_DISTINCT"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        for &i in row_indices {
+            if !values[0].is_null(i) {
+                let val = Value::from_arrow(&values[0], i);
+                self.values.insert(format!("{:?}", val));
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        for i in 0..values.len() {
+            if !values.is_null(i) {
+                let val = Value::from_arrow(values, i);
+                self.values.insert(format!("{:?}", val));
+            }
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_distinct) = other.as_any().downcast_ref::<CountDistinct>() {
+            self.values.extend(other_distinct.values.clone());
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::Number(self.values.len() as f64))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self {
+            values: self.values.clone(),
+        })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct Sum {
+    sum: f64,
+}
+
+impl Sum {
+    pub fn new() -> Self {
+        Self { sum: 0.0 }
+    }
+}
+
+impl AggregateFunction for Sum {
+    fn name(&self) -> &str {
+        "SUM"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = &values[0];
+        // Handle Float64Array
+        if let Some(arr_float) = arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            for i in row_indices {
+                if !arr_float.is_null(*i) {
+                    self.sum += arr_float.value(*i);
+                }
+            }
+        }
+        // Handle Int64Array - convert to f64
+        else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            for i in row_indices {
+                if !arr_int.is_null(*i) {
+                    self.sum += arr_int.value(*i) as f64;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            self.sum += arrow::compute::kernels::aggregate::sum(arr_float).unwrap_or(0.0);
+        } else if let Some(arr_int) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            self.sum += arrow::compute::kernels::aggregate::sum(arr_int).unwrap_or(0) as f64;
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_sum) = other.as_any().downcast_ref::<Sum>() {
+            self.sum += other_sum.sum;
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::Number(self.sum))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self { sum: self.sum })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct Avg {
+    sum: f64,
+    count: u64,
+}
+
+impl Avg {
+    pub fn new() -> Self {
+        Self { sum: 0.0, count: 0 }
+    }
+}
+
+impl AggregateFunction for Avg {
+    fn name(&self) -> &str {
+        "AVG"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = &values[0];
+        // Handle Float64Array
+        if let Some(arr_float) = arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            for i in row_indices {
+                if !arr_float.is_null(*i) {
+                    self.sum += arr_float.value(*i);
+                    self.count += 1;
+                }
+            }
+        }
+        // Handle Int64Array - convert to f64
+        else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            for i in row_indices {
+                if !arr_int.is_null(*i) {
+                    self.sum += arr_int.value(*i) as f64;
+                    self.count += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            self.sum += arrow::compute::kernels::aggregate::sum(arr_float).unwrap_or(0.0);
+            self.count += (arr_float.len() - arr_float.null_count()) as u64;
+        } else if let Some(arr_int) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            self.sum += arrow::compute::kernels::aggregate::sum(arr_int).unwrap_or(0) as f64;
+            self.count += (arr_int.len() - arr_int.null_count()) as u64;
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_avg) = other.as_any().downcast_ref::<Avg>() {
+            self.sum += other_avg.sum;
+            self.count += other_avg.count;
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::Number(if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f64
+        }))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self {
+            sum: self.sum,
+            count: self.count,
+        })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct Min {
+    min: Option<f64>,
+}
+
+impl Min {
+    pub fn new() -> Self {
+        Self { min: None }
+    }
+}
+
+impl AggregateFunction for Min {
+    fn name(&self) -> &str {
+        "MIN"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = &values[0];
+        // Handle Float64Array
+        if let Some(arr_float) = arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            for i in row_indices {
+                if !arr_float.is_null(*i) {
+                    let v = arr_float.value(*i);
+                    if self.min.is_none() || v < self.min.unwrap() {
+                        self.min = Some(v);
+                    }
+                }
+            }
+        }
+        // Handle Int64Array - convert to f64
+        else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            for i in row_indices {
+                if !arr_int.is_null(*i) {
+                    let v = arr_int.value(*i) as f64;
+                    if self.min.is_none() || v < self.min.unwrap() {
+                        self.min = Some(v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            let v = arrow::compute::kernels::aggregate::min(arr_float);
+            if let Some(v_val) = v {
+                if self.min.is_none() || v_val < self.min.unwrap() {
+                    self.min = Some(v_val);
+                }
+            }
+        } else if let Some(arr_int) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            let v = arrow::compute::kernels::aggregate::min(arr_int);
+            if let Some(v_val) = v {
+                let v_f64 = v_val as f64;
+                if self.min.is_none() || v_f64 < self.min.unwrap() {
+                    self.min = Some(v_f64);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_min) = other.as_any().downcast_ref::<Min>() {
+            if let Some(v) = other_min.min {
+                if self.min.is_none() || v < self.min.unwrap() {
+                    self.min = Some(v);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(self.min.map(Value::Number).unwrap_or(Value::Null))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self { min: self.min })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct Max {
+    max: Option<f64>,
+}
+
+impl Max {
+    pub fn new() -> Self {
+        Self { max: None }
+    }
+}
+
+impl AggregateFunction for Max {
+    fn name(&self) -> &str {
+        "MAX"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = &values[0];
+        // Handle Float64Array
+        if let Some(arr_float) = arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            for i in row_indices {
+                if !arr_float.is_null(*i) {
+                    let v = arr_float.value(*i);
+                    if self.max.is_none() || v > self.max.unwrap() {
+                        self.max = Some(v);
+                    }
+                }
+            }
+        }
+        // Handle Int64Array - convert to f64
+        else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            for i in row_indices {
+                if !arr_int.is_null(*i) {
+                    let v = arr_int.value(*i) as f64;
+                    if self.max.is_none() || v > self.max.unwrap() {
+                        self.max = Some(v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            let v = arrow::compute::kernels::aggregate::max(arr_float);
+            if let Some(v_val) = v {
+                if self.max.is_none() || v_val > self.max.unwrap() {
+                    self.max = Some(v_val);
+                }
+            }
+        } else if let Some(arr_int) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            let v = arrow::compute::kernels::aggregate::max(arr_int);
+            if let Some(v_val) = v {
+                let v_f64 = v_val as f64;
+                if self.max.is_none() || v_f64 > self.max.unwrap() {
+                    self.max = Some(v_f64);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_max) = other.as_any().downcast_ref::<Max>() {
+            if let Some(v) = other_max.max {
+                if self.max.is_none() || v > self.max.unwrap() {
+                    self.max = Some(v);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(self.max.map(Value::Number).unwrap_or(Value::Null))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self { max: self.max })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub struct Collect {
+    values: Vec<Value>,
+}
+
+impl Collect {
+    pub fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+}
+
+impl AggregateFunction for Collect {
+    fn name(&self) -> &str {
+        "COLLECT"
+    }
+    fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        for i in row_indices {
+            self.values.push(Value::from_arrow(&values[0], *i));
+        }
+        Ok(())
+    }
+    fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
+        for i in 0..values.len() {
+            self.values.push(Value::from_arrow(values, i));
+        }
+        Ok(())
+    }
+    fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
+        if let Some(other_collect) = other.as_any().downcast_ref::<Collect>() {
+            self.values.extend(other_collect.values.clone());
+        }
+        Ok(())
+    }
+    fn finalize(&self) -> Result<Value> {
+        Ok(Value::List(self.values.clone()))
+    }
+    fn clone_box(&self) -> Box<dyn AggregateFunction> {
+        Box::new(Self {
+            values: self.values.clone(),
+        })
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

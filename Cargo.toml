@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "crates/lightning-types",
+    "crates/lightning-core",
+    "crates/lightning-arrow",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Lightning Developers"]
+license = "MIT"
+repository = "https://github.com/lightning-db/lightning"
+
+[workspace.dependencies]
+lightning-types = { path = "crates/lightning-types" }
+lightning-core = { path = "crates/lightning-core" }
+lightning-arrow = { path = "crates/lightning-arrow" }
+arrow = { version = "58.0.0", features = ["ffi", "csv"] }
+parquet = { version = "58.0.0", features = ["async"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+thiserror = "1.0"
+anyhow = "1.0"
+log = "0.4"
+tracing = "0.1"
+tokio = { version = "1.35", features = ["full"] }
+parking_lot = "0.12"
+tempfile = "3.9"
+roaring = "0.10"
+rayon = "1.8"
+crossbeam = "0.8"
+num_cpus = "1.16"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+sha2 = "0.10"
+md-5 = "0.10"
+levenshtein = "1.0"
+rusqlite = { version = "0.37", features = ["bundled"] }
