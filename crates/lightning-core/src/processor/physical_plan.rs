@@ -55,11 +55,7 @@ impl PhysicalPlanner {
                         .unwrap_or(0)
                 };
                 // Use next_row_id as the effective row count if catalog num_rows is stale
-                let effective_num_rows = if num_rows == 0 {
-                    table.next_row_id.load(std::sync::atomic::Ordering::SeqCst)
-                } else {
-                    num_rows
-                };
+                let effective_num_rows = num_rows;
                 let mut scan = crate::processor::operators::scan::PhysicalScan::new(
                     table,
                     var.clone(),
@@ -333,11 +329,7 @@ impl PhysicalPlanner {
                     let cat = self.db.catalog.read();
                     cat.get_node_table(&pattern.table_name).unwrap().num_rows
                 };
-                let effective_num_rows = if num_rows == 0 {
-                    table.next_row_id.load(std::sync::atomic::Ordering::SeqCst)
-                } else {
-                    num_rows
-                };
+                let effective_num_rows = num_rows;
                 let table_name = pattern.table_name.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalMerge::new(

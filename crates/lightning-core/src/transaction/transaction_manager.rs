@@ -74,6 +74,9 @@ impl TransactionManager {
         db: &crate::Database,
     ) -> Result<()> {
         if !tx.is_read_only {
+            // Flush any pending write buffers so all data reaches the columns
+            db.storage_manager.read().flush_all_pending(bm, tx)?;
+
             let commit_ts = self.current_ts.fetch_add(1, Ordering::SeqCst) + 1;
             tx.commit_ts.store(commit_ts, Ordering::SeqCst);
 

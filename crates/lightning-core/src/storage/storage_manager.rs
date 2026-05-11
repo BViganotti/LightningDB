@@ -214,6 +214,7 @@ impl Table {
                             &Value::Null
                         };
                         match val {
+                            Value::Node(id) => builder.append_value(*id),
                             Value::Number(n) => builder.append_value(*n as u64),
                             _ => builder.append_null(),
                         }

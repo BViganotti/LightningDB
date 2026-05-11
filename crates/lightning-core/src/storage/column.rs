@@ -649,7 +649,7 @@ impl Column {
     ) -> Result<ArrayRef> {
         let values_per_page = 4096 / element_size as u64;
 
-        // Direct file read path for committed data (bypasses buffer manager)
+        // Direct file read for unmodified columns
         if !self.version_info.has_modifications() {
             return self.scan_primitive_direct(offset, num_values, element_size, target_type);
         }

@@ -170,7 +170,13 @@ impl RowVersion {
 
     pub fn has_modifications(&self) -> bool {
         for shard in &self.shards {
-            if !shard.versions.read().is_empty() {
+            let versions = shard.versions.read();
+            if !versions.is_empty() {
+                return true;
+            }
+            drop(versions);
+            let committed = shard.committed.read();
+            if !committed.is_empty() {
                 return true;
             }
         }

@@ -749,17 +749,17 @@ impl Connection {
                 ))
             })();
 
-            if autocommit {
-                let bm = &self.client_context.database.buffer_manager;
-                let db = &self.client_context.database;
-                if res.is_ok() {
-                    db.storage_manager.read().flush_all_pending(bm, &tx)?;
-                    db.transaction_manager.commit(&tx, bm, db)?;
-                } else {
-                    db.transaction_manager.rollback(db, &tx)?;
-                }
+        if autocommit {
+            let bm = &self.client_context.database.buffer_manager;
+            let db = &self.client_context.database;
+            if res.is_ok() {
+                db.storage_manager.read().flush_all_pending(bm, &tx)?;
+                db.transaction_manager.commit(&tx, bm, &db)?;
+            } else {
+                db.transaction_manager.rollback(db, &tx)?;
             }
-            return res;
+        }
+        return res;
         }
 
         let query = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
