@@ -66,6 +66,8 @@ impl PyMemoryStore {
             access_count: 0,
             ttl_seconds: 0,
             metadata: metadata.unwrap_or("{}").to_string(),
+            valid_from: now,
+            valid_until: 0,
         };
 
         self.inner
@@ -251,6 +253,8 @@ impl PyMemoryStore {
                         access_count: get_i64(&dict, "access_count", 0),
                         ttl_seconds: get_i64(&dict, "ttl_seconds", 0),
                         metadata: if meta.is_empty() { "{}".to_string() } else { meta },
+                        valid_from: get_i64(&dict, "valid_from", now),
+                        valid_until: get_i64(&dict, "valid_until", 0),
                     }
                 })
             })
