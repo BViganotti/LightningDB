@@ -1163,7 +1163,7 @@ mod tests {
 
     #[test]
     fn test_preprocess_in_strings() {
-        let input = "MATCH (n:CodeNode) WHERE n.id IN ['a', 'b'] RETURN n";
+        let input = "MATCH (n:TestNode) WHERE n.id IN ['a', 'b'] RETURN n";
         let output = preprocess_in_expressions(input);
         assert!(
             output.contains("(n.id = 'a' OR n.id = 'b')"),

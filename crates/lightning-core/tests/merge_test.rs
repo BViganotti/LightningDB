@@ -1,11 +1,9 @@
-use lightning_core::catalog::PropertyDefinition;
 use lightning_core::parser::parse;
 use lightning_core::planner::logical_plan::LogicalPlanner;
 use lightning_core::planner::Binder;
 use lightning_core::processor::physical_plan::PhysicalPlanner;
 use lightning_core::Database;
 use lightning_core::SystemConfig;
-use lightning_types::LogicalType;
 use tempfile::tempdir;
 
 #[test]
@@ -15,19 +13,10 @@ fn test_merge_basic() {
 
     // Create a node table
     {
-        db.create_node_table(
-            "Person".to_string(),
-            vec![
-                PropertyDefinition {
-                    name: "id".to_string(),
-                    type_: LogicalType::Int64,
-                },
-                PropertyDefinition {
-                    name: "name".to_string(),
-                    type_: LogicalType::String,
-                },
-            ],
-            Some("id".to_string()),
+        let conn = db.connect();
+        conn.execute(
+            "CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY(id))",
+            None,
         )
         .unwrap();
     }
@@ -123,27 +112,10 @@ fn test_merge_on_create_on_match() {
     let db = Database::new(dir.path().to_path_buf(), SystemConfig::default()).unwrap();
 
     {
-        db.create_node_table(
-            "Person".to_string(),
-            vec![
-                PropertyDefinition {
-                    name: "id".to_string(),
-                    type_: LogicalType::Int64,
-                },
-                PropertyDefinition {
-                    name: "name".to_string(),
-                    type_: LogicalType::String,
-                },
-                PropertyDefinition {
-                    name: "created".to_string(),
-                    type_: LogicalType::Bool,
-                },
-                PropertyDefinition {
-                    name: "matched".to_string(),
-                    type_: LogicalType::Bool,
-                },
-            ],
-            Some("id".to_string()),
+        let conn = db.connect();
+        conn.execute(
+            "CREATE NODE TABLE Person(id INT64, name STRING, created BOOL, matched BOOL, PRIMARY KEY(id))",
+            None,
         )
         .unwrap();
     }

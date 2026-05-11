@@ -1,6 +1,4 @@
-use lightning_core::catalog::PropertyDefinition;
 use lightning_core::{Database, SystemConfig};
-use lightning_types::LogicalType;
 use tempfile::tempdir;
 
 #[test]
@@ -9,19 +7,10 @@ fn test_hash_index_creation_and_lookup() {
     let db = Database::new(dir.path().to_path_buf(), SystemConfig::default()).unwrap();
 
     // Create a table with a primary key
-    db.create_node_table(
-        "User".into(),
-        vec![
-            PropertyDefinition {
-                name: "id".into(),
-                type_: LogicalType::Int64,
-            },
-            PropertyDefinition {
-                name: "name".into(),
-                type_: LogicalType::String,
-            },
-        ],
-        Some("id".into()),
+    let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY(id))",
+        None,
     )
     .unwrap();
 
@@ -65,23 +54,12 @@ fn test_index_scan_query_e2e() {
     let db = Database::new(dir.path().to_path_buf(), SystemConfig::default()).unwrap();
 
     // 1. Create table with Primary Key
-    db.create_node_table(
-        "User".into(),
-        vec![
-            PropertyDefinition {
-                name: "id".into(),
-                type_: LogicalType::Int64,
-            },
-            PropertyDefinition {
-                name: "name".into(),
-                type_: LogicalType::String,
-            },
-        ],
-        Some("id".into()),
+    let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY(id))",
+        None,
     )
     .unwrap();
-
-    let conn = db.connect();
 
     // 2. Insert rows using Cypher
     conn.query("CREATE (u:User {id: 42, name: 'Alice'})")

@@ -31,7 +31,7 @@ fn test_extreme_concurrency_stress() -> Result<()> {
                     loop {
                         let query = "MATCH (c:Counter) WHERE c.id = 1 SET c.val = c.val + 1";
                         match conn.execute(query, None) {
-                            Ok(res) if res.success => {
+                            Ok(res) if res.is_success() => {
                                 break;
                             }
                             Err(e) if format!("{:?}", e).contains("Write-Write Conflict") => {
@@ -255,7 +255,7 @@ fn test_large_data_joins() -> Result<()> {
         "MATCH (u:Users), (p:Posts) WHERE u.id = p.author_id RETURN u.name, p.title ORDER BY u.name, p.title",
         None,
     )?;
-    assert!(res.success);
+    assert!(res.is_success());
     let total_rows: usize = res.batches.iter().map(|b| b.num_rows()).sum();
 
     if total_rows != 50 {

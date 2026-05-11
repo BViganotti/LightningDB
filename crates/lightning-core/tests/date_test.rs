@@ -1,7 +1,5 @@
 use lightning_core::Database;
 use lightning_core::SystemConfig;
-use lightning_core::catalog::PropertyDefinition;
-use lightning_types::LogicalType;
 use arrow::array::{Date32Array, TimestampMicrosecondArray, Array};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -11,14 +9,10 @@ fn setup_db() -> (Arc<Database>, tempfile::TempDir) {
     let config = SystemConfig::default();
     let db = Database::new(dir.path(), config).unwrap();
     
-    db.create_node_table(
-        "Event".to_string(),
-        vec![
-            PropertyDefinition { name: "name".to_string(), type_: LogicalType::String },
-            PropertyDefinition { name: "date".to_string(), type_: LogicalType::Date },
-            PropertyDefinition { name: "ts".to_string(), type_: LogicalType::Timestamp },
-        ],
-        Some("name".to_string()),
+    let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE Event(name STRING, date DATE, ts TIMESTAMP, PRIMARY KEY(name))",
+        None,
     ).unwrap();
 
     (db, dir)

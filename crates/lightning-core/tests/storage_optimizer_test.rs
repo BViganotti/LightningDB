@@ -41,6 +41,7 @@ fn test_storage_compression_rewrite_roundtrip() {
                     ("dept".into(), lightning_types::LogicalType::String),
                 ],
                 false,
+                None,
             )
             .unwrap();
     }

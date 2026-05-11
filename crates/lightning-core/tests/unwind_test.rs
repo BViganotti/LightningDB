@@ -16,7 +16,7 @@ fn test_baseline_match() {
             PropertyDefinition { name: "name".into(), type_: LogicalType::String },
         ], None);
         let mut storage = db.storage_manager.write();
-        storage.create_table("Person".into(), vec![("name".into(), LogicalType::String)], false).unwrap();
+        storage.create_table("Person".into(), vec![("name".into(), LogicalType::String)], false, None).unwrap();
     }
     conn.query("CREATE (p:Person {name: 'Alice'})").unwrap();
 
@@ -78,7 +78,7 @@ fn test_unwind_with_match() {
         let mut storage = db.storage_manager.write();
         storage.create_table("Person".into(), vec![
             ("name".into(), LogicalType::String),
-        ], false).unwrap();
+        ], false, None).unwrap();
     }
 
     conn.query("CREATE (p:Person {name: 'Alice'})").unwrap();
@@ -111,7 +111,7 @@ fn test_unwind_empty_list() {
         let mut storage = db.storage_manager.write();
         storage.create_table("Person".into(), vec![
             ("name".into(), LogicalType::String),
-        ], false).unwrap();
+        ], false, None).unwrap();
     }
 
     conn.query("CREATE (p:Person {name: 'Alice'})").unwrap();

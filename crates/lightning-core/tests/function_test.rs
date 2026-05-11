@@ -1,7 +1,5 @@
 use lightning_core::Database;
 use lightning_core::SystemConfig;
-use lightning_core::catalog::PropertyDefinition;
-use lightning_types::LogicalType;
 use arrow::array::{Float64Array, StringArray};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -11,17 +9,12 @@ fn setup_db() -> Arc<Database> {
     let config = SystemConfig::default();
     let db = Database::new(dir.path(), config).unwrap();
     
-    db.create_node_table(
-        "Person".to_string(),
-        vec![
-            PropertyDefinition { name: "name".to_string(), type_: LogicalType::String },
-            PropertyDefinition { name: "age".to_string(), type_: LogicalType::Double },
-            PropertyDefinition { name: "height".to_string(), type_: LogicalType::Double },
-        ],
-        Some("name".to_string()),
-    ).unwrap();
-
     let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE Person(name STRING, age DOUBLE, height DOUBLE, PRIMARY KEY(name))",
+        None,
+    )
+    .unwrap();
     conn.query("CREATE (:Person {name: 'Alice', age: 25.6, height: 1.65})").unwrap();
     conn.query("CREATE (:Person {name: 'Bob', age: 42.1, height: 1.88})").unwrap();
     conn.query("CREATE (:Person {name: 'Charlie', age: -10.5, height: 1.75})").unwrap();

@@ -1,7 +1,5 @@
 use lightning_core::Database;
 use lightning_core::SystemConfig;
-use lightning_core::catalog::PropertyDefinition;
-use lightning_types::LogicalType;
 use tempfile::tempdir;
 
 #[test]
@@ -11,15 +9,11 @@ fn test_constant_compression_integration() {
     let config = SystemConfig::default();
     let db = Database::new(dir.path(), config).unwrap();
     
-    db.create_node_table(
-        "User".to_string(),
-        vec![
-            PropertyDefinition { name: "age".to_string(), type_: LogicalType::Int64 },
-        ],
+    let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE User(age INT64)",
         None,
     ).unwrap();
-
-    let conn = db.connect();
     // Insert 100 rows with same age
     for _ in 0..100 {
         conn.query("CREATE (:User {age: 25})").unwrap();

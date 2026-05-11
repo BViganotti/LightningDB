@@ -1,5 +1,4 @@
 use lightning_core::Database;
-use lightning_types::LogicalType;
 use tempfile::TempDir;
 
 #[test]
@@ -9,16 +8,9 @@ fn test_projection_pushdown() {
     let conn = db.connect();
 
     // Create a table with many columns
-    db.create_node_table(
-        "Person".to_string(),
-        vec![
-            lightning_core::catalog::PropertyDefinition { name: "id".to_string(), type_: LogicalType::Int32 },
-            lightning_core::catalog::PropertyDefinition { name: "name".to_string(), type_: LogicalType::String },
-            lightning_core::catalog::PropertyDefinition { name: "age".to_string(), type_: LogicalType::Int32 },
-            lightning_core::catalog::PropertyDefinition { name: "city".to_string(), type_: LogicalType::String },
-            lightning_core::catalog::PropertyDefinition { name: "salary".to_string(), type_: LogicalType::Int32 },
-        ],
-        Some("id".to_string()),
+    conn.execute(
+        "CREATE NODE TABLE Person(id INT32, name STRING, age INT32, city STRING, salary INT32, PRIMARY KEY(id))",
+        None,
     ).unwrap();
 
     // Insert some data
@@ -27,7 +19,7 @@ fn test_projection_pushdown() {
     // Query only name and age
     let result = conn.query("MATCH (p:Person) RETURN p.name, p.age").unwrap();
     
-    assert!(result.success);
+    assert!(result.is_success());
     assert_eq!(result.column_names, vec!["name".to_string(), "age".to_string()]);
     assert_eq!(result.batches.len(), 1);
     let batch = &result.batches[0];
@@ -41,7 +33,7 @@ fn test_projection_pushdown() {
 
     // Test with IndexScan (id = 1)
     let result_idx = conn.query("MATCH (p:Person {id: 1}) RETURN p.salary, p.city").unwrap();
-    assert!(result_idx.success);
+    assert!(result_idx.is_success());
     let batch_idx = &result_idx.batches[0];
     assert_eq!(batch_idx.num_columns(), 2);
     let salaries = batch_idx.column(0).as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();

@@ -18,7 +18,7 @@ impl MockOperator {
 }
 
 impl PhysicalOperator for MockOperator {
-    fn clone_box(&self) -> Box<dyn PhysicalOperator> { Box::new((*self).clone()) }
+    fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> { Box::new((*self).clone()) }
     fn get_next(&mut self, _database: &lightning_core::Database, _tx: &lightning_core::transaction::transaction_manager::Transaction, _params: Option<&std::collections::HashMap<String, lightning_core::processor::Value>>) -> lightning_core::Result<Option<DataChunk>> {
         if self.pos < self.batches.len() {
             let batch = self.batches[self.pos].clone();

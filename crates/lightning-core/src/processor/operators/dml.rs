@@ -776,57 +776,17 @@ impl PhysicalOperator for PhysicalMerge {
                     }
                 }
 
-                // 2. Full-Text Search Index (Multi-field)
+                // 2. Full-Text Search Index — index all string columns
                 if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
-                    let mut name = "";
-                    let mut path = "";
-                    let mut doc = "";
-                    let mut sig = "";
-                    for (i, col) in self.table.columns.iter().enumerate() {
-                        match col.name.as_str() {
-                            "name" => {
-                                if let Value::String(s) = &row_data[i] {
-                                    name = s;
-                                }
-                            }
-                            "file_path" => {
-                                if let Value::String(s) = &row_data[i] {
-                                    path = s;
-                                }
-                            }
-                            "docstring" => {
-                                if let Value::String(s) = &row_data[i] {
-                                    doc = s;
-                                }
-                            }
-                            "signature" => {
-                                if let Value::String(s) = &row_data[i] {
-                                    sig = s;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    let _ = fts.insert_node_fts(next_id, name, path, doc, sig);
-                    let _ = fts.commit();
-                }
-
-                // 3. Vector Index
-                if let Some(vec_idx) = storage.vector_indexes.get(&self.table_name) {
-                    for (i, col) in self.table.columns.iter().enumerate() {
-                        if col.name == "embedding" {
-                            if let Value::List(vals) = &row_data[i] {
-                                if vals.len() == 768 {
-                                    let mut emb = [0f32; 768];
-                                    for (j, v) in vals.iter().enumerate() {
-                                        if let Value::Number(n) = v {
-                                            emb[j] = *n as f32;
-                                        }
-                                    }
-                                    let _ = vec_idx.insert(next_id, &emb, &self.buffer_manager, tx);
-                                }
-                            }
-                        }
+                    let text_fields: Vec<&str> = row_data.iter()
+                        .filter_map(|v| match v {
+                            Value::String(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    if !text_fields.is_empty() {
+                        let _ = fts.insert_multi_field(next_id, &text_fields);
+                        let _ = fts.commit();
                     }
                 }
 

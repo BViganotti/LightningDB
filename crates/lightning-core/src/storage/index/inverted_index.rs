@@ -2,7 +2,7 @@ use crate::storage::buffer_manager::BufferManager;
 use crate::Result;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use tantivy::collector::{Collector, TopDocs};
+use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
@@ -14,10 +14,7 @@ pub struct InvertedIndex {
     writer: RwLock<IndexWriter>,
     reader: IndexReader,
     id_field: Field,
-    name_field: Field,
-    path_field: Field,
-    doc_field: Field,
-    sig_field: Field,
+    content_field: Field,
 }
 
 impl InvertedIndex {
@@ -29,10 +26,7 @@ impl InvertedIndex {
 
         let mut schema_builder = Schema::builder();
         let id_field = schema_builder.add_u64_field("node_id", FAST | STORED);
-        let name_field = schema_builder.add_text_field("name", TEXT | STORED);
-        let path_field = schema_builder.add_text_field("file_path", TEXT | STORED);
-        let doc_field = schema_builder.add_text_field("docstring", TEXT);
-        let sig_field = schema_builder.add_text_field("signature", TEXT);
+        let content_field = schema_builder.add_text_field("content", TEXT);
         let schema = schema_builder.build();
 
         let dir = tantivy::directory::MmapDirectory::open(&path)
@@ -57,55 +51,21 @@ impl InvertedIndex {
             writer: RwLock::new(writer),
             reader,
             id_field,
-            name_field,
-            path_field,
-            doc_field,
-            sig_field,
+            content_field,
         })
-    }
-
-    /// Insert a multi-field document (all text fields at once)
-    pub fn insert_full_doc(
-        &self,
-        node_id: u64,
-        name: &str,
-        file_path: &str,
-        docstring: &str,
-        signature: &str,
-    ) -> Result<()> {
-        let writer = self.writer.read().unwrap();
-        let mut doc = TantivyDocument::default();
-        doc.add_u64(self.id_field, node_id);
-        doc.add_text(self.name_field, name);
-        doc.add_text(self.path_field, file_path);
-        doc.add_text(self.doc_field, docstring);
-        doc.add_text(self.sig_field, signature);
-        writer
-            .add_document(doc)
-            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-        Ok(())
     }
 
     pub fn insert_batch(
         &self,
         docs: &[(u64, &str)],
-        field_name: &str,
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let writer = self.writer.read().unwrap();
-        let field = match field_name {
-            "name" => self.name_field,
-            "file_path" => self.path_field,
-            "docstring" => self.doc_field,
-            "signature" => self.sig_field,
-            _ => self.name_field,
-        };
-
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
-            doc.add_text(field, text);
+            doc.add_text(self.content_field, text);
             writer
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -113,16 +73,23 @@ impl InvertedIndex {
         Ok(())
     }
 
-    /// Legacy single-node FTS insert — replaced by insert_full_doc
-    pub fn insert_node_fts(
+    pub fn insert_multi_field(
         &self,
         node_id: u64,
-        name: &str,
-        file_path: &str,
-        docstring: &str,
-        signature: &str,
+        fields: &[&str],
     ) -> Result<()> {
-        self.insert_full_doc(node_id, name, file_path, docstring, signature)
+        let writer = self.writer.read().unwrap();
+        let mut doc = TantivyDocument::default();
+        doc.add_u64(self.id_field, node_id);
+        for text in fields {
+            if !text.is_empty() {
+                doc.add_text(self.content_field, text);
+            }
+        }
+        writer
+            .add_document(doc)
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        Ok(())
     }
 
     pub fn commit(&self) -> Result<()> {
@@ -143,12 +110,7 @@ impl InvertedIndex {
         let searcher = self.reader.searcher();
         let query_parser = QueryParser::for_index(
             &self.index,
-            vec![
-                self.name_field,
-                self.path_field,
-                self.doc_field,
-                self.sig_field,
-            ],
+            vec![self.content_field],
         );
 
         let query = query_parser
@@ -158,7 +120,7 @@ impl InvertedIndex {
         let top_docs = searcher
             .search(
                 &query,
-                &tantivy::collector::TopDocs::with_limit(limit).order_by_score(),
+                &TopDocs::with_limit(limit).order_by_score(),
             )
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 

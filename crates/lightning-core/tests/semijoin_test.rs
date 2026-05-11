@@ -1,6 +1,5 @@
 use lightning_core::processor::Value;
 use lightning_core::Database;
-use lightning_types::LogicalType;
 
 use arrow::array::Array;
 use tempfile::tempdir;
@@ -16,20 +15,15 @@ fn test_semijoin_pushdown_optimization() {
 
     // 1. Create Schema
     {
-        db.create_node_table(
-            "User".to_string(),
-            vec![lightning_core::catalog::PropertyDefinition {
-                name: "name".to_string(),
-                type_: LogicalType::String,
-            }],
-            Some("name".to_string()),
+        let conn = db.connect();
+        conn.execute(
+            "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
+            None,
         )
         .unwrap();
-        db.create_rel_table(
-            "Follows".to_string(),
-            "User".to_string(),
-            "User".to_string(),
-            vec![],
+        conn.execute(
+            "CREATE REL TABLE Follows(FROM User TO User)",
+            None,
         )
         .unwrap();
 

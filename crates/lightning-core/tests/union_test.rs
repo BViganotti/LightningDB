@@ -1,19 +1,17 @@
 use lightning_core::Database;
 use lightning_core::SystemConfig;
-use lightning_core::catalog::PropertyDefinition;
-use lightning_types::LogicalType;
 use std::sync::Arc;
 
 fn setup_db() -> Arc<Database> {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::new(temp_dir.path(), SystemConfig::default()).unwrap();
     
-    db.create_node_table("Person".into(), vec![
-        PropertyDefinition { name: "name".into(), type_: LogicalType::String },
-        PropertyDefinition { name: "age".into(), type_: LogicalType::Int64 },
-    ], Some("name".into())).unwrap();
-    
     let conn = db.connect();
+    conn.execute(
+        "CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))",
+        None,
+    )
+    .unwrap();
     conn.query("CREATE (p:Person {name: 'Alice', age: 30})").unwrap();
     conn.query("CREATE (p:Person {name: 'Bob', age: 25})").unwrap();
     conn.query("CREATE (p:Person {name: 'Charlie', age: 35})").unwrap();

@@ -55,7 +55,7 @@ fn test_recursive_reachability() {
     let query = "MATCH (root:Item {id: 1})-[r:Contains*1..2]->(f:Item) WHERE f.is_dir = false RETURN f.name ORDER BY f.name";
     let res = conn.execute(query, None).unwrap();
     
-    assert!(res.success);
+    assert!(res.is_success());
     // Ideally we should find file1 and file2
     let total_rows: usize = res.batches.iter().map(|b| b.num_rows()).sum();
     println!("DEBUG: Found {} rows for recursive query", total_rows);

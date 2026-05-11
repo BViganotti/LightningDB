@@ -25,9 +25,9 @@ fn test_optimizer_filter_pushdown_e2e() {
             ("id".into(), LogicalType::Int64),
             ("age".into(), LogicalType::Int64),
             ("name".into(), LogicalType::String),
-        ], false).unwrap();
+        ], false, None).unwrap();
         
-        storage.create_table("Knows".into(), vec![], true).unwrap();
+        storage.create_table("Knows".into(), vec![], true, None).unwrap();
     }
 
     // 2. Insert Data

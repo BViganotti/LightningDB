@@ -3,7 +3,6 @@ use lightning_core::processor::DataChunk;
 use lightning_core::processor::PhysicalOperator;
 use lightning_core::processor::Value;
 use lightning_core::Database;
-use lightning_types::LogicalType;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -18,22 +17,15 @@ fn test_intersect_operator() {
 
     // 1. Create Schema
     {
-        db.create_node_table(
-            "User".to_string(),
-            vec![lightning_core::catalog::PropertyDefinition {
-                name: "name".to_string(),
-                type_: LogicalType::String,
-            }],
-            Some("name".to_string()),
-        )
-        .unwrap();
-        db.create_rel_table(
-            "Follows".to_string(),
-            "User".to_string(),
-            "User".to_string(),
-            vec![],
-        )
-        .unwrap();
+        let conn = db.connect();
+        conn.execute(
+            "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
+            None,
+        ).unwrap();
+        conn.execute(
+            "CREATE REL TABLE Follows(FROM User TO User)",
+            None,
+        ).unwrap();
 
         // Manual catalog update for tests
         let mut catalog = db.catalog.write();
@@ -115,7 +107,7 @@ fn test_intersect_operator() {
         done: bool,
     }
     impl PhysicalOperator for MockProbe {
-        fn clone_box(&self) -> Box<dyn PhysicalOperator> {
+        fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
             Box::new((*self).clone())
         }
         fn get_next(

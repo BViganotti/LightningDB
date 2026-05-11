@@ -2,7 +2,6 @@ pub mod api;
 pub mod catalog;
 pub use api::*;
 pub mod capi;
-pub mod fusion;
 pub mod optimizer;
 pub mod parser;
 pub mod planner;
@@ -96,7 +95,6 @@ pub struct Database {
     pub physical_plan_cache: Arc<
         RwLock<HashMap<String, Arc<Box<dyn crate::processor::PhysicalOperator + Send + Sync>>>>,
     >,
-    pub name_id_cache: Arc<parking_lot::RwLock<HashMap<String, Vec<u64>>>>,
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -226,7 +224,6 @@ impl Database {
             header: RwLock::new(header),
             plan_cache: Arc::new(RwLock::new(HashMap::new())),
             physical_plan_cache: Arc::new(RwLock::new(HashMap::new())),
-            name_id_cache: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             vacuum_handle: Some(vacuum_handle),
         }))
     }
@@ -445,11 +442,8 @@ impl Connection {
             .next_row_id
             .fetch_add(num_rows as u64, Ordering::SeqCst);
 
-        // Get column info from table
-        let columns = &table.columns;
-        let col_names: Vec<&str> = columns.iter().skip(1).map(|c| c.name.as_str()).collect();
-
         // Build Arrow arrays per column (skip _id)
+        let columns = &table.columns;
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(columns.len());
         let mut fields: Vec<arrow::datatypes::Field> = Vec::with_capacity(columns.len());
 
@@ -463,7 +457,7 @@ impl Connection {
         arrays.push(Arc::new(id_values) as ArrayRef);
 
         // Data columns
-        for (col_idx, col) in columns.iter().enumerate().skip(1) {
+        for col in columns.iter().skip(1) {
             let arr: ArrayRef = match col.data_type {
                 lightning_types::LogicalType::String => {
                     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 64);
@@ -879,68 +873,61 @@ impl Connection {
             }
         }
 
-        rayon::join(
-            || {
-                if let Some(fts) = fts_opt {
-                    // Index ALL text columns for comprehensive search
-                    let text_cols = ["name", "file_path", "docstring", "signature"];
-                    for &col_name in &text_cols {
-                        if let Some(idx) = table.columns.iter().position(|c| &c.name == col_name) {
-                            if idx < final_batch.num_columns() {
-                                let array = final_batch.column(idx);
-                                if let Some(str_arr) =
-                                    array.as_any().downcast_ref::<arrow::array::StringArray>()
-                                {
-                                    let mut batch_docs = Vec::new();
-                                    for i in 0..num_rows {
-                                        if str_arr.is_valid(i) {
-                                            batch_docs.push((start_id + i as u64, str_arr.value(i)));
-                                        }
-                                    }
-                                    if !batch_docs.is_empty() {
-                                        if let Err(e) = fts.insert_batch(
-                                            &batch_docs,
-                                            col_name,
-                                            &bm,
-                                            &tx,
-                                        ) {
-                                            tracing::warn!("FTS insert_batch error for {}: {}", col_name, e);
-                                        }
-                                    }
-                                }
+        // Index all string columns into FTS
+        if let Some(fts) = fts_opt {
+            for (col_idx, col) in table.columns.iter().enumerate() {
+                if col_idx < final_batch.num_columns() {
+                    let array = final_batch.column(col_idx);
+                    if let Some(str_arr) =
+                        array.as_any().downcast_ref::<arrow::array::StringArray>()
+                    {
+                        let mut batch_docs = Vec::new();
+                        for i in 0..num_rows {
+                            if str_arr.is_valid(i) {
+                                batch_docs.push((start_id + i as u64, str_arr.value(i)));
+                            }
+                        }
+                        if !batch_docs.is_empty() {
+                            if let Err(e) = fts.insert_batch(&batch_docs, &bm, &tx) {
+                                tracing::warn!("FTS insert_batch error for column {}: {}", col.name, e);
                             }
                         }
                     }
-                    if let Err(e) = fts.commit() {
-                        tracing::warn!("FTS commit error: {}", e);
-                    }
                 }
-            },
-            || {
-                if let Some(vec_idx) = vec_opt {
-                    if let Some(idx) = table.columns.iter().position(|c| &c.name == "embedding") {
-                        let array = final_batch.column(idx);
-                        if let Some(list_arr) = array
-                            .as_any()
-                            .downcast_ref::<arrow::array::FixedSizeListArray>()
-                        {
-                            let values = list_arr
+            }
+            if let Err(e) = fts.commit() {
+                tracing::warn!("FTS commit error: {}", e);
+            }
+        }
+
+        // Index all FixedSizeList(Float32) columns as vector embeddings
+        if let Some(vec_idx) = vec_opt {
+            for (col_idx, col) in table.columns.iter().enumerate() {
+                if col_idx < final_batch.num_columns() {
+                    let array = final_batch.column(col_idx);
+                    if let Some(list_arr) = array
+                        .as_any()
+                        .downcast_ref::<arrow::array::FixedSizeListArray>()
+                    {
+                        if list_arr.value_length() == 768 {
+                            if let Some(values) = list_arr
                                 .values()
                                 .as_any()
                                 .downcast_ref::<arrow::array::Float32Array>()
-                                .unwrap();
-                            let mut batch_vecs = Vec::new();
-                            for i in 0..num_rows {
-                                let mut emb = [0f32; 768];
-                                emb.copy_from_slice(&values.values()[i * 768..(i + 1) * 768]);
-                                batch_vecs.push((start_id + i as u64, emb));
+                            {
+                                let mut batch_vecs = Vec::new();
+                                for i in 0..num_rows {
+                                    let mut emb = [0f32; 768];
+                                    emb.copy_from_slice(&values.values()[i * 768..(i + 1) * 768]);
+                                    batch_vecs.push((start_id + i as u64, emb));
+                                }
+                                let _ = vec_idx.insert_batch(&batch_vecs, &bm, &tx);
                             }
-                            let _ = vec_idx.insert_batch(&batch_vecs, &bm, &tx);
                         }
                     }
                 }
-            },
-        );
+            }
+        }
 
         db.storage_manager.read().flush_all_pending(&bm, &tx)?;
         db.transaction_manager.commit(&tx, &bm, &db)?;

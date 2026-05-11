@@ -61,14 +61,14 @@ fn contains_edge_parenthesized_infix() -> TestResult {
 fn contains_edge_infix_or_parens() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE CodeNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:CodeNode {name: 'test_func', file_path: '/src/main.rs'})", None)?;
-    conn.execute("CREATE (:CodeNode {name: 'other', file_path: '/tests/test.rs'})", None)?;
-    conn.execute("CREATE (:CodeNode {name: 'unrelated', file_path: '/src/lib.rs'})", None)?;
+    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
+    conn.execute("CREATE (:TestNode {name: 'test_func', file_path: '/src/main.rs'})", None)?;
+    conn.execute("CREATE (:TestNode {name: 'other', file_path: '/tests/test.rs'})", None)?;
+    conn.execute("CREATE (:TestNode {name: 'unrelated', file_path: '/src/lib.rs'})", None)?;
 
     // Infix CONTAINS inside parenthesized OR - this might break the regex
     let res = conn.execute(
-        "MATCH (n:CodeNode) WHERE (n.name CONTAINS 'test' OR n.file_path CONTAINS 'test') RETURN n.name",
+        "MATCH (n:TestNode) WHERE (n.name CONTAINS 'test' OR n.file_path CONTAINS 'test') RETURN n.name",
         None,
     );
     eprintln!("contains_edge_infix_or_parens result: {:?}", res.is_ok());

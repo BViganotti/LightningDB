@@ -1,6 +1,4 @@
 use lightning_core::Database;
-use lightning_core::catalog::PropertyDefinition;
-use lightning_types::LogicalType;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -9,22 +7,23 @@ fn test_semi_mask_filtering() {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), Default::default()).unwrap();
     
-    // 1. Create a node table "User"
-    db.create_node_table("User".to_string(), vec![
-        PropertyDefinition { name: "id".to_string(), type_: LogicalType::Uint64 },
-        PropertyDefinition { name: "name".to_string(), type_: LogicalType::String },
-    ], Some("id".to_string())).unwrap();
-
     let conn = db.connect();
+
+    // 1. Create schema
+    conn.execute(
+        "CREATE NODE TABLE User(id UINT64, name STRING, PRIMARY KEY(id))",
+        None,
+    ).unwrap();
+    conn.execute(
+        "CREATE REL TABLE Follows(FROM User TO User)",
+        None,
+    ).unwrap();
     
     // 2. Insert some users
     conn.query("CREATE (:User {id: 1, name: 'Alice'})").unwrap();
     conn.query("CREATE (:User {id: 2, name: 'Bob'})").unwrap();
     conn.query("CREATE (:User {id: 3, name: 'Charlie'})").unwrap();
     conn.query("CREATE (:User {id: 100, name: 'Target'})").unwrap();
-
-    // 3. Create a relationship table "Follows"
-    db.create_rel_table("Follows".to_string(), "User".to_string(), "User".to_string(), vec![]).unwrap();
     conn.query("MATCH (u1:User {id: 1}), (u2:User {id: 100}) CREATE (u1)-[:Follows]->(u2)").unwrap();
     conn.query("MATCH (u1:User {id: 2}), (u2:User {id: 3}) CREATE (u1)-[:Follows]->(u2)").unwrap();
 

@@ -43,6 +43,7 @@ fn test_flatten_operator() -> Result<()> {
                 "User".to_string(),
                 vec![("name".to_string(), lightning_types::LogicalType::String)],
                 false,
+                None,
             )
             .unwrap();
 
@@ -79,7 +80,7 @@ fn test_flatten_operator() -> Result<()> {
 
     // Manually create a plan with Flatten
     // Scan(User) -> Flatten
-    let scan = LogicalOperator::Scan("User".to_string(), "u".to_string(), None, None);
+    let scan = LogicalOperator::Scan("User".to_string(), "u".to_string(), None, None, None);
     let plan = LogicalOperator::Flatten(Box::new(scan));
 
     let tx = db.transaction_manager.begin(true)?;
