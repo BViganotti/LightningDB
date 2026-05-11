@@ -4,12 +4,22 @@ build-backend = "maturin"
 
 [project]
 name = "lightning-memory"
+version = "0.1.0"
 requires-python = ">=3.9"
 description = "Embedded graph+vector+hybrid database for AI agent memory"
 authors = [{ name = "Lightning Developers" }]
 license = { text = "MIT" }
 readme = "README.md"
+dependencies = [
+    "langchain-core>=0.1.0",
+    "llama-index-core>=0.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/BViganotti/lightning"
+Repository = "https://github.com/BViganotti/lightning"
 
 [tool.maturin]
+module-name = "lightning._native"
+python-source = "python"
 features = ["pyo3/extension-module"]
-module-name = "lightning"

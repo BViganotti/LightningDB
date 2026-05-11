@@ -3,3 +3,7 @@
 .fusion/
 *.lbug
 *.patch
+__pycache__/
+*.pyc
+dist/
+*.egg-info/
