@@ -1,4 +1,4 @@
-use crate::{Connection, Database, QueryResult, SystemConfig};
+use crate::{Connection, Database, QueryResult, SyncMode, SystemConfig};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::Arc;
@@ -35,6 +35,8 @@ pub extern "C" fn kuzu_database_init(
         buffer_pool_size: config.buffer_pool_size,
         max_num_threads: config.max_num_threads as u32,
         read_only: config.read_only,
+        sync_mode: SyncMode::Normal,
+        vacuum_interval_ms: 1000,
     };
 
     match Database::new(path_str, sys_config) {

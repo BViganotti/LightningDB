@@ -63,11 +63,25 @@ impl From<arrow::error::ArrowError> for LightningError {
 
 pub type Result<T> = std::result::Result<T, LightningError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    Normal,
+    Off,
+}
+
+impl Default for SyncMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SystemConfig {
     pub buffer_pool_size: u64,
     pub max_num_threads: u32,
     pub read_only: bool,
+    pub sync_mode: SyncMode,
+    pub vacuum_interval_ms: u64,
 }
 
 impl Default for SystemConfig {
@@ -76,6 +90,8 @@ impl Default for SystemConfig {
             buffer_pool_size: 1024 * 1024 * 1024,
             max_num_threads: 0,
             read_only: false,
+            sync_mode: SyncMode::Normal,
+            vacuum_interval_ms: 1000,
         }
     }
 }
@@ -138,7 +154,7 @@ impl Database {
             h
         };
 
-        let wal = Arc::new(WAL::new(&path)?);
+        let wal = Arc::new(WAL::new(&path, config.sync_mode)?);
         let mut storage_manager = crate::storage::storage_manager::StorageManager::new(&path)?;
 
         let catalog_path = path.join("catalog.lbug");
@@ -189,9 +205,16 @@ impl Database {
         }
 
         // REPLAY WAL after tables are created so apply_page can find file handles
-        wal.replay(|fid, pid, data| storage_manager.apply_page(fid, pid, data))?;
+        wal.replay(
+            |fid, pid, data| storage_manager.apply_page(fid, pid, data),
+            header.last_checkpoint_ts,
+        )?;
 
-        let free_space_manager = Arc::new(crate::storage::FreeSpaceManager::new());
+        let fsm_path = path.join("free_space.bin");
+        let free_space_manager = Arc::new(
+            crate::storage::FreeSpaceManager::load(&fsm_path)
+                .unwrap_or_else(|_| crate::storage::FreeSpaceManager::new()),
+        );
 
         let transaction_manager = Arc::new(TransactionManager::new(Arc::clone(&wal)));
         let buffer_manager = Arc::new(crate::storage::buffer_manager::BufferManager::new(
@@ -201,14 +224,17 @@ impl Database {
 
         let tm_clone = Arc::clone(&transaction_manager);
         let bm_clone = Arc::clone(&buffer_manager);
+        let vacuum_interval_ms = std::cmp::max(100, config.vacuum_interval_ms);
         let vacuum_handle = std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_millis(vacuum_interval_ms));
             if bm_clone.is_shutting_down() {
                 bm_clone.flush_all();
                 break;
             }
             let min_ts = tm_clone.get_min_active_read_ts();
-            let _ = bm_clone.reclaim_expired_versions(min_ts);
+            if let Err(e) = bm_clone.reclaim_expired_versions(min_ts) {
+                tracing::warn!("Vacuum reclaim failed: {}", e);
+            }
         });
 
         Ok(Arc::new(Self {
@@ -237,7 +263,25 @@ impl Database {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
-        self.buffer_manager.checkpoint(0)
+        // Flush all dirty pages to disk and sync data files
+        self.buffer_manager.checkpoint()?;
+
+        // Persist free space map
+        {
+            let fsm_path = self._path.join("free_space.bin");
+            let _ = self.free_space_manager.save(&fsm_path);
+        }
+
+        // Update the last checkpoint timestamp so recovery can skip these entries
+        let last_ts = self.transaction_manager.get_current_ts();
+        {
+            let mut header = self.header.write();
+            header.last_checkpoint_ts = last_ts;
+            let header_path = self._path.join("database.header");
+            header.save(&header_path)?;
+        }
+
+        Ok(())
     }
 
     /// Repair table cardinalities from actual data file sizes.

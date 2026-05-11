@@ -380,7 +380,18 @@ impl BufferManager {
         let shard_idx = self.get_shard_idx(key);
         let pool = self.shards[shard_idx].read();
         if let Some(wal) = &pool.wal {
-            wal.log_page_update(file_id, page_idx, data)?;
+            // Extract tx_id from the frame's version field
+            let tx_id = if let Some(slot_indices) = pool.page_to_slots.get(&key) {
+                if let Some(&idx) = slot_indices.first() {
+                    let version = pool.slots[idx].frame.version.load(std::sync::atomic::Ordering::Acquire);
+                    version & !UNCOMMITTED_BIT
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            wal.log_page_update(tx_id, file_id, page_idx, data)?;
         }
         Ok(())
     }
@@ -406,7 +417,7 @@ impl BufferManager {
         Ok(())
     }
 
-    pub fn checkpoint(&self, _commit_ts: u64) -> Result<()> {
+    pub fn checkpoint(&self) -> Result<()> {
         for shard in &self.shards {
             let mut pool = shard.write();
             for i in 0..pool.slots.len() {
@@ -414,11 +425,18 @@ impl BufferManager {
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, &pool.slots[i].frame.data)?;
+                            // Sync the data file after writing each shard's dirty pages
+                            fh.sync()?;
                             pool.slots[i].dirty = false;
                         }
                     }
                 }
             }
+        }
+        // Sync all data files first, then truncate WAL
+        // This ensures data is on disk before we discard the WAL
+        for shard in &self.shards {
+            let pool = shard.read();
             if let Some(wal) = &pool.wal {
                 wal.truncate()?;
             }
@@ -460,11 +478,9 @@ impl BufferManager {
     }
 
     pub fn shutdown(&self) {
-        // Use checkpoint to flush dirty pages AND truncate WAL for clean shutdown
-        if let Err(e) = self.checkpoint(0) {
+        if let Err(e) = self.checkpoint() {
             tracing::error!("Checkpoint failed during shutdown: {}", e);
         }
-        // Also do a final flush to ensure all data is on disk
         self.flush_all();
         for shard in &self.shards {
             shard.write().shutdown.store(true, Ordering::Release);

@@ -140,6 +140,10 @@ impl TransactionManager {
     pub fn get_active_tx_ids(&self) -> HashSet<u64> {
         self.active_tx_ids.read().clone()
     }
+
+    pub fn get_current_ts(&self) -> u64 {
+        self.current_ts.load(Ordering::Acquire)
+    }
 }
 
 impl Transaction {
