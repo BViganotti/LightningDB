@@ -2,6 +2,7 @@ pub mod api;
 pub mod catalog;
 pub use api::*;
 pub mod capi;
+pub mod memory;
 pub mod optimizer;
 pub mod parser;
 pub mod planner;
