@@ -3,6 +3,7 @@ members = [
     "crates/lightning-types",
     "crates/lightning-core",
     "crates/lightning-arrow",
+    "crates/lightning-python",
 ]
 resolver = "2"
 
