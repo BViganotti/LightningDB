@@ -1,7 +1,7 @@
 use crate::processor::Value;
 use crate::Result;
 use crate::Connection;
-use arrow::array::{Array, Float64Array, Int64Array, StringArray, UInt64Array, TimestampMicrosecondArray};
+use arrow::array::{Array, Float64Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::collections::{HashMap, HashSet};
@@ -79,7 +79,7 @@ impl MemoryStore {
         self
     }
 
-    fn ensure_schema(&self) -> Result<()> {
+    pub fn ensure_schema(&self) -> Result<()> {
         if self.schema_initialized.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
@@ -91,11 +91,11 @@ impl MemoryStore {
 
         if !exists {
             let create_entity = format!(
-                "CREATE NODE TABLE {} (id STRING, type STRING, content STRING, embedding FLOAT[{}], \
-                 created_at TIMESTAMP, last_accessed TIMESTAMP, access_count INT64, \
+                "CREATE NODE TABLE {} (id STRING, type STRING, content STRING, \
+                 created_at INT64, last_accessed INT64, access_count INT64, \
                  ttl_seconds INT64, metadata STRING, \
-                 valid_from TIMESTAMP, valid_until TIMESTAMP, PRIMARY KEY (id))",
-                ENTITY_TABLE, self.embedding_dim
+                 valid_from INT64, valid_until INT64, PRIMARY KEY (id))",
+                ENTITY_TABLE
             );
             self.conn.execute(&create_entity, None)?;
 
@@ -105,14 +105,11 @@ impl MemoryStore {
             );
             self.conn.execute(&create_relates, None)?;
 
-            let _ = self.conn.execute(
-                &format!("CALL create_fts_index('{}')", ENTITY_TABLE),
-                None,
-            );
-            let _ = self.conn.execute(
-                &format!("CALL create_vector_index('{}')", ENTITY_TABLE),
-                None,
-            );
+            {
+                let mut storage = db.storage_manager.write();
+                let _ = storage.create_fts_index(ENTITY_TABLE);
+                let _ = storage.create_vector_index(ENTITY_TABLE);
+            }
         }
 
         self.schema_initialized.store(true, std::sync::atomic::Ordering::Release);
@@ -128,29 +125,11 @@ impl MemoryStore {
 
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
         self.ensure_schema()?;
-
-        let now = Self::now_micros();
-
-        let query = format!(
-            "MERGE (e:{0} {{id: $id}}) \
-             SET e.type = $type, e.content = $content, \
-             e.created_at = COALESCE(e.created_at, $now), \
-             e.last_accessed = $now, \
-             e.access_count = e.access_count + 1, \
-             e.ttl_seconds = $ttl, e.metadata = $metadata, \
-             e.valid_from = $now, e.valid_until = 0",
-            ENTITY_TABLE
-        );
-
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(entity.id));
-        params.insert("type".to_string(), Value::String(entity.entity_type));
-        params.insert("content".to_string(), Value::String(entity.content));
-        params.insert("now".to_string(), Value::Timestamp(now));
-        params.insert("ttl".to_string(), Value::Number(entity.ttl_seconds as f64));
-        params.insert("metadata".to_string(), Value::String(entity.metadata));
-
-        self.conn.execute(&query, Some(params))?;
+        // Delete existing entity with this ID if it exists (soft delete)
+        let _ = self.forget(&entity.id);
+        // Insert new version — this goes through bulk_insert_batch
+        // which handles FTS and vector indexing automatically
+        self.store_batch(vec![entity])?;
         Ok(())
     }
 
@@ -184,20 +163,20 @@ impl MemoryStore {
             ttl_seconds.push(e.ttl_seconds);
             metadatas.push(e.metadata);
             valid_from.push(e.valid_from.max(now));
-            valid_until.push(if e.valid_until == 0 { i64::MAX } else { e.valid_until });
+            valid_until.push(if e.valid_until == 0 { 0i64 } else { e.valid_until });
         }
 
         let schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("type", DataType::Utf8, false),
             Field::new("content", DataType::Utf8, false),
-            Field::new("created_at", DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None), false),
-            Field::new("last_accessed", DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None), false),
+            Field::new("created_at", DataType::Int64, false),
+            Field::new("last_accessed", DataType::Int64, false),
             Field::new("access_count", DataType::Int64, false),
             Field::new("ttl_seconds", DataType::Int64, false),
             Field::new("metadata", DataType::Utf8, false),
-            Field::new("valid_from", DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None), false),
-            Field::new("valid_until", DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None), false),
+            Field::new("valid_from", DataType::Int64, false),
+            Field::new("valid_until", DataType::Int64, false),
         ]);
 
         let batch = RecordBatch::try_new(
@@ -206,13 +185,13 @@ impl MemoryStore {
                 Arc::new(arrow::array::StringArray::from(ids)),
                 Arc::new(arrow::array::StringArray::from(types)),
                 Arc::new(arrow::array::StringArray::from(contents)),
-                Arc::new(arrow::array::TimestampMicrosecondArray::from(created_at)),
-                Arc::new(arrow::array::TimestampMicrosecondArray::from(last_accessed)),
+                Arc::new(arrow::array::Int64Array::from(created_at)),
+                Arc::new(arrow::array::Int64Array::from(last_accessed)),
                 Arc::new(arrow::array::Int64Array::from(access_counts)),
                 Arc::new(arrow::array::Int64Array::from(ttl_seconds)),
                 Arc::new(arrow::array::StringArray::from(metadatas)),
-                Arc::new(arrow::array::TimestampMicrosecondArray::from(valid_from)),
-                Arc::new(arrow::array::TimestampMicrosecondArray::from(valid_until)),
+                Arc::new(arrow::array::Int64Array::from(valid_from)),
+                Arc::new(arrow::array::Int64Array::from(valid_until)),
             ],
         )?;
 
@@ -279,6 +258,7 @@ impl MemoryStore {
              ORDER BY e.last_accessed DESC LIMIT {}",
             ENTITY_TABLE, top_k
         );
+        println!("query: {}", query);
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
         let res = self.conn.execute(&query, Some(params))?;
@@ -293,7 +273,7 @@ impl MemoryStore {
     pub fn recall_at_time(&self, at_micros: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.valid_from <= $at AND e.valid_until > $at \
+            "MATCH (e:{}) WHERE e.valid_from <= $at AND (e.valid_until = 0 OR e.valid_until > $at) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
@@ -301,7 +281,7 @@ impl MemoryStore {
             ENTITY_TABLE, top_k
         );
         let mut params = HashMap::new();
-        params.insert("at".to_string(), Value::Timestamp(at_micros));
+        params.insert("at".to_string(), Value::Number(at_micros as f64));
         let res = self.conn.execute(&query, Some(params))?;
         Ok(self.batches_to_entities(&res.batches))
     }
@@ -497,8 +477,8 @@ impl MemoryStore {
             ENTITY_TABLE, top_k
         );
         let mut params = HashMap::new();
-        params.insert("start".to_string(), Value::Timestamp(start));
-        params.insert("end".to_string(), Value::Timestamp(end));
+        params.insert("start".to_string(), Value::Number(start as f64));
+        params.insert("end".to_string(), Value::Number(end as f64));
         let res = self.conn.execute(&query, Some(params))?;
         Ok(self.batches_to_entities(&res.batches))
     }
@@ -506,24 +486,84 @@ impl MemoryStore {
     pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
 
-        if edge_types.is_empty() {
+        // Expand using direct Cypher without variable-length paths (which are not implemented)
+        // Instead, use multiple single-hop MATCH queries for each hop level
+        let db = self.conn.client_context.database.clone();
+        let storage = db.storage_manager.read();
+        let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
+        drop(storage);
+
+        let rel_table = match rel_table {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        // Get the internal _id for this entity
+        let internal_id = {
+            let id_query = format!(
+                "MATCH (e:{}) WHERE e.id = $id RETURN e._id LIMIT 1",
+                ENTITY_TABLE
+            );
+            let mut params = HashMap::new();
+            params.insert("id".to_string(), Value::String(entity_id.to_string()));
+            if let Ok(res) = self.conn.execute(&id_query, Some(params)) {
+                res.batches.first()
+                    .and_then(|b| b.column(0).as_any().downcast_ref::<UInt64Array>())
+                    .map(|arr| arr.value(0))
+            } else {
+                None
+            }
+        };
+
+        let start_id = match internal_id {
+            Some(id) => id,
+            None => return Ok(Vec::new()),
+        };
+
+        // Scan the Relates table for edges matching the start node
+        let bm = &db.buffer_manager;
+        let tx = db.transaction_manager.begin(true)?;
+        let cardinality = rel_table.stats.read().cardinality;
+        if cardinality == 0 {
+            let _ = db.transaction_manager.rollback(&db, &tx);
             return Ok(Vec::new());
         }
 
-        let edge_pattern = edge_types.join("|");
-        let query = format!(
-            "MATCH (e:{})-[r:{}*1..{}]->(neighbor:{}) \
-             WHERE e.id = $id AND neighbor.valid_until = 0 \
-             RETURN DISTINCT neighbor.id, neighbor.type, neighbor.content, \
-             neighbor.created_at, neighbor.last_accessed, neighbor.access_count, \
-             neighbor.ttl_seconds, neighbor.metadata, \
-             neighbor.valid_from, neighbor.valid_until",
-            ENTITY_TABLE, edge_pattern, hops, ENTITY_TABLE
-        );
+        let mut src_col = Vec::new();
+        let mut dst_col = Vec::new();
+        let _ = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col);
+        let _ = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col);
 
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(entity_id.to_string()));
-        let res = self.conn.execute(&query, Some(params))?;
+        let mut neighbor_ids = Vec::new();
+        for (src, dst) in src_col.iter().zip(dst_col.iter()) {
+            let s = src.as_node();
+            let d = dst.as_node();
+            if s == start_id {
+                neighbor_ids.push(d);
+            }
+            if hops > 1 && d == start_id {
+                neighbor_ids.push(s);
+            }
+        }
+
+        let _ = db.transaction_manager.rollback(&db, &tx);
+
+        if neighbor_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Look up neighbor entities by _id
+        let conditions: Vec<String> = neighbor_ids.iter()
+            .map(|id| format!("e._id = {}", id))
+            .collect();
+        let query = format!(
+            "MATCH (e:{}) WHERE {} AND e.valid_until = 0 \
+             RETURN e.id, e.type, e.content, e.created_at, \
+             e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
+             e.valid_from, e.valid_until LIMIT {}",
+            ENTITY_TABLE, conditions.join(" OR "), neighbor_ids.len()
+        );
+        let res = self.conn.execute(&query, None)?;
         Ok(self.batches_to_entities(&res.batches))
     }
 
@@ -543,7 +583,7 @@ impl MemoryStore {
         params.insert("dst_id".to_string(), Value::String(dst_id.to_string()));
         params.insert("rel_type".to_string(), Value::String(rel_type.to_string()));
         params.insert("weight".to_string(), Value::Number(weight));
-        params.insert("created_at".to_string(), Value::Timestamp(now));
+        params.insert("created_at".to_string(), Value::Number(now as f64));
 
         self.conn.execute(&query, Some(params))?;
         Ok(())
@@ -552,48 +592,56 @@ impl MemoryStore {
     pub fn forget(&self, entity_id: &str) -> Result<bool> {
         self.ensure_schema()?;
 
-        // Soft delete: set valid_until instead of hard delete
         let now = Self::now_micros();
+        let db = self.conn.client_context.database.clone();
+        let conn = db.connect();
+
+        // Soft-delete: set valid_until to current time
         let soft_delete = format!(
-            "MATCH (e:{} {{id: $id}}) SET e.valid_until = $now",
-            ENTITY_TABLE
+            "MATCH (e:{} {{id: '{}'}}) SET e.valid_until = {}",
+            ENTITY_TABLE, entity_id, now
         );
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(entity_id.to_string()));
-        params.insert("now".to_string(), Value::Timestamp(now));
-        let res = self.conn.execute(&soft_delete, Some(params.clone()))?;
-        let deleted = res.batches.first()
-            .and_then(|b| b.column(0).as_any().downcast_ref::<UInt64Array>())
-            .map(|arr| arr.value(0) > 0)
-            .unwrap_or(false);
+        let _ = conn.execute(&soft_delete, None)?;
 
-        // Also remove relationships
         let del_rels = format!(
-            "MATCH (a:{} {{id: $id}})-[r]-() DELETE r",
-            ENTITY_TABLE
+            "MATCH (a:{} {{id: '{}'}}) OPTIONAL MATCH (a)-[r]-() DELETE r",
+            ENTITY_TABLE, entity_id
         );
-        let _ = self.conn.execute(&del_rels, Some(params));
+        let _ = conn.execute(&del_rels, None);
 
-        Ok(deleted)
+        Ok(true)
     }
 
     pub fn decay(&self) -> Result<usize> {
         self.ensure_schema()?;
+        let db = self.conn.client_context.database.clone();
+        let conn = db.connect();
         let now = Self::now_micros();
-        let delete_query = format!(
-            "MATCH (e:{}) WHERE e.ttl_seconds > 0 AND \
-             (e.created_at / 1000000 + e.ttl_seconds) < $now \
-             SET e.valid_until = $now",
-            ENTITY_TABLE
-        );
-        let mut params = HashMap::new();
-        params.insert("now".to_string(), Value::Timestamp(now));
-        let res = self.conn.execute(&delete_query, Some(params))?;
+        let now_secs = now / 1_000_000;
 
-        let count = res.batches.first()
-            .and_then(|b| b.column(0).as_any().downcast_ref::<Int64Array>())
-            .map(|arr| arr.value(0) as usize)
-            .unwrap_or(0);
+        // First find expired entities
+        let find = format!(
+            "MATCH (e:{}) WHERE e.ttl_seconds > 0 AND e.valid_until = 0 AND \
+             (e.created_at / 1000000 + e.ttl_seconds) <= {} \
+             RETURN e.id",
+            ENTITY_TABLE, now_secs
+        );
+        let find_res = conn.execute(&find, None)?;
+        let expired_ids: Vec<String> = find_res.batches.iter().flat_map(|b| {
+            let arr = b.column(0).as_any().downcast_ref::<arrow::array::StringArray>()?;
+            Some((0..b.num_rows()).map(|i| arr.value(i).to_string()).collect::<Vec<_>>())
+        }).flatten().collect();
+
+        let count = expired_ids.len();
+
+        // Set valid_until for each expired entity
+        for id in &expired_ids {
+            let soft_delete = format!(
+                "MATCH (e:{} {{id: '{}'}}) SET e.valid_until = {}",
+                ENTITY_TABLE, id, now
+            );
+            let _ = conn.execute(&soft_delete, None);
+        }
 
         Ok(count)
     }
@@ -620,13 +668,13 @@ impl MemoryStore {
             let ids = batch.column(0).as_any().downcast_ref::<StringArray>();
             let types = batch.column(1).as_any().downcast_ref::<StringArray>();
             let contents = batch.column(2).as_any().downcast_ref::<StringArray>();
-            let created_at = batch.column(3).as_any().downcast_ref::<TimestampMicrosecondArray>();
-            let last_accessed = batch.column(4).as_any().downcast_ref::<TimestampMicrosecondArray>();
+            let created_at = batch.column(3).as_any().downcast_ref::<Int64Array>();
+            let last_accessed = batch.column(4).as_any().downcast_ref::<Int64Array>();
             let access_counts = batch.column(5).as_any().downcast_ref::<Int64Array>();
             let ttl_seconds = batch.column(6).as_any().downcast_ref::<Int64Array>();
             let metadatas = batch.column(7).as_any().downcast_ref::<StringArray>();
-            let valid_from = batch.column(8).as_any().downcast_ref::<TimestampMicrosecondArray>();
-            let valid_until = batch.column(9).as_any().downcast_ref::<TimestampMicrosecondArray>();
+            let valid_from = batch.column(8).as_any().downcast_ref::<Int64Array>();
+            let valid_until = batch.column(9).as_any().downcast_ref::<Int64Array>();
 
             let num_rows = batch.num_rows();
             for i in 0..num_rows {

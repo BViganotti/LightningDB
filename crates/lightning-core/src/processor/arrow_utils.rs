@@ -237,6 +237,20 @@ pub fn append_raw_to_builder(
             let actual_len = std::cmp::min(len, 63);
             b.append_value(std::str::from_utf8(&data[1..1 + actual_len]).unwrap_or(""));
         }
+        LogicalType::Timestamp => {
+            let b = builder
+                .as_any_mut()
+                .downcast_mut::<TimestampMicrosecondBuilder>()
+                .unwrap();
+            b.append_value(i64::from_le_bytes(data[0..8].try_into().unwrap()));
+        }
+        LogicalType::Date => {
+            let b = builder
+                .as_any_mut()
+                .downcast_mut::<Date32Builder>()
+                .unwrap();
+            b.append_value(i32::from_le_bytes(data[0..4].try_into().unwrap()));
+        }
         LogicalType::List(_) => {
             // Lists (like embeddings) are variable-length and not suitable for raw append
             // Just append an empty/null list for now

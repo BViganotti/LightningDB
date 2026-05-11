@@ -107,6 +107,7 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Vec<(u64, f32)>> {
+        let _ = self.reader.reload();
         let searcher = self.reader.searcher();
         let query_parser = QueryParser::for_index(
             &self.index,
