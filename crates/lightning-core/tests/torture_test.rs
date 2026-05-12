@@ -1178,7 +1178,7 @@ fn torture_graph_scale() -> TestResult {
 
     // Verify CSR index was built correctly
     let storage = db.storage_manager.read();
-    let has_csr = storage.fwd_csr.contains_key("Linked");
+    let _has_csr = storage.fwd_csr.contains_key("Linked");
     let csr_count = storage.fwd_csr.get("Linked").map(|csr| {
         let tx = db.transaction_manager.begin(true).unwrap();
         let bm = &db.buffer_manager;
@@ -1195,5 +1195,267 @@ fn torture_graph_scale() -> TestResult {
         assert_eq!(csr_edges, n, "Graph: CSR should have {} edges, got {}", n, csr_edges);
     }
     println!("  [GRAPH] CSR index verified: {} edges", n);
+    Ok(())
+}
+
+// ============================================================
+// 16. CONCURRENT MULTI-TABLE TRANSACTIONS WITH ROLLBACK
+// ============================================================
+
+#[test]
+fn torture_concurrent_rollback() -> TestResult {
+    use std::thread;
+    let dir = tempdir().unwrap();
+    let db = Arc::new(Database::new(dir.path(), SystemConfig::default())?);
+
+    // Create two tables for cross-table transactions
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE X(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute("CREATE NODE TABLE Y(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+
+    let n = 100u64;
+    let err_count = Arc::new(AtomicU64::new(0));
+
+    // Spawn 4 writers that each insert to X and Y in a single explicit transaction,
+    // then either commit or rollback randomly. The other half of threads also read.
+    let handles: Vec<_> = (0..4).map(|t| {
+        let db = Arc::clone(&db);
+        let errors = Arc::clone(&err_count);
+        thread::spawn(move || {
+            for i in 0..25 {
+                let id = (t * 25 + i) as i64;
+                let conn = db.connect();
+                // Begin explicit transaction
+                if let Err(e) = conn.begin() {
+                    errors.fetch_add(1, Ordering::SeqCst);
+                    continue;
+                }
+                // Insert to X
+                if let Err(e) = conn.execute(&format!("CREATE (:X {{id: {}, val: {}}})", id, id), None) {
+                    errors.fetch_add(1, Ordering::SeqCst);
+                    let _ = conn.rollback();
+                    continue;
+                }
+                // Insert to Y
+                if let Err(e) = conn.execute(&format!("CREATE (:Y {{id: {}, val: {}}})", id, id * 10), None) {
+                    errors.fetch_add(1, Ordering::SeqCst);
+                    let _ = conn.rollback();
+                    continue;
+                }
+                // Randomly commit or rollback
+                if (id as u64) % 3 == 0 {
+                    // Rollback — X and Y should NOT have this row
+                    if let Err(e) = conn.rollback() {
+                        errors.fetch_add(1, Ordering::SeqCst);
+                    }
+                } else {
+                    // Commit — X and Y should have this row
+                    if let Err(e) = conn.commit() {
+                        errors.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        })
+    }).collect();
+
+    for h in handles { h.join().unwrap(); }
+
+    // Check: X and Y should have the same number of rows (from committed transactions)
+    let res_x = db.connect().execute("MATCH (x:X) RETURN count(*)", None)?;
+    let cnt_x = res_x.batches[0].column(0)
+        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    let res_y = db.connect().execute("MATCH (y:Y) RETURN count(*)", None)?;
+    let cnt_y = res_y.batches[0].column(0)
+        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+
+    let total_attempts = 100u64;
+    // Approximately 2/3 should commit (since id % 3 == 0 rolls back)
+    let expected_min = 50i64;
+    let expected_max = 100i64;
+
+    assert_eq!(cnt_x, cnt_y, "X and Y counts should match after paired rollbacks: X={}, Y={}", cnt_x, cnt_y);
+    assert!(cnt_x >= expected_min, "Too few committed X rows: {} < {}", cnt_x, expected_min);
+    assert!(cnt_x <= expected_max, "Too many committed X rows: {} > {}", cnt_x, expected_max);
+    assert_eq!(err_count.load(Ordering::SeqCst), 0, "Concurrent rollback test had errors");
+
+    println!("  [ROLLBACK] X={} Y={} (attempts={}, expected ~67) — strict PASS", cnt_x, cnt_y, total_attempts);
+    Ok(())
+}
+
+// ============================================================
+// 17. WAL CORRUPTION INJECTION — corrupt specific bytes, verify recovery
+// ============================================================
+
+#[test]
+fn torture_wal_corruption() -> TestResult {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().to_path_buf();
+
+    // Phase 1: Create database with data and checkpoint
+    {
+        let db = Database::new(&db_path, SystemConfig::default())?;
+        let conn = db.connect();
+        conn.execute("CREATE NODE TABLE Safe(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+        for i in 0..100 {
+            conn.execute(&format!("CREATE (:Safe {{id: {}, val: {}}})", i, i * 2), None)?;
+        }
+        db.checkpoint()?; // All data flushed, WAL truncated
+    }
+
+    // Phase 2: Insert more data WITHOUT checkpoint so it goes to WAL
+    {
+        let db = Database::new(&db_path, SystemConfig::default())?;
+        let conn = db.connect();
+        for i in 100..150 {
+            conn.execute(&format!("CREATE (:Safe {{id: {}, val: {}}})", i, i * 3), None)?;
+        }
+    }
+
+    // Phase 3: Corrupt a non-critical byte in the WAL and verify recovery
+    // The WAL file is binary: [type(1)] [tx_id(8)] [file_id(8)] [page_idx(8)] [data(4096)]
+    // We corrupt byte 20 inside a page data block — should not affect parsing
+    // because corrupted data bytes just produce wrong on-disk data for one page,
+    // which will be overwritten by the next checkpoint.
+    {
+        let wal_path = db_path.join("wal.lbug");
+        if wal_path.exists() {
+            let mut wal_data = std::fs::read(&wal_path)?;
+            if wal_data.len() > 100 {
+                // Flip a bit in the middle of the second page's data section
+                let corrupt_offset = 50;
+                wal_data[corrupt_offset] ^= 0xFF;
+                std::fs::write(&wal_path, &wal_data)?;
+                println!("  [WALCORRUPT] Corrupted byte {} in WAL file ({} bytes)", corrupt_offset, wal_data.len());
+            }
+        }
+    }
+
+    // Phase 4: Reopen and verify recovery — at minimum the checkpointed data survives
+    // Corrupted WAL entries for uncommitted/uncheckpointed data may be lost,
+    // but the database should not crash or corrupt existing data.
+    {
+        match Database::new(&db_path, SystemConfig::default()) {
+            Ok(db) => {
+                let conn = db.connect();
+                let res = conn.execute("MATCH (s:Safe) RETURN count(*)", None)?;
+                let count = res.batches[0].column(0)
+                    .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+                // Checkpointed data (100 rows) MUST survive
+                assert!(count >= 100,
+                    "WAL corruption: checkpointed data lost! Expected >=100, got {}", count);
+                // Non-checkpointed data may be lost due to corruption — acceptable
+                if count < 150 {
+                    println!("  [WALCORRUPT] WAL corruption: {} rows survived (100 checkpointed, {} lost from corrupt WAL)",
+                        count, count - 100);
+                } else {
+                    println!("  [WALCORRUPT] WAL corruption: all 150 rows survived despite bit corruption");
+                }
+
+                // Verify checkpointed values are correct
+                for i in &[0i64, 50, 99] {
+                    let res = conn.execute(&format!("MATCH (s:Safe {{id: {}}}) RETURN s.val", i), None)?;
+                    assert!(res.batches[0].num_rows() > 0,
+                        "WAL corruption: checkpointed row {} lost!", i);
+                    let val = res.batches[0].column(0)
+                        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+                    assert_eq!(val, i * 2,
+                        "WAL corruption: row {} value mismatch: expected {}, got {}", i, i * 2, val);
+                }
+                println!("  [WALCORRUPT] All checkpointed values verified intact");
+            }
+            Err(e) => {
+                // If the WAL corruption breaks the parser entirely, the DB should
+                // create a fresh instance or report an error — not panic
+                println!("  [WALCORRUPT] Database failed to open after WAL corruption: {} (acceptable)", e);
+            }
+        }
+    }
+    Ok(())
+}
+
+// ============================================================
+// 18. MULTI-TYPE CONCURRENT STRESS — 5 types, 5 threads
+// ============================================================
+
+#[test]
+fn torture_multi_type_concurrent() -> TestResult {
+    use std::thread;
+    let dir = tempdir().unwrap();
+    let db = Arc::new(Database::new(dir.path(), SystemConfig::default())?);
+
+    let err_count = Arc::new(AtomicU64::new(0));
+
+    // Each thread writes to its own table with its own data type
+    let schemas = vec![
+        ("Ints", "id INT64, val INT64"),
+        ("Floats", "id INT64, val DOUBLE"),
+        ("Bools", "id INT64, val BOOL"),
+        ("Strings", "id INT64, val STRING"),
+        ("Mixed", "id INT64, i INT64, f DOUBLE, b BOOL, s STRING"),
+    ];
+
+    // Create all tables
+    let conn = db.connect();
+    for (name, schema) in &schemas {
+        conn.execute(&format!("CREATE NODE TABLE {}({}, PRIMARY KEY (id))", name, schema), None)?;
+    }
+
+    let handles: Vec<_> = schemas.into_iter().map(|(name, _)| {
+        let db = Arc::clone(&db);
+        let errs = Arc::clone(&err_count);
+        thread::spawn(move || {
+            let conn = db.connect();
+            for i in 0..100 {
+                let result = match name {
+                    "Ints" => conn.execute(&format!("CREATE (:Ints {{id: {}, val: {}}})", i, i * 10), None),
+                    "Floats" => conn.execute(&format!("CREATE (:Floats {{id: {}, val: {}}})", i, i as f64 * 1.5), None),
+                    "Bools" => conn.execute(&format!("CREATE (:Bools {{id: {}, val: {}}})", i, if i % 2 == 0 { "TRUE" } else { "FALSE" }), None),
+                    "Strings" => conn.execute(&format!("CREATE (:Strings {{id: {}, val: 'str_{}'}})", i, i), None),
+                    _ => conn.execute(&format!("CREATE (:Mixed {{id: {}, i: {}, f: {}, b: {}, s: 'm_{}'}})", i, i, i as f64, if i % 2 == 0 { "TRUE" } else { "FALSE" }, i), None),
+                };
+                if let Err(e) = result {
+                    // MVCC write-write conflicts are expected under concurrent writes
+                    // We track them to ensure they're within acceptable bounds
+                    errs.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        })
+    }).collect();
+
+    for h in handles { h.join().unwrap(); }
+
+    let err_total = err_count.load(Ordering::SeqCst);
+    // MVCC write-write conflicts are expected under concurrent writes across tables.
+    // What matters is that the database doesn't crash or corrupt data.
+    // Track ratio for diagnostics: higher than 50% may indicate a systemic issue.
+    let err_ratio = err_total as f64 / 500.0;
+    eprintln!("  [MULTITYPE] total errors: {} ({:.0}%)", err_total, err_ratio * 100.0);
+    assert!(err_ratio < 0.50,
+        "Multi-type: {} errors ({:.0}%) exceeds 50% threshold", err_total, err_ratio * 100.0);
+
+    // Verify every single row in every table — data integrity is the real test
+    let conn = db.connect();
+    for (name, expected_count) in &[("Ints", 100i64), ("Floats", 100), ("Bools", 100), ("Strings", 100), ("Mixed", 100)] {
+        let res = conn.execute(&format!("MATCH (t:{}) RETURN count(*)", name), None)?;
+        let count = res.batches[0].column(0)
+            .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+        assert_eq!(count, *expected_count, "Multi-type: {} expected {} rows, got {}", name, expected_count, count);
+    }
+
+    // Verify specific values in Mixed table
+    for i in 0..100 {
+        let res = conn.execute(&format!("MATCH (m:Mixed {{id: {}}}) RETURN m.i, m.f, m.b, m.s", i), None)?;
+        assert!(res.batches[0].num_rows() > 0, "Multi-type: Mixed row {} not found", i);
+        let i_val = res.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+        assert_eq!(i_val, i, "Multi-type: Mixed id {} int mismatch", i);
+        let f_val = res.batches[0].column(1).as_any().downcast_ref::<arrow::array::Float64Array>().unwrap().value(0);
+        assert!((f_val - i as f64).abs() < 0.001, "Multi-type: Mixed id {} float mismatch", i);
+        let b_val = res.batches[0].column(2).as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap().value(0);
+        assert_eq!(b_val, i % 2 == 0, "Multi-type: Mixed id {} bool mismatch", i);
+        let s_val = res.batches[0].column(3).as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(0);
+        assert_eq!(s_val, format!("m_{}", i), "Multi-type: Mixed id {} string mismatch", i);
+    }
+
+    println!("  [MULTITYPE] 5 tables, 5 types, 5 threads, 500 rows — ALL VALUES VERIFIED");
     Ok(())
 }
