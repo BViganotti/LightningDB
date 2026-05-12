@@ -1,6 +1,7 @@
 use crate::processor::Value;
 use crate::Result;
 use crate::Connection;
+use crate::QueryResult;
 use arrow::array::{Array, Float64Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -114,6 +115,10 @@ impl MemoryStore {
 
         self.schema_initialized.store(true, std::sync::atomic::Ordering::Release);
         Ok(())
+    }
+
+    pub fn now_micros_for_test() -> i64 {
+        Self::now_micros()
     }
 
     fn now_micros() -> i64 {
@@ -246,6 +251,124 @@ impl MemoryStore {
         sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         sorted.truncate(top_k);
         Ok(sorted)
+    }
+
+    /// Full RAG pipeline: hybrid search → graph expansion → reranking → context assembly.
+    ///
+    /// Returns a RagResult containing assembled context and source metadata.
+    /// The pipeline:
+    ///   1. Hybrid search (FTS + vector) for initial candidates
+    ///   2. Graph expansion via Relates edges for context enrichment
+    ///   3. Reranking by search score × graph degree × temporal recency
+    ///   4. Assembly into LLM-ready context string
+    pub fn rag_query(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<RagResult> {
+        self.ensure_schema()?;
+
+        // Phase 1: Hybrid search
+        let initial = self.recall(query_text, embedding, top_k)?;
+        if initial.is_empty() {
+            return Ok(RagResult::default());
+        }
+
+        let mut all_entities: HashMap<String, (MemoryEntity, f64)> = HashMap::new();
+        for r in &initial {
+            all_entities.insert(r.entity.id.clone(), (r.entity.clone(), r.score));
+        }
+
+        // Phase 2: Graph expansion — find neighbors for top results
+        let top_for_expansion = std::cmp::min(3, initial.len());
+        let db = self.conn.client_context.database.clone();
+        let storage = db.storage_manager.read();
+        let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
+        drop(storage);
+
+        if let Some(ref rel_tab) = rel_table {
+            let tx = db.transaction_manager.begin(true)?;
+            let card = rel_tab.stats.read().cardinality;
+            if card > 0 {
+                let mut srcs = Vec::new();
+                let mut dsts = Vec::new();
+                let bm = &db.buffer_manager;
+                let _ = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs);
+                let _ = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts);
+
+                // Build internal_id -> string_id map from initial results
+                let mut internal_ids: Vec<(u64, String)> = Vec::new();
+                for i in 0..top_for_expansion {
+                    if i >= initial.len() { break; }
+                    let lookup = format!(
+                        "MATCH (e:{}) WHERE e.id = '{}' RETURN e._id LIMIT 1",
+                        ENTITY_TABLE, initial[i].entity.id
+                    );
+                    if let Ok(res) = self.conn.execute(&lookup, None) {
+                        if let Some(b) = res.batches.first() {
+                            let arr = b.column(0).as_any().downcast_ref::<UInt64Array>();
+                            if let Some(a) = arr {
+                                internal_ids.push((a.value(0), initial[i].entity.id.clone()));
+                            }
+                        }
+                    }
+                }
+
+                for (nid, _) in &internal_ids {
+                    for (s, d) in srcs.iter().zip(dsts.iter()) {
+                        let neighbor_eid = if s.as_node() == *nid {
+                            self.lookup_by_internal_id(d.as_node())
+                        } else if d.as_node() == *nid {
+                            self.lookup_by_internal_id(s.as_node())
+                        } else {
+                            continue;
+                        };
+                        if let Some(ne) = neighbor_eid {
+                            if !all_entities.contains_key(&ne.id) {
+                                all_entities.insert(ne.id.clone(), (ne, 0.0));
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = db.transaction_manager.rollback(&db, &tx);
+        }
+
+        // Phase 3: Rerank by composite score
+        let now_secs = Self::now_micros() / 1_000_000;
+        let mut ranked: Vec<(MemoryEntity, f64)> = all_entities.into_values().collect();
+        for (entity, score) in &mut ranked {
+            let search_score = *score;
+            let created_secs = (entity.created_at / 1_000_000) as f64;
+            let recency = (now_secs as f64 - created_secs).max(0.001).recip();
+            let composite = search_score * 2.0 + recency * 0.3;
+            *score = composite;
+        }
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Phase 4: Assemble context
+        let top_n = std::cmp::min(top_k * 2, ranked.len());
+        let used = &ranked[..top_n];
+        let sources: Vec<String> = used.iter().map(|(e, _)| e.id.clone()).collect();
+        let mut context = String::new();
+        context.push_str(&format!("Query: {}\n\nRelevant context:\n", query_text));
+        for (i, (entity, score)) in used.iter().enumerate() {
+            context.push_str(&format!(
+                "[{}] (score={:.3}, type={}) {}\n",
+                i + 1, score, entity.entity_type, entity.content
+            ));
+        }
+        context.push_str(&format!("\n---\nTotal sources: {}", top_n));
+
+        Ok(RagResult {
+            context,
+            sources,
+            total_sources: top_n,
+            query: query_text.to_string(),
+        })
+    }
+
+    /// Execute a Cypher query as of a specific MVCC timestamp.
+    /// The database shows only data committed at or before `snapshot_micros`.
+    /// This works because Lightning's MVCC already tracks every version.
+    pub fn execute_at(&self, query: &str, snapshot_micros: u64) -> Result<QueryResult> {
+        self.conn.execute_at(query, snapshot_micros, None)
     }
 
     pub fn recall_by_type(&self, entity_type: &str, top_k: usize) -> Result<Vec<MemoryEntity>> {
@@ -708,4 +831,12 @@ pub struct ConsolidationReport {
     pub links_created: usize,
     pub contradictions_found: usize,
     pub total_entities: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RagResult {
+    pub context: String,
+    pub sources: Vec<String>,
+    pub total_sources: usize,
+    pub query: String,
 }

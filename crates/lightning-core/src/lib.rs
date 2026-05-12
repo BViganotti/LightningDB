@@ -675,6 +675,158 @@ impl Connection {
         self.execute(query_str, None)
     }
 
+    /// Execute a query as of a specific point in time (time-travel).
+    /// `snapshot_ts` is an MVCC timestamp — use `now_micros()` or a
+    /// previously observed timestamp to see the graph at that moment.
+    /// The MVCC engine handles all version filtering automatically.
+    pub fn execute_at(
+        &self,
+        query_str: &str,
+        snapshot_ts: u64,
+        params: Option<HashMap<String, Value>>,
+    ) -> Result<QueryResult> {
+        let _query_id = self
+            .client_context
+            .active_query_id
+            .fetch_add(1, Ordering::SeqCst);
+
+        let cache_key = normalize_query(query_str);
+        let cached_stmt = {
+            let cache = self.client_context.database.plan_cache.read();
+            cache.get(&cache_key).cloned()
+        };
+
+        if let Some(stmt) = cached_stmt {
+            let mut active_tx_guard = self.transaction.lock();
+            let (tx, autocommit) = if let Some(ref tx) = *active_tx_guard {
+                (Arc::clone(tx), false)
+            } else {
+                (
+                    Arc::new(
+                        self.client_context
+                            .database
+                            .transaction_manager
+                            .begin_at(true, snapshot_ts)?,
+                    ),
+                    true,
+                )
+            };
+            drop(active_tx_guard);
+
+            let bm = &self.client_context.database.buffer_manager;
+            let db = &*self.client_context.database;
+            db.storage_manager.read().flush_all_pending(bm, &tx)?;
+
+            let res = (|| -> Result<QueryResult> {
+                let logical_plan = LogicalPlanner::plan(stmt)?;
+                let pkey = &cache_key;
+                let physical_plan = {
+                    let mut plan_cache = self.client_context.database.physical_plan_cache.write();
+                    if let Some(cached) = plan_cache.get(pkey) {
+                        cached.as_ref().clone_box()
+                    } else {
+                        let mut planner = PhysicalPlanner::new(
+                            Arc::clone(&self.client_context.database),
+                            tx.read_ts,
+                            tx.tx_id,
+                            Arc::clone(&tx.undo_buffer),
+                        );
+                        let new_plan = planner.plan(logical_plan)?;
+                        let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> = new_plan;
+                        plan_cache.insert(pkey.clone(), Arc::new(boxed));
+                        plan_cache.get(pkey).unwrap().as_ref().clone_box()
+                    }
+                };
+                let mut processor = crate::processor::Processor::new(physical_plan);
+                let chunks = processor.execute(
+                    Arc::clone(&self.client_context.database),
+                    Arc::clone(&tx),
+                    params,
+                )?;
+                Ok(QueryResult::new_arrow(
+                    vec![], vec![],
+                    chunks.into_iter().map(|c| c.batch).collect(),
+                ))
+            })();
+
+            if autocommit {
+                let bm = &self.client_context.database.buffer_manager;
+                let db = &self.client_context.database;
+                if res.is_ok() {
+                    db.transaction_manager.commit(&tx, bm, db)?;
+                } else {
+                    db.transaction_manager.rollback(db, &tx)?;
+                }
+            }
+            return res;
+        }
+
+        let query = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
+        let mut active_tx_guard = self.transaction.lock();
+        let (tx, autocommit) = if let Some(ref tx) = *active_tx_guard {
+            (Arc::clone(tx), false)
+        } else {
+            (
+                Arc::new(
+                    self.client_context
+                        .database
+                        .transaction_manager
+                        .begin_at(true, snapshot_ts)?,
+                ),
+                true,
+            )
+        };
+        drop(active_tx_guard);
+
+        let bm = &self.client_context.database.buffer_manager;
+        let db: &Database = &*self.client_context.database;
+        db.storage_manager.read().flush_all_pending(bm, &tx)?;
+
+        let res = (|| -> Result<QueryResult> {
+            let catalog = self.client_context.database.catalog.read();
+            let mut binder = Binder::new(&catalog, &self.client_context.database.function_registry);
+            let bound_query = binder.bind_query(&query)?;
+            drop(catalog);
+
+            if let Some(bound_union) = bound_query.union_queries.first() {
+                self.client_context.database.plan_cache.write()
+                    .insert(cache_key.clone(), bound_union.statement.clone());
+            }
+
+            let bound_union = bound_query.union_queries.first()
+                .ok_or_else(|| LightningError::Query("No query".into()))?;
+            let logical_plan = LogicalPlanner::plan(bound_union.statement.clone())?;
+            let mut planner = PhysicalPlanner::new(
+                Arc::clone(&self.client_context.database),
+                tx.read_ts,
+                tx.tx_id,
+                Arc::clone(&tx.undo_buffer),
+            );
+            let physical_plan = planner.plan(logical_plan)?;
+            let mut processor = Processor::new(physical_plan);
+            let chunks = processor.execute(
+                Arc::clone(&self.client_context.database),
+                Arc::clone(&tx),
+                params,
+            )?;
+            Ok(QueryResult::new_arrow(
+                vec![], vec![],
+                chunks.into_iter().map(|c| c.batch).collect(),
+            ))
+        })();
+
+        if autocommit {
+            let bm = &self.client_context.database.buffer_manager;
+            let db = &self.client_context.database;
+            if res.is_ok() {
+                db.transaction_manager.commit(&tx, bm, db)?;
+            } else {
+                db.transaction_manager.rollback(db, &tx)?;
+            }
+        }
+        res
+    }
+
     pub fn execute(
         &self,
         query_str: &str,

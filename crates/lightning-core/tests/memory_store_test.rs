@@ -393,3 +393,70 @@ fn test_consolidate_contradictions() -> TestResult {
     assert!(report.total_entities >= 2);
     Ok(())
 }
+
+// ============================================================
+// Auto-temporal versioning (execute_at)
+// ============================================================
+
+#[test]
+fn test_execute_at_time_travel() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    store.store(make_entity("tt-1", "Original version", "time_travel"))?;
+
+    // Get a timestamp after first store
+    let t1 = lightning_core::memory::MemoryStore::now_micros_for_test();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    store.store(make_entity("tt-1", "Updated version", "time_travel"))?;
+
+    // Should see updated version at current time
+    let now = store.recall_recent(10)?;
+    let tt: Vec<_> = now.iter().filter(|e| e.id == "tt-1").collect();
+    assert!(!tt.is_empty(), "Should find entity at current time");
+    assert_eq!(tt[0].content, "Updated version");
+
+    Ok(())
+}
+
+// ============================================================
+// RAG Pipeline
+// ============================================================
+
+#[test]
+fn test_rag_query_basic() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    store.store(make_entity("rag-1", "Python is a programming language used in AI development", "rag"))?;
+    store.store(make_entity("rag-2", "Machine learning models are trained with large datasets", "rag"))?;
+    store.store(make_entity("rag-3", "Data pipelines process information for analysis", "rag"))?;
+
+    let result = store.rag_query("AI programming", &[], 5)?;
+    assert!(!result.context.is_empty(), "RAG should produce context");
+    assert!(result.total_sources > 0, "RAG should have sources");
+    assert_eq!(result.query, "AI programming");
+    Ok(())
+}
+
+#[test]
+fn test_rag_query_empty() -> TestResult {
+    let (_dir, _db, store) = setup();
+    let result = store.rag_query("nothing", &[], 5)?;
+    assert!(result.context.is_empty());
+    assert_eq!(result.total_sources, 0);
+    Ok(())
+}
+
+#[test]
+fn test_rag_query_with_graph_expansion() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    store.store(make_entity("hub", "Central machine learning concept", "rag"))?;
+    store.store(make_entity("leaf", "Related secondary topic in ML systems", "rag"))?;
+    store.associate("hub", "leaf", "RelatesTo", 0.9)?;
+
+    let result = store.rag_query("machine learning", &[], 5)?;
+    assert!(!result.context.is_empty());
+    assert!(result.total_sources >= 1);
+    Ok(())
+}

@@ -45,8 +45,16 @@ impl TransactionManager {
     }
 
     pub fn begin(&self, is_read_only: bool) -> Result<Transaction> {
+        self.begin_at(is_read_only, self.current_ts.load(Ordering::SeqCst))
+    }
+
+    /// Begin a read-only transaction that sees the database as it was
+    /// at `snapshot_ts`. This enables time-travel queries — any read
+    /// will show only data committed at or before `snapshot_ts`, as if
+    /// the clock was frozen at that moment.
+    pub fn begin_at(&self, is_read_only: bool, snapshot_ts: u64) -> Result<Transaction> {
         let tx_id = self.next_tx_id.fetch_add(1, Ordering::SeqCst);
-        let read_ts = self.current_ts.load(Ordering::SeqCst);
+        let read_ts = snapshot_ts;
 
         if !is_read_only {
             self.active_tx_ids.write().insert(tx_id);
