@@ -244,27 +244,20 @@ impl BufferManager {
             for &idx in slot_indices {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
 
+                // Row-level conflict detection: allow concurrent page versions.
+                // If another transaction has an uncommitted version of this page,
+                // we still create our own version. Row-level conflicts are detected
+                // by RowVersion::mark_row when two transactions modify the same row.
+                // On commit, per-row modifications are merged into the latest page.
                 if version == tx_id_marked {
                     best_version = version;
                     source_data = Some(pool.slots[idx].frame.data);
                     break;
                 }
 
-                if (version & UNCOMMITTED_BIT) != 0 && version != tx_id_marked {
-                    return Err(crate::LightningError::Query(format!(
-                        "Write-Write Conflict: Page {} modified by active tx {}",
-                        page_idx,
-                        version & !UNCOMMITTED_BIT
-                    )));
-                }
-
-                if (version & UNCOMMITTED_BIT) == 0 && version > tx.read_ts {
-                    return Err(crate::LightningError::Query(format!(
-                        "Write-Write Conflict: Page {} modified by committed tx {}",
-                        page_idx, version
-                    )));
-                }
-
+                // Select the best snapshot-visible version as source data.
+                // We ignore uncommitted versions (from other transactions)
+                // and versions committed after our read_ts.
                 if (version & UNCOMMITTED_BIT) == 0
                     && version <= tx.read_ts
                     && (version > best_version || (version == 0 && source_data.is_none()))
@@ -339,6 +332,49 @@ impl BufferManager {
         }
 
         Ok(new_frame)
+    }
+
+    /// Pin the latest committed version of a page (for commit-time merging).
+    /// This returns the frame with the highest committed version, regardless of
+    /// read_ts. Used by merge-on-commit to re-read the current page state and
+    /// apply this transaction's row modifications on top.
+    pub fn pin_latest_committed(
+        &self,
+        fh_arc: Arc<FileHandle>,
+        page_idx: u64,
+    ) -> Result<Arc<Frame>> {
+        let key = (fh_arc.file_id, page_idx);
+        let shard_idx = self.get_shard_idx(key);
+
+        // Try buffer pool first (read lock)
+        {
+            let pool = self.shards[shard_idx].read();
+            if let Some(slot_indices) = pool.page_to_slots.get(&key) {
+                let mut best_version: u64 = 0;
+                let mut best_frame: Option<Arc<Frame>> = None;
+                for &idx in slot_indices {
+                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                    // Find the highest committed version
+                    if (version & UNCOMMITTED_BIT) == 0 && version >= best_version {
+                        best_version = version;
+                        best_frame = Some(Arc::clone(&pool.slots[idx].frame));
+                    }
+                }
+                if let Some(frame) = best_frame {
+                    frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    return Ok(frame);
+                }
+            }
+        }
+
+        // Fallback: load from disk
+        let mut data = [0u8; PAGE_SIZE];
+        if (page_idx as usize) < fh_arc.get_num_pages() as usize {
+            fh_arc.read_page(page_idx, &mut data)?;
+        }
+        let frame = Arc::new(Frame::new(data, 0));
+        frame.pin_count.fetch_add(1, Ordering::AcqRel);
+        Ok(frame)
     }
 
     pub fn update_timestamps(&self, file_id: u64, page_idx: u64, tx_id: u64, commit_ts: u64) {

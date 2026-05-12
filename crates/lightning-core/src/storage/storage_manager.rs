@@ -721,6 +721,10 @@ impl StorageManager {
         self.indexes.get(table_name).cloned()
     }
 
+    pub fn get_file_handle(&self, file_id: u64) -> Option<Arc<FileHandle>> {
+        self.file_handles.get(&file_id).cloned()
+    }
+
     fn create_column_recursive(
         &mut self,
         table_name: &str,

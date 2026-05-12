@@ -1130,9 +1130,9 @@ impl Column {
         }
         let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
 
+        let mut stack_buf = [0u8; 64];
         unsafe {
             let data_ptr = frame.data.as_ptr() as *mut u8;
-            let mut stack_buf = [0u8; 64];
             self.serialize_value_into(val, bm, tx, &mut stack_buf)?;
             std::ptr::copy_nonoverlapping(
                 stack_buf.as_ptr(),
@@ -1146,6 +1146,24 @@ impl Column {
             tx.modified_rows
                 .lock()
                 .push((self.version_info.clone(), row_id));
+            // Record the exact row data for merge-on-commit.
+            // This allows concurrent transactions modifying different rows
+            // on the same page to merge their changes without conflict.
+            let mut row_data = [0u8; 64];
+            // Copy the serialized value bytes (inline storage).
+            // For overflow strings (>63 chars), this copies the overflow
+            // pointer (page_idx + offset + length), which is correct:
+            // the overflow data is read via the pointer at read time.
+            row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+            tx.modified_page_rows.lock().push(
+                crate::transaction::transaction_manager::PageRowMod {
+                    file_id: self.fh.file_id,
+                    page_idx,
+                    row_id,
+                    element_size,
+                    row_data,
+                }
+            );
         }
 
         bm.log_page_update(self.fh.file_id, page_idx, &frame.data)?;
@@ -1329,6 +1347,18 @@ impl Column {
 
                     if !skip_modified_rows && !self.name.starts_with('_') {
                         modified_rows_batch.push((self.version_info.clone(), current_row));
+                        // Record row data for merge-on-commit
+                        let mut row_data = [0u8; 64];
+                        row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+                        tx.modified_page_rows.lock().push(
+                            crate::transaction::transaction_manager::PageRowMod {
+                                file_id: self.fh.file_id,
+                                page_idx,
+                                row_id: current_row,
+                                element_size,
+                                row_data,
+                            }
+                        );
                         if modified_rows_batch.len() >= 1024 {
                             tx.modified_rows
                                 .lock()
