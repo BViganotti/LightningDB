@@ -538,13 +538,28 @@ impl Column {
                     builder.append_null();
                 } else {
                     let slot_offset = base_offset + i * 64;
-                    let len = page.data[slot_offset] as usize;
-                    let actual_len = std::cmp::min(len, 63);
-                    let s = std::str::from_utf8(
-                        &page.data[slot_offset + 1..slot_offset + 1 + actual_len],
-                    )
-                    .unwrap_or("");
-                    builder.append_value(s);
+                    let marker = page.data[slot_offset];
+                    let s = if marker == 255 {
+                        // Overflow string: read from overflow file via parse_value
+                        // (which handles buffer manager pinning internally)
+                        match self.parse_value(
+                            &page.data[slot_offset..slot_offset + 64],
+                            bm,
+                            tx,
+                        ) {
+                            Ok(Value::String(s)) => s,
+                            _ => "".to_string(),
+                        }
+                    } else {
+                        let len = marker as usize;
+                        let actual_len = std::cmp::min(len, 63);
+                        std::str::from_utf8(
+                            &page.data[slot_offset + 1..slot_offset + 1 + actual_len],
+                        )
+                        .unwrap_or("")
+                        .to_string()
+                    };
+                    builder.append_value(&s);
                 }
             }
 
@@ -596,7 +611,21 @@ impl Column {
         let mut null_bits = vec![0xFFu8; (num_values as usize + 7) / 8];
         let mut has_any_nulls = false;
 
-        // Unroll loop for Branchless string scanning
+        // Pre-read overflow file if needed — we need it for overflow strings
+        let overflow_data: Vec<u8> = if self.overflow_fh.is_some() {
+            let ofh = self.overflow_fh.as_ref().unwrap();
+            let num_of_pages = ofh.get_num_pages() as usize;
+            if num_of_pages > 0 {
+                let mut buf = vec![0u8; num_of_pages * 4096];
+                let _ = ofh.read_pages(0, num_of_pages as u64, &mut buf);
+                buf
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         for i in 0..num_values as usize {
             let row_offset = offset as usize + i;
             let null_idx = row_offset - (null_first_page as usize * 4096);
@@ -607,17 +636,50 @@ impl Column {
             let offset_in_page = (row_offset % values_per_page as usize) * 64;
             let slot_offset = page_offset + offset_in_page;
 
-            let len = data_buf[slot_offset] as usize;
-            let actual_len = std::cmp::min(len, 63) * (1 - is_null as usize);
-            let s_bytes = &data_buf[slot_offset + 1..slot_offset + 1 + actual_len];
+            if is_null != 0 {
+                // Null handling stays the same
+                null_bits[i / 8] &= !(is_null << (i % 8));
+                has_any_nulls |= is_null != 0;
+                continue;
+            }
+
+            let marker = data_buf[slot_offset];
+            let s_bytes = if marker == 255 && !overflow_data.is_empty() {
+                let of_page = u64::from_le_bytes(
+                    data_buf[slot_offset + 1..slot_offset + 9].try_into().unwrap(),
+                ) as usize;
+                let of_offset = u64::from_le_bytes(
+                    data_buf[slot_offset + 9..slot_offset + 17].try_into().unwrap(),
+                ) as usize;
+                let of_len = std::cmp::min(
+                    u32::from_le_bytes(
+                        data_buf[slot_offset + 17..slot_offset + 21].try_into().unwrap(),
+                    ) as usize,
+                    4096,
+                );
+                let of_start = of_page * 4096 + of_offset;
+                let of_end = std::cmp::min(of_start + of_len, overflow_data.len());
+                if of_end > of_start {
+                    &overflow_data[of_start..of_end]
+                } else {
+                    &[]
+                }
+            } else {
+                let len = marker as usize;
+                let actual_len = std::cmp::min(len, 63);
+                &data_buf[slot_offset + 1..slot_offset + 1 + actual_len]
+            };
+
             let s = String::from_utf8_lossy(s_bytes);
             values.extend_from_slice(s.as_bytes());
             current_offset += s.len() as i32;
             offsets.push(current_offset);
 
             // Update null bits branchlessly
-            null_bits[i / 8] &= !(is_null << (i % 8));
-            has_any_nulls |= is_null != 0;
+            if is_null != 0 {
+                null_bits[i / 8] &= !(is_null << (i % 8));
+                has_any_nulls |= is_null != 0;
+            }
         }
 
         let null_buf = if has_any_nulls {
@@ -970,7 +1032,18 @@ impl Column {
                 Ok(Arc::new(Float64Array::new(values, null_buf)))
             }
             DataType::Boolean => {
-                let values = BooleanBuffer::new(data_buf, 0, num_values);
+                // Booleans are stored byte-packed (1 byte per value) in the column
+                // files, but Arrow's BooleanBuffer expects bit-packed data.
+                // Convert byte-packed → bit-packed here.
+                let bytes = data_buf.as_slice();
+                let byte_count = std::cmp::min(bytes.len(), num_values);
+                let mut packed = vec![0u8; (num_values + 7) / 8];
+                for i in 0..byte_count {
+                    if bytes[i] != 0 {
+                        packed[i / 8] |= 1u8 << (i % 8);
+                    }
+                }
+                let values = BooleanBuffer::new(Buffer::from(packed), 0, num_values);
                 Ok(Arc::new(BooleanArray::new(values, null_buf)))
             }
             _ => unreachable!(),
@@ -1455,18 +1528,43 @@ impl Column {
         let mut data_vec = Vec::with_capacity(num_rows * 64);
         data_vec.resize(num_rows * 64, 0u8);
 
-        // Fill buffer with strings
+        // Fill buffer with strings, using overflow for strings > 63 chars.
+        // We need the buffer manager for overflow writes only (buffer pool pages).
         for i in 0..num_rows {
             let is_null = nulls.as_ref().map(|n| n.is_null(i)).unwrap_or(false);
             if !is_null {
                 let s = string_array.value(i);
                 let s_bytes = s.as_bytes();
-                let write_len = std::cmp::min(s_bytes.len(), 63);
-
                 let local_offset = i * 64;
-                data_vec[local_offset] = write_len as u8;
-                data_vec[local_offset + 1..local_offset + 1 + write_len]
-                    .copy_from_slice(&s_bytes[..write_len]);
+
+                if s_bytes.len() <= 63 {
+                    data_vec[local_offset] = s_bytes.len() as u8;
+                    data_vec[local_offset + 1..local_offset + 1 + s_bytes.len()]
+                        .copy_from_slice(s_bytes);
+                } else if let Some(ref ofh) = self.overflow_fh {
+                    // Overflow path: write to overflow file, store pointer
+                    let page_idx = ofh.add_new_page()?;
+                    let frame = bm.create_new_version(ofh.clone(), page_idx, tx)?;
+                    let copy_len = std::cmp::min(s_bytes.len(), 4096);
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            s_bytes.as_ptr(),
+                            frame.data.as_ptr() as *mut u8,
+                            copy_len,
+                        );
+                    }
+                    bm.log_page_update(ofh.file_id, page_idx, &frame.data)?;
+                    bm.unpin_page(ofh, page_idx, frame);
+
+                    data_vec[local_offset] = 255u8;
+                    data_vec[local_offset + 1..local_offset + 9]
+                        .copy_from_slice(&page_idx.to_le_bytes());
+                    data_vec[local_offset + 9..local_offset + 17]
+                        .copy_from_slice(&0u64.to_le_bytes());
+                    let stored_len = std::cmp::min(s_bytes.len(), 4096);
+                    data_vec[local_offset + 17..local_offset + 21]
+                        .copy_from_slice(&(stored_len as u32).to_le_bytes());
+                }
             }
         }
 
@@ -1542,11 +1640,13 @@ impl Column {
                     let page_idx = u64::from_le_bytes(data[1..9].try_into().unwrap());
                     let offset = u64::from_le_bytes(data[9..17].try_into().unwrap());
                     let len = u32::from_le_bytes(data[17..21].try_into().unwrap()) as usize;
+                    let read_len = std::cmp::min(len, 4096 - offset as usize);
                     let overflow_page =
                         bm.pin_page(self.overflow_fh.as_ref().unwrap().clone(), page_idx, tx)?;
+                    let end = std::cmp::min(offset as usize + read_len, 4096);
                     Ok(Value::String(
                         String::from_utf8_lossy(
-                            &overflow_page.data[offset as usize..offset as usize + len],
+                            &overflow_page.data[offset as usize..end],
                         )
                         .to_string(),
                     ))
