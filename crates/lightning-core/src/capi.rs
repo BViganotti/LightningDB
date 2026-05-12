@@ -37,6 +37,9 @@ pub extern "C" fn kuzu_database_init(
         read_only: config.read_only,
         sync_mode: SyncMode::Normal,
         vacuum_interval_ms: 1000,
+        prefetch_enabled: true,
+        prefetch_depth: 2,
+        prefetch_confidence: 0.15,
     };
 
     match Database::new(path_str, sys_config) {

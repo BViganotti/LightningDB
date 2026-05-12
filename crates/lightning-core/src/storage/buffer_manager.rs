@@ -47,12 +47,23 @@ struct BufferPool {
 pub struct BufferManager {
     shards: Vec<RwLock<BufferPool>>,
     num_shards: usize,
+    pub prefetch_tracker: Arc<crate::storage::prefetch::PrefetchTracker>,
+    prefetch_enabled: bool,
+    prefetch_depth: usize,
+    prefetch_confidence: f64,
 }
 
 impl BufferManager {
-    pub fn new(capacity: usize, wal: Option<Arc<crate::storage::WAL>>) -> Self {
+    pub fn new(
+        capacity: usize,
+        wal: Option<Arc<crate::storage::WAL>>,
+        prefetch_enabled: bool,
+        prefetch_depth: usize,
+        prefetch_confidence: f64,
+    ) -> Self {
         let num_shards = 16;
         let shard_capacity = capacity / num_shards;
+        let prefetch_tracker = Arc::new(crate::storage::prefetch::PrefetchTracker::new());
         let mut shards = Vec::with_capacity(num_shards);
 
         for _ in 0..num_shards {
@@ -77,7 +88,14 @@ impl BufferManager {
             }));
         }
 
-        Self { shards, num_shards }
+        Self {
+            shards,
+            num_shards,
+            prefetch_tracker,
+            prefetch_enabled,
+            prefetch_depth,
+            prefetch_confidence,
+        }
     }
 
     fn get_shard_idx(&self, key: (u64, u64)) -> usize {
@@ -135,6 +153,7 @@ impl BufferManager {
 
                 if let Some(frame) = best_frame {
                     frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
                     return Ok(frame);
                 }
             }
@@ -167,6 +186,7 @@ impl BufferManager {
 
             if let Some(frame) = best_frame {
                 frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
                 return Ok(frame);
             }
         }
@@ -291,6 +311,33 @@ impl BufferManager {
         pool.page_to_slots.entry(key).or_default().push(slot_idx);
 
         new_frame.pin_count.fetch_add(1, Ordering::AcqRel);
+
+        // Record access for learned prefetch prediction.
+        // This builds the transition matrix used to predict future accesses.
+        self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+
+        // Speculative prefetch: predict which pages will be accessed next
+        // and read them into the OS page cache to reduce disk I/O latency.
+        if self.prefetch_enabled {
+            let predicted = self.prefetch_tracker.predict_next(
+                fh_arc.file_id,
+                page_idx,
+                self.prefetch_depth,
+                self.prefetch_confidence,
+            );
+            for (pf_id, pf_pg) in predicted {
+                let pf_key = (pf_id, pf_pg);
+                if !pool.page_to_slots.contains_key(&pf_key) {
+                    if let Some(pf_fh) = pool.file_handles.get(&pf_id) {
+                        if (pf_pg as usize) < pf_fh.get_num_pages() as usize {
+                            let mut pf_data = [0u8; PAGE_SIZE];
+                            let _ = pf_fh.read_page(pf_pg, &mut pf_data);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(new_frame)
     }
 

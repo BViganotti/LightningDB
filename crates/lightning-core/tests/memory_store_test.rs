@@ -462,6 +462,177 @@ fn test_rag_query_with_graph_expansion() -> TestResult {
 }
 
 // ============================================================
+// Streaming Queries
+// ============================================================
+
+#[test]
+fn test_streaming_query_basic() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    // Store some entities
+    for i in 0..10 {
+        store.store(make_entity(&format!("stream-{}", i), &format!("Streaming test entity {}", i), "stream"))?;
+    }
+
+    // Query via streaming channel
+    let rx = store.query_stream("MATCH (e:Entity) WHERE e.type = 'stream' RETURN e.id, e.content ORDER BY e.id LIMIT 10")?;
+
+    let mut count = 0usize;
+    while let Ok(Ok(chunk)) = rx.recv() {
+        count += chunk.batch.num_rows();
+    }
+    assert_eq!(count, 10, "Should receive all 10 entities via stream");
+    Ok(())
+}
+
+#[test]
+fn test_streaming_query_empty() -> TestResult {
+    let (_dir, _db, store) = setup();
+    let rx = store.query_stream("MATCH (e:Entity) WHERE e.type = 'nonexistent' RETURN e.id")?;
+    let mut count = 0usize;
+    while let Ok(Ok(chunk)) = rx.recv() {
+        count += chunk.batch.num_rows();
+    }
+    assert_eq!(count, 0, "Empty query should stream 0 rows");
+    Ok(())
+}
+
+#[test]
+fn test_streaming_query_cancel() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    // Insert many entities
+    for i in 0..50 {
+        store.store(make_entity(&format!("cancel-{}", i), &format!("Cancel test {}", i), "cancel"))?;
+    }
+
+    // Start streaming, then drop the receiver to cancel
+    let rx = store.query_stream("MATCH (e:Entity) WHERE e.type = 'cancel' RETURN e.id")?;
+    drop(rx); // Cancel immediately
+    // No assertion — just ensure no crash
+    Ok(())
+}
+
+#[test]
+fn test_streaming_memory_recall() -> TestResult {
+    let (_dir, _db, store) = setup();
+
+    store.store(make_entity("stream-mem-1", "Streaming memory recall test", "stream_recall"))?;
+    store.store(make_entity("stream-mem-2", "Another streaming recall entity", "stream_recall"))?;
+
+    let rx = store.recall_stream("streaming", &[], 10)?;
+    let mut results = Vec::new();
+    while let Ok(Ok(r)) = rx.recv() {
+        results.push(r);
+    }
+    assert!(!results.is_empty(), "Streaming recall should return results");
+    Ok(())
+}
+
+// ============================================================
+// Learned Cache Prefetching
+// ============================================================
+
+#[test]
+fn test_prefetch_tracker_basic() -> TestResult {
+    use lightning_core::storage::prefetch::PrefetchTracker;
+
+    let tracker = PrefetchTracker::new();
+
+    // Record a sequence of page accesses
+    tracker.record_access(1, 100);
+    tracker.record_access(1, 101);
+    tracker.record_access(1, 102);
+    tracker.record_access(1, 100);
+    tracker.record_access(1, 101);
+    tracker.record_access(1, 100);
+    tracker.record_access(1, 101);
+    tracker.record_access(1, 103);
+
+    // After enough observations, the tracker should have learned that
+    // after page 100, page 101 is the most common transition
+    // (3 transitions from 100: 3 -> 101, all >= min_observations)
+    let predictions = tracker.predict_next(1, 100, 3, 0.3);
+    assert!(!predictions.is_empty(), "Should predict next pages");
+    assert_eq!(predictions[0], (1, 101), "Most common transition: 100 -> 101");
+
+    // Hot pages should include the most frequently accessed ones
+    let hot = tracker.get_hot_pages(5);
+    assert!(!hot.is_empty(), "Should have hot pages");
+    assert!(tracker.num_tracked_pages() >= 4);
+    assert!(tracker.num_transitions() >= 3);
+    Ok(())
+}
+
+#[test]
+fn test_prefetch_tracker_no_data() -> TestResult {
+    use lightning_core::storage::prefetch::PrefetchTracker;
+
+    let tracker = PrefetchTracker::new();
+
+    // Without any observations, predictions should be empty
+    let pred = tracker.predict_next(1, 999, 5, 0.5);
+    assert!(pred.is_empty());
+
+    let hot = tracker.get_hot_pages(10);
+    assert!(hot.is_empty());
+    assert_eq!(tracker.num_tracked_pages(), 0);
+    assert_eq!(tracker.num_transitions(), 0);
+    Ok(())
+}
+
+#[test]
+fn test_prefetch_tracker_confidence_threshold() -> TestResult {
+    use lightning_core::storage::prefetch::PrefetchTracker;
+
+    let tracker = PrefetchTracker::new();
+
+    // Record 100 accesses of the same transition
+    for _ in 0..100 {
+        tracker.record_access(1, 200);
+        tracker.record_access(1, 201);
+    }
+
+    // With high confidence, should still predict (100% confidence)
+    let pred = tracker.predict_next(1, 200, 1, 0.99);
+    assert!(!pred.is_empty(), "High confidence should still predict");
+    assert_eq!(pred[0], (1, 201));
+
+    // With confidence too high, no predictions
+    let none = tracker.predict_next(1, 200, 1, 1.5);
+    assert!(none.is_empty(), "Impossibly high confidence returns nothing");
+    Ok(())
+}
+
+#[test]
+fn test_prefetch_buffer_manager_integration() -> TestResult {
+    let dir = tempdir()?;
+    let config = SystemConfig {
+        prefetch_enabled: true,
+        prefetch_depth: 2,
+        prefetch_confidence: 0.01, // very permissive for testing
+        ..Default::default()
+    };
+    let db = Database::new(dir.path(), config)?;
+    let conn = db.connect();
+
+    // Run some queries to exercise the prefetch tracker
+    conn.execute("CREATE NODE TABLE Test(val INT64, PRIMARY KEY (val))", None)?;
+    for i in 0..10 {
+        conn.execute(&format!("CREATE (:Test {{val: {}}})", i), None)?;
+    }
+    let res = conn.execute("MATCH (t:Test) RETURN t.val ORDER BY t.val", None)?;
+    let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 10, "Should find all 10 nodes");
+
+    // Prefetch tracker should have recorded some accesses
+    let tracked = db.buffer_manager.prefetch_tracker.num_tracked_pages();
+    assert!(tracked > 0, "Prefetch tracker should have recorded accesses (got {})", tracked);
+
+    Ok(())
+}
+
+// ============================================================
 // WebAssembly Functions
 // ============================================================
 

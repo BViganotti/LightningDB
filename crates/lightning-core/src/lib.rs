@@ -84,6 +84,9 @@ pub struct SystemConfig {
     pub read_only: bool,
     pub sync_mode: SyncMode,
     pub vacuum_interval_ms: u64,
+    pub prefetch_enabled: bool,
+    pub prefetch_depth: usize,
+    pub prefetch_confidence: f64,
 }
 
 impl Default for SystemConfig {
@@ -94,6 +97,9 @@ impl Default for SystemConfig {
             read_only: false,
             sync_mode: SyncMode::Normal,
             vacuum_interval_ms: 1000,
+            prefetch_enabled: true,
+            prefetch_depth: 2,
+            prefetch_confidence: 0.15,
         }
     }
 }
@@ -222,6 +228,9 @@ impl Database {
         let buffer_manager = Arc::new(crate::storage::buffer_manager::BufferManager::new(
             config.buffer_pool_size as usize / 4096,
             Some(Arc::clone(&wal)),
+            config.prefetch_enabled,
+            config.prefetch_depth,
+            config.prefetch_confidence,
         ));
 
         let tm_clone = Arc::clone(&transaction_manager);
@@ -699,6 +708,103 @@ impl Connection {
 
     pub fn query(&self, query_str: &str) -> Result<QueryResult> {
         self.execute(query_str, None)
+    }
+
+    /// Execute a query and return results as a streaming channel.
+    /// Each `DataChunk` is sent as it becomes available, allowing the
+    /// caller to process large result sets without buffering.
+    ///
+    /// The receiver yields `Result<DataChunk>`. Drop the receiver to
+    /// cancel the query early.
+    pub fn query_stream(
+        &self,
+        query_str: &str,
+    ) -> Result<crossbeam::channel::Receiver<Result<crate::processor::DataChunk>>> {
+        self.execute_stream(query_str, None)
+    }
+
+    /// Streaming variant of `execute()`. Returns a channel receiver
+    /// instead of collecting all chunks. See `query_stream()`.
+    pub fn execute_stream(
+        &self,
+        query_str: &str,
+        params: Option<HashMap<String, Value>>,
+    ) -> Result<crossbeam::channel::Receiver<Result<crate::processor::DataChunk>>> {
+        let cache_key = normalize_query(query_str);
+
+        let cached_stmt = {
+            let cache = self.client_context.database.plan_cache.read();
+            cache.get(&cache_key).cloned()
+        };
+
+        let tx = Arc::new(
+            self.client_context
+                .database
+                .transaction_manager
+                .begin(false)?,
+        );
+
+        let bm = &self.client_context.database.buffer_manager;
+        let db: &Database = &*self.client_context.database;
+        db.storage_manager.read().flush_all_pending(bm, &tx)?;
+
+        let (physical_plan, query_tx) = if let Some(stmt) = cached_stmt {
+            let logical_plan = LogicalPlanner::plan(stmt)?;
+            let pkey = &cache_key;
+            let plan = {
+                let mut plan_cache = self.client_context.database.physical_plan_cache.write();
+                if let Some(cached) = plan_cache.get(pkey) {
+                    cached.as_ref().clone_box()
+                } else {
+                    let mut planner = PhysicalPlanner::new(
+                        Arc::clone(&self.client_context.database),
+                        tx.read_ts,
+                        tx.tx_id,
+                        Arc::clone(&tx.undo_buffer),
+                    );
+                    let new_plan = planner.plan(logical_plan)?;
+                    let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> = new_plan;
+                    plan_cache.insert(pkey.clone(), Arc::new(boxed));
+                    plan_cache.get(pkey).unwrap().as_ref().clone_box()
+                }
+            };
+            (plan, tx)
+        } else {
+            let query = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
+            let catalog = self.client_context.database.catalog.read();
+            let mut binder = Binder::new(&catalog, &self.client_context.database.function_registry);
+            let bound_query = binder.bind_query(&query)?;
+            drop(catalog);
+
+            if let Some(bound_union) = bound_query.union_queries.first() {
+                self.client_context
+                    .database
+                    .plan_cache
+                    .write()
+                    .insert(cache_key.clone(), bound_union.statement.clone());
+            }
+
+            let bound_union = bound_query
+                .union_queries
+                .first()
+                .ok_or_else(|| LightningError::Query("No query".into()))?;
+            let logical_plan = LogicalPlanner::plan(bound_union.statement.clone())?;
+            let mut planner = PhysicalPlanner::new(
+                Arc::clone(&self.client_context.database),
+                tx.read_ts,
+                tx.tx_id,
+                Arc::clone(&tx.undo_buffer),
+            );
+            (planner.plan(logical_plan)?, tx)
+        };
+
+        let mut processor = crate::processor::Processor::new(physical_plan);
+        let rx = processor.execute_stream(
+            Arc::clone(&self.client_context.database),
+            query_tx,
+            params,
+        )?;
+        Ok(rx)
     }
 
     /// Execute a query as of a specific point in time (time-travel).

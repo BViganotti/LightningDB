@@ -1,10 +1,11 @@
-use crate::processor::Value;
+use crate::processor::{DataChunk, Value};
 use crate::Result;
 use crate::Connection;
 use crate::QueryResult;
 use arrow::array::{Array, Float64Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use crossbeam::channel::Receiver;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -253,6 +254,48 @@ impl MemoryStore {
         Ok(sorted)
     }
 
+    /// Streaming variant of `recall()`. Returns a channel that yields
+    /// `SearchResult` items as they become available. This is useful for
+    /// real-time display of results or processing large result sets.
+    pub fn recall_stream(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Receiver<Result<SearchResult>>> {
+        self.ensure_schema()?;
+
+        let db = self.conn.client_context.database.clone();
+        let storage = db.storage_manager.read();
+        let fts_exists = storage.fts_indexes.contains_key(ENTITY_TABLE);
+        let vec_exists = storage.vector_indexes.contains_key(ENTITY_TABLE);
+        drop(storage);
+
+        let (tx, rx) = crossbeam::channel::unbounded();
+        let query_text = query_text.to_string();
+        let embedding = embedding.to_vec();
+        let conn = self.conn.client_context.database.clone();
+
+        std::thread::spawn(move || {
+            let new_conn = conn.connect();
+            let store = MemoryStore::new(new_conn);
+            let results = match store.recall(&query_text, &embedding, top_k) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
+            for r in results {
+                if tx.send(Ok(r)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
     /// Full RAG pipeline: hybrid search → graph expansion → reranking → context assembly.
     ///
     /// Returns a RagResult containing assembled context and source metadata.
@@ -362,6 +405,15 @@ impl MemoryStore {
             total_sources: top_n,
             query: query_text.to_string(),
         })
+    }
+
+    /// Execute a streaming Cypher query. Results arrive on a channel
+    /// as DataChunks are produced — useful for large result sets.
+    pub fn query_stream(
+        &self,
+        query: &str,
+    ) -> Result<crossbeam::channel::Receiver<Result<DataChunk>>> {
+        self.conn.query_stream(query)
     }
 
     /// Execute a Cypher query as of a specific MVCC timestamp.

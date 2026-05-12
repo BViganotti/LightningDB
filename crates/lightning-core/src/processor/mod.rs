@@ -12,6 +12,7 @@ use crate::Result;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::record_batch::RecordBatch;
+use crossbeam::channel::Receiver;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -65,6 +66,27 @@ impl Processor {
         tx: Arc<crate::transaction::transaction_manager::Transaction>,
         params: Option<std::collections::HashMap<String, Value>>,
     ) -> Result<Vec<DataChunk>> {
+        let rx = self.execute_stream(database, tx, params)?;
+        let mut results = Vec::new();
+        while let Ok(res) = rx.recv() {
+            let chunk = res?;
+            results.push(chunk);
+        }
+        Ok(results)
+    }
+
+    /// Execute the query and return a channel receiver that yields chunks
+    /// as they are produced. This enables streaming processing of large
+    /// result sets without buffering everything in memory.
+    ///
+    /// The receiver yields `Result<DataChunk>`. When the query is complete,
+    /// the channel is closed and `recv()` will return `Err(RecvError)`.
+    pub fn execute_stream(
+        &mut self,
+        database: Arc<crate::Database>,
+        tx: Arc<crate::transaction::transaction_manager::Transaction>,
+        params: Option<std::collections::HashMap<String, Value>>,
+    ) -> Result<Receiver<Result<DataChunk>>> {
         let num_threads = if database._config.max_num_threads == 0 {
             num_cpus::get()
         } else {
@@ -76,14 +98,7 @@ impl Processor {
             Box::new(crate::processor::operators::PhysicalSingleRow::new()),
         );
         let scheduler = crate::processor::scheduler::Scheduler::new(num_threads);
-        let rx = scheduler.execute_operator(root, database, tx, params)?;
-
-        let mut results = Vec::new();
-        while let Ok(res) = rx.recv() {
-            let chunk = res?;
-            results.push(chunk);
-        }
-        Ok(results)
+        scheduler.execute_operator(root, database, tx, params)
     }
 }
 
