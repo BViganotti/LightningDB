@@ -37,3 +37,5 @@ levenshtein = { workspace = true }
 rusqlite = { workspace = true }
 tantivy = "0.26.0"
 fixedbitset = "0.5.7"
+wat = "1.248.0"
+wasmi = "2.0.0-beta.2"

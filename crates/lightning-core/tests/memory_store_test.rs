@@ -460,3 +460,44 @@ fn test_rag_query_with_graph_expansion() -> TestResult {
     assert!(result.total_sources >= 1);
     Ok(())
 }
+
+// ============================================================
+// WebAssembly Functions
+// ============================================================
+
+#[test]
+fn test_wasm_function_double() -> TestResult {
+    use std::sync::Arc;
+
+    // Write a WAT file
+    std::fs::write("/tmp/wasm_test/double.wat", r#"
+(module
+  (func (export "double") (param f64) (result f64)
+    local.get 0
+    f64.const 2.0
+    f64.mul
+  )
+)
+"#)?;
+
+    let dir = tempdir()?;
+    let db = Database::new(dir.path(), SystemConfig::default())?;
+    db.register_wasm_function("/tmp/wasm_test/double.wat", "double")?;
+    let conn = db.connect();
+
+    conn.execute("CREATE NODE TABLE Test(val DOUBLE, PRIMARY KEY (val))", None)?;
+    conn.execute("CREATE (:Test {val: 3.0})", None)?;
+    conn.execute("CREATE (:Test {val: 7.5})", None)?;
+
+    let res = conn.execute("MATCH (t:Test) RETURN WASM_double(t.val)", None)?;
+    let result = res.batches.first().unwrap();
+    let arr = result.column(0).as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+
+    let mut vals: Vec<f64> = (0..result.num_rows()).map(|i| arr.value(i)).collect();
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(vals.len(), 2);
+    assert!((vals[0] - 6.0).abs() < 0.001, "3.0 * 2 = 6.0, got {}", vals[0]);
+    assert!((vals[1] - 15.0).abs() < 0.001, "7.5 * 2 = 15.0, got {}", vals[1]);
+
+    Ok(())
+}

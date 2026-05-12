@@ -4,6 +4,7 @@ pub use api::*;
 pub mod capi;
 pub mod memory;
 pub mod optimizer;
+pub mod wasm_function;
 pub mod parser;
 pub mod planner;
 pub mod processor;
@@ -257,6 +258,31 @@ impl Database {
 
     pub fn connect(self: &Arc<Self>) -> Connection {
         Connection::new(Arc::clone(self))
+    }
+
+    /// Register a WebAssembly function that can be called from Cypher queries.
+    ///
+    /// The WASM module must export a function `func_name` with signature
+    /// `(f64) -> f64`. It will be registered as a scalar function available
+    /// in any query on this database.
+    ///
+    /// Example usage in Cypher:
+    ///   RETURN wasm_score(t.val)
+    pub fn register_wasm_function<P: AsRef<std::path::Path>>(
+        &self,
+        wasm_path: P,
+        func_name: &str,
+    ) -> Result<()> {
+        let wasm_func = crate::wasm_function::WasmFunction::load(wasm_path, func_name)?;
+        let scalar = wasm_func.to_scalar_function();
+        // SAFETY: register_wasm_function is called at initialization before
+        // any concurrent access to the function registry.
+        let registry_ptr = Arc::as_ptr(&self.function_registry) as *mut crate::processor::functions::FunctionRegistry;
+        unsafe {
+            (*registry_ptr).scalar_functions.insert(scalar.name.clone(), scalar);
+        }
+        tracing::info!("Registered WASM function: {}", func_name);
+        Ok(())
     }
 
     pub fn get_catalog_path(&self) -> PathBuf {
