@@ -18,6 +18,13 @@
 use lightning_core::memory::{MemoryEntity, MemoryStore, RagResult};
 use lightning_core::{Database, SystemConfig};
 
+fn now_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔════════════════════════════════════════════════════╗");
     println!("║        Lightning AI Agent Memory Demo             ║");
@@ -39,11 +46,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ================================================================
     // 2. STORE MEMORIES: conversations, facts, preferences, documents
     // ================================================================
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as i64)
-        .unwrap_or(0);
-
     fn entity(id: &str, content: &str, etype: &str, ts: i64) -> MemoryEntity {
         MemoryEntity {
             id: id.to_string(),
@@ -59,23 +61,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let t0 = now;
-    let day = 86_400_000_000i64; // microseconds in a day
-
     // Session 1: User asks about Rust
-    memory.store(entity("conv-1", "User asked: What's the best way to learn Rust?", "conversation", t0))?;
-    memory.store(entity("conv-2", "Assistant recommended starting with 'The Book' and building small CLI tools", "conversation", t0 + 1000))?;
+    memory.store(entity("conv-1", "User asked: What's the best way to learn Rust?", "conversation", now_micros()))?;
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    memory.store(entity("conv-2", "Assistant recommended starting with 'The Book' and building small CLI tools", "conversation", now_micros()))?;
 
     // Session 2: User expresses preferences
-    memory.store(entity("pref-1", "User prefers Python for data science and Rust for systems programming", "preference", t0 + day))?;
-    memory.store(entity("pref-2", "User likes functional programming patterns", "preference", t0 + day + 1000))?;
+    let session2_ts = now_micros();
+    memory.store(entity("pref-1", "User prefers Python for data science and Rust for systems programming", "preference", session2_ts))?;
+    memory.store(entity("pref-2", "User likes functional programming patterns", "preference", session2_ts))?;
 
     // Session 3: Facts extracted from conversation
-    memory.store(entity("fact-1", "User has 5 years of Python experience and 1 year of Rust experience", "fact", t0 + 2 * day))?;
-    memory.store(entity("fact-2", "User works at a fintech company building trading systems", "fact", t0 + 2 * day + 1000))?;
+    let session3_ts = now_micros();
+    memory.store(entity("fact-1", "User has 5 years of Python experience and 1 year of Rust experience", "fact", session3_ts))?;
+    memory.store(entity("fact-2", "User works at a fintech company building trading systems", "fact", session3_ts))?;
 
     // A document memory
-    memory.store(entity("doc-1", "Rust ownership model ensures memory safety without a garbage collector. The borrow checker enforces rules at compile time.", "document", t0 + 3 * day))?;
+    memory.store(entity("doc-1", "Rust ownership model ensures memory safety without a garbage collector. The borrow checker enforces rules at compile time.", "document", now_micros()))?;
 
     // Create relationships between related memories
     memory.associate("conv-1", "fact-1", "extracted_from", 0.9)?;
@@ -108,8 +110,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ================================================================
     // 5. TEMPORAL QUERIES: Time-travel to see what the agent knew
     // ================================================================
-    println!("▶ TEMPORAL: what did the agent know after session 1?");
-    let snapshot_t = t0 + 5000; // right after session 1
+    println!("▶ TEMPORAL: what did the agent know after sessions 1 and 2?");
+    let snapshot_t = session2_ts + 1000; // right after session 2
     let snapshot = memory.recall_at_time(snapshot_t, 10)?;
     println!("  Memories visible at time T+5ms: {} memories", snapshot.len());
     for s in &snapshot {
@@ -142,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("▶ CDC: subscribe to memory changes");
     let rx = memory.subscribe_changes()?;
     // Write something to trigger CDC
-    memory.store(entity("cdc-test", "CDC test event", "test", t0 + 4 * day))?;
+    memory.store(entity("cdc-test", "CDC test event", "test", now_micros()))?;
     std::thread::sleep(std::time::Duration::from_millis(200));
     let events: Vec<_> = rx.try_iter().collect();
     println!("  CDC events received: {}", events.len());
