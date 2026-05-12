@@ -116,9 +116,7 @@ pub struct Database {
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
     pub plan_cache: Arc<RwLock<HashMap<String, crate::planner::binder::BoundStatement>>>,
-    pub physical_plan_cache: Arc<
-        RwLock<HashMap<String, Arc<Box<dyn crate::processor::PhysicalOperator + Send + Sync>>>>,
-    >,
+
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -261,7 +259,7 @@ impl Database {
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
             plan_cache: Arc::new(RwLock::new(HashMap::new())),
-            physical_plan_cache: Arc::new(RwLock::new(HashMap::new())),
+
             vacuum_handle: Some(vacuum_handle),
         }))
     }
@@ -762,25 +760,15 @@ impl Connection {
 
         let (physical_plan, query_tx) = if let Some(stmt) = cached_stmt {
             let logical_plan = LogicalPlanner::plan(stmt)?;
-            let pkey = &cache_key;
-            let plan = {
-                let mut plan_cache = self.client_context.database.physical_plan_cache.write();
-                if let Some(cached) = plan_cache.get(pkey) {
-                    cached.as_ref().clone_box()
-                } else {
-                    let mut planner = PhysicalPlanner::new(
-                        Arc::clone(&self.client_context.database),
-                        tx.read_ts,
-                        tx.tx_id,
-                        Arc::clone(&tx.undo_buffer),
-                    );
-                    let new_plan = planner.plan(logical_plan)?;
-                    let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> = new_plan;
-                    plan_cache.insert(pkey.clone(), Arc::new(boxed));
-                    plan_cache.get(pkey).unwrap().as_ref().clone_box()
-                }
-            };
-            (plan, tx)
+            let mut planner = PhysicalPlanner::new(
+                Arc::clone(&self.client_context.database),
+                tx.read_ts,
+                tx.tx_id,
+                Arc::clone(&tx.undo_buffer),
+            );
+            let plan = planner.plan(logical_plan)?;
+            let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> = plan;
+            (boxed, tx)
         } else {
             let query = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
             let catalog = self.client_context.database.catalog.read();
@@ -863,24 +851,13 @@ impl Connection {
 
             let res = (|| -> Result<QueryResult> {
                 let logical_plan = LogicalPlanner::plan(stmt)?;
-                let pkey = &cache_key;
-                let physical_plan = {
-                    let mut plan_cache = self.client_context.database.physical_plan_cache.write();
-                    if let Some(cached) = plan_cache.get(pkey) {
-                        cached.as_ref().clone_box()
-                    } else {
-                        let mut planner = PhysicalPlanner::new(
-                            Arc::clone(&self.client_context.database),
-                            tx.read_ts,
-                            tx.tx_id,
-                            Arc::clone(&tx.undo_buffer),
-                        );
-                        let new_plan = planner.plan(logical_plan)?;
-                        let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> = new_plan;
-                        plan_cache.insert(pkey.clone(), Arc::new(boxed));
-                        plan_cache.get(pkey).unwrap().as_ref().clone_box()
-                    }
-                };
+                let mut planner = PhysicalPlanner::new(
+                    Arc::clone(&self.client_context.database),
+                    tx.read_ts,
+                    tx.tx_id,
+                    Arc::clone(&tx.undo_buffer),
+                );
+                let physical_plan = planner.plan(logical_plan)?;
                 let mut processor = crate::processor::Processor::new(physical_plan);
                 let chunks = processor.execute(
                     Arc::clone(&self.client_context.database),
@@ -1013,24 +990,13 @@ impl Connection {
                 let logical_plan = LogicalPlanner::plan(stmt)?;
 
                 let pkey = &cache_key;
-                let physical_plan = {
-                    let mut plan_cache = self.client_context.database.physical_plan_cache.write();
-                    if let Some(cached) = plan_cache.get(pkey) {
-                        cached.as_ref().clone_box()
-                    } else {
-                        let mut planner = PhysicalPlanner::new(
-                            Arc::clone(&self.client_context.database),
-                            tx.read_ts,
-                            tx.tx_id,
-                            Arc::clone(&tx.undo_buffer),
-                        );
-                        let new_plan = planner.plan(logical_plan)?;
-                        let boxed: Box<dyn crate::processor::PhysicalOperator + Send + Sync> =
-                            new_plan;
-                        plan_cache.insert(pkey.clone(), Arc::new(boxed));
-                        plan_cache.get(pkey).unwrap().as_ref().clone_box()
-                    }
-                };
+                let mut planner = PhysicalPlanner::new(
+                    Arc::clone(&self.client_context.database),
+                    tx.read_ts,
+                    tx.tx_id,
+                    Arc::clone(&tx.undo_buffer),
+                );
+                let physical_plan = planner.plan(logical_plan)?;
 
                 let mut processor = crate::processor::Processor::new(physical_plan);
                 let chunks = processor.execute(

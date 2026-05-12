@@ -776,15 +776,13 @@ impl Column {
             let src_end = src_start + to_read * element_size;
             data_buffer.extend_from_slice(&page.data[src_start..src_end]);
 
-            // Optimization: Skip null scan if column has no nulls
-            let has_any_nulls_in_stats = self.stats.read().null_count > 0;
-
-            if has_any_nulls_in_stats {
+            // Always read null bitmap — not relying on null_count stats which
+            // can be stale for newly written data via the CREATE→append_row path.
+            {
                 let null_page_idx = current_offset / 4096;
                 let null_frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
                 let null_base_offset = (current_offset % 4096) as usize;
 
-                // SIMD-optimized null bit processing with u64
                 let null_src = &null_frame.data[null_base_offset..null_base_offset + to_read];
                 let mut j = 0;
                 while j + 8 <= to_read {
@@ -844,13 +842,9 @@ impl Column {
         let mut output_offset = 0usize;
         let mut values_read = 0u64;
 
-        // Optimization: Skip null scan if column has no nulls
-        let has_any_nulls_in_stats = self.stats.read().null_count > 0;
-        let mut null_bits = if has_any_nulls_in_stats {
-            vec![0xFFu8; (num_values as usize + 7) / 8]
-        } else {
-            Vec::new() // Avoid allocation if not needed
-        };
+        // Always read null bitmap — not relying on null_count stats which
+        // can be stale for CREATE→flush_buffer path.
+        let mut null_bits = vec![0xFFu8; (num_values as usize + 7) / 8];
 
         // Optimization: When offset is page-aligned, we can use fast bulk-reads
         let is_page_aligned = offset % values_per_page == 0;
@@ -871,8 +865,9 @@ impl Column {
             // Truncate down to the exact requested data size
             data_vec.truncate(total_bytes);
 
-            if has_any_nulls_in_stats {
-                // Read null pages in one syscall
+            {
+                // Read null pages in one syscall — always, since null_count
+                // stats may be stale for recently-written data.
                 let null_first_page = offset / 4096;
                 let null_last_page = (offset + num_values - 1) / 4096;
                 let num_null_pages = null_last_page - null_first_page + 1;
@@ -925,26 +920,7 @@ impl Column {
             let mut page_buf = [0u8; 4096];
             let mut null_buf = [0u8; 4096];
 
-            if !has_any_nulls_in_stats {
-                while values_read < num_values {
-                    let current_offset = offset + values_read;
-                    let page_idx = current_offset / values_per_page;
-                    let offset_in_page = (current_offset % values_per_page) as usize;
-                    let to_read = std::cmp::min(
-                        num_values - values_read,
-                        values_per_page - offset_in_page as u64,
-                    ) as usize;
-
-                    self.fh.read_page(page_idx, &mut page_buf)?;
-                    let src_start = offset_in_page * element_size;
-                    let src_end = src_start + to_read * element_size;
-                    data_buffer.extend_from_slice(&page_buf[src_start..src_end]);
-
-                    values_read += to_read as u64;
-                    output_offset += to_read;
-                }
-            } else {
-                while values_read < num_values {
+            while values_read < num_values {
                     let current_offset = offset + values_read;
                     let page_idx = current_offset / values_per_page;
                     let offset_in_page = (current_offset % values_per_page) as usize;
@@ -990,7 +966,6 @@ impl Column {
                     values_read += to_read as u64;
                     output_offset += to_read;
                 }
-            }
             Buffer::from(data_buffer)
         };
 
