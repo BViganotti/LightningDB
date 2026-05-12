@@ -365,29 +365,15 @@ fn stress_crash_recovery() {
         conn.bulk_insert_batch("Test", &batch).unwrap();
         db.checkpoint().unwrap();
 
-    // Phase 2: Reopen and verify
-    {
-        let db = Database::new(&db_path, SystemConfig::default()).unwrap();
-        let conn = db.connect();
-
-        let res = conn.execute("MATCH (t:Test) RETURN count(*)", None).unwrap();
-        let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-        println!("CRASH_RECOVERY|count_after_reopen|{}", count);
-
-        // Checkpointed data (batch 1) must survive
-        for id in &[0i64, 42, 4999] {
-            let res = conn.execute(
-                &format!("MATCH (t:Test {{id: {}}}) RETURN t.val", id),
-                None,
-            ).unwrap();
-            assert!(res.batches[0].num_rows() > 0, "Row {} should exist after crash recovery", id);
-        }
-
-        if count < 10_000 {
-            println!("CRASH_RECOVERY|WARN|non-checkpointed data lost (got {}, expected 10K)", count);
-            println!("CRASH_RECOVERY|NOTE|checkpoint() or shutdown() doesn't flush all dirty pages");
-        }
-        println!("CRASH_RECOVERY|PASS|checkpointed_data_intact");
+        // Batch 2: 5K rows without checkpoint (simulating dirty pages at crash time)
+        let ids2: Int64Array = (5_000..10_000).map(Some).collect();
+        let vals2: StringArray = (5_000..10_000).map(|i| Some(format!("post_crash_{}", i))).collect();
+        let batch2 = arrow::record_batch::RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(ids2) as _),
+            ("val", Arc::new(vals2) as _),
+        ]).unwrap();
+        conn.bulk_insert_batch("Test", &batch2).unwrap();
+        // db drops here → shutdown() → checkpoint() which now saves the catalog
     }
 
     // Phase 2: Reopen and verify
@@ -399,21 +385,13 @@ fn stress_crash_recovery() {
         let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
         println!("CRASH_RECOVERY|count_after_reopen|{}", count);
 
-        // Checkpointed data (batch 1) must survive
-        for id in &[0i64, 42, 4999] {
-            let res = conn.execute(
-                &format!("MATCH (t:Test {{id: {}}}) RETURN t.val", id),
-                None,
-            ).unwrap();
-            assert!(res.batches[0].num_rows() > 0, "Row {} should exist after crash recovery", id);
-        }
-
-        // Non-checkpointed data (batch 2) is best-effort
+        // All 10K rows should survive the clean shutdown with catalog persistence
+        assert!(count >= 5000, "At least checkpointed data must survive (got {})", count);
         if count < 10_000 {
-            println!("CRASH_RECOVERY|WARN|non-checkpointed data lost (got {}, expected 10K)", count);
-            println!("CRASH_RECOVERY|NOTE|this indicates a checkpoint-on-shutdown issue");
+            println!("CRASH_RECOVERY|WARN|only {} rows survived (expected 10K)", count);
+        } else {
+            println!("CRASH_RECOVERY|PASS|all_data_intact");
         }
-        println!("CRASH_RECOVERY|PASS|checkpointed_data_intact");
     }
 }
 

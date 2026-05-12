@@ -130,21 +130,22 @@ impl std::fmt::Debug for Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
+        // Full Database::checkpoint persists dirty pages, catalog, free space map,
+        // and header — ensuring num_rows and data files are consistent on restart.
+        // This must happen BEFORE shutdown truncates the WAL.
+        self.checkpoint().ok();
+
+        // Shutdown buffer manager (final flush + WAL truncation)
         self.buffer_manager.shutdown();
-        // Commit any pending FTS index data before shutdown
-        {
-            let sm = self.storage_manager.read();
-            for fts in sm.fts_indexes.values() {
-                let _ = fts.commit();
-            }
-        }
+
+        // Final flush of any remaining dirty pages via file handles
         let fhs = {
             let sm = self.storage_manager.read();
             sm.get_all_file_handles()
         };
-        std::thread::sleep(std::time::Duration::from_millis(1200));
-        self.buffer_manager.flush_all_with_handles(&fhs);
         std::thread::sleep(std::time::Duration::from_millis(200));
+        self.buffer_manager.flush_all_with_handles(&fhs);
+        std::thread::sleep(std::time::Duration::from_millis(100));
         drop(fhs);
     }
 }
@@ -306,6 +307,17 @@ impl Database {
         {
             let fsm_path = self._path.join("free_space.bin");
             let _ = self.free_space_manager.save(&fsm_path);
+        }
+
+        // Persist catalog to disk so num_rows and other metadata survive restart.
+        // This is critical: without it, checkpoint-flushed data files may have
+        // rows that the catalog doesn't know about, causing COUNT(*) to return
+        // fewer rows than actually exist.
+        {
+            let catalog_path = self._path.join("catalog.lbug");
+            if let Err(e) = self.catalog.force_save() {
+                tracing::warn!("Failed to save catalog during checkpoint: {}", e);
+            }
         }
 
         // Update the last checkpoint timestamp so recovery can skip these entries
