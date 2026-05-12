@@ -1293,7 +1293,6 @@ impl Column {
                 | LogicalType::Uint64
                 | LogicalType::Node(_)
                 | LogicalType::Double
-                | LogicalType::Bool
         );
 
         // Enable fast path for primitives even with nulls - zeros will be written for nulls
@@ -1405,7 +1404,10 @@ impl Column {
         if buffers.is_empty() {
             return Ok(());
         }
-        let raw_bytes = buffers[0].as_slice();
+        // For nullable arrays, the first buffer is the null bitmap and the second
+        // is the data. For non-nullable arrays, the first buffer is the data.
+        let buffer_idx = if data.nulls().is_some() && buffers.len() > 1 { 1 } else { 0 };
+        let raw_bytes = buffers[buffer_idx].as_slice();
 
         // Ensure file is large enough
         let num_pages_needed = (num_rows as u64 + values_per_page - 1) / values_per_page;
@@ -1434,7 +1436,15 @@ impl Column {
             );
         }
 
-        self.stats.write().num_values += num_rows as u64;
+        // Update null count in stats so the scan path knows to read null bitmaps.
+        // Without this, scan_primitive_direct skips null bitmap reading and all
+        // values are treated as non-null, returning 0/false/"" for null entries.
+        let null_count = data.nulls().map(|n| n.null_count()).unwrap_or(0);
+        {
+            let mut stats = self.stats.write();
+            stats.num_values += num_rows as u64;
+            stats.null_count += null_count as u64;
+        }
         Ok(())
     }
 
@@ -1598,7 +1608,12 @@ impl Column {
             );
         }
 
-        self.stats.write().num_values += num_rows as u64;
+        let null_count = string_array.nulls().map(|n| n.null_count()).unwrap_or(0);
+        {
+            let mut stats = self.stats.write();
+            stats.num_values += num_rows as u64;
+            stats.null_count += null_count as u64;
+        }
         Ok(())
     }
 
