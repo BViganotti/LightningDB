@@ -1,8 +1,11 @@
 use crate::processor::Value;
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::column::Column;
+use crate::storage::compression::CompressionType;
 use crate::storage::file_handle::FileHandle;
+use crate::storage::free_space_manager::FreeSpaceManager;
 use crate::storage::index::hash_index::HashIndex;
+use crate::storage::index::trigram_index::TrigramIndex;
 use crate::storage::row_version::RowVersion;
 use crate::storage::stats::TableStats;
 use crate::storage::trigram_index_worker::TrigramIndexWorker;
@@ -522,6 +525,7 @@ pub struct StorageManager {
     pub bwd_csr: HashMap<String, Arc<crate::storage::index::csr::CSRIndex>>,
     csr_cardinalities: HashMap<String, u64>,
     file_handles: HashMap<u64, Arc<FileHandle>>,
+    free_space_manager: Option<Arc<FreeSpaceManager>>,
 }
 
 impl StorageManager {
@@ -543,7 +547,23 @@ impl StorageManager {
             bwd_csr: HashMap::new(),
             csr_cardinalities: HashMap::new(),
             file_handles: HashMap::new(),
+            free_space_manager: None,
         })
+    }
+
+    pub fn set_free_space_manager(&mut self, fsm: Arc<FreeSpaceManager>) {
+        self.free_space_manager = Some(Arc::clone(&fsm));
+        for fh in self.get_all_file_handles() {
+            fh.set_free_space_manager(Arc::clone(&fsm));
+        }
+    }
+
+    pub fn set_fsm_on_all_file_handles(&self) {
+        if let Some(ref fsm) = self.free_space_manager {
+            for fh in self.get_all_file_handles() {
+                fh.set_free_space_manager(Arc::clone(fsm));
+            }
+        }
     }
 
     pub fn create_vector_index(&mut self, table_name: &str) -> Result<()> {
@@ -676,6 +696,30 @@ impl StorageManager {
             }
         }
         let table_stats = stats.unwrap_or_else(|| TableStats::new(0));
+
+        // Restore persisted ColumnStats from catalog to Column objects.
+        // This includes num_values, null_count, and compression_meta (e.g.,
+        // Constant for all-same-value columns, or IntegerBitpacking for
+        // compressed int columns). Without this:
+        //   - Columns optimized before restart would lose compression_meta,
+        //     causing misreads of compressed pages as uncompressed data.
+        //   - num_values would start at 0, causing optimize() to skip analysis.
+        if !table_stats.column_stats.is_empty() {
+            for (col, cat_stat) in columns.iter().zip(table_stats.column_stats.iter()) {
+                let mut stats = col.stats.write();
+                stats.num_values = cat_stat.num_values;
+                stats.null_count = cat_stat.null_count;
+                stats.min = cat_stat.min.clone();
+                stats.max = cat_stat.max.clone();
+                stats.distinct_count = cat_stat.distinct_count;
+                if let Some(ref meta) = cat_stat.compression_meta {
+                    if meta.compression != CompressionType::Uncompressed {
+                        stats.compression_meta = Some(meta.clone());
+                    }
+                }
+            }
+        }
+
         let mut table = Table::new(name.clone(), columns, Arc::new(PlRwLock::new(table_stats)));
 
         if !is_rel {

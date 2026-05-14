@@ -1,0 +1,54 @@
+[FUSION] Using database: /Users/bviga/.fusion_mcp.db
+Generated .cursorrules for Cursor support.
+Generated CLAUDE.md for Claude Code support.
+[2m2026-05-13T06:38:14.127317Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-13T06:38:14.127636Z[0m [33m WARN[0m [2mmcp::server[0m[2m:[0m Port 3366 in use, falling back to 127.0.0.1:3367
+[2m2026-05-13T06:38:14.127654Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3367
+[2m2026-05-13T06:38:14.183707Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
+[2m2026-05-13T06:38:14.185747Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
+[2m2026-05-13T06:38:15.587426Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-13T06:38:15.587552Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+[2m2026-05-13T06:38:15.616730Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=0
+[2m2026-05-13T06:38:15.617191Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=1
+[2m2026-05-13T06:38:15.617402Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
+[2m2026-05-13T06:38:15.617609Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
+[2m2026-05-13T06:38:15.618160Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=4
+[2m2026-05-13T06:44:22.272085Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=5
+[2m2026-05-13T06:44:28.495645Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='addBooleanFilterParams', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:28.495889Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='compression_integration_test', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:28.495911Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='state', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:28.496266Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=6
+[2m2026-05-13T06:44:28.496965Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=7
+[2m2026-05-13T06:44:29.883991Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='addBooleanFilterParams', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:29.884010Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='compression_integration_test', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:29.884901Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='state', p='clone() performance allocation hot path', result=false
+[2m2026-05-13T06:44:29.885038Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=8
+[2m2026-05-13T06:44:29.885318Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=9
+[2m2026-05-13T06:44:31.233664Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=10
+[2m2026-05-13T06:44:31.233988Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=11
+[FUSION] Using database: /Users/bviga/.fusion_mcp.db
+[2m2026-05-14T07:14:45.773180Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-14T07:14:45.775323Z[0m [33m WARN[0m [2mmcp::server[0m[2m:[0m Port 3366 in use, falling back to 127.0.0.1:3368
+[2m2026-05-14T07:14:45.775347Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3368
+[2m2026-05-14T07:14:45.829250Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
+[2m2026-05-14T07:14:45.833797Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
+[2m2026-05-14T07:14:48.059337Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-14T07:14:48.059667Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+[2m2026-05-14T07:14:48.072168Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=0
+[2m2026-05-14T07:14:48.072379Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=1
+[2m2026-05-14T07:14:48.072908Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
+[2m2026-05-14T07:14:48.073431Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
+[2m2026-05-14T07:14:48.073677Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=4
+[FUSION] Using database: /Users/bviga/.fusion_mcp.db
+[2m2026-05-14T11:01:36.339968Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-14T11:01:36.342576Z[0m [33m WARN[0m [2mmcp::server[0m[2m:[0m Port 3366 in use, falling back to 127.0.0.1:3368
+[2m2026-05-14T11:01:36.342606Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3368
+[2m2026-05-14T11:01:36.395370Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
+[2m2026-05-14T11:01:36.400001Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
+[2m2026-05-14T11:01:37.481530Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-14T11:01:37.481800Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+[2m2026-05-14T11:01:37.534055Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=0
+[2m2026-05-14T11:01:37.534381Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=1
+[2m2026-05-14T11:01:37.534601Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
+[2m2026-05-14T11:01:37.534931Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
+[2m2026-05-14T11:01:37.535179Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=4

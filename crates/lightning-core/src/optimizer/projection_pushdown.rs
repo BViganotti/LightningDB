@@ -284,14 +284,14 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Delete(child, vars) => {
+            LogicalOperator::Delete(child, vars, detach) => {
                 let mut my_indices = required_indices;
                 for (var, _) in &vars {
                     my_indices.entry(var.clone()).or_default().insert(0); // Always need _id for DELETE
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
                 Ok((
-                    LogicalOperator::Delete(Box::new(new_child), vars),
+                    LogicalOperator::Delete(Box::new(new_child), vars, detach),
                     child_indices,
                 ))
             }

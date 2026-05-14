@@ -34,7 +34,7 @@ pub enum LogicalOperator {
     }, // child, group_by_cols, dependent_group_by_cols, aggregates
     CreateNode(Option<Box<LogicalOperator>>, BoundNodePattern),
     CreateRel(Option<Box<LogicalOperator>>, BoundRelPattern),
-    Delete(Box<LogicalOperator>, Vec<(String, String)>), // child, (var, table_name)
+    Delete(Box<LogicalOperator>, Vec<(String, String)>, bool), // child, (var, table_name), detach
     Set(Box<LogicalOperator>, Vec<BoundPropertyAssignment>),
     Sort(Box<LogicalOperator>, Vec<BoundOrderByItem>),
     Limit(Box<LogicalOperator>, u64),
@@ -141,7 +141,7 @@ impl LogicalOperator {
             | LogicalOperator::SemiMasker(c, _, _)
             | LogicalOperator::Unwind(c, _, _)
             | LogicalOperator::Aggregate { child: c, .. }
-            | LogicalOperator::Delete(c, _)
+            | LogicalOperator::Delete(c, ..)
             | LogicalOperator::Set(c, _)
             | LogicalOperator::Sort(c, _)
             | LogicalOperator::Limit(c, _)
@@ -177,7 +177,7 @@ impl LogicalOperator {
             | LogicalOperator::SemiMasker(c, _, _)
             | LogicalOperator::Unwind(c, _, _)
             | LogicalOperator::Aggregate { child: c, .. }
-            | LogicalOperator::Delete(c, _)
+            | LogicalOperator::Delete(c, ..)
             | LogicalOperator::Set(c, _)
             | LogicalOperator::Sort(c, _)
             | LogicalOperator::Limit(c, _)
@@ -734,7 +734,7 @@ impl LogicalPlanner {
                             unwind.alias.clone(),
                         ),
                         BoundClause::Delete(del) => {
-                            LogicalOperator::Delete(Box::new(plan), del.variables.clone())
+                            LogicalOperator::Delete(Box::new(plan), del.variables.clone(), del.detach)
                         }
                         BoundClause::Set(set) => {
                             LogicalOperator::Set(Box::new(plan), set.assignments.clone())

@@ -147,9 +147,10 @@ impl IndexPushDown {
                 };
                 Ok(LogicalOperator::CreateRel(new_child, p))
             }
-            LogicalOperator::Delete(child, v) => Ok(LogicalOperator::Delete(
+            LogicalOperator::Delete(child, v, detach) => Ok(LogicalOperator::Delete(
                 Box::new(self.apply_recursive(*child)?),
                 v,
+                detach,
             )),
             LogicalOperator::Set(child, a) => Ok(LogicalOperator::Set(
                 Box::new(self.apply_recursive(*child)?),

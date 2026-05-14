@@ -1,4 +1,5 @@
 pub mod aggregate;
+pub mod accumulate;
 pub mod cross_join;
 pub mod dml;
 pub mod filter;
@@ -54,8 +55,6 @@ pub use partitioner::PhysicalPartitioner;
 pub mod profile;
 pub use profile::PhysicalProfile;
 pub mod checkpoint;
-pub mod multiplicity_reducer;
 pub use checkpoint::PhysicalCheckpoint;
-pub use multiplicity_reducer::PhysicalMultiplicityReducer;
 pub mod gds;
 pub use gds::PhysicalASP;

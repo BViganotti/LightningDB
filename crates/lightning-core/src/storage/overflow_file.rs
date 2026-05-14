@@ -34,15 +34,14 @@ impl OverflowFile {
                 current_page_idx as u64,
                 tx,
             )?;
-            let data = &page.data;
-
             // In kuzu/ladybug, each overflow page has a pointer to the next page at the end.
             // Page size is 4KB.
             let page_size = 4096;
-            let usable_size = page_size - 4; // 4 bytes for next_page_idx
+            let usable_size = page_size - 4;
+            let page_data = page.as_slice();
 
             let to_read = std::cmp::min(remaining, usable_size - current_offset);
-            let slice = &data[current_offset..current_offset + to_read];
+            let slice = &page_data[current_offset..current_offset + to_read];
             result.push_str(
                 std::str::from_utf8(slice)
                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?,
@@ -50,8 +49,7 @@ impl OverflowFile {
 
             remaining -= to_read;
             if remaining > 0 {
-                // Read next page index
-                let next_page_bytes = &data[usable_size..page_size];
+                let next_page_bytes = &page_data[usable_size..page_size];
                 let next_page_idx = u32::from_le_bytes(next_page_bytes.try_into().unwrap());
                 current_page_idx = next_page_idx;
                 current_offset = 0;

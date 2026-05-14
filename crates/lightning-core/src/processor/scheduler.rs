@@ -28,14 +28,12 @@ impl Scheduler {
         let (ch_tx, rx) = unbounded();
         let params_arc = params.map(Arc::new);
 
-        for _ in 0..self.num_threads {
-            let mut op = operator.clone_box();
+        if self.num_threads == 1 {
+            // Single-threaded fast path: avoid cloning the operator tree.
+            let mut op = operator;
             let ch_tx = ch_tx.clone();
-            let db = Arc::clone(&database);
-            let tx_clone = Arc::clone(&tx);
-            let p_clone = params_arc.clone();
             self.pool.spawn(move || loop {
-                match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
+                match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
                     Ok(Some(chunk)) => {
                         if ch_tx.send(Ok(chunk)).is_err() {
                             break;
@@ -48,6 +46,28 @@ impl Scheduler {
                     }
                 }
             });
+        } else {
+            for _ in 0..self.num_threads {
+                let mut op = operator.clone_box();
+                let ch_tx = ch_tx.clone();
+                let db = Arc::clone(&database);
+                let tx_clone = Arc::clone(&tx);
+                let p_clone = params_arc.clone();
+                self.pool.spawn(move || loop {
+                    match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
+                        Ok(Some(chunk)) => {
+                            if ch_tx.send(Ok(chunk)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = ch_tx.send(Err(e));
+                            break;
+                        }
+                    }
+                });
+            }
         }
         drop(ch_tx);
         Ok(rx)

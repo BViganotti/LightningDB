@@ -1,4 +1,7 @@
 use crate::processor::aggregate::AggregateFunction;
+use crate::processor::functions::aggregate_ext::{
+    CollectDistinct, GroupConcat, Median, StdDevPop, StdDevSamp, VarPop, VarSamp,
+};
 use crate::processor::functions::aggregate_function::{
     AggregateFunction as IAggregateFunction, Avg, Collect, Count, CountDistinct, Max, Min, Sum,
 };
@@ -62,7 +65,27 @@ impl Aggregate {
                 AggregateFunction::Collect => {
                     Box::new(Collect::new()) as Box<dyn IAggregateFunction>
                 }
-                _ => Box::new(Count::new()) as Box<dyn IAggregateFunction>, // Placeholder
+                AggregateFunction::GroupConcat => {
+                    Box::new(GroupConcat::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::Median => {
+                    Box::new(Median::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::CollectDistinct => {
+                    Box::new(CollectDistinct::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::StdDevPop => {
+                    Box::new(StdDevPop::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::StdDevSamp => {
+                    Box::new(StdDevSamp::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::VarPop => {
+                    Box::new(VarPop::new()) as Box<dyn IAggregateFunction>
+                }
+                AggregateFunction::VarSamp => {
+                    Box::new(VarSamp::new()) as Box<dyn IAggregateFunction>
+                }
             })
             .collect()
     }
@@ -191,7 +214,7 @@ impl Aggregate {
                     let builder = columns[i]
                         .as_any_mut()
                         .downcast_mut::<arrow::array::StringBuilder>()
-                        .unwrap();
+                        .expect("group-by columns must be StringBuilder");
                     builder.append_value(val.to_string());
                 }
                 for (i, (agg_type, _)) in self.aggregates.iter().enumerate() {
@@ -201,7 +224,7 @@ impl Aggregate {
                             let builder = columns[self.group_by_indices.len() + i]
                                 .as_any_mut()
                                 .downcast_mut::<arrow::array::Int64Builder>()
-                                .unwrap();
+                                .expect("Count aggregate columns must be Int64Builder");
                             // Convert the f64 value to i64
                             let count = final_val.as_number() as i64;
                             builder.append_value(count);
@@ -210,7 +233,7 @@ impl Aggregate {
                             let builder = columns[self.group_by_indices.len() + i]
                                 .as_any_mut()
                                 .downcast_mut::<arrow::array::Float64Builder>()
-                                .unwrap();
+                                .expect("Non-Count aggregate columns must be Float64Builder");
                             builder.append_value(final_val.as_number());
                         }
                     }
@@ -222,7 +245,8 @@ impl Aggregate {
                 final_columns.push(b.finish() as Arc<dyn arrow::array::Array>);
             }
 
-            let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), final_columns).unwrap();
+            let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), final_columns)
+                .expect("aggregate output schema must match columns");
             *self.shared_state.final_result.write() = Some(batch);
             self.shared_state.is_done.store(true, Ordering::SeqCst);
         }
@@ -250,6 +274,10 @@ impl PhysicalOperator for Aggregate {
             }
         }
         Ok(None)
+    }
+
+    fn is_single_row(&self) -> bool {
+        self.group_by_indices.is_empty()
     }
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {

@@ -140,6 +140,7 @@ pub struct BoundUnwind {
 #[derive(Debug, Clone)]
 pub struct BoundDeleteClause {
     pub variables: Vec<(String, String)>, // (variable, table_name)
+    pub detach: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -696,10 +697,7 @@ impl<'a> Binder<'a> {
                     .variable
                     .clone()
                     .unwrap_or_else(|| format!("_rel_{}", self.variables.len()));
-                let rel_label = rel_pat.labels.get(0).ok_or_else(|| {
-                    LightningError::Query("MATCH relationship must have a label".into())
-                })?;
-
+                let rel_label = self.require_single_label(&rel_pat.labels, "MATCH relationship")?;
                 let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
                     LightningError::Query(format!("Rel Table {} not found", rel_label))
                 })?;
@@ -737,9 +735,7 @@ impl<'a> Binder<'a> {
                     (bound_var.table_name, props)
                 } else {
                     // Variable not bound yet, need label
-                    let dst_label = dst_pat.labels.get(0).ok_or_else(|| {
-                        LightningError::Query("MATCH destination node must have a label".into())
-                    })?;
+                    let dst_label = self.require_single_label(&dst_pat.labels, "MATCH destination node")?;
 
                     let dst_table = self.catalog.get_node_table(dst_label).ok_or_else(|| {
                         LightningError::Query(format!("Table {} not found", dst_label))
@@ -793,7 +789,10 @@ impl<'a> Binder<'a> {
                     })?;
                     vars.push((var.clone(), binding.table_name.clone()));
                 }
-                Ok(BoundClause::Delete(BoundDeleteClause { variables: vars }))
+                Ok(BoundClause::Delete(BoundDeleteClause {
+                    variables: vars,
+                    detach: del.detach,
+                }))
             }
             Clause::Merge(merge) => Ok(BoundClause::Merge(self.bind_merge_clause(merge)?)),
             Clause::Unwind(unwind) => {
@@ -869,6 +868,35 @@ impl<'a> Binder<'a> {
                     .transpose()?;
                 Ok(BoundClause::With(bound_ret, bw))
             }
+            Clause::Remove(rem) => {
+                let mut assignments = Vec::new();
+                for (variable, property_key) in &rem.properties {
+                    let (properties, offset, table_name) =
+                        self.get_table_properties(variable)?;
+                    let mut prop_idx = None;
+                    for (i, prop) in properties.iter().enumerate() {
+                        if prop.name == *property_key {
+                            prop_idx = Some(i + offset);
+                            break;
+                        }
+                    }
+                    let idx = prop_idx.ok_or_else(|| {
+                        LightningError::Query(format!(
+                            "Property {} not found in table {}",
+                            property_key, table_name
+                        ))
+                    })?;
+                    assignments.push(BoundPropertyAssignment {
+                        variable: variable.clone(),
+                        table_name: table_name.clone(),
+                        property_idx: idx,
+                        expression: crate::planner::binder::BoundExpression::Literal(
+                            crate::parser::ast::Literal::Null,
+                        ),
+                    });
+                }
+                Ok(BoundClause::Set(BoundSetClause { assignments }))
+            }
             Clause::Set(set) => {
                 let mut assignments = Vec::new();
                 for assign in &set.assignments {
@@ -906,9 +934,7 @@ impl<'a> Binder<'a> {
                     let rel = &rel_chain.relationship_pattern;
                     let src = &pattern.node_pattern;
                     let dst = &rel_chain.node_pattern;
-                    let rel_label = rel.labels.get(0).ok_or_else(|| {
-                        LightningError::Query("CREATE relationship must have a label".into())
-                    })?;
+                    let rel_label = self.require_single_label(&rel.labels, "CREATE relationship")?;
                     let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
                         LightningError::Query(format!("Rel Table {} not found", rel_label))
                     })?;
@@ -1476,5 +1502,17 @@ impl<'a> Binder<'a> {
             }
             _ => Ok(body.clone()),
         }
+    }
+
+    fn require_single_label<'b>(&self, labels: &'b [String], context: &str) -> Result<&'b String> {
+        if labels.len() > 1 {
+            return Err(LightningError::Query(format!(
+                "Multiple labels in {} are not supported yet. Got: {:?}",
+                context, labels
+            )));
+        }
+        labels.get(0).ok_or_else(|| {
+            LightningError::Query(format!("{} must have a label", context))
+        })
     }
 }

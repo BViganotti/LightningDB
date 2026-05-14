@@ -3,10 +3,10 @@ use crate::planner::binder::BoundExpression;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Float64Array, ListArray, RecordBatch,
+    Array, ArrayRef, BooleanArray, Float64Array, ListArray, RecordBatch,
 };
 use arrow::compute::cast;
-use arrow::compute::kernels::boolean::{and, or};
+use arrow::compute::kernels::boolean::{and, not, or};
 use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Field, Schema};
 use lightning_types::LogicalType;
@@ -223,9 +223,9 @@ impl ExpressionEvaluator {
 
                 match op {
                     crate::parser::ast::LogicalOperator::And => {
-                        let false_count = l_bool.values().count_set_bits();
-                        if false_count == 0 {
-                            return Ok(Arc::new(BooleanArray::from(vec![false; num_rows])));
+                        let true_count = l_bool.values().count_set_bits();
+                        if true_count == 0 {
+                            return Ok(Arc::new(l_bool.clone()));
                         }
                         let r = cast(
                             &Self::evaluate(right, batch, params, num_rows, registry, database)?,
@@ -237,6 +237,29 @@ impl ExpressionEvaluator {
                             .downcast_ref::<BooleanArray>()
                             .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
                         let res = and(l_bool, r_bool)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        Ok(Arc::new(res))
+                    }
+                    crate::parser::ast::LogicalOperator::Xor => {
+                        let r = cast(
+                            &Self::evaluate(right, batch, params, num_rows, registry, database)?,
+                            &DataType::Boolean,
+                        )
+                        .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let r_bool = r
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
+                        // XOR as (l AND NOT r) OR (NOT l AND r)
+                        let not_l = not(l_bool)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let not_r = not(r_bool)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let l_and_not_r = and(l_bool, &not_r)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let not_l_and_r = and(&not_l, r_bool)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let res = or(&l_and_not_r, &not_l_and_r)
                             .map_err(|e| LightningError::Internal(e.to_string()))?;
                         Ok(Arc::new(res))
                     }
@@ -265,11 +288,9 @@ impl ExpressionEvaluator {
                     .downcast_ref::<BooleanArray>()
                     .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
 
-                let mut result = BooleanBufferBuilder::new(arr.len());
-                for i in 0..arr.len() {
-                    result.append(!arr.value(i));
-                }
-                Ok(Arc::new(BooleanArray::from(result.finish())))
+                let res = not(arr)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                Ok(Arc::new(res))
             }
             BoundExpression::Function(name, args, _) => {
                 let mut arg_arrays = Vec::new();
@@ -486,6 +507,22 @@ impl ExpressionEvaluator {
         let mut new_offsets = Vec::with_capacity(list_arr.len() + 1);
         new_offsets.push(0);
 
+        // Build the schema once from the first non-empty list element.
+        // All elements share the same data type in a fixed-type list column.
+        let canned_schema: Option<Arc<Schema>> = 'schema: {
+            for i in 0..list_arr.len() {
+                let values = list_arr.value(i);
+                if !values.is_empty() {
+                    break 'schema Some(Arc::new(Schema::new(vec![Field::new(
+                        var,
+                        values.data_type().clone(),
+                        true,
+                    )])));
+                }
+            }
+            None
+        };
+
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
             if values.is_empty() {
@@ -493,11 +530,11 @@ impl ExpressionEvaluator {
                 continue;
             }
 
-            let schema = Arc::new(Schema::new(vec![Field::new(
+            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
                 var,
                 values.data_type().clone(),
                 true,
-            )]));
+            )])));
             let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
 
             let bool_res = Self::evaluate(
@@ -553,6 +590,21 @@ impl ExpressionEvaluator {
         let mut new_offsets = Vec::with_capacity(list_arr.len() + 1);
         new_offsets.push(0);
 
+        // Build schema once from the first non-empty element
+        let canned_schema: Option<Arc<Schema>> = 'schema: {
+            for i in 0..list_arr.len() {
+                let values = list_arr.value(i);
+                if !values.is_empty() {
+                    break 'schema Some(Arc::new(Schema::new(vec![Field::new(
+                        var,
+                        values.data_type().clone(),
+                        true,
+                    )])));
+                }
+            }
+            None
+        };
+
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
             if values.is_empty() {
@@ -560,11 +612,11 @@ impl ExpressionEvaluator {
                 continue;
             }
 
-            let schema = Arc::new(Schema::new(vec![Field::new(
+            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
                 var,
                 values.data_type().clone(),
                 true,
-            )]));
+            )])));
             let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
 
             let res = Self::evaluate(
@@ -612,6 +664,21 @@ impl ExpressionEvaluator {
 
         let mut results = Vec::with_capacity(list_arr.len());
 
+        // Build schema once from the first non-empty element.
+        let canned_schema: Option<Arc<Schema>> = 'schema: {
+            for i in 0..list_arr.len() {
+                let values = list_arr.value(i);
+                if !values.is_empty() {
+                    break 'schema Some(Arc::new(Schema::new(vec![Field::new(
+                        var,
+                        values.data_type().clone(),
+                        true,
+                    )])));
+                }
+            }
+            None
+        };
+
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
             if values.is_empty() {
@@ -623,11 +690,11 @@ impl ExpressionEvaluator {
                 continue;
             }
 
-            let schema = Arc::new(Schema::new(vec![Field::new(
+            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
                 var,
                 values.data_type().clone(),
                 true,
-            )]));
+            )])));
             let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
 
             let bool_res = Self::evaluate(

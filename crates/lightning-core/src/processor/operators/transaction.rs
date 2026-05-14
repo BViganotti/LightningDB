@@ -1,7 +1,11 @@
 use crate::planner::binder::BoundTransactionAction;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
+use arrow::array::StringArray;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct PhysicalTransaction {
@@ -21,7 +25,7 @@ impl PhysicalTransaction {
 impl PhysicalOperator for PhysicalTransaction {
     fn get_next(
         &mut self,
-        _database: &crate::Database,
+        database: &crate::Database,
         tx: &crate::transaction::transaction_manager::Transaction,
         _params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
@@ -30,16 +34,55 @@ impl PhysicalOperator for PhysicalTransaction {
         }
         self.executed = true;
 
-        // Transaction actions are usually handled by the higher-level execution context (e.g. Session/Client)
-        // that manages the lifecycle of the transaction object.
-        // For the purpose of the physical operator, we can return success but the actual
-        // commit/rollback logic must be integrated with the system's TransactionManager
-        // at the boundaries of query execution.
-
-        // In this implementation, we simply signify the action.
-        // The calling code (e.g. in Database::query) will see this operator and act accordingly.
-
-        Ok(None)
+        let bm = &database.buffer_manager;
+        match self.action {
+            BoundTransactionAction::Commit => {
+                database.transaction_manager.commit(tx, bm, database)?;
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "result",
+                    DataType::Utf8,
+                    false,
+                )]));
+                let batch = RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(StringArray::from(vec!["Transaction committed"]))],
+                )
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                Ok(Some(DataChunk::new(batch)))
+            }
+            BoundTransactionAction::Rollback => {
+                database.transaction_manager.rollback(database, tx)?;
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "result",
+                    DataType::Utf8,
+                    false,
+                )]));
+                let batch = RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(StringArray::from(vec!["Transaction rolled back"]))],
+                )
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                Ok(Some(DataChunk::new(batch)))
+            }
+            BoundTransactionAction::Begin => {
+                // BEGIN within an operator context starts a nested transaction.
+                // The explicit transaction is managed by the Connection layer.
+                // This operator is reached when a query contains an explicit BEGIN
+                // statement. The Connection layer already created a transaction for
+                // the query execution, so we signal success.
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "result",
+                    DataType::Utf8,
+                    false,
+                )]));
+                let batch = RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(StringArray::from(vec!["Transaction started"]))],
+                )
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                Ok(Some(DataChunk::new(batch)))
+            }
+        }
     }
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {

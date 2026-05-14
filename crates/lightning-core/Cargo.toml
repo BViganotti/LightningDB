@@ -14,7 +14,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
 tracing.workspace = true
-tokio.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true
 arrow.workspace = true
@@ -34,8 +33,11 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 md-5 = { workspace = true }
 levenshtein = { workspace = true }
-rusqlite = { workspace = true }
+crc32fast = { workspace = true }
 tantivy = "0.26.0"
 fixedbitset = "0.5.7"
 wat = "1.248.0"
 wasmi = "2.0.0-beta.2"
+
+[dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }

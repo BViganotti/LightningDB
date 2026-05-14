@@ -1,14 +1,15 @@
 use crate::processor::Value;
+use crate::storage::buffer_manager::BufferManager;
+use crate::storage::row_version::RowVersion;
 use crate::storage::undo_buffer::UndoBuffer;
 use crate::storage::WAL;
 use crate::Result;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
-use crate::storage::row_version::RowVersion;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 /// Records a per-row page modification for merge-on-commit.
 /// When two transactions modify different rows on the same page,
@@ -29,15 +30,15 @@ pub struct Transaction {
     pub read_ts: u64,
     pub commit_ts: AtomicU64,
     pub undo_buffer: Arc<UndoBuffer>,
-    pub modified_pages: parking_lot::Mutex<Vec<(u64, u64)>>,
-    pub modified_rows: parking_lot::Mutex<Vec<(Arc<RowVersion>, u64)>>,
-    pub bulk_row_ranges: parking_lot::Mutex<Vec<(Arc<RowVersion>, u64, u64)>>,
+    pub modified_pages: Mutex<Vec<(u64, u64)>>,
+    pub modified_rows: Mutex<Vec<(Arc<RowVersion>, u64)>>,
+    pub bulk_row_ranges: Mutex<Vec<(Arc<RowVersion>, u64, u64)>>,
     pub uncommitted_cache: RwLock<HashMap<(String, u64), Value>>,
-    pub buffered_tables: RwLock<Vec<std::sync::Arc<()>>>,
-    /// Row-level modifications for merge-on-commit. Each entry records
-    /// the exact byte data written to a specific row on a specific page.
-    /// On commit, this data is merged into the latest committed page.
-    pub modified_page_rows: parking_lot::Mutex<Vec<PageRowMod>>,
+    pub buffered_tables: RwLock<Vec<Arc<()>>>,
+    pub modified_page_rows: Mutex<Vec<PageRowMod>>,
+    finalized: AtomicBool,
+    tx_mgr: Option<Weak<TransactionManager>>,
+    bm: Option<Weak<BufferManager>>,
 }
 
 pub struct TransactionManager {
@@ -47,6 +48,8 @@ pub struct TransactionManager {
     active_tx_ids: RwLock<HashSet<u64>>,
     active_read_ts: RwLock<std::collections::BTreeMap<u64, usize>>,
     wal: Arc<WAL>,
+    self_weak: Mutex<Option<Weak<Self>>>,
+    bm_weak: Mutex<Option<Weak<BufferManager>>>,
 }
 
 impl TransactionManager {
@@ -58,7 +61,17 @@ impl TransactionManager {
             active_tx_ids: RwLock::new(HashSet::new()),
             active_read_ts: RwLock::new(std::collections::BTreeMap::new()),
             wal,
+            self_weak: Mutex::new(None),
+            bm_weak: Mutex::new(None),
         }
+    }
+
+    pub fn set_self_weak(&self, weak: Weak<Self>) {
+        *self.self_weak.lock() = Some(weak);
+    }
+
+    pub fn set_bm_weak(&self, weak: Weak<BufferManager>) {
+        *self.bm_weak.lock() = Some(weak);
     }
 
     pub fn begin(&self, is_read_only: bool) -> Result<Transaction> {
@@ -78,18 +91,24 @@ impl TransactionManager {
         }
         *self.active_read_ts.write().entry(read_ts).or_insert(0) += 1;
 
+        let tx_mgr = self.self_weak.lock().clone();
+        let bm = self.bm_weak.lock().clone();
+
         Ok(Transaction {
             tx_id,
             is_read_only,
             read_ts,
             commit_ts: AtomicU64::new(0),
             undo_buffer: Arc::new(UndoBuffer::new()),
-            modified_pages: parking_lot::Mutex::new(Vec::new()),
-            modified_rows: parking_lot::Mutex::new(Vec::new()),
-            bulk_row_ranges: parking_lot::Mutex::new(Vec::new()),
+            modified_pages: Mutex::new(Vec::new()),
+            modified_rows: Mutex::new(Vec::new()),
+            bulk_row_ranges: Mutex::new(Vec::new()),
             uncommitted_cache: RwLock::new(HashMap::new()),
             buffered_tables: RwLock::new(Vec::new()),
-            modified_page_rows: parking_lot::Mutex::new(Vec::new()),
+            modified_page_rows: Mutex::new(Vec::new()),
+            finalized: AtomicBool::new(false),
+            tx_mgr,
+            bm,
         })
     }
 
@@ -119,7 +138,7 @@ impl TransactionManager {
                 if !page_mods.is_empty() {
                     use std::collections::HashMap;
                     // Group modifications by (file_id, page_idx) for efficient merge
-                    let mut page_groups: HashMap<(u64, u64), Vec<&crate::transaction::transaction_manager::PageRowMod>> = HashMap::new();
+                    let mut page_groups: HashMap<(u64, u64), Vec<&PageRowMod>> = HashMap::new();
                     for mod_entry in page_mods.iter() {
                         page_groups
                             .entry((mod_entry.file_id, mod_entry.page_idx))
@@ -149,7 +168,7 @@ impl TransactionManager {
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(
                                             row_mod.row_data.as_ptr(),
-                                            latest_frame.data.as_ptr() as *mut u8,
+                                            latest_frame.as_ptr(),
                                             es,
                                         );
                                     }
@@ -157,7 +176,7 @@ impl TransactionManager {
                             }
 
                             // Log the merged page to WAL
-                            bm.log_page_update(*file_id, *page_idx, &latest_frame.data)?;
+                            bm.log_page_update(*file_id, *page_idx, latest_frame.as_slice())?;
                             bm.unpin_page(&*fh, *page_idx, latest_frame);
                         }
                     }
@@ -189,6 +208,7 @@ impl TransactionManager {
             db.catalog.save_if_needed(committed_count)?;
         }
         self.remove_read_ts(tx.read_ts);
+        tx.finalized.store(true, Ordering::SeqCst);
         Ok(())
     }
 
@@ -202,6 +222,7 @@ impl TransactionManager {
             self.active_tx_ids.write().remove(&tx.tx_id);
         }
         self.remove_read_ts(tx.read_ts);
+        tx.finalized.store(true, Ordering::SeqCst);
         Ok(())
     }
 
@@ -230,6 +251,40 @@ impl TransactionManager {
 
     pub fn get_current_ts(&self) -> u64 {
         self.current_ts.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        if self.finalized.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if self.is_read_only {
+            return;
+        }
+        if let Some(ref weak_mgr) = self.tx_mgr {
+            if let Some(mgr) = weak_mgr.upgrade() {
+                mgr.active_tx_ids.write().remove(&self.tx_id);
+                mgr.remove_read_ts(self.read_ts);
+            } else {
+                tracing::warn!(
+                    "Transaction {} dropped without commit/rollback; \
+                     TransactionManager already dropped, cannot clean up",
+                    self.tx_id
+                );
+            }
+        }
+        if let Some(ref weak_bm) = self.bm {
+            if let Some(bm) = weak_bm.upgrade() {
+                if let Err(e) = bm.rollback_versions(self.tx_id) {
+                    tracing::error!(
+                        "Failed to rollback page versions for tx {} during Drop: {}",
+                        self.tx_id,
+                        e
+                    );
+                }
+            }
+        }
     }
 }
 

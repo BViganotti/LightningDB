@@ -3,7 +3,6 @@ pub mod ast;
 use self::ast::*;
 use pest::Parser;
 use pest_derive::Parser;
-use regex::Regex;
 use thiserror::Error;
 
 #[derive(Parser)]
@@ -20,7 +19,6 @@ pub enum ParserError {
 
 pub fn parse(query_str: &str) -> Result<Query, ParserError> {
     let preprocessed = preprocess_distinct_functions(query_str);
-    let preprocessed = preprocess_in_expressions(&preprocessed);
 
     let (clean, order_by, skip, limit) = strip_modifiers(&preprocessed);
     let mut pairs = CypherParser::parse(Rule::query, &clean)?;
@@ -55,81 +53,6 @@ fn preprocess_distinct_functions(s: &str) -> String {
             );
             pos = actual_idx + replace.len();
         }
-    }
-
-    result
-}
-
-fn preprocess_in_expressions(s: &str) -> String {
-    let mut strings: Vec<String> = Vec::new();
-    let mut protected = String::new();
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\'' {
-            let mut literal = String::from(ch);
-            loop {
-                match chars.next() {
-                    Some('\'') => {
-                        if chars.peek() == Some(&'\'') {
-                            literal.push('\'');
-                            literal.push(chars.next().unwrap());
-                        } else {
-                            literal.push('\'');
-                            break;
-                        }
-                    }
-                    Some(c) => literal.push(c),
-                    None => break,
-                }
-            }
-            let placeholder = format!("__INLIT{}__", strings.len());
-            strings.push(literal);
-            protected.push_str(&placeholder);
-        } else {
-            protected.push(ch);
-        }
-    }
-
-    let re = Regex::new(r"(?i)(NOT\s+)?(\w+(?:\.\w+)?)\s+IN\s*\[([^\]]+)\]").unwrap();
-
-    let expanded = re
-        .replace_all(&protected, |caps: &regex::Captures| {
-            let not_prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let expr = caps.get(2).unwrap().as_str();
-            let items_str = caps.get(3).unwrap().as_str();
-
-            let items: Vec<&str> = items_str
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-
-            if items.is_empty() {
-                return if not_prefix.trim().is_empty() {
-                    "(1 = 0)".to_string()
-                } else {
-                    "NOT (1 = 0)".to_string()
-                };
-            }
-
-            let or_conditions: Vec<String> = items
-                .iter()
-                .map(|item| format!("{} = {}", expr, item))
-                .collect();
-
-            if not_prefix.trim().is_empty() {
-                format!("({})", or_conditions.join(" OR "))
-            } else {
-                format!("NOT ({})", or_conditions.join(" OR "))
-            }
-        })
-        .to_string();
-
-    let mut result = expanded;
-    for (i, literal) in strings.iter().enumerate() {
-        let placeholder = format!("__INLIT{}__", i);
-        result = result.replace(&placeholder, literal);
     }
 
     result
@@ -450,35 +373,82 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             Rule::set_clause => {
                 let mut assignments = Vec::new();
                 for j in i.into_inner() {
-                    if j.as_rule() == Rule::property_assignment {
-                        let mut parts = j.into_inner();
-                        // First part is property_lookup (variable.property), second is expression
-                        let prop_lookup = parts.next().unwrap();
-                        let value = parts.next().unwrap();
+                    // j is a set_item; look inside for property_assignment or map_assignment
+                    match j.as_rule() {
+                        Rule::set_item => {
+                            for child in j.into_inner() {
+                                match child.as_rule() {
+                                    Rule::property_assignment => {
+                                        let mut parts = child.into_inner();
+                                        let prop_lookup = parts.next().unwrap();
+                                        let value = parts.next().unwrap();
 
-                        // Parse property_lookup to get variable and property_key
-                        let mut prop_parts = prop_lookup.into_inner();
-                        let variable = prop_parts.next().unwrap().as_str().to_string();
-                        let property_key = prop_parts.next().unwrap().as_str().to_string();
+                                        let mut prop_parts = prop_lookup.into_inner();
+                                        let variable = prop_parts.next().unwrap().as_str().to_string();
+                                        let property_key = prop_parts.next().unwrap().as_str().to_string();
 
-                        assignments.push(PropertyAssignment {
-                            variable,
-                            property_key,
-                            expression: parse_expression(value)?,
-                        });
+                                        assignments.push(PropertyAssignment {
+                                            variable,
+                                            property_key,
+                                            expression: parse_expression(value)?,
+                                        });
+                                    }
+                                    Rule::map_assignment => {
+                                        let mut parts = child.into_inner();
+                                        let variable = parts.next().unwrap().as_str().to_string();
+                                        let _op = parts.next().unwrap().as_str().to_string();
+                                        for item in parts {
+                                            if item.as_rule() == Rule::property_item {
+                                                let mut item_parts = item.into_inner();
+                                                let key = item_parts.next().unwrap().as_str().to_string();
+                                                let val_expr = item_parts.next().unwrap();
+                                                assignments.push(PropertyAssignment {
+                                                    variable: variable.clone(),
+                                                    property_key: key,
+                                                    expression: parse_expression(val_expr)?,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                clauses.push(Clause::Set(SetClause { assignments }));
+                if !assignments.is_empty() {
+                    clauses.push(Clause::Set(SetClause { assignments }));
+                }
+            }
+            Rule::remove_clause => {
+                let mut properties = Vec::new();
+                for j in i.into_inner() {
+                    if j.as_rule() == Rule::property_lookup {
+                        let mut parts = j.into_inner();
+                        let variable = parts.next().unwrap().as_str().to_string();
+                        let property_key = parts.next().unwrap().as_str().to_string();
+                        properties.push((variable, property_key));
+                    }
+                }
+                clauses.push(Clause::Remove(RemoveClause { properties }));
             }
             Rule::delete_clause => {
                 let mut to_delete = Vec::new();
+                let mut is_detach = false;
                 for j in i.into_inner() {
-                    if j.as_rule() == Rule::variable {
-                        to_delete.push(j.as_str().to_string());
+                    match j.as_rule() {
+                        Rule::variable => to_delete.push(j.as_str().to_string()),
+                        _ => {
+                            if j.as_str().to_uppercase() == "DETACH" {
+                                is_detach = true;
+                            }
+                        }
                     }
                 }
                 clauses.push(Clause::Delete(DeleteClause {
                     variables: to_delete,
+                    detach: is_detach,
                 }));
             }
             Rule::merge_clause => {
@@ -818,13 +788,29 @@ fn parse_expression(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
 fn parse_logical_or(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
+        return parse_xor(ps[0].clone());
+    }
+    let mut e = parse_xor(ps[0].clone())?;
+    for i in (1..ps.len()).step_by(2) {
+        e = Expression::Logical(
+            Box::new(e),
+            LogicalOperator::Or,
+            Box::new(parse_xor(ps[i + 1].clone())?),
+        );
+    }
+    Ok(e)
+}
+
+fn parse_xor(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
+    let ps = p.into_inner().collect::<Vec<_>>();
+    if ps.len() == 1 {
         return parse_logical_and(ps[0].clone());
     }
     let mut e = parse_logical_and(ps[0].clone())?;
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Logical(
             Box::new(e),
-            LogicalOperator::Or,
+            LogicalOperator::Xor,
             Box::new(parse_logical_and(ps[i + 1].clone())?),
         );
     }
@@ -905,6 +891,51 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
             ],
             false,
         ));
+    } else if ps[1].as_rule() == Rule::is_null_check {
+        let is_not = ps[1].clone().into_inner().any(|p| p.as_rule() == Rule::not_op);
+        let func_name = if is_not { "IS_NOT_NULL" } else { "IS_NULL" };
+        return Ok(Expression::Function(
+            func_name.to_string(),
+            vec![parse_arithmetic(ps[0].clone())?],
+            false,
+        ));
+    } else if ps[1].as_rule() == Rule::in_check {
+        let is_not = ps[1].clone().into_inner().any(|p| {
+            let s = p.as_str().to_uppercase();
+            s == "NOT"
+        });
+        let lhs = parse_arithmetic(ps[0].clone())?;
+        // Collect all list items from the in_check
+        let mut items = Vec::new();
+        for child in ps[1].clone().into_inner() {
+            if child.as_rule() == Rule::expression {
+                items.push(parse_expression(child)?);
+            }
+        }
+        if items.is_empty() {
+            return Ok(Expression::Literal(Literal::Boolean(is_not)));
+        }
+        // Build: (lhs = item1) OR (lhs = item2) OR ...
+        let mut or_expr = Expression::Comparison(
+            Box::new(lhs.clone()),
+            ComparisonOperator::Equal,
+            Box::new(items[0].clone()),
+        );
+        for item in &items[1..] {
+            or_expr = Expression::Logical(
+                Box::new(or_expr),
+                LogicalOperator::Or,
+                Box::new(Expression::Comparison(
+                    Box::new(lhs.clone()),
+                    ComparisonOperator::Equal,
+                    Box::new(item.clone()),
+                )),
+            );
+        }
+        if is_not {
+            return Ok(Expression::Not(Box::new(or_expr)));
+        }
+        return Ok(or_expr);
     }
 
     Err(ParserError::Internal(format!(
@@ -964,7 +995,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                         }
                         Rule::star => {}
                         other => {
-                            eprintln!("DEBUG unexpected arg rule: {:?}", other);
+                            tracing::debug!("unexpected arg rule: {:?}", other);
                         }
                     }
                 }
@@ -993,6 +1024,51 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             else_expression: None,
         }),
         Rule::exists_subquery => Ok(Expression::Exists(Vec::new())),
+        Rule::cast_expression => {
+            let mut inner = i.into_inner();
+            let expr = parse_expression(inner.next().unwrap())?;
+            let type_literal = inner.last().unwrap().as_str().to_uppercase();
+            Ok(Expression::Function(
+                "CAST".to_string(),
+                vec![expr, Expression::Literal(Literal::String(type_literal))],
+                false,
+            ))
+        }
+        Rule::list_subscript => {
+            let tokens: Vec<_> = i.into_inner().collect();
+            if tokens.is_empty() {
+                return Err(ParserError::Internal("empty list_subscript".into()));
+            }
+            let variable = if tokens[0].as_rule() == Rule::variable {
+                tokens[0].as_str().to_string()
+            } else {
+                return Err(ParserError::Internal("expected variable in subscript".into()));
+            };
+            let index_expr = if tokens.len() > 1 {
+                parse_expression(tokens[1].clone())?
+            } else {
+                return Err(ParserError::Internal("expected index in subscript".into()));
+            };
+            let has_range = tokens.iter().any(|p| p.as_rule() == Rule::range_operator);
+            if has_range {
+                let end_expr = if tokens.len() > 3 {
+                    Some(parse_expression(tokens[3].clone())?)
+                } else {
+                    None
+                };
+                let mut args = vec![Expression::Variable(variable.clone()), index_expr];
+                if let Some(end) = end_expr {
+                    args.push(end);
+                }
+                Ok(Expression::Function("LIST_SLICE".to_string(), args, false))
+            } else {
+                Ok(Expression::Function(
+                    "LIST_EXTRACT".to_string(),
+                    vec![Expression::Variable(variable), index_expr],
+                    false,
+                ))
+            }
+        }
         _ => Err(ParserError::Internal(format!("atom:{:?}", i.as_rule()))),
     }
 }
@@ -1146,82 +1222,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_preprocess_in_simple() {
-        let input = "MATCH (t:Test) WHERE t.val IN [1, 3] RETURN count(*)";
-        let output = preprocess_in_expressions(input);
-        assert!(
-            output.contains("(t.val = 1 OR t.val = 3)"),
-            "got: {}",
-            output
-        );
-        assert!(
-            !output.contains(" IN "),
-            "IN keyword should be removed: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_preprocess_in_strings() {
-        let input = "MATCH (n:TestNode) WHERE n.id IN ['a', 'b'] RETURN n";
-        let output = preprocess_in_expressions(input);
-        assert!(
-            output.contains("(n.id = 'a' OR n.id = 'b')"),
-            "got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_preprocess_in_not() {
-        let input = "MATCH (n) WHERE NOT n.id IN ['a', 'b'] RETURN n";
-        let output = preprocess_in_expressions(input);
-        assert!(
-            output.contains("NOT (n.id = 'a' OR n.id = 'b')"),
-            "got: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_preprocess_in_and_not() {
-        let input = "MATCH (n) WHERE n.id IN ['a'] AND NOT m.id IN ['b'] RETURN n";
-        let output = preprocess_in_expressions(input);
-        assert!(output.contains("(n.id = 'a')"), "got: {}", output);
-        assert!(output.contains("NOT (m.id = 'b')"), "got: {}", output);
-        assert!(
-            !output.contains(" IN "),
-            "IN keyword should be removed: {}",
-            output
-        );
-    }
-
-    #[test]
-    fn test_preprocess_in_string_with_bracket() {
-        let input = "MATCH (n) WHERE n.id IN ['hello]world'] RETURN n";
-        let output = preprocess_in_expressions(input);
-        assert!(
-            !output.contains(" IN "),
-            "IN keyword should be removed: {}",
-            output
-        );
-    }
-
-    #[test]
     fn test_parse_or_expression() {
         let query = "MATCH (t:Test) WHERE (t.val = 1 OR t.val = 3) RETURN count(*)";
         let result = parse(query);
-        eprintln!("Parse result: {:?}", result);
         assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
     }
 
     #[test]
-    fn test_parse_in_then_or() {
+    fn test_parse_in_expr() {
         let query = "MATCH (t:Test) WHERE t.val IN [1, 3] RETURN count(*)";
-        let preprocessed = preprocess_in_expressions(query);
-        eprintln!("Preprocessed: {}", preprocessed);
-        let result = parse(&preprocessed);
-        eprintln!("Parse result: {:?}", result);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let result = parse(query);
+        assert!(result.is_ok(), "Failed to parse IN: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_not_in_expr() {
+        let query = "MATCH (t:Test) WHERE t.val NOT IN [1, 3] RETURN count(*)";
+        let result = parse(query);
+        assert!(result.is_ok(), "Failed to parse NOT IN: {:?}", result.err());
     }
 }

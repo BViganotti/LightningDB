@@ -89,6 +89,11 @@ impl CardinalityEstimator {
                 AstLogicalOperator::Not => {
                     unreachable!("Not should be BoundExpression::Not, not LogicalOperator::Not")
                 }
+                AstLogicalOperator::Xor => {
+                    let s1 = self.estimate_selectivity(left, child);
+                    let s2 = self.estimate_selectivity(right, child);
+                    s1 + s2 - 2.0 * s1 * s2
+                }
             },
             BoundExpression::Not(expr) => 1.0 - self.estimate_selectivity(expr, child),
             BoundExpression::Parameter(_) => 0.1, // Fixed selectivity for parameters for now

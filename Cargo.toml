@@ -25,7 +25,6 @@ thiserror = "1.0"
 anyhow = "1.0"
 log = "0.4"
 tracing = "0.1"
-tokio = { version = "1.35", features = ["full"] }
 parking_lot = "0.12"
 tempfile = "3.9"
 roaring = "0.10"
@@ -36,4 +35,4 @@ uuid = { version = "1.7", features = ["v4", "serde"] }
 sha2 = "0.10"
 md-5 = "0.10"
 levenshtein = "1.0"
-rusqlite = { version = "0.37", features = ["bundled"] }
+crc32fast = "1.4"

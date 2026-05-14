@@ -76,7 +76,8 @@ impl PhysicalShortestPath {
             // Expand from source (forward)
             if !q_src.is_empty() {
                 for _ in 0..q_src.len() {
-                    let curr = q_src.pop_front().unwrap();
+                    let curr = q_src.pop_front()
+                        .expect("BFS source queue should not be empty during iteration");
                     for csr in &csrs_fwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
                             for n in neighbors {
@@ -102,7 +103,8 @@ impl PhysicalShortestPath {
             // Expand from destination (backward)
             if !q_dst.is_empty() {
                 for _ in 0..q_dst.len() {
-                    let curr = q_dst.pop_front().unwrap();
+                    let curr = q_dst.pop_front()
+                        .expect("BFS destination queue should not be empty during iteration");
                     for csr in &csrs_bwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
                             for n in neighbors {

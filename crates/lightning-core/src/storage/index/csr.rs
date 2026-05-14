@@ -40,14 +40,14 @@ impl CSRIndex {
         let (start, end) = {
             let start_frame = bm.pin_page(self.offset_fh.clone(), start_page, tx)?;
             let start = u64::from_le_bytes(
-                start_frame.data[start_offset_in_page as usize..start_offset_in_page as usize + 8]
+                start_frame.as_slice()[start_offset_in_page as usize..start_offset_in_page as usize + 8]
                     .try_into()
                     .unwrap(),
             );
 
             let end = if start_page == end_page {
                 u64::from_le_bytes(
-                    start_frame.data[end_offset_in_page as usize..end_offset_in_page as usize + 8]
+                    start_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
                         .try_into()
                         .unwrap(),
                 )
@@ -57,7 +57,7 @@ impl CSRIndex {
                 }
                 let end_frame = bm.pin_page(self.offset_fh.clone(), end_page, tx)?;
                 u64::from_le_bytes(
-                    end_frame.data[end_offset_in_page as usize..end_offset_in_page as usize + 8]
+                    end_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
                         .try_into()
                         .unwrap(),
                 )
@@ -81,7 +81,7 @@ impl CSRIndex {
             for j in 0..to_read {
                 let offset = (adj_offset_in_page as usize) + (j * 8);
                 let neighbor =
-                    u64::from_le_bytes(adj_frame.data[offset..offset + 8].try_into().unwrap());
+                    u64::from_le_bytes(adj_frame.as_slice()[offset..offset + 8].try_into().unwrap());
                 f(neighbor);
             }
             i += to_read as u64;
@@ -131,7 +131,7 @@ impl CSRIndex {
             }
             let frame = bm.create_new_version(offset_fh.clone(), page_idx, tx)?;
             unsafe {
-                let ptr = frame.data.as_ptr() as *mut u8;
+                let ptr = frame.as_ptr();
                 std::ptr::copy_nonoverlapping(
                     val.to_le_bytes().as_ptr(),
                     ptr.add(offset_in_page as usize),
@@ -148,7 +148,7 @@ impl CSRIndex {
             }
             let frame = bm.create_new_version(adj_node_fh.clone(), page_idx, tx)?;
             unsafe {
-                let ptr = frame.data.as_ptr() as *mut u8;
+                let ptr = frame.as_ptr();
                 std::ptr::copy_nonoverlapping(
                     dst.to_le_bytes().as_ptr(),
                     ptr.add(offset_in_page as usize),

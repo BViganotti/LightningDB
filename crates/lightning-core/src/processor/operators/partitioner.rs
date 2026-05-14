@@ -96,8 +96,15 @@ impl PhysicalOperator for PhysicalPartitioner {
                 self.partition_batch(chunk.batch)?;
             }
         }
-        // Partitioner is a sink-only operator in this design?
-        // Or it returns None to signal it processed everything into the state.
+
+        // Emit each partition in sequence
+        for p_idx in 0..self.state.num_partitions {
+            let mut guard = self.state.partitions[p_idx].lock();
+            if let Some(batch) = guard.pop() {
+                return Ok(Some(DataChunk { batch }));
+            }
+        }
+
         Ok(None)
     }
 

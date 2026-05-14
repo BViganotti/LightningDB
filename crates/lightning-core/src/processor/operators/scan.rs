@@ -2,7 +2,7 @@ use crate::planner::binder::BoundExpression;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
-use crate::Result;
+use crate::{LightningError, Result};
 use arrow::array::{Array, ArrayRef, BooleanArray, Int64Array, UInt64Array};
 use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
@@ -27,6 +27,7 @@ pub struct PhysicalScan {
     pub projected_idxs: Option<Vec<usize>>,
     pub read_ts: u64,
     pub cached_schema: Arc<RwLock<Option<Arc<arrow::datatypes::Schema>>>>,
+    pub filter_cached_schema: Arc<RwLock<Option<Arc<arrow::datatypes::Schema>>>>,
     pub pushdown_filter: Option<BoundExpression>,
     pub filter_column_idxs: Vec<usize>,
 }
@@ -38,12 +39,15 @@ impl PhysicalScan {
         bm: Arc<BufferManager>,
         num_rows: u64,
         read_ts: u64,
-    ) -> Self {
+    ) -> Result<Self> {
         if table.columns.is_empty() {
-            panic!("PhysicalScan::new: table '{}' has no columns! This indicates a schema mismatch. Catalog and storage may be out of sync.", table.name);
+            return Err(LightningError::Internal(format!(
+                "PhysicalScan::new: table '{}' has no columns. Schema mismatch: catalog and storage may be out of sync.",
+                table.name
+            )));
         }
         let has_modifications = table.columns[0].version_info.has_modifications();
-        Self {
+        Ok(Self {
             table,
             variable,
             bm,
@@ -57,9 +61,10 @@ impl PhysicalScan {
             projected_idxs: None,
             read_ts,
             cached_schema: Arc::new(RwLock::new(None)),
+            filter_cached_schema: Arc::new(RwLock::new(None)),
             pushdown_filter: None,
             filter_column_idxs: Vec::new(),
-        }
+        })
     }
 
     pub fn with_mask(
@@ -79,9 +84,7 @@ impl PhysicalScan {
 
     pub fn with_filter(mut self, filter: BoundExpression) -> Self {
         self.filter_column_idxs = self.extract_filter_columns(&filter);
-        let mut remapped_filter = filter;
-        self.remap_filter_expression(&mut remapped_filter);
-        self.pushdown_filter = Some(remapped_filter);
+        self.pushdown_filter = Some(filter);
         self
     }
 
@@ -220,7 +223,11 @@ impl PhysicalOperator for PhysicalScan {
             let only_scan_filter_cols = has_pushdown && self.projected_idxs.is_none();
 
             if only_scan_filter_cols {
-                let results: Vec<Result<ArrayRef>> = self
+                // Compute a boolean mask from filter columns only (lightweight scan),
+                // then fall through to the normal path which scans the full column set
+                // and applies the mask. This avoids the O(n*m) cost of scanning
+                // all columns for rows that would be filtered out.
+                let filter_results: Vec<Result<ArrayRef>> = self
                     .filter_column_idxs
                     .iter()
                     .map(|&idx| {
@@ -230,12 +237,12 @@ impl PhysicalOperator for PhysicalScan {
                     .collect();
 
                 let mut filter_columns = Vec::with_capacity(self.filter_column_idxs.len());
-                let mut fields = Vec::with_capacity(self.filter_column_idxs.len());
+                let mut filter_fields = Vec::with_capacity(self.filter_column_idxs.len());
 
-                for (i, res) in results.into_iter().enumerate() {
+                for (i, res) in filter_results.into_iter().enumerate() {
                     let array = res?;
                     let idx = self.filter_column_idxs[i];
-                    fields.push(arrow::datatypes::Field::new(
+                    filter_fields.push(arrow::datatypes::Field::new(
                         &self.table.columns[idx].name,
                         array.data_type().clone(),
                         true,
@@ -243,34 +250,32 @@ impl PhysicalOperator for PhysicalScan {
                     filter_columns.push(array);
                 }
 
-                let schema = Arc::new(arrow::datatypes::Schema::new(fields));
-                let batch = RecordBatch::try_new(schema, filter_columns)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                let filter_batch = RecordBatch::try_new(
+                    Arc::new(arrow::datatypes::Schema::new(filter_fields)),
+                    filter_columns,
+                )
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
                 if let Some(ref filter_expr) = self.pushdown_filter {
+                    let mut remapped = filter_expr.clone();
+                    self.remap_filter_expression(&mut remapped);
                     let mask_arr = crate::processor::evaluator::ExpressionEvaluator::evaluate(
-                        filter_expr,
-                        Some(&batch),
+                        &remapped,
+                        Some(&filter_batch),
                         params,
-                        batch.num_rows(),
+                        filter_batch.num_rows(),
                         &database.function_registry,
                         database,
                     )?;
-                    let mask = mask_arr.as_any().downcast_ref::<BooleanArray>().unwrap();
+                    let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
+                    .expect("filter expression must evaluate to BooleanArray");
 
-                    let filtered_batch = filter_record_batch(&batch, mask)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-                    if filtered_batch.num_rows() > 0 {
-                        return Ok(Some(DataChunk {
-                            batch: filtered_batch,
-                        }));
-                    } else {
+                    // If all rows in this morsel are filtered out, skip to next morsel
+                    if mask.false_count() == mask.len() {
                         continue;
                     }
                 }
-
-                return Ok(Some(DataChunk { batch }));
+                // Fall through to normal path — all columns will be scanned below.
             }
 
             let mut arrow_columns = Vec::new();
@@ -343,7 +348,7 @@ impl PhysicalOperator for PhysicalScan {
                         }
                         *cache = Some(Arc::new(arrow::datatypes::Schema::new(fields)));
                     }
-                    cache.as_ref().unwrap().clone()
+                    cache.as_ref().expect("schema cache was just populated").clone()
                 }
             };
 
@@ -414,7 +419,7 @@ impl PhysicalOperator for PhysicalScan {
                         .column(col_idx)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
-                        .unwrap();
+                        .expect("mask column must be UInt64Array");
                     for i in 0..batch.num_rows() {
                         let m = mask.contains(col.value(i));
                         filter_mask.push(m);
@@ -458,7 +463,8 @@ impl PhysicalOperator for PhysicalScan {
                     &database.function_registry,
                     database,
                 )?;
-                let mask = mask_arr.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
+                    .expect("filter expression must evaluate to BooleanArray");
 
                 let set_bits = mask.values().count_set_bits();
                 if set_bits == 0 {
@@ -511,6 +517,9 @@ impl PhysicalOperator for PhysicalSingleRow {
         )
         .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         Ok(Some(DataChunk { batch }))
+    }
+    fn is_single_row(&self) -> bool {
+        true
     }
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {

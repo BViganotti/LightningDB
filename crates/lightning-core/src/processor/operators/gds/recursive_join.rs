@@ -124,7 +124,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
         while !self.exhausted_child && self.output_buffer.is_empty() {
             if let Some(chunk) = self.child.get_next(database, tx, params)? {
-                let src_idx = self.src_col_idx.unwrap();
+                let src_idx = self.src_col_idx
+                    .expect("src_col_idx was just initialized if needed");
                 let num_rows = chunk.num_rows();
 
                 for i in 0..num_rows {

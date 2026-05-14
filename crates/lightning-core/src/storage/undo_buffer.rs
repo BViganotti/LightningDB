@@ -33,10 +33,18 @@ impl UndoBuffer {
         while let Some(record) = records.pop() {
             match record {
                 UndoRecord::UpdateColumn(_table_name, _row_id, _old_val) => {
-                    // Page-level rollback in BufferManager covers this if CoW is used
+                    // Handled by page-level rollback in BufferManager::rollback_versions (below).
+                    // Each transaction gets its own CoW page version via create_new_version, so
+                    // rollback_versions discards only this transaction's versions without affecting
+                    // concurrently committed changes on the same page.
+                    // UNCOMMITTED_BIT checks (0.1.1/0.1.2) ensure dirty uncommitted pages are
+                    // never evicted to disk, so page-level rollback is always safe.
                 }
                 UndoRecord::DeleteNode(_table_name, _row_id) => {
-                    // Undelete logic if we used a separate delete map - for now handled by page CoW
+                    // Handled by page-level rollback in BufferManager::rollback_versions (below).
+                    // Deletes create new page versions that remove the row's data. On rollback,
+                    // discarding the CoW page version restores the original row data.
+                    // See 0.1.1/0.1.2 for eviction safety guarantee.
                 }
                 UndoRecord::CreateNodeTable(name) => {
                     db.catalog.write().remove_table(&name);

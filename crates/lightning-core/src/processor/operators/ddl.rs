@@ -150,6 +150,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     .collect();
                 storage.create_table(name.clone(), col_defs, false, None)?;
                 storage.create_index(&name)?;
+                storage.set_fsm_on_all_file_handles();
 
                 // 3. Register for rollback
                 self.undo_buffer
@@ -183,6 +184,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     .map(|c| (c.name.clone(), c.type_.clone()))
                     .collect();
                 storage.create_table(name.clone(), col_defs, true, None)?;
+                storage.set_fsm_on_all_file_handles();
 
                 // 3. Register for rollback
                 self.undo_buffer

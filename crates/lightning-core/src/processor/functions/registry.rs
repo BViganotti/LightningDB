@@ -50,6 +50,14 @@ impl FunctionRegistry {
             "COLLECT".to_string(),
             Box::new(|| Box::new(crate::processor::functions::aggregate_function::Collect::new())),
         );
+        aggregate_functions.insert(
+            "COUNT_DISTINCT".to_string(),
+            Box::new(|| {
+                Box::new(
+                    crate::processor::functions::aggregate_function::CountDistinct::new(),
+                )
+            }),
+        );
         // Define UPPER
         scalar_functions.insert(
             "UPPER".to_string(),
@@ -102,179 +110,6 @@ impl FunctionRegistry {
                         .map(|opt_str| opt_str.map(|s| s.to_lowercase()))
                         .collect();
                     Ok(Arc::new(result))
-                }),
-            ),
-        );
-
-        // Define INITCAP
-        scalar_functions.insert(
-            "INITCAP".to_string(),
-            ScalarFunction::new(
-                "INITCAP".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "INITCAP requires 1 argument".into(),
-                        ));
-                    }
-                    let string_array = args[0]
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| {
-                            crate::LightningError::Internal(
-                                "INITCAP expects a String argument".into(),
-                            )
-                        })?;
-                    let result: arrow::array::StringArray = string_array
-                        .iter()
-                        .map(|opt_str| {
-                            opt_str.map(|s| {
-                                let mut c = s.chars();
-                                match c.next() {
-                                    None => String::new(),
-                                    Some(f) => {
-                                        f.to_uppercase().collect::<String>()
-                                            + &c.as_str().to_lowercase()
-                                    }
-                                }
-                            })
-                        })
-                        .collect();
-                    Ok(Arc::new(result))
-                }),
-            ),
-        );
-
-        // Define LEVENSHTEIN
-        scalar_functions.insert(
-            "LEVENSHTEIN".to_string(),
-            ScalarFunction::new(
-                "LEVENSHTEIN".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 2 {
-                        return Err(crate::LightningError::Internal(
-                            "LEVENSHTEIN requires 2 arguments".into(),
-                        ));
-                    }
-                    let s1_arg = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Utf8)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let s2_arg = arrow::compute::cast(&args[1], &arrow::datatypes::DataType::Utf8)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let s1_arr = s1_arg
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
-                    let s2_arr = s2_arg
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
-                    let mut result = arrow::array::Int64Builder::new();
-                    for i in 0..s1_arr.len() {
-                        if s1_arr.is_null(i) || s2_arr.is_null(i) {
-                            result.append_null();
-                            continue;
-                        }
-                        result
-                            .append_value(
-                                levenshtein::levenshtein(s1_arr.value(i), s2_arr.value(i)) as i64,
-                            );
-                    }
-                    Ok(Arc::new(result.finish()))
-                }),
-            ),
-        );
-
-        // Define MD5
-        scalar_functions.insert(
-            "MD5".to_string(),
-            ScalarFunction::new(
-                "MD5".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "MD5 requires 1 argument".into(),
-                        ));
-                    }
-                    let s_arg = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Utf8)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let s_arr = s_arg
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
-                    let mut result = arrow::array::StringBuilder::new();
-                    use md5::{Digest, Md5};
-                    for i in 0..s_arr.len() {
-                        if s_arr.is_null(i) {
-                            result.append_null();
-                            continue;
-                        }
-                        let mut hasher = Md5::new();
-                        hasher.update(s_arr.value(i));
-                        result.append_value(format!("{:x}", hasher.finalize()));
-                    }
-                    Ok(Arc::new(result.finish()))
-                }),
-            ),
-        );
-
-        // Define SHA256
-        scalar_functions.insert(
-            "SHA256".to_string(),
-            ScalarFunction::new(
-                "SHA256".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "SHA256 requires 1 argument".into(),
-                        ));
-                    }
-                    let s_arg = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Utf8)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let s_arr = s_arg
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
-                    let mut result = arrow::array::StringBuilder::new();
-                    use sha2::{Digest, Sha256};
-                    for i in 0..s_arr.len() {
-                        if s_arr.is_null(i) {
-                            result.append_null();
-                            continue;
-                        }
-                        let mut hasher = Sha256::new();
-                        hasher.update(s_arr.value(i));
-                        result.append_value(format!("{:x}", hasher.finalize()));
-                    }
-                    Ok(Arc::new(result.finish()))
-                }),
-            ),
-        );
-
-        // Define HASH
-        scalar_functions.insert(
-            "HASH".to_string(),
-            ScalarFunction::new(
-                "HASH".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "HASH requires 1 argument".into(),
-                        ));
-                    }
-                    let mut result = arrow::array::Int64Builder::new();
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    for i in 0..args[0].len() {
-                        if args[0].is_null(i) {
-                            result.append_null();
-                            continue;
-                        }
-                        let val = crate::processor::Value::from_arrow(&args[0], i);
-                        let mut hasher = DefaultHasher::new();
-                        val.hash(&mut hasher);
-                        result.append_value(hasher.finish() as i64);
-                    }
-                    Ok(Arc::new(result.finish()))
                 }),
             ),
         );
@@ -444,6 +279,96 @@ impl FunctionRegistry {
                 }),
             ),
         );
+
+        // Define IFNULL, ISNULL — return first non-null argument
+        for name in &["IFNULL", "ISNULL"] {
+            let func_name = name.to_string();
+            scalar_functions.insert(
+                func_name.clone(),
+                ScalarFunction::new(
+                    func_name,
+                    Arc::new(move |args, num_rows| {
+                        if args.len() != 2 {
+                            return Err(crate::LightningError::Internal(format!(
+                                "{} requires 2 arguments",
+                                name
+                            )));
+                        }
+                        let target_type = args[0].data_type().clone();
+                        let mut result = Vec::with_capacity(num_rows);
+                        for i in 0..num_rows {
+                            if !args[0].is_null(i) {
+                                result.push(crate::processor::Value::from_arrow(&args[0], i));
+                            } else {
+                                result.push(crate::processor::Value::from_arrow(&args[1], i));
+                            }
+                        }
+                        Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                    }),
+                ),
+            );
+        }
+
+        // Define NULLIF — return null if two arguments are equal
+        scalar_functions.insert(
+            "NULLIF".to_string(),
+            ScalarFunction::new(
+                "NULLIF".to_string(),
+                Arc::new(|args, num_rows| {
+                    if args.len() != 2 {
+                        return Err(crate::LightningError::Internal(
+                            "NULLIF requires 2 arguments".into(),
+                        ));
+                    }
+                    let target_type = args[0].data_type().clone();
+                    let mut result = Vec::with_capacity(num_rows);
+                    for i in 0..num_rows {
+                        let v1 = crate::processor::Value::from_arrow(&args[0], i);
+                        let v2 = crate::processor::Value::from_arrow(&args[1], i);
+                        if v1 == v2 {
+                            result.push(crate::processor::Value::Null);
+                        } else {
+                            result.push(v1);
+                        }
+                    }
+                    Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                }),
+            ),
+        );
+
+        // Define IF, IIF — inline conditional: IF(condition, true_val, false_val)
+        for name in &["IF", "IIF"] {
+            let func_name = name.to_string();
+            scalar_functions.insert(
+                func_name.clone(),
+                ScalarFunction::new(
+                    func_name,
+                    Arc::new(move |args, num_rows| {
+                        if args.len() != 3 {
+                            return Err(crate::LightningError::Internal(format!(
+                                "{} requires 3 arguments (condition, true_value, false_value)",
+                                name
+                            )));
+                        }
+                        let cond = args[0].as_any()
+                            .downcast_ref::<arrow::array::BooleanArray>()
+                            .ok_or_else(|| crate::LightningError::Internal(
+                                "IF/IIF first argument must be boolean".into()
+                            ))?;
+                        let target_type = args[1].data_type().clone();
+                        let mut result = Vec::with_capacity(num_rows);
+                        for i in 0..num_rows {
+                            if cond.is_null(i) || !cond.value(i) {
+                                result.push(crate::processor::Value::from_arrow(&args[2], i));
+                            } else {
+                                result.push(crate::processor::Value::from_arrow(&args[1], i));
+                            }
+                        }
+                        Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                    }),
+                ),
+            );
+        }
 
         // Define REVERSE
         scalar_functions.insert(
@@ -1505,145 +1430,9 @@ impl FunctionRegistry {
             ),
         );
 
-        // Define PI, E
-        scalar_functions.insert(
-            "PI".to_string(),
-            ScalarFunction::new(
-                "PI".to_string(),
-                Arc::new(|_args, num_rows| {
-                    Ok(Arc::new(arrow::array::Float64Array::from(
-                        vec![std::f64::consts::PI; num_rows],
-                    )))
-                }),
-            ),
-        );
-        scalar_functions.insert(
-            "E".to_string(),
-            ScalarFunction::new(
-                "E".to_string(),
-                Arc::new(|_args, num_rows| {
-                    Ok(Arc::new(arrow::array::Float64Array::from(
-                        vec![std::f64::consts::E; num_rows],
-                    )))
-                }),
-            ),
-        );
+        // Define RADIANS, DEGREES
 
-        // Define DEGREES, RADIANS
-        for name in &["DEGREES", "RADIANS"] {
-            let func_name = name.to_string();
-            scalar_functions.insert(
-                func_name.clone(),
-                ScalarFunction::new(
-                    func_name,
-                    Arc::new(move |args, num_rows| {
-                        if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
-                            ));
-                        }
-                        let n_arg =
-                            arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
-                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                        let n_arr = n_arg
-                            .as_any()
-                            .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
-                        let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            if n_arr.is_null(i) {
-                                results.append_null();
-                                continue;
-                            }
-                            let n = n_arr.value(i);
-                            let res = if *name == "DEGREES" {
-                                (n * 180.0) / std::f64::consts::PI
-                            } else {
-                                (n * std::f64::consts::PI) / 180.0
-                            };
-                            results.append_value(res);
-                        }
-                        Ok(Arc::new(results.finish()))
-                    }),
-                ),
-            );
-        }
-
-        // Define BIT_AND, BIT_OR, BIT_XOR
-        for name in &["BIT_AND", "BIT_OR", "BIT_XOR"] {
-            let func_name = name.to_string();
-            scalar_functions.insert(
-                func_name.clone(),
-                ScalarFunction::new(
-                    func_name,
-                    Arc::new(move |args, num_rows| {
-                        if args.len() != 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 arguments", name).into(),
-                            ));
-                        }
-                        let a1 = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
-                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                        let a2 = arrow::compute::cast(&args[1], &arrow::datatypes::DataType::Int64)
-                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                        let arr1 = a1
-                            .as_any()
-                            .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
-                        let arr2 = a2
-                            .as_any()
-                            .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
-                        let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            if arr1.is_null(i) || arr2.is_null(i) {
-                                results.append_null();
-                                continue;
-                            }
-                            let res = match *name {
-                                "BIT_AND" => arr1.value(i) & arr2.value(i),
-                                "BIT_OR" => arr1.value(i) | arr2.value(i),
-                                "BIT_XOR" => arr1.value(i) ^ arr2.value(i),
-                                _ => unreachable!(),
-                            };
-                            results.append_value(res);
-                        }
-                        Ok(Arc::new(results.finish()))
-                    }),
-                ),
-            );
-        }
-
-        scalar_functions.insert(
-            "BIT_NOT".to_string(),
-            ScalarFunction::new(
-                "BIT_NOT".to_string(),
-                Arc::new(|args, num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "BIT_NOT requires 1 argument".into(),
-                        ));
-                    }
-                    let a = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let arr = a
-                        .as_any()
-                        .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
-                    let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
-                    for i in 0..num_rows {
-                        if arr.is_null(i) {
-                            results.append_null();
-                            continue;
-                        }
-                        results.append_value(!arr.value(i));
-                    }
-                    Ok(Arc::new(results.finish()))
-                }),
-            ),
-        );
-
-        // Define MD5
+        // Define BIT_NOT
         scalar_functions.insert(
             "MD5".to_string(),
             ScalarFunction::new(
@@ -1707,23 +1496,6 @@ impl FunctionRegistry {
                         })
                         .collect();
                     Ok(Arc::new(result))
-                }),
-            ),
-        );
-
-        // Define GEN_RANDOM_UUID
-        scalar_functions.insert(
-            "GEN_RANDOM_UUID".to_string(),
-            ScalarFunction::new(
-                "GEN_RANDOM_UUID".to_string(),
-                Arc::new(|_args, num_rows| {
-                    use uuid::Uuid;
-                    let mut result =
-                        arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 36);
-                    for _ in 0..num_rows {
-                        result.append_value(Uuid::new_v4().to_string());
-                    }
-                    Ok(Arc::new(result.finish()))
                 }),
             ),
         );
@@ -1932,77 +1704,6 @@ impl FunctionRegistry {
                 ),
             );
         }
-
-        // Define STRUCT_EXTRACT, STRUCT_PACK
-        scalar_functions.insert(
-            "STRUCT_EXTRACT".to_string(),
-            ScalarFunction::new(
-                "STRUCT_EXTRACT".to_string(),
-                Arc::new(|args, num_rows| {
-                    if args.len() != 2 {
-                        return Err(crate::LightningError::Internal(
-                            "STRUCT_EXTRACT requires 2 arguments".into(),
-                        ));
-                    }
-                    let mut results = Vec::with_capacity(num_rows);
-                    for i in 0..num_rows {
-                        let struct_val = crate::processor::Value::from_arrow(&args[0], i);
-                        let field_name = crate::processor::Value::from_arrow(&args[1], i);
-                        if let (
-                            crate::processor::Value::Struct(s),
-                            crate::processor::Value::String(f),
-                        ) = (struct_val, field_name)
-                        {
-                            let mut found = false;
-                            for (name, val) in s {
-                                if name == f {
-                                    results.push(val);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                results.push(crate::processor::Value::Null);
-                            }
-                        } else {
-                            results.push(crate::processor::Value::Null);
-                        }
-                    }
-                    Ok(crate::processor::arrow_utils::values_to_array(
-                        &results,
-                        &arrow::datatypes::DataType::Null,
-                    ))
-                }),
-            ),
-        );
-
-        scalar_functions.insert(
-            "STRUCT_PACK".to_string(),
-            ScalarFunction::new(
-                "STRUCT_PACK".to_string(),
-                Arc::new(|args, num_rows| {
-                    if args.len() % 2 != 0 {
-                        return Err(crate::LightningError::Internal(
-                            "STRUCT_PACK requires an even number of arguments".into(),
-                        ));
-                    }
-                    let mut results = Vec::with_capacity(num_rows);
-                    for i in 0..num_rows {
-                        let mut fields = Vec::with_capacity(args.len() / 2);
-                        for j in (0..args.len()).step_by(2) {
-                            let name = crate::processor::Value::from_arrow(&args[j], i).to_string();
-                            let val = crate::processor::Value::from_arrow(&args[j + 1], i);
-                            fields.push((name, val));
-                        }
-                        results.push(crate::processor::Value::Struct(fields));
-                    }
-                    Ok(crate::processor::arrow_utils::values_to_array(
-                        &results,
-                        &arrow::datatypes::DataType::Null,
-                    ))
-                }),
-            ),
-        );
 
         // Define DATE_ADD, DATE_SUB
         for name in &["DATE_ADD", "DATE_SUB"] {
@@ -3540,6 +3241,52 @@ impl FunctionRegistry {
                             });
                         }
                         Ok(Arc::new(results.finish()))
+                    }),
+                ),
+            );
+        }
+
+        // Define IS_NULL, IS_NOT_NULL
+        for name in &["IS_NULL", "IS_NOT_NULL"] {
+            let func_name = name.to_string();
+            scalar_functions.insert(
+                func_name.clone(),
+                ScalarFunction::new(
+                    func_name,
+                    Arc::new(move |args, num_rows| {
+                        if args.len() != 1 {
+                            return Err(crate::LightningError::Internal(format!(
+                                "{} requires 1 argument",
+                                name
+                            )));
+                        }
+                        if *name == "IS_NOT_NULL" {
+                            let nulls = args[0].nulls();
+                            let result = match nulls {
+                                Some(n) => {
+                                    let mut vec = Vec::with_capacity(num_rows);
+                                    for i in 0..num_rows {
+                                        vec.push(n.is_valid(i));
+                                    }
+                                    arrow::array::BooleanArray::from(vec)
+                                }
+                                None => arrow::array::BooleanArray::from(vec![true; num_rows]),
+                            };
+                            Ok(Arc::new(result))
+                        } else {
+                            let nulls = args[0].nulls();
+                            let result = match nulls {
+                                Some(n) => {
+                                    let mut vec = Vec::with_capacity(num_rows);
+                                    for i in 0..num_rows {
+                                        vec.push(n.is_null(i));
+                                    }
+                                    arrow::array::BooleanArray::from(vec)
+                                }
+                                None => arrow::array::BooleanArray::from(vec![false; num_rows]),
+                            };
+                            Ok(Arc::new(result))
+                        }
                     }),
                 ),
             );

@@ -117,7 +117,7 @@ impl FilterPushDown {
                     vars.insert(var.clone());
                 }
             }
-            LogicalOperator::Delete(child, _)
+            LogicalOperator::Delete(child, ..)
             | LogicalOperator::Set(child, _)
             | LogicalOperator::Sort(child, _)
             | LogicalOperator::Limit(child, _)
@@ -333,9 +333,10 @@ impl FilterPushDown {
                 let new_child = child.map(|c| self.push_down(*c)).transpose()?.map(Box::new);
                 Ok(LogicalOperator::CreateRel(new_child, pat))
             }
-            LogicalOperator::Delete(child, vars) => Ok(LogicalOperator::Delete(
+            LogicalOperator::Delete(child, vars, detach) => Ok(LogicalOperator::Delete(
                 Box::new(self.push_down(*child)?),
                 vars,
+                detach,
             )),
             LogicalOperator::Set(child, assignments) => Ok(LogicalOperator::Set(
                 Box::new(self.push_down(*child)?),

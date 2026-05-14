@@ -194,7 +194,7 @@ impl Column {
         let offset_in_page = (row_id % values_per_page) as usize * element_size;
         let frame = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
         let res = self.parse_value(
-            &frame.data[offset_in_page..offset_in_page + element_size],
+            &frame.as_slice()[offset_in_page..offset_in_page + element_size],
             bm,
             tx,
         );
@@ -211,7 +211,7 @@ impl Column {
         let page_idx = row_id / 4096;
         let offset = (row_id % 4096) as usize;
         let frame = bm.pin_page(Arc::clone(&self.null_fh), page_idx, tx)?;
-        let is_null = frame.data[offset] != 0;
+        let is_null = frame.as_slice()[offset] != 0;
         bm.unpin_page(&self.null_fh, page_idx, frame);
         Ok(is_null)
     }
@@ -239,7 +239,7 @@ impl Column {
 
             let mut page_i = i;
             unsafe {
-                let ptr = frame.data.as_ptr() as *mut u8;
+                let ptr = frame.as_ptr();
                 while page_i < num_rows {
                     let current_row = start_row_id + page_i as u64;
                     if current_row / 4096 != page_idx {
@@ -254,7 +254,7 @@ impl Column {
                     page_i += 1;
                 }
             }
-            bm.log_page_update(self.null_fh.file_id, page_idx, &frame.data)?;
+            bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(&self.null_fh, page_idx, frame);
             i = page_i;
         }
@@ -286,7 +286,7 @@ impl Column {
             let mut stack_buf = [0u8; 64];
 
             unsafe {
-                let data_ptr = frame.data.as_ptr() as *mut u8;
+                let data_ptr = frame.as_ptr();
                 while page_i < num_rows {
                     let current_row = start_row_id + page_i as u64;
                     if current_row / values_per_page != page_idx {
@@ -320,7 +320,7 @@ impl Column {
                     page_i += 1;
                 }
             }
-            bm.log_page_update(self.fh.file_id, page_idx, &frame.data)?;
+            bm.log_page_update(self.fh.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(&self.fh, page_idx, frame);
             i = page_i;
         }
@@ -354,7 +354,7 @@ impl Column {
             );
             for k in 0..to_read {
                 let start = offset_in_page + k as usize * element_size;
-                result.push(self.parse_value(&frame.data[start..start + element_size], bm, tx)?);
+                result.push(self.parse_value(&frame.as_slice()[start..start + element_size], bm, tx)?);
             }
             bm.unpin_page(&self.fh, page_idx, frame);
             values_read += to_read;
@@ -415,7 +415,7 @@ impl Column {
             let to_read = std::cmp::min(num_values - values_read, 32);
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
             alg.decompress_from_page(
-                &page.data,
+                page.as_slice(),
                 offset_in_page as u64,
                 &mut temp_block,
                 0,
@@ -428,7 +428,7 @@ impl Column {
             let null_base_offset = (current_offset % 4096) as usize;
 
             for i in 0..to_read as usize {
-                let is_null = null_frame.data[null_base_offset + i] != 0;
+                let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
                 if is_null {
                     crate::processor::arrow_utils::append_null_to_builder(
                         &mut *builder,
@@ -533,17 +533,17 @@ impl Column {
             let null_base_offset = (current_offset % 4096) as usize;
 
             for i in 0..to_read {
-                let is_null = null_frame.data[null_base_offset + i] != 0;
+                let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
                 if is_null {
                     builder.append_null();
                 } else {
                     let slot_offset = base_offset + i * 64;
-                    let marker = page.data[slot_offset];
+                    let marker = page.as_slice()[slot_offset];
                     let s = if marker == 255 {
                         // Overflow string: read from overflow file via parse_value
                         // (which handles buffer manager pinning internally)
                         match self.parse_value(
-                            &page.data[slot_offset..slot_offset + 64],
+                            &page.as_slice()[slot_offset..slot_offset + 64],
                             bm,
                             tx,
                         ) {
@@ -554,7 +554,7 @@ impl Column {
                         let len = marker as usize;
                         let actual_len = std::cmp::min(len, 63);
                         std::str::from_utf8(
-                            &page.data[slot_offset + 1..slot_offset + 1 + actual_len],
+                            &page.as_slice()[slot_offset + 1..slot_offset + 1 + actual_len],
                         )
                         .unwrap_or("")
                         .to_string()
@@ -721,13 +721,13 @@ impl Column {
             let page_idx = offset / values_per_page;
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
 
-            let data_buf = Buffer::from(&page.data);
+            let data_buf = Buffer::from(page.as_slice());
 
             let null_page_idx = offset / 4096;
             let null_frame = bm.pin_page(Arc::clone(&self.null_fh), null_page_idx, tx)?;
             let null_base_offset = (offset % 4096) as usize;
 
-            let has_nulls = null_frame.data
+            let has_nulls = null_frame.as_slice()
                 [null_base_offset..null_base_offset + num_values as usize]
                 .iter()
                 .any(|&v| v != 0);
@@ -735,7 +735,7 @@ impl Column {
             let null_buf = if has_nulls {
                 let mut bits = vec![0xFFu8; (num_values as usize + 7) / 8];
                 for i in 0..num_values as usize {
-                    if null_frame.data[null_base_offset + i] != 0 {
+                    if null_frame.as_slice()[null_base_offset + i] != 0 {
                         bits[i / 8] &= !(1u8 << (i % 8));
                     }
                 }
@@ -774,7 +774,7 @@ impl Column {
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
             let src_start = offset_in_page * element_size;
             let src_end = src_start + to_read * element_size;
-            data_buffer.extend_from_slice(&page.data[src_start..src_end]);
+            data_buffer.extend_from_slice(&page.as_slice()[src_start..src_end]);
 
             // Always read null bitmap — not relying on null_count stats which
             // can be stale for newly written data via the CREATE→append_row path.
@@ -783,7 +783,7 @@ impl Column {
                 let null_frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
                 let null_base_offset = (current_offset % 4096) as usize;
 
-                let null_src = &null_frame.data[null_base_offset..null_base_offset + to_read];
+                let null_src = &null_frame.as_slice()[null_base_offset..null_base_offset + to_read];
                 let mut j = 0;
                 while j + 8 <= to_read {
                     let val = u64::from_le_bytes(null_src[j..j + 8].try_into().unwrap());
@@ -1063,7 +1063,7 @@ impl Column {
             let to_read = std::cmp::min(num_values - values_read, 32);
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
             alg.decompress_from_page(
-                &page.data,
+                page.as_slice(),
                 offset_in_page as u64,
                 &mut temp_block,
                 0,
@@ -1076,7 +1076,7 @@ impl Column {
 
             for i in 0..to_read as usize {
                 let row_data = &temp_block[i * element_size..(i + 1) * element_size];
-                let is_null = null_frame.data[null_base_offset + i] != 0;
+                let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
                 if !is_null && predicate(row_data) {
                     crate::processor::arrow_utils::append_raw_to_builder(
                         &mut *builder,
@@ -1106,10 +1106,10 @@ impl Column {
         }
         let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
         unsafe {
-            let ptr = frame.data.as_ptr() as *mut u8;
+            let ptr = frame.as_ptr();
             *ptr.add(offset) = if is_null { 1 } else { 0 };
         }
-        bm.log_page_update(self.null_fh.file_id, page_idx, &frame.data)?;
+        bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
         bm.unpin_page(&self.null_fh, page_idx, frame);
         Ok(())
     }
@@ -1132,7 +1132,7 @@ impl Column {
 
         let mut stack_buf = [0u8; 64];
         unsafe {
-            let data_ptr = frame.data.as_ptr() as *mut u8;
+            let data_ptr = frame.as_ptr();
             self.serialize_value_into(val, bm, tx, &mut stack_buf)?;
             std::ptr::copy_nonoverlapping(
                 stack_buf.as_ptr(),
@@ -1166,7 +1166,7 @@ impl Column {
             );
         }
 
-        bm.log_page_update(self.fh.file_id, page_idx, &frame.data)?;
+        bm.log_page_update(self.fh.file_id, page_idx, frame.as_slice())?;
         bm.unpin_page(&self.fh, page_idx, frame);
         self.stats.write().update(val);
         Ok(())
@@ -1249,7 +1249,7 @@ impl Column {
 
                 let mut page_i = i;
                 unsafe {
-                    let ptr = frame.data.as_ptr() as *mut u8;
+                    let ptr = frame.as_ptr();
                     while page_i < num_rows {
                         let current_row = start_row_id + page_i as u64;
                         if current_row / 4096 != page_idx {
@@ -1261,7 +1261,7 @@ impl Column {
                         page_i += 1;
                     }
                 }
-                bm.log_page_update(self.null_fh.file_id, page_idx, &frame.data)?;
+                bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
                 bm.unpin_page(&self.null_fh, page_idx, frame);
                 i = page_i;
             }
@@ -1324,7 +1324,7 @@ impl Column {
             let mut stack_buf = [0u8; 64];
 
             unsafe {
-                let data_ptr = frame.data.as_ptr() as *mut u8;
+                let data_ptr = frame.as_ptr();
                 while page_i < num_rows {
                     let current_row = start_row_id + page_i as u64;
                     if current_row / values_per_page != page_idx {
@@ -1369,7 +1369,7 @@ impl Column {
                     page_i += 1;
                 }
             }
-            bm.log_page_update(self.fh.file_id, page_idx, &frame.data)?;
+            bm.log_page_update(self.fh.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(&self.fh, page_idx, frame);
             i = page_i;
         }
@@ -1521,7 +1521,7 @@ impl Column {
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
                 let mut page_i = i;
                 unsafe {
-                    let ptr = frame.data.as_ptr() as *mut u8;
+                    let ptr = frame.as_ptr();
                     while page_i < num_rows {
                         let current_row = start_row_id + page_i as u64;
                         if current_row / 4096 != page_idx {
@@ -1533,7 +1533,7 @@ impl Column {
                         page_i += 1;
                     }
                 }
-                bm.log_page_update(self.null_fh.file_id, page_idx, &frame.data)?;
+                bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
                 bm.unpin_page(&self.null_fh, page_idx, frame);
                 i = page_i;
             }
@@ -1564,11 +1564,11 @@ impl Column {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             s_bytes.as_ptr(),
-                            frame.data.as_ptr() as *mut u8,
+                            frame.as_ptr(),
                             copy_len,
                         );
                     }
-                    bm.log_page_update(ofh.file_id, page_idx, &frame.data)?;
+                    bm.log_page_update(ofh.file_id, page_idx, frame.as_slice())?;
                     bm.unpin_page(ofh, page_idx, frame);
 
                     data_vec[local_offset] = 255u8;
@@ -1666,7 +1666,7 @@ impl Column {
                     let end = std::cmp::min(offset as usize + read_len, 4096);
                     Ok(Value::String(
                         String::from_utf8_lossy(
-                            &overflow_page.data[offset as usize..end],
+                            &overflow_page.as_slice()[offset as usize..end],
                         )
                         .to_string(),
                     ))
@@ -1755,7 +1755,7 @@ impl Column {
         let frame = bm.create_new_version(fh.clone(), page_idx, tx)?;
         let len = std::cmp::min(data.len(), 4096);
         unsafe {
-            let ptr = frame.data.as_ptr() as *mut u8;
+            let ptr = frame.as_ptr();
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
         }
         Ok((page_idx, 0))
@@ -1780,6 +1780,36 @@ impl Column {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        let num_data_pages = self.fh.get_num_pages();
+        if num_data_pages == 0 {
+            return Ok(());
+        }
+        // Scan from end to find completely empty trailing pages and free them
+        let element_size = self.element_size();
+        let stats = self.stats.read();
+        let values_per_page = if stats
+            .compression_meta
+            .as_ref()
+            .map(|m| m.compression)
+            .unwrap_or(CompressionType::Uncompressed)
+            == CompressionType::Uncompressed
+        {
+            4096 / element_size as u64
+        } else {
+            32
+        };
+        if values_per_page == 0 {
+            return Ok(());
+        }
+        let total_values = stats.num_values;
+        let pages_needed = if total_values == 0 {
+            0
+        } else {
+            (total_values + values_per_page - 1) / values_per_page
+        };
+        if pages_needed < num_data_pages {
+            self.fh.truncate_last_pages(pages_needed)?;
+        }
         Ok(())
     }
 }

@@ -343,6 +343,7 @@ pub struct PhysicalDelete {
     undo_buffer: Arc<UndoBuffer>,
     shared_state: Arc<SharedDMLState>,
     tx_id: u64,
+    detach: bool,
 }
 impl PhysicalDelete {
     pub fn new(
@@ -351,6 +352,7 @@ impl PhysicalDelete {
         buffer_manager: Arc<BufferManager>,
         undo_buffer: Arc<UndoBuffer>,
         tx_id: u64,
+        detach: bool,
     ) -> Self {
         Self {
             child,
@@ -364,6 +366,7 @@ impl PhysicalDelete {
                 final_result: RwLock::new(None),
             }),
             tx_id,
+            detach,
         }
     }
 }
@@ -384,6 +387,47 @@ impl PhysicalOperator for PhysicalDelete {
                     };
                     self.undo_buffer
                         .push(UndoRecord::DeleteNode(self.table.name.clone(), id));
+
+                    if self.detach {
+                        let cat = database.catalog.read();
+                        let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
+                        drop(cat);
+                        for rel_name in &rel_tables {
+                            let storage = database.storage_manager.read();
+                            if let Some(rel_table) = storage.get_table(rel_name) {
+                                let bm = &self.buffer_manager;
+                                if let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM") {
+                                    if let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO") {
+                                        let num_rel_rows = {
+                                            let cat2 = database.catalog.read();
+                                            cat2.get_rel_table(rel_name)
+                                                .map(|t| t.num_rows)
+                                                .unwrap_or(0)
+                                        };
+                                        if num_rel_rows == 0 { continue; }
+                                        let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx)?;
+                                        let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx)?;
+                                        for row_idx in 0..num_rel_rows as usize {
+                                            let from_val = match Value::from_arrow(&from_arr, row_idx) {
+                                                Value::Node(id) => id,
+                                                _ => continue,
+                                            };
+                                            let to_val = match Value::from_arrow(&to_arr, row_idx) {
+                                                Value::Node(id) => id,
+                                                _ => continue,
+                                            };
+                                            if from_val == id || to_val == id {
+                                                for col in &rel_table.columns {
+                                                    col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     for col in &self.table.columns {
                         col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
                     }
@@ -434,6 +478,7 @@ impl PhysicalOperator for PhysicalDelete {
             undo_buffer: self.undo_buffer.clone(),
             shared_state: self.shared_state.clone(),
             tx_id: self.tx_id,
+            detach: self.detach,
         })
     }
 }

@@ -985,28 +985,46 @@ fn torture_wal_replay() -> TestResult {
         println!("  [WAL] Phase 2: {} rows survived unclean restart (WAL replay)", total_rows + new_rows);
     }
 
-    // Phase 3: Insert without checkpoint, crash mid-stream, verify partial recovery
+    // Phase 3: WAL replay with string columns — verify INSERT survives crash recovery.
+    // This exercises scan_string_direct null handling (the offsets-buffer alignment bug)
+    // and the post-replay catalog reconciliation.
     {
         let db = Database::new(&db_path, SystemConfig::default())?;
         let conn = db.connect();
 
-        // Create separate table for DML WAL test (avoids string column Arrow alignment issues)
-        conn.execute("CREATE NODE TABLE DMLTest(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+        conn.execute("CREATE NODE TABLE StrTable(id INT64, val INT64, label STRING, PRIMARY KEY (id))", None)?;
+        db.checkpoint()?;
+
         for i in 0..100 {
-            conn.execute(&format!("CREATE (:DMLTest {{id: {}, val: {}}})", i, i * 2), None)?;
+            conn.execute(&format!(
+                "CREATE (:StrTable {{id: {}, val: {}, label: 'str_{}'}})",
+                i, i * 7, i
+            ), None)?;
         }
-        // DELETE is not tested in WAL replay due to string null buffer alignment during recovery.
-        // INSERT-only WAL replay is verified in Phase 1 and 2 above.
+        // No checkpoint — simulates crash with dirty WAL
     }
 
     {
         let db = Database::new(&db_path, SystemConfig::default())?;
         let conn = db.connect();
-        let res = conn.execute("MATCH (d:DMLTest) RETURN count(*)", None)?;
+
+        let res = conn.execute("MATCH (s:StrTable) RETURN count(*)", None)?;
         let count = res.batches[0].column(0)
             .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
-        assert!(count >= 100, "WAL replay DML: expected >=100 rows, got {}", count);
-        println!("  [WAL] Phase 3: DML WAL replay: {} rows", count);
+        assert_eq!(count, 100, "WAL replay strings: expected 100 rows, got {}", count);
+
+        // Verify string values survived — scan and check individual values
+        let res = conn.execute("MATCH (s:StrTable) RETURN s.id, s.val, s.label ORDER BY s.id", None)?;
+        let ids = res.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let vals = res.batches[0].column(1).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let labels = res.batches[0].column(2).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+        assert_eq!(ids.len(), 100, "WAL replay strings: expected 100 rows in scan");
+        for i in 0..100 {
+            assert_eq!(ids.value(i), i as i64, "WAL replay strings: id mismatch at {}", i);
+            assert_eq!(vals.value(i), (i * 7) as i64, "WAL replay strings: val mismatch at {}", i);
+            assert_eq!(labels.value(i), format!("str_{}", i), "WAL replay strings: label mismatch at {}", i);
+        }
+        println!("  [WAL] Phase 3: 100 string rows survived WAL replay — values verified");
     }
 
     println!("  [WAL] WAL replay correctness: ALL 3 PHASES PASS");

@@ -238,9 +238,18 @@ impl std::hash::Hash for Value {
             Value::List(l) => l.hash(state),
             Value::Struct(s) => s.hash(state),
             Value::Map(m) => {
-                // To avoid non-deterministic hash for Map, sum hashes
+                // Sort by deterministic key hash to ensure equal maps
+                // always produce the same hash regardless of insertion order.
+                let mut entries: Vec<(u64, &Value, &Value)> = m.iter()
+                    .map(|(k, v)| {
+                        let mut kh = std::collections::hash_map::DefaultHasher::new();
+                        k.hash(&mut kh);
+                        (std::hash::Hasher::finish(&kh), k, v)
+                    })
+                    .collect();
+                entries.sort_by_key(|(h, _, _)| *h);
                 let mut h = 0u64;
-                for (k, v) in m {
+                for (_, k, v) in entries {
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     k.hash(&mut s);
                     v.hash(&mut s);

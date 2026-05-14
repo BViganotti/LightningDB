@@ -130,11 +130,11 @@ fn test_forget_and_decay() -> TestResult {
     assert!(deleted, "forget should return true");
 
     // Wait for TTL to expire
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
 
     // Decay should clean up temp-1
     let expired = store.decay()?;
-    assert!(expired >= 1);
+    assert!(expired >= 1, "decay should find at least 1 expired entity (found {})", expired);
 
     Ok(())
 }

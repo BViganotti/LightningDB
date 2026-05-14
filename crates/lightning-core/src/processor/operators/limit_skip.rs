@@ -65,6 +65,10 @@ impl PhysicalOperator for PhysicalLimit {
         }
     }
 
+    fn is_single_row(&self) -> bool {
+        self.shared.limit == 1
+    }
+
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
             child: self.child.clone_box(),

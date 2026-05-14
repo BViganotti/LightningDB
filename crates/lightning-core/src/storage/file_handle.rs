@@ -1,4 +1,5 @@
 use crate::storage::buffer_manager::PAGE_SIZE;
+use crate::storage::free_space_manager::FreeSpaceManager;
 use crate::storage::page_state::PageState;
 use crate::Result;
 use parking_lot::RwLock;
@@ -12,6 +13,7 @@ pub struct FileHandle {
     file: Arc<File>,
     num_pages: RwLock<u64>,
     pub(crate) page_states: RwLock<Vec<PageState>>,
+    free_space_manager: RwLock<Option<Arc<FreeSpaceManager>>>,
 }
 
 impl FileHandle {
@@ -52,6 +54,7 @@ impl FileHandle {
             file: Arc::new(file),
             num_pages: RwLock::new(num_pages),
             page_states: RwLock::new(page_states),
+            free_space_manager: RwLock::new(None),
         })
     }
 
@@ -104,17 +107,29 @@ impl FileHandle {
         Ok(())
     }
 
+    pub fn set_free_space_manager(&self, fsm: Arc<FreeSpaceManager>) {
+        *self.free_space_manager.write() = Some(fsm);
+    }
+
     pub fn add_new_page(&self) -> Result<u64> {
+        {
+            let fsm = self.free_space_manager.read();
+            if let Some(ref fsm) = *fsm {
+                if let Some(freed_page) = fsm.get_free_page(self.file_id) {
+                    let mut page_states = self.page_states.write();
+                    if (freed_page as usize) < page_states.len() {
+                        page_states[freed_page as usize] = PageState::new();
+                    }
+                    return Ok(freed_page);
+                }
+            }
+        }
         let mut num_pages = self.num_pages.write();
         let mut page_states = self.page_states.write();
 
         let new_idx = *num_pages;
         *num_pages += 1;
         page_states.push(PageState::new());
-
-        // Do not extend the file physically yet.
-        // read_page will use metadata().len() to return zeros for new pages.
-        // write_page will extend the file when the page is actually flushed.
 
         Ok(new_idx)
     }
@@ -144,6 +159,38 @@ impl FileHandle {
 
     pub fn sync(&self) -> Result<()> {
         self.file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn free_page(&self, page_idx: u64) {
+        {
+            let fsm = self.free_space_manager.read();
+            if let Some(ref fsm) = *fsm {
+                fsm.record_free_page(self.file_id, page_idx);
+            }
+        }
+    }
+
+    pub fn reset_page_state(&self, page_idx: u64) {
+        let mut page_states = self.page_states.write();
+        if (page_idx as usize) < page_states.len() {
+            page_states[page_idx as usize] = PageState::new();
+        }
+    }
+
+    pub fn truncate_last_pages(&self, keep_count: u64) -> Result<()> {
+        let mut num_pages = self.num_pages.write();
+        let mut page_states = self.page_states.write();
+        if keep_count >= *num_pages {
+            return Ok(());
+        }
+        for page_idx in keep_count..*num_pages {
+            self.free_page(page_idx);
+        }
+        let new_len = keep_count * PAGE_SIZE as u64;
+        self.file.set_len(new_len)?;
+        page_states.truncate(keep_count as usize);
+        *num_pages = keep_count;
         Ok(())
     }
 }

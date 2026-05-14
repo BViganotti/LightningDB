@@ -69,11 +69,21 @@ impl WasmFunction {
 
     /// Convert this WASM function into a ScalarFunction for the query engine.
     /// The WASM function must accept (f64) -> f64.
-    /// Each function call instantiates a new WASM instance (isolated).
+    ///
+    /// Engine and module are compiled once at registration time and reused
+    /// across all invocations via cheap Clone. Each batch still creates a
+    /// fresh Store + Instance for isolation.
     pub fn to_scalar_function(&self) -> ScalarFunction {
         let wasm = self.wasm_bytes.clone();
         let func_name = self.func_name.clone();
         let name = self.name.clone();
+
+        // Compile engine and module once — the expensive part of WASM setup.
+        // Module validation/compilation is the dominant cost; cloning Engine
+        // and Module is cheap (internally Arc-backed).
+        let engine = wasmi::Engine::default();
+        let module = wasmi::Module::new(&engine, &wasm)
+            .expect("WASM module compilation failed at registration time");
 
         let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
             move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
@@ -82,12 +92,6 @@ impl WasmFunction {
                     .ok_or_else(|| crate::LightningError::Internal(
                         "WASM function requires Float64 input".into()
                     ))?;
-
-                let engine = wasmi::Engine::default();
-                let module = wasmi::Module::new(&engine, &wasm)
-                    .map_err(|e| crate::LightningError::Internal(format!(
-                        "WASM module load failed: {}", e
-                    )))?;
 
                 let mut store = wasmi::Store::new(&engine, ());
                 let instance = wasmi::Instance::new(&mut store, &module, &[])

@@ -51,6 +51,11 @@ impl LazyCatalog {
         self.inner.write()
     }
 
+    #[inline]
+    pub fn inner_catalog(&self) -> Arc<RwLock<Catalog>> {
+        Arc::clone(&self.inner)
+    }
+
     pub fn mark_dirty(&self) {
         self.dirty.store(true, Ordering::Release);
         debug!("Catalog marked dirty");

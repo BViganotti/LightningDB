@@ -87,6 +87,7 @@ pub enum Clause {
     Return(ReturnClause),
     Delete(DeleteClause),
     Set(SetClause),
+    Remove(RemoveClause),
     Create(Pattern),
     Unwind(UnwindClause),
     Merge(MergeClause),
@@ -126,11 +127,17 @@ pub struct UnwindClause {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteClause {
     pub variables: Vec<String>,
+    pub detach: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetClause {
     pub assignments: Vec<PropertyAssignment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoveClause {
+    pub properties: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +249,7 @@ pub enum LogicalOperator {
     And,
     Or,
     Not,
+    Xor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -229,9 +229,11 @@ impl MemoryStore {
         if !embedding.is_empty() && embedding.len() == self.embedding_dim {
             if let Some(vec_idx) = storage.vector_indexes.get(ENTITY_TABLE) {
                 let tx = db.transaction_manager.begin(true)?;
-                let mut emb = [0f32; 768];
-                let copy_len = std::cmp::min(embedding.len(), 768);
-                emb[..copy_len].copy_from_slice(&embedding[..copy_len]);
+                let emb: [f32; 768] = embedding
+                    .try_into()
+                    .map_err(|_| crate::LightningError::Internal(format!(
+                        "Expected embedding of length {} but got {}", 768, embedding.len()
+                    )))?;
 
                 if let Ok(vec_results) = vec_idx.search(&emb, top_k * 2, &db.buffer_manager, &tx) {
                     for (rank, (node_id, _)) in vec_results.iter().enumerate() {
@@ -505,34 +507,36 @@ impl MemoryStore {
 
         // Step 1-2: Compute content-based similarity (n-gram Jaccard on word sets)
         // Process in batches to avoid O(n^2) memory for very large datasets
-        let batch_size = std::cmp::min(n, 200usize);
         let word_sets: Vec<HashSet<String>> = all.iter().map(|e| {
             e.content.split_whitespace()
                 .map(|w| w.to_lowercase())
                 .collect()
         }).collect();
 
-        for i in 0..batch_size {
-            for j in (i + 1)..batch_size {
-                let intersection: usize = word_sets[i].intersection(&word_sets[j]).count();
-                let union: usize = word_sets[i].union(&word_sets[j]).count();
-                if union == 0 { continue; }
-                let jaccard = intersection as f64 / union as f64;
+        for chunk_start in (0..n).step_by(200) {
+            let chunk_end = std::cmp::min(chunk_start + 200, n);
+            for i in chunk_start..chunk_end {
+                for j in (i + 1)..chunk_end {
+                    let intersection: usize = word_sets[i].intersection(&word_sets[j]).count();
+                    let union: usize = word_sets[i].union(&word_sets[j]).count();
+                    if union == 0 { continue; }
+                    let jaccard = intersection as f64 / union as f64;
 
-                if jaccard > 0.35 {
-                    let _ = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard);
-                    adjacency[i].push((j, jaccard));
-                    adjacency[j].push((i, jaccard));
-                    links_created += 1;
-                }
+                    if jaccard > 0.35 {
+                        let _ = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard);
+                        adjacency[i].push((j, jaccard));
+                        adjacency[j].push((i, jaccard));
+                        links_created += 1;
+                    }
 
-                // Contradiction: low word overlap but similar content length
-                if jaccard < 0.15 {
-                    let len_sim = 1.0 - (all[i].content.len() as f64 - all[j].content.len() as f64).abs()
-                        / all[i].content.len().max(all[j].content.len()).max(1) as f64;
-                    if len_sim > 0.8 {
-                        let _ = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard);
-                        contradictions_found += 1;
+                    // Contradiction: low word overlap but similar content length
+                    if jaccard < 0.15 {
+                        let len_sim = 1.0 - (all[i].content.len() as f64 - all[j].content.len() as f64).abs()
+                            / all[i].content.len().max(all[j].content.len()).max(1) as f64;
+                        if len_sim > 0.8 {
+                            let _ = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard);
+                            contradictions_found += 1;
+                        }
                     }
                 }
             }

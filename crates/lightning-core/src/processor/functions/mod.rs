@@ -1,3 +1,4 @@
+pub mod aggregate_ext;
 pub mod aggregate_function;
 pub mod registry;
 pub mod scalar_function;

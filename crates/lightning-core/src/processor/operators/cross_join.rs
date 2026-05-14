@@ -117,7 +117,9 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 }
             }
 
-            let left_batch = self.current_left_chunk.as_ref().unwrap().batch.clone();
+            let left_batch = self.current_left_chunk.as_ref()
+                .expect("current_left_chunk should be Some when processing")
+                .batch.clone();
             let left_num_cols = left_batch.num_columns();
             let left_num_rows = left_batch.num_rows();
             let left_schema = left_batch.schema();

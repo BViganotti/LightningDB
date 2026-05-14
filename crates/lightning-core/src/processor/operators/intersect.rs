@@ -112,7 +112,8 @@ impl PhysicalOperator for PhysicalIntersect {
 
             let mut output_ready = false;
             {
-                let chunk = self.current_probe_chunk.as_ref().unwrap();
+                let chunk = self.current_probe_chunk.as_ref()
+                    .expect("current_probe_chunk should be Some when processing");
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
                 let num_cols = batch.num_columns();

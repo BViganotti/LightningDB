@@ -1,5 +1,7 @@
+use crate::catalog::Catalog;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::Result;
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 pub mod acc_hash_join_optimizer;
@@ -27,9 +29,27 @@ pub struct Optimizer {
 }
 
 impl Optimizer {
-    pub fn new(_catalog: std::sync::Arc<parking_lot::RwLock<crate::catalog::Catalog>>) -> Self {
+    pub fn new(catalog: Arc<RwLock<Catalog>>) -> Self {
+        let cat1 = Arc::clone(&catalog);
+        let cat2 = Arc::clone(&catalog);
         Self {
-            rules: vec![Box::new(filter_pushdown::FilterPushDown::new())],
+            rules: vec![
+                Box::new(filter_pushdown::FilterPushDown::new()),
+                Box::new(subquery_unnesting::SubqueryUnnesting::new()),
+                Box::new(join_reordering::JoinReordering::new(cat1)),
+                Box::new(index_pushdown::IndexPushDown::new(cat2)),
+                Box::new(topk_optimizer::TopKOptimizer::new()),
+                Box::new(limit_pushdown::LimitPushDown::new()),
+                Box::new(order_by_pushdown::OrderByPushDown::new()),
+                // NOTE: projection_pushdown disabled — needs cross-operator
+                //   expression index remapping in all expression-bearing ops.
+                // NOTE: semijoin_pushdown + acc_hash_join_optimizer disabled —
+                //   physical planner mask lifecycle issues with rel table scans.
+                // NOTE: agg_key_dependency_optimizer disabled — incorrect group-by
+                //   dependency analysis in edge cases.
+                // NOTE: count_rel_table_optimizer disabled — wrong COUNT results
+                //   for single-relationship tables.
+            ],
         }
     }
 

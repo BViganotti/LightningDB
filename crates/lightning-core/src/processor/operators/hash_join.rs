@@ -164,7 +164,7 @@ impl HashJoin {
             let key_col = batch.column(self.right_key_idx);
             match key_col.data_type() {
                 DataType::UInt64 => {
-                    let arr = key_col.as_any().downcast_ref::<UInt64Array>().unwrap();
+                    let arr = key_col.as_any().downcast_ref::<UInt64Array>().expect("hash join build: UInt64 key");
                     for row_idx in 0..num_rows {
                         if !arr.is_null(row_idx) {
                             shared
@@ -176,7 +176,8 @@ impl HashJoin {
                     }
                 }
                 DataType::Int64 => {
-                    let arr = key_col.as_any().downcast_ref::<Int64Array>().unwrap();
+                    let arr = key_col.as_any().downcast_ref::<Int64Array>()
+                        .expect("hash join build: Int64 key");
                     for row_idx in 0..num_rows {
                         if !arr.is_null(row_idx) {
                             shared
@@ -207,7 +208,8 @@ impl HashJoin {
         if shared.num_active_builders == 0 {
             // Finalize build: Concatenate into single batch for faster 'take'
             if !shared.build_chunks.is_empty() {
-                let schema = shared.right_schema.clone().unwrap();
+                let schema = shared.right_schema.clone()
+                    .expect("right_schema should be set after build phase");
                 let table_batch = arrow::compute::concat_batches(&schema, &shared.build_chunks)
                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                 shared.build_chunks = vec![table_batch];
@@ -303,7 +305,8 @@ impl PhysicalOperator for HashJoin {
                     // Find matches using specialized or generic hash table
                     let matches_ref = match left_key_col.data_type() {
                         DataType::UInt64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<UInt64Array>().unwrap();
+                            let arr = left_key_col.as_any().downcast_ref::<UInt64Array>()
+                                .expect("hash join probe: UInt64 key");
                             if arr.is_null(self.left_row_idx) {
                                 None
                             } else {
@@ -311,7 +314,8 @@ impl PhysicalOperator for HashJoin {
                             }
                         }
                         DataType::Int64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<Int64Array>().unwrap();
+                            let arr = left_key_col.as_any().downcast_ref::<Int64Array>()
+                                .expect("hash join probe: Int64 key");
                             if arr.is_null(self.left_row_idx) {
                                 None
                             } else {

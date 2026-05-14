@@ -57,7 +57,8 @@ impl PhysicalOperator for PhysicalUnwind {
                 }
             }
 
-            let chunk = self.current_chunk.as_ref().unwrap();
+            let chunk = self.current_chunk.as_ref()
+                .expect("current_chunk should be Some when processing rows");
 
             if self.current_row_idx >= chunk.num_rows() {
                 self.current_chunk = None;
@@ -92,7 +93,8 @@ impl PhysicalOperator for PhysicalUnwind {
                 self.current_list_idx = 0;
             }
 
-            let list = self.current_list.as_ref().unwrap();
+            let list = self.current_list.as_ref()
+                .expect("current_list should be Some when unwinding");
             if self.current_list_idx >= list.len() {
                 self.current_row_idx += 1;
                 self.current_list = None;

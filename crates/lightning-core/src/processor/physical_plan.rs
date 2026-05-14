@@ -62,7 +62,7 @@ impl PhysicalPlanner {
                     self.db.buffer_manager.clone(),
                     effective_num_rows,
                     self.read_ts,
-                );
+                )?;
                 if let Some((mask_id, col_idx)) = mask_info {
                     let mask = self
                         .masks
@@ -250,7 +250,7 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
-            LogicalOperator::Delete(child, vars) => {
+            LogicalOperator::Delete(child, vars, detach) => {
                 let planned_child = self.plan(*child)?;
                 let table_name = &vars[0].1;
                 let storage = self.db.storage_manager.read();
@@ -262,6 +262,7 @@ impl PhysicalPlanner {
                         self.db.buffer_manager.clone(),
                         self.undo_buffer.clone(),
                         self.tx_id,
+                        detach,
                     ),
                 ))
             }
@@ -356,6 +357,12 @@ impl PhysicalPlanner {
             }
             LogicalOperator::SingleRow => Ok(Box::new(
                 crate::processor::operators::scan::PhysicalSingleRow::new(),
+            )),
+            LogicalOperator::Call(call) => Ok(Box::new(
+                crate::processor::operators::call::PhysicalCall::new(call),
+            )),
+            LogicalOperator::Transaction(action) => Ok(Box::new(
+                crate::processor::operators::transaction::PhysicalTransaction::new(action),
             )),
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {:?}",
@@ -586,6 +593,19 @@ impl PhysicalPlanner {
                     }
                 }
                 crate::parser::ast::LogicalOperator::Or => {
+                    let l_cand = self.extract_trigram_candidates(left, table);
+                    let r_cand = self.extract_trigram_candidates(right, table);
+                    if let (Some(l), Some(r)) = (l_cand, r_cand) {
+                        let mut res = l;
+                        res.extend(r);
+                        res.sort_unstable();
+                        res.dedup();
+                        Some(res)
+                    } else {
+                        None
+                    }
+                }
+                crate::parser::ast::LogicalOperator::Xor => {
                     let l_cand = self.extract_trigram_candidates(left, table);
                     let r_cand = self.extract_trigram_candidates(right, table);
                     if let (Some(l), Some(r)) = (l_cand, r_cand) {

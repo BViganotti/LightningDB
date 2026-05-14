@@ -40,8 +40,7 @@ impl PhysicalOperator for PhysicalProfile {
             None => {
                 self.finished = true;
                 let duration = self.start_time.elapsed();
-                // In a real system, we'd return a special row or update a shared dashboard
-                println!(
+                tracing::info!(
                     "PROFILE: Execution took {:?} and produced {} rows",
                     duration, self.total_rows
                 );

@@ -2,6 +2,7 @@ use crate::storage::file_handle::FileHandle;
 use crate::{LightningError, Result};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -11,7 +12,7 @@ pub const PAGE_SIZE: usize = 4096;
 const UNCOMMITTED_BIT: u64 = 1 << 63;
 
 pub struct Frame {
-    pub data: [u8; PAGE_SIZE],
+    pub data: UnsafeCell<[u8; PAGE_SIZE]>,
     pub version: AtomicU64,
     pub pin_count: AtomicU64,
 }
@@ -19,12 +20,27 @@ pub struct Frame {
 impl Frame {
     pub fn new(data: [u8; PAGE_SIZE], version: u64) -> Self {
         Self {
-            data,
+            data: UnsafeCell::new(data),
             version: AtomicU64::new(version),
             pin_count: AtomicU64::new(0),
         }
     }
+
+    pub fn as_ptr(&self) -> *mut u8 {
+        self.data.get() as *mut u8
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { &*self.data.get() }
+    }
+
+    pub fn as_mut_slice(&self) -> &mut [u8] {
+        unsafe { &mut *self.data.get() }
+    }
 }
+
+unsafe impl Send for Frame {}
+unsafe impl Sync for Frame {}
 
 struct BufferSlot {
     key: Option<(u64, u64)>,
@@ -251,7 +267,7 @@ impl BufferManager {
                 // On commit, per-row modifications are merged into the latest page.
                 if version == tx_id_marked {
                     best_version = version;
-                    source_data = Some(pool.slots[idx].frame.data);
+                    source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                     break;
                 }
 
@@ -263,7 +279,7 @@ impl BufferManager {
                     && (version > best_version || (version == 0 && source_data.is_none()))
                 {
                     best_version = version;
-                    source_data = Some(pool.slots[idx].frame.data);
+                    source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                 }
             }
         }
@@ -408,11 +424,13 @@ impl BufferManager {
                 let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                 let version = pool.slots[i].frame.version.load(Ordering::Acquire);
 
-                if pin_count == 0 && version != 0 && version < min_active_ts {
+                if pin_count == 0 && version != 0 && version < min_active_ts
+                    && version & UNCOMMITTED_BIT == 0
+                {
                     if pool.slots[i].dirty {
                         if let Some((fid, pid)) = pool.slots[i].key {
                             if let Some(fh) = pool.file_handles.get(&fid) {
-                                let _ = fh.write_page(pid, &pool.slots[i].frame.data);
+                                let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
                             }
                         }
                     }
@@ -442,9 +460,12 @@ impl BufferManager {
                 let indices: Vec<usize> = slot_indices.clone();
                 for &idx in &indices {
                     if pool.slots[idx].dirty {
-                        if let Some((fid, pid)) = pool.slots[idx].key {
-                            if let Some(fh) = pool.file_handles.get(&fid) {
-                                let _ = fh.write_page(pid, &pool.slots[idx].frame.data);
+                        let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                        if version & UNCOMMITTED_BIT == 0 {
+                            if let Some((fid, pid)) = pool.slots[idx].key {
+                                if let Some(fh) = pool.file_handles.get(&fid) {
+                                    let _ = fh.write_page(pid, pool.slots[idx].frame.as_slice());
+                                }
                             }
                         }
                     }
@@ -463,7 +484,6 @@ impl BufferManager {
         let shard_idx = self.get_shard_idx(key);
         let pool = self.shards[shard_idx].read();
         if let Some(wal) = &pool.wal {
-            // Extract tx_id from the frame's version field
             let tx_id = if let Some(slot_indices) = pool.page_to_slots.get(&key) {
                 if let Some(&idx) = slot_indices.first() {
                     let version = pool.slots[idx].frame.version.load(std::sync::atomic::Ordering::Acquire);
@@ -474,6 +494,15 @@ impl BufferManager {
             } else {
                 0
             };
+            wal.log_page_update(tx_id, file_id, page_idx, data)?;
+        }
+        Ok(())
+    }
+
+    pub fn log_page_update_for_tx(&self, tx_id: u64, file_id: u64, page_idx: u64, data: &[u8]) -> Result<()> {
+        let shard_idx = self.get_shard_idx((file_id, page_idx));
+        let pool = self.shards[shard_idx].read();
+        if let Some(wal) = &pool.wal {
             wal.log_page_update(tx_id, file_id, page_idx, data)?;
         }
         Ok(())
@@ -501,23 +530,38 @@ impl BufferManager {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
+        let mut synced_fids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+
         for shard in &self.shards {
             let mut pool = shard.write();
             for i in 0..pool.slots.len() {
                 if pool.slots[i].dirty {
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
+                        continue;
+                    }
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, &pool.slots[i].frame.data)?;
-                            // Sync the data file after writing each shard's dirty pages
-                            fh.sync()?;
+                            fh.write_page(pid, pool.slots[i].frame.as_slice())?;
+                            synced_fids.insert(fid);
                             pool.slots[i].dirty = false;
                         }
                     }
                 }
             }
         }
-        // Sync all data files first, then truncate WAL
-        // This ensures data is on disk before we discard the WAL
+
+        // Sync each file handle once, across all shards
+        for shard in &self.shards {
+            let pool = shard.read();
+            for fid in &synced_fids {
+                if let Some(fh) = pool.file_handles.get(fid) {
+                    fh.sync()?;
+                }
+            }
+        }
+
+        // Truncate WAL after data is safely on disk
         for shard in &self.shards {
             let pool = shard.read();
             if let Some(wal) = &pool.wal {
@@ -529,6 +573,7 @@ impl BufferManager {
 
     fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<usize> {
         let start_ptr = pool.clock_ptr;
+        let mut all_uncommitted = true;
         loop {
             let idx = pool.clock_ptr;
             pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
@@ -537,12 +582,18 @@ impl BufferManager {
             if pin_count == 0 {
                 if pool.slots[idx].referenced {
                     pool.slots[idx].referenced = false;
+                    all_uncommitted = false;
                     continue;
                 }
                 if pool.slots[idx].dirty {
+                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
+                        continue;
+                    }
+                    all_uncommitted = false;
                     if let Some((fid, pid)) = pool.slots[idx].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, &pool.slots[idx].frame.data)?;
+                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
                         }
                     }
                 }
@@ -550,6 +601,11 @@ impl BufferManager {
             }
 
             if pool.clock_ptr == start_ptr {
+                if all_uncommitted {
+                    return Err(LightningError::Internal(
+                        "Buffer pool exhausted: all unpinned pages are dirty with uncommitted data".into(),
+                    ));
+                }
                 return Err(LightningError::Internal("Buffer pool exhausted".into()));
             }
         }
@@ -558,6 +614,19 @@ impl BufferManager {
     pub fn is_shutting_down(&self) -> bool {
         // Just check the first shard
         self.shards[0].read().shutdown.load(Ordering::Acquire)
+    }
+
+    pub fn dirty_page_count(&self) -> usize {
+        let mut count = 0;
+        for shard in &self.shards {
+            let pool = shard.read();
+            for slot in &pool.slots {
+                if slot.dirty {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     pub fn shutdown(&self) {
@@ -575,9 +644,13 @@ impl BufferManager {
             let mut pool = shard.write();
             for i in 0..pool.slots.len() {
                 if pool.slots[i].dirty {
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
+                        continue;
+                    }
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
-                            let _ = fh.write_page(pid, &pool.slots[i].frame.data);
+                            let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
                             pool.slots[i].dirty = false;
                         }
                     }
@@ -596,6 +669,9 @@ impl BufferManager {
     }
 
     pub fn flush_all_with_handles(&self, file_handles: &[std::sync::Arc<FileHandle>]) {
+        if file_handles.is_empty() {
+            return;
+        }
         let mut fh_map: std::collections::HashMap<u64, std::sync::Arc<FileHandle>> =
             std::collections::HashMap::new();
         for fh in file_handles {
@@ -606,9 +682,13 @@ impl BufferManager {
             let mut pool = shard.write();
             for i in 0..pool.slots.len() {
                 if pool.slots[i].dirty {
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
+                        continue;
+                    }
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = fh_map.get(&fid) {
-                            let _ = fh.write_page(pid, &pool.slots[i].frame.data);
+                            let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
                             pool.slots[i].dirty = false;
                         }
                     }
