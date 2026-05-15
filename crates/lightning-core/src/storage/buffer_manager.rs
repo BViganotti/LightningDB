@@ -2,6 +2,7 @@ use crate::storage::file_handle::FileHandle;
 use crate::{LightningError, Result};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rayon::prelude::*;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -535,9 +536,13 @@ impl BufferManager {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
-        let mut synced_fids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        use std::sync::Mutex;
 
-        for shard in &self.shards {
+        let synced_fids: Mutex<std::collections::HashSet<u64>> =
+            Mutex::new(std::collections::HashSet::new());
+
+        // Phase 1: Parallel flush of dirty pages across all shards
+        let results: Vec<Result<()>> = self.shards.par_iter().map(|shard| {
             let mut pool = shard.write();
             for i in 0..pool.slots.len() {
                 if pool.slots[i].dirty {
@@ -548,25 +553,36 @@ impl BufferManager {
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
-                            synced_fids.insert(fid);
+                            synced_fids.lock().unwrap().insert(fid);
                             pool.slots[i].dirty = false;
                         }
                     }
                 }
             }
+            Ok(())
+        }).collect();
+
+        // Check for errors from parallel phase
+        for r in &results {
+            if let Err(e) = r {
+                return Err(crate::LightningError::Internal(format!(
+                    "Checkpoint write error: {}", e
+                )));
+            }
         }
 
-        // Sync each file handle once, across all shards
+        // Phase 2: Sync each file handle once
+        let fids: Vec<u64> = synced_fids.lock().unwrap().iter().copied().collect();
         for shard in &self.shards {
             let pool = shard.read();
-            for fid in &synced_fids {
+            for fid in &fids {
                 if let Some(fh) = pool.file_handles.get(fid) {
                     fh.sync()?;
                 }
             }
         }
 
-        // Truncate WAL after data is safely on disk
+        // Phase 3: Truncate WAL after data is safely on disk
         for shard in &self.shards {
             let pool = shard.read();
             if let Some(wal) = &pool.wal {
