@@ -365,6 +365,19 @@ impl PhysicalPlanner {
             LogicalOperator::Transaction(action) => Ok(Box::new(
                 crate::processor::operators::transaction::PhysicalTransaction::new(action),
             )),
+            LogicalOperator::Profile(child) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::profile::PhysicalProfile::new(planned_child),
+                ))
+            }
+            LogicalOperator::Explain(child) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::profile::PhysicalProfile::new(planned_child)
+                        .with_explain_analyze(),
+                ))
+            }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"
             ))),
