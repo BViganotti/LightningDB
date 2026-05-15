@@ -387,7 +387,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 - [x] **0.6.3a** Replace all 28 `unwrap()` calls with proper error propagation (`?`) or context via `expect("meaningful message")`
 - [x] **0.6.3b** Remove the `panic!()` in `PhysicalScan::new` (line 44) — unrecoverable anyway, but should be a proper error
-- [ ] **0.6.3c** Run `cargo clippy -- -D clippy::unwrap_used` as CI gate to prevent new unwraps
+- [x] **0.6.3c** Run `cargo clippy -- -D clippy::unwrap_used` as CI gate to prevent new unwraps
 
 ### 0.6.4 Operator test coverage
 
