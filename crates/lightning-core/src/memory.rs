@@ -654,11 +654,9 @@ impl MemoryStore {
         Ok(self.batches_to_entities(&res.batches))
     }
 
-    pub fn expand(&self, entity_id: &str, hops: u32, _edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+    pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
 
-        // Expand using direct Cypher without variable-length paths (which are not implemented)
-        // Instead, use multiple single-hop MATCH queries for each hop level
         let db = self.conn.client_context.database.clone();
         let storage = db.storage_manager.read();
         let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
@@ -669,7 +667,6 @@ impl MemoryStore {
             None => return Ok(Vec::new()),
         };
 
-        // Get the internal _id for this entity
         let internal_id = {
             let id_query = format!(
                 "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
@@ -690,7 +687,6 @@ impl MemoryStore {
             None => return Ok(Vec::new()),
         };
 
-        // Scan the Relates table for edges matching the start node
         let bm = &db.buffer_manager;
         let tx = db.transaction_manager.begin(true)?;
         let cardinality = rel_table.stats.read().cardinality;
@@ -704,15 +700,29 @@ impl MemoryStore {
         let _ = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col);
         let _ = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col);
 
+        let mut type_col: Vec<crate::processor::Value> = Vec::new();
+        if !edge_types.is_empty() && rel_table.columns.len() > 2 {
+            let _ = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col);
+        }
+
         let mut neighbor_ids = Vec::new();
-        for (src, dst) in src_col.iter().zip(dst_col.iter()) {
+        for (i, (src, dst)) in src_col.iter().zip(dst_col.iter()).enumerate() {
             let s = src.as_node();
             let d = dst.as_node();
-            if s == start_id {
-                neighbor_ids.push(d);
-            }
-            if hops > 1 && d == start_id {
-                neighbor_ids.push(s);
+
+            let matches_src = s == start_id;
+            let matches_dst = hops > 1 && d == start_id;
+
+            if matches_src || matches_dst {
+                if !edge_types.is_empty() {
+                    if let Some(type_val) = type_col.get(i) {
+                        let rel_type_str = format!("{}", type_val).trim_matches('"').to_string();
+                        if !edge_types.iter().any(|et| *et == rel_type_str) {
+                            continue;
+                        }
+                    }
+                }
+                neighbor_ids.push(if matches_src { d } else { s });
             }
         }
 
@@ -722,7 +732,6 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
 
-        // Look up neighbor entities by _id
         let conditions: Vec<String> = neighbor_ids.iter()
             .map(|id| format!("e._id = {id}"))
             .collect();
