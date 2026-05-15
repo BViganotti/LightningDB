@@ -116,8 +116,8 @@ The existing 300 tests are impressive but miss critical dimensions:
 
 ### 1.4 Polish
 
-- [ ] **1.4.1 Error messages**: All `LightningError::Internal(format!(...))` messages should be actionable. Replace "Operator not implemented" with the specific operator name.
-- [ ] **1.4.2 Warnings cleanup**: 100 warnings at build time. Fix unused imports, dead code, unreachable patterns. Run `cargo clippy --fix`.
+- [x] **1.4.1 Error messages**: All `LightningError::Internal(format!(...))` messages should be actionable. Replace "Operator not implemented" with the specific operator name.
+- [x] **1.4.2 Warnings cleanup**: 100 warnings at build time. Fix unused imports, dead code, unreachable patterns. Run `cargo clippy --fix`.
 - [ ] **1.4.3 Test-only debug prints**: Remove all remaining `eprintln!` from tests. Tests should be silent on success.
 - [ ] **1.4.4 `eprintln!` eradication**: Ensure zero uses of `eprintln!` in production code (only `tracing`).
 
