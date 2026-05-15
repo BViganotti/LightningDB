@@ -101,3 +101,5 @@ Generated CLAUDE.md for Claude Code support.
 [2m2026-05-15T12:56:38.481210Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='state', p='768 dimensions vector', result=false
 [2m2026-05-15T12:56:38.481580Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=7
 [2m2026-05-15T12:56:38.482767Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=8
+[2m2026-05-15T13:24:15.733808Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=9
+[2m2026-05-15T13:24:15.736605Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=10

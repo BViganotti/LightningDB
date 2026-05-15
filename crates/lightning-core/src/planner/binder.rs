@@ -53,6 +53,7 @@ pub enum BoundStatement {
     },
     Transaction(BoundTransactionAction),
     Checkpoint,
+    Vacuum,
     StandaloneCall(String, Vec<Literal>),
     CreateSequence {
         name: String,
@@ -530,6 +531,7 @@ impl<'a> Binder<'a> {
                 Ok(BoundStatement::Transaction(bound_action))
             }
             Statement::Checkpoint => Ok(BoundStatement::Checkpoint),
+            Statement::Vacuum => Ok(BoundStatement::Vacuum),
             Statement::StandaloneCall(name, args) => {
                 let _parameters: Vec<BoundExpression> = args
                     .iter()

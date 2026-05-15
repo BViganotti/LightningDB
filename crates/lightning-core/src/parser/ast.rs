@@ -43,6 +43,7 @@ pub enum Statement {
     },
     StandaloneCall(String, Vec<Literal>),
     Checkpoint,
+    Vacuum,
     Transaction(TransactionAction),
     CreateSequence {
         name: String,

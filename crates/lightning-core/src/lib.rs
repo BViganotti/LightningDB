@@ -442,6 +442,44 @@ impl Database {
         Ok(())
     }
 
+    /// VACUUM: compact the database by reclaiming space from deleted rows.
+    /// Optimizes each column by truncating trailing empty pages.
+    pub fn vacuum(&self) -> Result<()> {
+        let start = std::time::Instant::now();
+        let tables: Vec<String> = {
+            let cat = self.catalog.read();
+            let mut names: Vec<String> = cat.node_tables.keys().cloned().collect();
+            names.extend(cat.rel_tables.keys().cloned());
+            names
+        };
+
+        let bm = &self.buffer_manager;
+        let tx = self.transaction_manager.begin(true)?;
+
+        for table_name in &tables {
+            let table = {
+                let storage = self.storage_manager.read();
+                storage.get_table(table_name).cloned()
+            };
+            if let Some(ref table) = table {
+                for col in &table.columns {
+                    col.optimize(bm, &tx)?;
+                }
+            }
+            // Rebuild CSR indexes if present
+            self.storage_manager.write().rebuild_csr_if_stale(table_name, bm, &tx)?;
+        }
+
+        let _ = self.transaction_manager.rollback(&self, &tx);
+
+        // Force a checkpoint to persist the optimized state
+        self.checkpoint()?;
+
+        let elapsed = start.elapsed();
+        tracing::info!("VACUUM completed in {:?} for {} tables", elapsed, tables.len());
+        Ok(())
+    }
+
     /// Repair table cardinalities from actual data file sizes.
     /// Called after init_schema to fix databases where catalog cardinality
     /// was reset to 0 (e.g., by old versions of init_fusion_schema).
@@ -944,6 +982,7 @@ impl Connection {
     /// `snapshot_ts` is an MVCC timestamp — use `now_micros()` or a
     /// previously observed timestamp to see the graph at that moment.
     /// The MVCC engine handles all version filtering automatically.
+    #[tracing::instrument(skip(self, snapshot_ts, params))]
     pub fn execute_at(
         &self,
         query_str: &str,
@@ -988,6 +1027,7 @@ impl Connection {
         ))
     }
 
+    #[tracing::instrument(skip(self, params))]
     pub fn execute(
         &self,
         query_str: &str,

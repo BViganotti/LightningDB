@@ -40,3 +40,40 @@ impl PhysicalOperator for PhysicalCheckpoint {
         })
     }
 }
+
+pub struct PhysicalVacuum {
+    db: Arc<Database>,
+    executed: bool,
+}
+
+impl PhysicalVacuum {
+    pub fn new(db: Arc<Database>) -> Self {
+        Self {
+            db,
+            executed: false,
+        }
+    }
+}
+
+impl PhysicalOperator for PhysicalVacuum {
+    fn get_next(
+        &mut self,
+        _database: &Database,
+        _tx: &crate::transaction::transaction_manager::Transaction,
+        _params: Option<&HashMap<String, Value>>,
+    ) -> Result<Option<DataChunk>> {
+        if self.executed {
+            return Ok(None);
+        }
+        self.executed = true;
+        self.db.vacuum()?;
+        Ok(None)
+    }
+
+    fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
+        Box::new(Self {
+            db: self.db.clone(),
+            executed: self.executed,
+        })
+    }
+}

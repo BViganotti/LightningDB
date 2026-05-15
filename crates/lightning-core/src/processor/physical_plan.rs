@@ -378,6 +378,15 @@ impl PhysicalPlanner {
                         .with_explain_analyze(),
                 ))
             }
+            LogicalOperator::Checkpoint => Ok(Box::new(
+                crate::processor::operators::checkpoint::PhysicalCheckpoint::new(self.db.clone()),
+            )),
+            LogicalOperator::Vacuum => {
+                let db = self.db.clone();
+                Ok(Box::new(
+                    crate::processor::operators::checkpoint::PhysicalVacuum::new(db),
+                ))
+            }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"
             ))),
@@ -529,6 +538,7 @@ impl PhysicalPlanner {
             | LogicalOperator::CopyTo { .. }
             | LogicalOperator::Transaction(_)
             | LogicalOperator::Checkpoint
+            | LogicalOperator::Vacuum
             | LogicalOperator::SingleRow => Ok(0),
         }
     }

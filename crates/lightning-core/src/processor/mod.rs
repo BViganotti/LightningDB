@@ -60,6 +60,7 @@ impl Processor {
         self.root.get_next(database, tx, None)
     }
 
+    #[tracing::instrument(skip(self, database, tx, params))]
     pub fn execute(
         &mut self,
         database: Arc<crate::Database>,

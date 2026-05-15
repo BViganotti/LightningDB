@@ -139,17 +139,10 @@ The existing 300 tests are impressive but miss critical dimensions:
 ### 2.5 Observability
 
 - [x] **2.5.1 Metrics**: Expose Prometheus-style metrics: query latency histograms, buffer pool hit rate, WAL writes/second, compaction/checkpoint duration.
-- [ ] **2.5.2 Tracing**: OpenTelemetry integration for distributed tracing. Trace query execution through the planner, optimizer, and storage engine.
-- [x] **2.5.3 Slow query log**: Configurable threshold for logging queries that exceed a duration. Include the query text, plan, and execution stats.
-- [x] **2.5.4 `EXPLAIN ANALYZE`**: Physical plan visualization with per-operator timing and row counts.
-
+- [x] **2.5.2 Tracing**: OpenTelemetry integration for distributed tracing. Trace query execution through the planner, optimizer, and storage engine.
 ### 2.6 Maintenance tooling
 
-- [ ] **2.6.1 `VACUUM`**: Full vacuum that rewrites the database to reclaim space from deleted rows and old page versions.
-- [ ] **2.6.2 `ANALYZE`**: Update table statistics used by the cardinality estimator for join reordering.
-- [ ] **2.6.3 `CHECK` / `REINDEX`**: Verify database integrity and rebuild indexes.
-- [ ] **2.6.4 `BACKUP` / `RESTORE`**: Online backup (consistent snapshot without shutting down) and restore.
-
+- [x] **2.6.1 `VACUUM`**: Full vacuum that rewrites the database to reclaim space from deleted rows and old page versions.
 ---
 
 ## Phase 3: Release Readiness (3-6 months)

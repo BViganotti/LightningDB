@@ -253,6 +253,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 ))
             }
             Rule::checkpoint_statement => return Ok(Statement::Checkpoint),
+            Rule::vacuum_statement => return Ok(Statement::Vacuum),
             Rule::create_node_table => {
                 let mut it = i.into_inner();
                 let mut if_not_exists = false;

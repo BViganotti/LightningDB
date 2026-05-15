@@ -107,6 +107,7 @@ pub enum LogicalOperator {
     },
     Transaction(BoundTransactionAction),
     Checkpoint,
+    Vacuum,
     CountRelTable {
         rel_table: String,
         bound_table: String, // Source node table for counting
@@ -316,6 +317,7 @@ impl LogicalPlanner {
             }),
             BoundStatement::Transaction(action) => Ok(LogicalOperator::Transaction(action)),
             BoundStatement::Checkpoint => Ok(LogicalOperator::Checkpoint),
+            BoundStatement::Vacuum => Ok(LogicalOperator::Vacuum),
             BoundStatement::StandaloneCall(name, args) => Ok(LogicalOperator::Call(BoundCall {
                 procedure_name: name,
                 parameters: args
