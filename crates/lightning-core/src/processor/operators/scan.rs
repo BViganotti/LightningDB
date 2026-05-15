@@ -29,6 +29,8 @@ pub struct PhysicalScan {
     pub filter_cached_schema: Arc<RwLock<Option<Arc<arrow::datatypes::Schema>>>>,
     pub pushdown_filter: Option<BoundExpression>,
     pub filter_column_idxs: Vec<usize>,
+    /// Reusable buffer for column arrays to reduce per-morsel allocation.
+    column_buffer: Vec<ArrayRef>,
 }
 
 impl PhysicalScan {
@@ -63,6 +65,7 @@ impl PhysicalScan {
             filter_cached_schema: Arc::new(RwLock::new(None)),
             pushdown_filter: None,
             filter_column_idxs: Vec::new(),
+            column_buffer: Vec::new(),
         })
     }
 
@@ -277,7 +280,8 @@ impl PhysicalOperator for PhysicalScan {
                 // Fall through to normal path — all columns will be scanned below.
             }
 
-            let mut arrow_columns = Vec::new();
+            self.column_buffer.clear();
+            let arrow_columns = &mut self.column_buffer;
             let results: Vec<Result<ArrayRef>> = if num_rows_to_read >= 4096 {
                 use rayon::prelude::*;
                 if let Some(idxs) = &self.projected_idxs {
@@ -349,7 +353,7 @@ impl PhysicalOperator for PhysicalScan {
                 }
             };
 
-            let mut batch = RecordBatch::try_new(schema, arrow_columns)
+            let mut batch = RecordBatch::try_new(schema, std::mem::take(arrow_columns))
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
             // Check has_modifications dynamically - it may change between plan creation and execution
