@@ -40,6 +40,7 @@ pub extern "C" fn kuzu_database_init(
         prefetch_enabled: true,
         prefetch_depth: 2,
         prefetch_confidence: 0.15,
+        slow_query_threshold_ms: 100,
     };
 
     match Database::new(path_str, sys_config) {

@@ -86,6 +86,9 @@ pub struct SystemConfig {
     pub prefetch_enabled: bool,
     pub prefetch_depth: usize,
     pub prefetch_confidence: f64,
+    /// Queries exceeding this duration (in milliseconds) are logged as warnings.
+    /// Set to 0 to disable slow query logging.
+    pub slow_query_threshold_ms: u64,
 }
 
 impl Default for SystemConfig {
@@ -99,6 +102,7 @@ impl Default for SystemConfig {
             prefetch_enabled: true,
             prefetch_depth: 2,
             prefetch_confidence: 0.15,
+            slow_query_threshold_ms: 100,
         }
     }
 }
@@ -913,6 +917,7 @@ impl Connection {
         query_str: &str,
         params: Option<HashMap<String, Value>>,
     ) -> Result<QueryResult> {
+        let start = std::time::Instant::now();
         let _query_id = self
             .client_context
             .active_query_id
@@ -937,6 +942,16 @@ impl Connection {
             db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
                 let _ = db.transaction_manager.rollback(db, &tx);
             })?;
+        }
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        let threshold = self.client_context.database._config.slow_query_threshold_ms;
+        if threshold > 0 && elapsed_ms >= threshold {
+            tracing::warn!(
+                "SLOW QUERY: {} ms | query: {}",
+                elapsed_ms,
+                query_str
+            );
         }
 
         Ok(QueryResult::new_arrow(

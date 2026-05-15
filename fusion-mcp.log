@@ -52,3 +52,27 @@ Generated CLAUDE.md for Claude Code support.
 [2m2026-05-14T11:01:37.534601Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
 [2m2026-05-14T11:01:37.534931Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
 [2m2026-05-14T11:01:37.535179Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=4
+[FUSION] Using database: /Users/bviga/.fusion_mcp.db
+[2m2026-05-15T11:16:04.762633Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-15T11:16:04.762949Z[0m [33m WARN[0m [2mmcp::server[0m[2m:[0m Port 3366 in use, falling back to 127.0.0.1:3371
+[2m2026-05-15T11:16:04.762978Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3371
+[2m2026-05-15T11:16:04.898939Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
+[2m2026-05-15T11:16:04.905023Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
+[2m2026-05-15T11:16:10.499971Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-15T11:16:10.500252Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+[2m2026-05-15T11:16:11.477802Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=0
+[2m2026-05-15T11:16:11.479749Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=1
+[2m2026-05-15T11:16:11.480898Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
+[2m2026-05-15T11:16:11.481142Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
+[2m2026-05-15T11:16:11.481714Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=4
+[2m2026-05-15T11:16:28.366774Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=5
+[2m2026-05-15T11:16:28.569800Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=6
+[2m2026-05-15T11:16:28.570902Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=7
+[2m2026-05-15T11:16:31.360544Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='state', p='database bindings python', result=false
+[2m2026-05-15T11:16:31.360545Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='addBooleanFilterParams', p='database bindings python', result=false
+[2m2026-05-15T11:16:31.362477Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='compression_integration_test', p='database bindings python', result=false
+[2m2026-05-15T11:16:31.363667Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=8
+[2m2026-05-15T11:16:31.364378Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=9
+[2m2026-05-15T11:16:31.465591Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=10
+[2m2026-05-15T11:16:31.469895Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=11
+[2m2026-05-15T11:16:31.715986Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=12
