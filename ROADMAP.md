@@ -170,7 +170,7 @@ The existing 300 tests are impressive but miss critical dimensions:
 
 ### 2.5 Observability
 
-- [ ] **2.5.1 Metrics**: Expose Prometheus-style metrics: query latency histograms, buffer pool hit rate, WAL writes/second, compaction/checkpoint duration.
+- [x] **2.5.1 Metrics**: Expose Prometheus-style metrics: query latency histograms, buffer pool hit rate, WAL writes/second, compaction/checkpoint duration.
 - [ ] **2.5.2 Tracing**: OpenTelemetry integration for distributed tracing. Trace query execution through the planner, optimizer, and storage engine.
 - [x] **2.5.3 Slow query log**: Configurable threshold for logging queries that exceed a duration. Include the query text, plan, and execution stats.
 - [ ] **2.5.4 `EXPLAIN ANALYZE`**: Physical plan visualization with per-operator timing and row counts.

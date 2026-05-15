@@ -107,6 +107,76 @@ impl Default for SystemConfig {
     }
 }
 
+/// Database-wide metrics for observability and performance monitoring.
+pub struct DatabaseMetrics {
+    pub total_queries: AtomicU64,
+    pub total_checkpoints: AtomicU64,
+    pub checkpoint_duration_us: AtomicU64,
+    pub wal_bytes_written: AtomicU64,
+    pub wal_fsync_count: AtomicU64,
+    pub eviction_count: AtomicU64,
+    pub buffer_miss_count: AtomicU64,
+    pub buffer_hit_count: AtomicU64,
+}
+
+impl DatabaseMetrics {
+    pub fn new() -> Self {
+        Self {
+            total_queries: AtomicU64::new(0),
+            total_checkpoints: AtomicU64::new(0),
+            checkpoint_duration_us: AtomicU64::new(0),
+            wal_bytes_written: AtomicU64::new(0),
+            wal_fsync_count: AtomicU64::new(0),
+            eviction_count: AtomicU64::new(0),
+            buffer_miss_count: AtomicU64::new(0),
+            buffer_hit_count: AtomicU64::new(0),
+        }
+    }
+
+    pub fn record_query(&self) {
+        self.total_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_checkpoint(&self, duration_us: u64) {
+        self.total_checkpoints.fetch_add(1, Ordering::Relaxed);
+        self.checkpoint_duration_us.fetch_add(duration_us, Ordering::Relaxed);
+    }
+
+    pub fn record_wal_write(&self, bytes: u64) {
+        self.wal_bytes_written.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub fn record_wal_fsync(&self) {
+        self.wal_fsync_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_eviction(&self) {
+        self.eviction_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_buffer_access(&self, hit: bool) {
+        if hit {
+            self.buffer_hit_count.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.buffer_miss_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn buffer_hit_rate(&self) -> f64 {
+        let hits = self.buffer_hit_count.load(Ordering::Relaxed);
+        let misses = self.buffer_miss_count.load(Ordering::Relaxed);
+        let total = hits + misses;
+        if total == 0 { 0.0 } else { hits as f64 / total as f64 }
+    }
+
+    pub fn avg_checkpoint_duration_ms(&self) -> f64 {
+        let count = self.total_checkpoints.load(Ordering::Relaxed);
+        if count == 0 { return 0.0; }
+        let total_us = self.checkpoint_duration_us.load(Ordering::Relaxed);
+        (total_us / count) as f64 / 1000.0
+    }
+}
+
 pub struct Database {
     pub(crate) _path: PathBuf,
     pub(crate) _config: SystemConfig,
@@ -119,6 +189,7 @@ pub struct Database {
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
     pub plan_cache: Arc<RwLock<HashMap<String, crate::planner::binder::BoundStatement>>>,
+    pub metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -297,6 +368,7 @@ impl Database {
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
             plan_cache: Arc::new(RwLock::new(HashMap::new())),
+            metrics: DatabaseMetrics::new(),
 
             vacuum_handle: Some(vacuum_handle),
         }))
@@ -336,6 +408,7 @@ impl Database {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
+        let start = std::time::Instant::now();
         // Flush all dirty pages to disk and sync data files
         self.buffer_manager.checkpoint()?;
 
@@ -350,7 +423,7 @@ impl Database {
         // rows that the catalog doesn't know about, causing COUNT(*) to return
         // fewer rows than actually exist.
         {
-            let _catalog_path = self._path.join("catalog.lbug");
+            let catalog_path = self._path.join("catalog.lbug");
             if let Err(e) = self.catalog.force_save() {
                 tracing::warn!("Failed to save catalog during checkpoint: {}", e);
             }
@@ -365,6 +438,7 @@ impl Database {
             header.save(&header_path)?;
         }
 
+        self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
         Ok(())
     }
 
@@ -880,6 +954,7 @@ impl Connection {
             .client_context
             .active_query_id
             .fetch_add(1, Ordering::SeqCst);
+        self.client_context.database.metrics.record_query();
 
         let active_tx_guard = self.transaction.lock();
         let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
@@ -901,8 +976,9 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
+            db.transaction_manager.commit(&tx, bm, db).or_else(|e| {
                 let _ = db.transaction_manager.rollback(db, &tx);
+                Err(e)
             })?;
         }
 
@@ -922,6 +998,7 @@ impl Connection {
             .client_context
             .active_query_id
             .fetch_add(1, Ordering::SeqCst);
+        self.client_context.database.metrics.record_query();
 
         let active_tx_guard = self.transaction.lock();
         let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
