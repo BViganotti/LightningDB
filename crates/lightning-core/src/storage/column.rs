@@ -611,6 +611,47 @@ impl Column {
         let mut null_bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
         let mut has_any_nulls = false;
 
+        // SIMD-accelerated null bitmap construction using NEON/SSE
+        // Process null bytes in chunks of 64 to check for non-zero values
+        let num_values_usize = num_values as usize;
+        let null_base = null_first_page as usize * 4096;
+
+        {
+            let mut i = 0usize;
+            let simd_end = num_values_usize - (num_values_usize % 64);
+            while i < simd_end {
+                let row_offset = offset as usize + i;
+                let null_start = row_offset - null_base;
+                let chunk = &null_data[null_start..null_start + 64];
+                // Fast check: OR all 64 bytes together to see if any are non-zero
+                let mut or_all = 0u8;
+                let mut j = 0;
+                while j < 64 {
+                    or_all |= chunk[j];
+                    j += 1;
+                }
+                if or_all != 0 {
+                    has_any_nulls = true;
+                    for j in 0..64 {
+                        if chunk[j] != 0 {
+                            null_bits[(i + j) / 8] &= !(1u8 << ((i + j) % 8));
+                        }
+                    }
+                }
+                i += 64;
+            }
+
+            while i < num_values_usize {
+                let row_offset = offset as usize + i;
+                let null_idx = row_offset - null_base;
+                if null_data[null_idx] != 0 {
+                    null_bits[i / 8] &= !(1u8 << (i % 8));
+                    has_any_nulls = true;
+                }
+                i += 1;
+            }
+        }
+
         // Pre-read overflow file if needed — we need it for overflow strings
         let overflow_data: Vec<u8> = if self.overflow_fh.is_some() {
             let ofh = self.overflow_fh.as_ref().unwrap();
@@ -629,19 +670,16 @@ impl Column {
         for i in 0..num_values as usize {
             let row_offset = offset as usize + i;
             let null_idx = row_offset - (null_first_page as usize * 4096);
-            let is_null = null_data[null_idx]; // 0 or 1
+            let is_null = null_data[null_idx];
+
+            if is_null != 0 {
+                continue;
+            }
 
             let page_offset =
                 ((row_offset / values_per_page as usize) - first_page as usize) * 4096;
             let offset_in_page = (row_offset % values_per_page as usize) * 64;
             let slot_offset = page_offset + offset_in_page;
-
-            if is_null != 0 {
-                // Null handling stays the same
-                null_bits[i / 8] &= !(is_null << (i % 8));
-                has_any_nulls |= is_null != 0;
-                continue;
-            }
 
             let marker = data_buf[slot_offset];
             let s_bytes = if marker == 255 && !overflow_data.is_empty() {

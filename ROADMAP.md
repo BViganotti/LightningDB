@@ -152,7 +152,7 @@ The existing 300 tests are impressive but miss critical dimensions:
 ### 2.3 Performance optimization
 
 - [ ] **2.3.1 Parallel checkpointing**: The checkpoint loop is serial per-shard. With 16 shards and millions of dirty pages, this dominates shutdown time. Parallelize across shards + file handles.
-- [ ] **2.3.2 SIMD scan acceleration**: The scan operator processes one column at a time. Vectorize null-bitmap filtering using SIMD bit operations.
+- [x] **2.3.2 SIMD scan acceleration**: The scan operator processes one column at a time. Vectorize null-bitmap filtering using SIMD bit operations.
 - [ ] **2.3.3 Compression v2**: The ALP, bitpacking, delta, dict, and RLE codecs exist. Profile which codecs are selected for typical workloads. Add adaptive compression that learns from access patterns.
 - [x] **2.3.4 Batch materialization**: Replace the current `DataChunk` → `RecordBatch` per-morsel allocation with reusable buffer pools and zero-copy columnar transfer.
 - [x] **2.3.5 Learned prefetch v2**: The Markov-chain prefetch tracker (`prefetch.rs`) is a proof of concept. Extend with:
