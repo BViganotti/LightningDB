@@ -1,3 +1,23 @@
+/// Write-Ahead Log (WAL) for durability and crash recovery.
+///
+/// ## Sync invariants (SyncMode::Normal)
+///
+/// 1. `log_page_update` — writes page data to WAL but does NOT fsync.
+///    Page updates are durable only if the transaction commits.
+///
+/// 2. `log_commit` — writes the commit record, then calls `flush()` + `sync_all()`.
+///    The fsync happens BEFORE acknowledging the commit to the caller.
+///    This ensures the commit record is on disk before the caller proceeds.
+///
+/// 3. `checkpoint` — the Database::checkpoint() sequence is:
+///    a. BufferManager::checkpoint() — flush dirty pages to data files, sync data files, truncate WAL
+///    b. Save catalog
+///    c. Save header with new last_checkpoint_ts
+///    On crash between (a) and (c): data is on disk, WAL is truncated, header has old timestamp.
+///    Recovery skips entries before old timestamp — correct since data is already on disk.
+///
+/// 4. WAL is always written BEFORE data. On replay, committed transactions' page updates
+///    are applied to data files, ensuring no committed data is lost.
 use crate::storage::buffer_manager::PAGE_SIZE;
 use crate::SyncMode;
 use crate::Result;

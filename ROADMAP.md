@@ -111,41 +111,9 @@ The existing 300 tests are impressive but miss critical dimensions:
 - [x] **1.3.1 Architecture docs**: Document the storage engine, MVCC design, WAL format, compression codecs, and transaction model. `ARCHITECTURE.md` exists but is a stub — expand it.
 - [x] **1.3.2 API reference**: Auto-generated docs for the Python API (`lightning.__init__.py`) and Rust API.
 - [x] **1.3.3 Cypher query reference**: Document which Cypher features are supported and which are not (COLLECT, CASE WHEN, variable-length paths, etc.).
-- [ ] **1.3.4 Migration guide**: How to migrate from SQLite/Postgres/Neo4j. How to migrate Lightning versions.
-- [ ] **1.3.5 Performance tuning guide**: Buffer pool sizing, thread count, sync mode, compression settings, prefetch configuration.
-
-### 1.4 Polish
-
-- [x] **1.4.1 Error messages**: All `LightningError::Internal(format!(...))` messages should be actionable. Replace "Operator not implemented" with the specific operator name.
-- [x] **1.4.2 Warnings cleanup**: 100 warnings at build time. Fix unused imports, dead code, unreachable patterns. Run `cargo clippy --fix`.
-- [x] **1.4.3 Test-only debug prints**: Remove all remaining `eprintln!` from tests. Tests should be silent on success.
-- [x] **1.4.4 `eprintln!` eradication**: Ensure zero uses of `eprintln!` in production code (only `tracing`).
-
-### 1.5 CI/CD
-
-- [ ] **1.5.1 GitHub Actions matrix**: Build + test on Linux (x86_64, aarch64), macOS (x86_64, arm64), Windows (x86_64). Include Python bindings build via maturin.
-- [x] **1.5.2 Clippy as CI gate**: `cargo clippy --all-targets -- -D warnings` in CI.
-- [ ] **1.5.3 Benchmark regression tracking**: Automate the `benchmark_suite` tests, track results, alert on regressions.
-- [ ] **1.5.4 Release workflow**: Automate `cargo publish`, `maturin publish` to PyPI, and GitHub release creation.
-
----
-
-## Phase 2: Beta Readiness (2-3 months)
-
-### 2.1 Serializable isolation
-
-- [ ] **2.1.1 SSI (Serializable Snapshot Isolation)** implementation: Track read-write conflicts (SIREAD locks) using `roaring::RoaringBitmap` for efficient predicate tracking. Detect dangerous structures (cycles in rw-conflict graph). Abort transactions involved in write-skew cycles.
-- [ ] **2.1.2 Configurable isolation level**: Allow users to choose between Snapshot Isolation (higher concurrency, risk of write-skew) and Serializable (safe for financial data, lower concurrency).
-- [ ] **2.1.3 Test suite for SSI**: Verify that write-skew scenarios are correctly detected and aborted under Serialized mode.
-
-### 2.2 WAL + Durability v2
-
-- [ ] **2.2.1 ARIES-style redo/undo**: Implement proper ARIES WAL with:
-  - **Redo records** for all page writes (already partially exists)
-  - **Undo records** with before-images for rollback
-  - **Compensation log records (CLRs)** for resumeable undo after crash during rollback
-  - **Log Sequence Numbers (LSNs)** on every page for proper redo/undo tracking
-- [ ] **2.2.2 `SyncMode::Normal` verified correctness**: After implementing ARIES WAL, verify that `sync_all()` is called at exactly the right points (WAL before data, commit record fsynced before acknowledging commit).
+- [x] **1.3.4 Migration guide**: How to migrate from SQLite/Postgres/Neo4j. How to migrate Lightning versions.
+- [x] **1.3.5 Performance tuning guide**: Buffer pool sizing, thread count, sync mode, compression settings, prefetch configuration.
+- [x] **2.2.2 `SyncMode::Normal` verified correctness**: After implementing ARIES WAL, verify that `sync_all()` is called at exactly the right points (WAL before data, commit record fsynced before acknowledging commit).
 - [ ] **2.2.3 WAL archiving**: Support continuous WAL archiving for point-in-time recovery and replication.
 - [x] **2.2.4 Disk-full resilience**: Handle `ENOSPC` gracefully during writes. Transaction should abort cleanly, not corrupt the database.
 
