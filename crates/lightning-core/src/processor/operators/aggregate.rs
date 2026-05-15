@@ -15,8 +15,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Threshold for switching from hash-based to sort-based aggregation.
+/// When the estimated number of groups exceeds this value, sort-based
+/// aggregation is used instead to avoid building a large HashMap.
+const SORT_AGGREGATION_THRESHOLD: usize = 100_000;
+
 pub struct SharedAggregateState {
     pub groups: RwLock<HashMap<Vec<Value>, (Vec<Box<dyn IAggregateFunction>>, usize)>>,
+    pub sorted_rows: parking_lot::Mutex<Vec<(Vec<Value>, Vec<Value>)>>,
     pub num_active_builders: AtomicU64,
     pub is_done: AtomicBool,
     pub final_result: RwLock<Option<RecordBatch>>,
@@ -42,6 +48,7 @@ impl Aggregate {
             aggregates,
             shared_state: Arc::new(SharedAggregateState {
                 groups: RwLock::new(HashMap::new()),
+                sorted_rows: parking_lot::Mutex::new(Vec::new()),
                 num_active_builders: AtomicU64::new(0),
                 is_done: AtomicBool::new(false),
                 final_result: RwLock::new(None),
@@ -140,26 +147,87 @@ impl Aggregate {
                 agg_funcs[i].merge(local_func.as_ref())?;
             }
         } else {
+            // Adaptive aggregation: switch to sort-based when row count is large
+            // to avoid HashMap memory pressure for high-cardinality group keys.
+            let mut all_rows: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
+            let mut use_sort_based = false;
+
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
 
-                for row_idx in 0..num_rows {
-                    let mut group_key = Vec::with_capacity(self.group_by_indices.len());
-                    for &idx in &self.group_by_indices {
-                        group_key.push(Value::from_arrow(batch.column(idx), row_idx));
-                    }
+                if !use_sort_based && all_rows.len() + num_rows > SORT_AGGREGATION_THRESHOLD {
+                    // Switch to sort-based approach — flush existing hash map first
+                    use_sort_based = true;
+                }
 
-                    let mut groups = self.shared_state.groups.write();
-                    let (agg_funcs, count) = groups
-                        .entry(group_key)
-                        .or_insert_with(|| (self.create_agg_functions(), 0));
-
-                    *count += 1;
-                    for (i, (_, col_idx)) in self.aggregates.iter().enumerate() {
-                        let col = batch.column(*col_idx);
-                        agg_funcs[i].update(&[col.clone()], &[row_idx])?;
+                if use_sort_based {
+                    // Collect rows for sort-based aggregation
+                    for row_idx in 0..num_rows {
+                        let mut group_key = Vec::with_capacity(self.group_by_indices.len());
+                        for &idx in &self.group_by_indices {
+                            group_key.push(Value::from_arrow(batch.column(idx), row_idx));
+                        }
+                        let mut row_values = Vec::with_capacity(self.aggregates.len());
+                        for (_, col_idx) in &self.aggregates {
+                            row_values.push(Value::from_arrow(batch.column(*col_idx), row_idx));
+                        }
+                        all_rows.push((group_key, row_values));
                     }
+                } else {
+                    // Hash-based aggregation (default for small result sets)
+                    for row_idx in 0..num_rows {
+                        let mut group_key = Vec::with_capacity(self.group_by_indices.len());
+                        for &idx in &self.group_by_indices {
+                            group_key.push(Value::from_arrow(batch.column(idx), row_idx));
+                        }
+
+                        let mut groups = self.shared_state.groups.write();
+                        let (agg_funcs, count) = groups
+                            .entry(group_key)
+                            .or_insert_with(|| (self.create_agg_functions(), 0));
+
+                        *count += 1;
+                        for (i, (_, col_idx)) in self.aggregates.iter().enumerate() {
+                            let col = batch.column(*col_idx);
+                            agg_funcs[i].update(&[col.clone()], &[row_idx])?;
+                        }
+                    }
+                }
+            }
+
+            // If sort-based was used, process the collected rows
+            if use_sort_based && !all_rows.is_empty() {
+                all_rows.sort_by(|a, b| {
+                    let ka = &a.0;
+                    let kb = &b.0;
+                    for (va, vb) in ka.iter().zip(kb.iter()) {
+                        let cmp = format!("{:?}", va).cmp(&format!("{:?}", vb));
+                        if cmp != std::cmp::Ordering::Equal {
+                            return cmp;
+                        }
+                    }
+                    ka.len().cmp(&kb.len())
+                });
+
+                let mut groups = self.shared_state.groups.write();
+                let mut i = 0;
+                while i < all_rows.len() {
+                    let key = all_rows[i].0.clone();
+                    let mut agg_funcs = self.create_agg_functions();
+                    let mut count = 0usize;
+                    while i < all_rows.len() && all_rows[i].0 == key {
+                        for (j, val) in all_rows[i].1.iter().enumerate() {
+                            let arr = crate::processor::arrow_utils::values_to_array(
+                                &[val.clone()],
+                                &arrow::datatypes::DataType::Float64,
+                            );
+                            agg_funcs[j].update(&[arr], &[0])?;
+                        }
+                        count += 1;
+                        i += 1;
+                    }
+                    groups.insert(key, (agg_funcs, count));
                 }
             }
         }

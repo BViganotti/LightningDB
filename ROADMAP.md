@@ -297,7 +297,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 ### 0.6.2 Aggregate operator improvements
 
-- [ ] **0.6.2a** Sort-based aggregation: The current hash-based aggregation works well for many groups but degrades with memory pressure. Add a sort-based fallback that avoids building a large HashMap.
+- [x] **0.6.2a** Sort-based aggregation: The current hash-based aggregation works well for many groups but degrades with memory pressure. Add a sort-based fallback that avoids building a large HashMap.
 - [ ] **0.6.2b** Vectorized aggregation: The global aggregation (no GROUP BY) path uses vectorized batch processing. Extend this to grouped aggregation — currently it processes row-by-row which is slow for large groups.
 - [x] **0.6.2c** Implement `is_single_row()` for operators that can produce exactly one row (e.g., `Limit(1)`, `TopK(1)`, `Aggregate` without GROUP BY, `IndexScan` with equality on unique key).
 
