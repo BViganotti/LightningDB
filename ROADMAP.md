@@ -147,7 +147,7 @@ The existing 300 tests are impressive but miss critical dimensions:
   - **Log Sequence Numbers (LSNs)** on every page for proper redo/undo tracking
 - [ ] **2.2.2 `SyncMode::Normal` verified correctness**: After implementing ARIES WAL, verify that `sync_all()` is called at exactly the right points (WAL before data, commit record fsynced before acknowledging commit).
 - [ ] **2.2.3 WAL archiving**: Support continuous WAL archiving for point-in-time recovery and replication.
-- [ ] **2.2.4 Disk-full resilience**: Handle `ENOSPC` gracefully during writes. Transaction should abort cleanly, not corrupt the database.
+- [x] **2.2.4 Disk-full resilience**: Handle `ENOSPC` gracefully during writes. Transaction should abort cleanly, not corrupt the database.
 
 ### 2.3 Performance optimization
 

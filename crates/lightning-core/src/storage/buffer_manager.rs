@@ -430,7 +430,7 @@ impl BufferManager {
                     if pool.slots[i].dirty {
                         if let Some((fid, pid)) = pool.slots[i].key {
                             if let Some(fh) = pool.file_handles.get(&fid) {
-                                let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
+                                fh.write_page(pid, pool.slots[i].frame.as_slice())?;
                             }
                         }
                     }
@@ -464,7 +464,12 @@ impl BufferManager {
                         if version & UNCOMMITTED_BIT == 0 {
                             if let Some((fid, pid)) = pool.slots[idx].key {
                                 if let Some(fh) = pool.file_handles.get(&fid) {
-                                    let _ = fh.write_page(pid, pool.slots[idx].frame.as_slice());
+                                    if let Err(e) = fh.write_page(pid, pool.slots[idx].frame.as_slice()) {
+                                        tracing::error!(
+                                            "Failed to write page {} on file {} during eviction: {}",
+                                            pid, fid, e
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -650,8 +655,11 @@ impl BufferManager {
                     }
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
-                            let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
-                            pool.slots[i].dirty = false;
+                            if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
+                                tracing::error!("flush_all: write error on page {} file {}: {}", pid, fid, e);
+                            } else {
+                                pool.slots[i].dirty = false;
+                            }
                         }
                     }
                 }
@@ -688,8 +696,11 @@ impl BufferManager {
                     }
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = fh_map.get(&fid) {
-                            let _ = fh.write_page(pid, pool.slots[i].frame.as_slice());
-                            pool.slots[i].dirty = false;
+                            if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
+                                tracing::error!("flush_all_with_handles: write error on page {} file {}: {}", pid, fid, e);
+                            } else {
+                                pool.slots[i].dirty = false;
+                            }
                         }
                     }
                 }
