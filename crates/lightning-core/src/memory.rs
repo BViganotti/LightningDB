@@ -90,6 +90,7 @@ pub struct MemoryStore {
     conn: Connection,
     embedding_dim: usize,
     schema_initialized: std::sync::atomic::AtomicBool,
+    cdc_senders: std::sync::Mutex<Vec<std::sync::mpsc::Sender<ChangeEvent>>>,
 }
 
 impl MemoryStore {
@@ -98,6 +99,7 @@ impl MemoryStore {
             conn,
             embedding_dim: DEFAULT_EMBEDDING_DIM,
             schema_initialized: std::sync::atomic::AtomicBool::new(false),
+            cdc_senders: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -154,11 +156,9 @@ impl MemoryStore {
 
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
         self.ensure_schema()?;
-        // Delete existing entity with this ID if it exists (soft delete)
         let _ = self.forget(&entity.id);
-        // Insert new version — this goes through bulk_insert_batch
-        // which handles FTS and vector indexing automatically
         self.store_batch(vec![entity])?;
+        self.emit_cdc_event(None, Some("INSERT".to_string()));
         Ok(())
     }
 
@@ -675,33 +675,22 @@ impl MemoryStore {
     /// and pushes ChangeEvents into the channel.
     pub fn subscribe_changes(&self) -> Result<std::sync::mpsc::Receiver<ChangeEvent>> {
         let (tx, rx) = std::sync::mpsc::channel();
-        let db = self.conn.client_context.database.clone();
-
-        std::thread::spawn(move || {
-            let mut last_wal_size = 0u64;
-            loop {
-                match db.wal.size() {
-                    Ok(size) if size > last_wal_size => {
-                        let event = ChangeEvent {
-                            timestamp: Self::now_micros(),
-                            bytes_written: size - last_wal_size,
-                            total_wal_bytes: size,
-                        };
-                        if tx.send(event).is_err() {
-                            break;
-                        }
-                        last_wal_size = size;
-                    }
-                    _ => {}
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                if db.buffer_manager.is_shutting_down() {
-                    break;
-                }
-            }
-        });
-
+        self.cdc_senders.lock().unwrap().push(tx);
         Ok(rx)
+    }
+
+    fn emit_cdc_event(&self, entity_id: Option<String>, operation_type: Option<String>) {
+        let event = ChangeEvent {
+            timestamp: Self::now_micros(),
+            bytes_written: 0,
+            total_wal_bytes: 0,
+            entity_id,
+            operation_type,
+        };
+        let senders = self.cdc_senders.lock().unwrap();
+        senders.iter().for_each(|tx| {
+            let _ = tx.send(event.clone());
+        });
     }
 
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
@@ -914,7 +903,6 @@ impl MemoryStore {
         let db = self.conn.client_context.database.clone();
         let conn = db.connect();
 
-        // Soft-delete: set valid_until to current time
         let soft_delete = format!(
             "MATCH (e:{ENTITY_TABLE} {{id: '{entity_id}'}}) SET e.valid_until = {now}"
         );
@@ -925,6 +913,7 @@ impl MemoryStore {
         );
         let _ = conn.execute(&del_rels, None);
 
+        self.emit_cdc_event(Some(entity_id.to_string()), Some("DELETE".to_string()));
         Ok(true)
     }
 
@@ -1014,6 +1003,8 @@ pub struct ChangeEvent {
     pub timestamp: i64,
     pub bytes_written: u64,
     pub total_wal_bytes: u64,
+    pub entity_id: Option<String>,
+    pub operation_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

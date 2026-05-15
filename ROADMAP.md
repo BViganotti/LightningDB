@@ -102,7 +102,7 @@ The existing 300 tests are impressive but miss critical dimensions:
 
 - [x] **1.2.1 Multi-hop `expand`** (`memory.rs:663-780`): Replace the current boolean `hops` with real transitive closure. Use the `recursive_join` operator if it supports variable-length paths, or implement iterative traversal in Rust. Remove the comment "variable-length paths are not implemented."
 - [x] **1.2.2 `edge_types` filtering in `expand`** (`memory.rs:663`): The parameter is accepted but fully ignored. Wire it into the Cypher query as a filter on `r.type IN $edge_types`.
-- [ ] **1.2.3 Record-level CDC** (`memory.rs:601-660`): Replace WAL-file-size polling with actual WAL parsing. Emit `ChangeEvent` structs containing `entity_id`, `operation_type` (INSERT/UPDATE/DELETE), `timestamp`, and optionally the new value. The WAL already contains all page updates — parse them and reconstruct logical events.
+- [x] **1.2.3 Record-level CDC** (`memory.rs:601-660`): Replace WAL-file-size polling with actual WAL parsing. Emit `ChangeEvent` structs containing `entity_id`, `operation_type` (INSERT/UPDATE/DELETE), `timestamp`, and optionally the new value. The WAL already contains all page updates — parse them and reconstruct logical events.
 - [x] **1.2.4 RAG pipeline enhancement** (`memory.rs:309-402`): Add configurable reranking (cross-encoder via WASM UDF or pluggable scorer). Increase expansion depth beyond top-3 seeds. Make the reranking formula configurable.
 - [x] **1.2.5 WASM UDF flexibility** (`wasm_function.rs`): Support multi-argument WASM functions, not just `f64 → f64`. Accept `&[f32]` for vector operations. Add support for returning strings.
 
