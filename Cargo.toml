@@ -4,6 +4,7 @@ members = [
     "crates/lightning-core",
     "crates/lightning-arrow",
     "crates/lightning-python",
+    "crates/lightning-node",
 ]
 resolver = "2"
 

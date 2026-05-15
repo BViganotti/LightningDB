@@ -45,12 +45,6 @@ pub struct JsChangeEvent {
     pub total_wal_bytes: i64,
 }
 
-#[napi(object)]
-pub struct JsStreamNext<T: napi::bindgen_prelude::ToNapiValue> {
-    pub done: bool,
-    pub value: Option<T>,
-}
-
 impl JsSearchResult {
     pub fn from_parts(id: String, content: String, entity_type: String, score: f64, metadata: String) -> Self {
         Self { id, content, entity_type, score, metadata }

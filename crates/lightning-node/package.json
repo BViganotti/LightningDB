@@ -1,0 +1,39 @@
+{
+  "name": "@lightning-db/core",
+  "version": "0.1.0",
+  "description": "Embedded graph+vector+hybrid database for AI agent memory — Node.js bindings",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "lightning-db",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "build": "napi build --release --platform --js index.js --dts index.d.ts",
+    "build:debug": "napi build --platform --js index.js --dts index.d.ts",
+    "test": "vitest run",
+    "artifacts": "napi artifacts",
+    "prepublish": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "vitest": "^3.0.0",
+    "typescript": "^5.7.0"
+  },
+  "optionalDependencies": {
+    "@lightning-db/core-darwin-arm64": "0.1.0",
+    "@lightning-db/core-darwin-x64": "0.1.0",
+    "@lightning-db/core-linux-x64-gnu": "0.1.0",
+    "@lightning-db/core-linux-x64-musl": "0.1.0",
+    "@lightning-db/core-linux-arm64-gnu": "0.1.0",
+    "@lightning-db/core-linux-arm64-musl": "0.1.0",
+    "@lightning-db/core-win32-x64-msvc": "0.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BViganotti/lightning"
+  },
+  "license": "MIT"
+}

@@ -14,6 +14,17 @@ report = memory.consolidate()                     # Auto-link related memories
 snapshot = memory.recall_at_time(timestamp)        # Time-travel query
 ```
 
+```typescript
+import { MemoryStore } from '@lightning-db/core'
+
+const memory = await MemoryStore.open('/tmp/agent-memory')
+await memory.store('msg-1', 'User prefers Node.js', 'preference')
+const results = await memory.recall('node.js', 10)    // Semantic keyword search
+const context = await memory.expand('msg-1', 1)         // Graph traversal
+const report = await memory.consolidate()                // Auto-link related memories
+const snapshot = await memory.recallAtTime(timestamp)     // Time-travel query
+```
+
 ## Why Lightning?
 
 | You need this | Instead of 3-4 services | Lightning does it |
@@ -52,6 +63,7 @@ snapshot = memory.recall_at_time(timestamp)        # Time-travel query
 | **SIMD acceleration** | ✅ AVX2/SSE | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **Learned cache prefetch** | ✅ Markov chain | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Python bindings** | ✅ PyO3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Node.js bindings** | ✅ napi-rs | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **LangChain integration** | ✅ VectorStore | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
 | **Arrow native** | ✅ Zero-copy | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Written in Rust** | ✅ | C | C++ | Java | Go | C++ | Python |
@@ -199,6 +211,53 @@ while let Ok(Ok(chunk)) = rx.recv() {
 }
 ```
 
+### Node.js / TypeScript
+
+```bash
+cd crates/lightning-node
+npm install
+npm run build
+```
+
+```typescript
+import { MemoryStore, JsSearchResult } from '@lightning-db/core'
+
+const memory = await MemoryStore.open('/tmp/agent-memory')
+
+await memory.store('msg-1', 'User prefers Node.js', 'preference')
+await memory.store('msg-2', 'User works at a fintech company', 'fact')
+
+// Graph traversal
+await memory.associate('msg-1', 'msg-2', 'related_to', 0.9)
+const neighbors = await memory.expand('msg-1', 1, ['related_to'])
+
+// Hybrid search (FTS + vector fused via RRF)
+const results: JsSearchResult[] = await memory.recall('node.js preference', 5)
+
+// Temporal query — what did the agent know yesterday?
+const snapshot = await memory.recallAtTime(yesterdayMicros, 100)
+
+// RAG pipeline — returns LLM-ready context
+const rag = await memory.ragQuery('user background and preferences', 5)
+console.log(rag.context)
+
+// Memory consolidation — auto-link + contradict + PageRank
+const report = await memory.consolidate()
+console.log(`Linked ${report.linksCreated}, contradictions ${report.contradictionsFound}`)
+
+// Time-based recall
+const recent = await memory.recallRecent(50)
+const byType = await memory.recallByType('preference', 10)
+
+// Change data capture — subscribe to real-time changes
+const changes = memory.subscribeChanges()
+while (true) {
+    const event = await changes.next()
+    if (!event) break
+    console.log(`Memory changed: +${event.bytesWritten} bytes`)
+}
+```
+
 ## Unique Features
 
 ### Built-in RAG Pipeline
@@ -273,26 +332,26 @@ Two transactions modifying different rows on the same page can both commit. Thei
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                 Agent Application                      │
-├──────────────────────────────────────────────────────┤
-│     Python / LangChain / LlamaIndex / Rust / C       │
-├──────────────────────────────────────────────────────┤
-│                   MemoryStore API                     │
-│    store · recall · expand · associate · rag_query    │
-│    consolidate · recall_at_time · subscribe_changes   │
-├──────────────────────────────────────────────────────┤
-│              Cypher Query Engine                      │
-│    Parser (Pest) → Binder → Planner (16 opt rules)    │
-├────────────┬────────────┬─────────────┬─────────────┤
-│ Graph CSR  │ Vector SIMD │ FTS Tantivy │ Columnar    │
-│ adjacency  │ Cosine 768d │ BM25 search │ Compressed  │
-│ bidirectional│ Parallel  │ Multi-field │ MVCC buffer │
-├────────────┴────────────┴─────────────┴─────────────┤
-│                Storage Engine                         │
-│  WAL · Buffer Pool · MVCC · Compression · Checkpoint │
-│  Learned Prefetch · Row-level OCC · Free Space Mgmt  │
-└──────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                        Agent Application                          │
+├───────────────────────────────────────────────────────────────────┤
+│   Node.js (napi-rs) · Python · LangChain · LlamaIndex · Rust / C   │
+├───────────────────────────────────────────────────────────────────┤
+│                          MemoryStore API                          │
+│         store · recall · expand · associate · rag_query          │
+│         consolidate · recall_at_time · subscribe_changes          │
+├───────────────────────────────────────────────────────────────────┤
+│                        Cypher Query Engine                        │
+│          Parser (Pest) → Binder → Planner (16 opt rules)          │
+├────────────────┬───────────────────┬──────────────────┬──────────┤
+│   Graph CSR    │   Vector SIMD     │   FTS Tantivy    │ Columnar │
+│   adjacency    │   Cosine 768d     │   BM25 search    │Compressed│
+│ bidirectional  │    Parallel       │   Multi-field    │MVCC buf  │
+├────────────────┴───────────────────┴──────────────────┴──────────┤
+│                         Storage Engine                            │
+│       WAL · Buffer Pool · MVCC · Compression · Checkpoint        │
+│       Learned Prefetch · Row-level OCC · Free Space Mgmt         │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ## Test Coverage
@@ -319,13 +378,14 @@ This exercises: store, hybrid search, graph traversal, temporal queries, RAG pip
 
 ## Status
 
-Pre-alpha. The core engine is functional with 298 passing tests in release mode. Python bindings are new (PyO3). WASM runtime uses `wasmi` interpreter (no native compilation).
+Pre-alpha. The core engine is functional with 298 passing tests in release mode. Python bindings are new (PyO3). Node.js bindings are new (napi-rs). WASM runtime uses `wasmi` interpreter (no native compilation).
 
 ### Known Limitations
 - Vector index is hardcoded to 768 dimensions
 - WAL replay of DELETE operations has a StringArray null-buffer alignment issue
 - Columnar compression is analyzed but not yet activated (always uncompressed)
 - Python bindings not yet published to PyPI (install from source)
+- Node.js bindings not yet published to npm (install from source)
 
 ## License
 

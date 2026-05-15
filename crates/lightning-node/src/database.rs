@@ -18,7 +18,7 @@ impl JsDatabase {
         };
         let db = CoreDatabase::new(&path, config)
             .map_err(|e| napi::Error::from_reason(format!("Failed to open database: {}", e)))?;
-        Ok(Self { db: Arc::new(db) })
+        Ok(Self { db })
     }
 }
 

@@ -76,3 +76,5 @@ Generated CLAUDE.md for Claude Code support.
 [2m2026-05-15T11:16:31.465591Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=10
 [2m2026-05-15T11:16:31.469895Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=11
 [2m2026-05-15T11:16:31.715986Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=12
+[2m2026-05-15T11:41:29.226028Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=13
+[2m2026-05-15T11:41:29.228509Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=14

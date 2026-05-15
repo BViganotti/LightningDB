@@ -10,6 +10,9 @@ pub struct ColumnStats {
     pub num_values: u64,
     pub distinct_count: u64,
     pub compression_meta: Option<CompressionMetadata>,
+    /// Achieved compression ratio (uncompressed_size / compressed_size).
+    /// Higher is better. None means not yet measured.
+    pub compression_ratio: Option<f64>,
 }
 
 impl Default for ColumnStats {
@@ -27,6 +30,7 @@ impl ColumnStats {
             num_values: 0,
             distinct_count: 0,
             compression_meta: None,
+            compression_ratio: None,
         }
     }
 

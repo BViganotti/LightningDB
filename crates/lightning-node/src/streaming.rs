@@ -9,7 +9,7 @@ use napi_derive::napi;
 
 use crate::types::{JsChangeEvent, JsSearchResult};
 
-struct NextChunk {
+pub struct NextChunk {
     rx: Arc<Mutex<Receiver<std::result::Result<DataChunk, LightningError>>>>,
 }
 
@@ -19,7 +19,10 @@ impl Task for NextChunk {
     type JsValue = JsChunkResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let rx = self.rx.lock().map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+        let rx = self
+            .rx
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
         match rx.recv() {
             Ok(Ok(chunk)) => {
                 let batch = &chunk.batch;
@@ -54,7 +57,7 @@ impl Task for NextChunk {
     }
 }
 
-struct NextChange {
+pub struct NextChange {
     rx: Arc<Mutex<Receiver<ChangeEvent>>>,
 }
 
@@ -64,7 +67,10 @@ impl Task for NextChange {
     type JsValue = Option<JsChangeEvent>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let rx = self.rx.lock().map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+        let rx = self
+            .rx
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
         match rx.recv() {
             Ok(event) => Ok(Some(event)),
             Err(_) => Ok(None),
@@ -76,7 +82,7 @@ impl Task for NextChange {
     }
 }
 
-struct NextRecall {
+pub struct NextRecall {
     rx: Arc<Mutex<Receiver<std::result::Result<SearchResult, LightningError>>>>,
 }
 
@@ -86,7 +92,10 @@ impl Task for NextRecall {
     type JsValue = Option<JsSearchResult>;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        let rx = self.rx.lock().map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+        let rx = self
+            .rx
+            .lock()
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
         match rx.recv() {
             Ok(Ok(result)) => Ok(Some(result)),
             Ok(Err(e)) => Err(napi::Error::from_reason(format!("Recall error: {}", e))),
@@ -115,14 +124,16 @@ pub struct JsQueryStream {
 #[napi]
 impl JsQueryStream {
     #[napi]
-    pub fn next(&self) -> AsyncTask<JsChunkResult> {
+    pub fn next(&self) -> AsyncTask<NextChunk> {
         AsyncTask::new(NextChunk { rx: self.rx.clone() })
     }
 }
 
 impl JsQueryStream {
     pub fn new(rx: Receiver<std::result::Result<DataChunk, LightningError>>) -> Self {
-        Self { rx: Arc::new(Mutex::new(rx)) }
+        Self {
+            rx: Arc::new(Mutex::new(rx)),
+        }
     }
 }
 
@@ -140,14 +151,16 @@ pub struct JsChangeStream {
 #[napi]
 impl JsChangeStream {
     #[napi]
-    pub fn next(&self) -> AsyncTask<Option<JsChangeEvent>> {
+    pub fn next(&self) -> AsyncTask<NextChange> {
         AsyncTask::new(NextChange { rx: self.rx.clone() })
     }
 }
 
 impl JsChangeStream {
     pub fn new(rx: Receiver<ChangeEvent>) -> Self {
-        Self { rx: Arc::new(Mutex::new(rx)) }
+        Self {
+            rx: Arc::new(Mutex::new(rx)),
+        }
     }
 }
 
@@ -159,13 +172,15 @@ pub struct JsRecallStream {
 #[napi]
 impl JsRecallStream {
     #[napi]
-    pub fn next(&self) -> AsyncTask<Option<JsSearchResult>> {
+    pub fn next(&self) -> AsyncTask<NextRecall> {
         AsyncTask::new(NextRecall { rx: self.rx.clone() })
     }
 }
 
 impl JsRecallStream {
     pub fn new(rx: Receiver<std::result::Result<SearchResult, LightningError>>) -> Self {
-        Self { rx: Arc::new(Mutex::new(rx)) }
+        Self {
+            rx: Arc::new(Mutex::new(rx)),
+        }
     }
 }

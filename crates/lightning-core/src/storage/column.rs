@@ -1814,14 +1814,13 @@ impl Column {
 
     pub fn optimize(
         &self,
-        _bm: &BufferManager,
-        _tx: &crate::transaction::transaction_manager::Transaction,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let num_data_pages = self.fh.get_num_pages();
         if num_data_pages == 0 {
             return Ok(());
         }
-        // Scan from end to find completely empty trailing pages and free them
         let element_size = self.element_size();
         let stats = self.stats.read();
         let values_per_page = if stats
@@ -1846,6 +1845,34 @@ impl Column {
         };
         if pages_needed < num_data_pages {
             self.fh.truncate_last_pages(pages_needed)?;
+        }
+
+        // Analyze column data to select optimal compression codec
+        if total_values < 32 || self.stats.read().compression_meta.is_some() {
+            return Ok(());
+        }
+
+        let sample_size = std::cmp::min(total_values, 4096usize as u64);
+        let mut values = Vec::with_capacity(sample_size as usize);
+        self.scan(bm, 0, sample_size, tx, &mut values)?;
+
+        let data_type = &self.data_type;
+        let meta = match data_type {
+            LogicalType::Int64 | LogicalType::Int32 | LogicalType::Uint64 | LogicalType::Node(_) => {
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_integer_chunk(&values, data_type)
+            }
+            LogicalType::Double | LogicalType::Float => {
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_float_chunk(&values)
+            }
+            LogicalType::String => {
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_string_chunk(&values)
+            }
+            _ => return Ok(()),
+        };
+
+        if meta.compression != CompressionType::Uncompressed {
+            let mut stats = self.stats.write();
+            stats.compression_meta = Some(meta);
         }
         Ok(())
     }
