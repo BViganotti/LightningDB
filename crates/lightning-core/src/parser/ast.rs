@@ -21,14 +21,16 @@ pub enum Statement {
         name: String,
         columns: Vec<ColumnDefinition>,
         primary_key: String,
+        if_not_exists: bool,
     },
     CreateTableRel {
         name: String,
         from_table: String,
         to_table: String,
         columns: Vec<ColumnDefinition>,
+        if_not_exists: bool,
     },
-    DropTable(String),
+    DropTable(String, bool), // name, if_exists
     CopyFrom {
         table_name: String,
         file_path: String,

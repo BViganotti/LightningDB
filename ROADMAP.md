@@ -435,8 +435,8 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
   - `ALTER TABLE name DROP [COLUMN] name` (drop property)
   - `ALTER TABLE name RENAME TO new_name` (rename table)
   - `ALTER TABLE name RENAME [COLUMN] name TO new_name` (rename property)
-- [ ] **0.7.2c** `CREATE [TABLE [IF NOT EXISTS]]` — Add `IF NOT EXISTS` / `IF EXISTS` clauses
-- [ ] **0.7.2d** `DROP TABLE [IF EXISTS]` — Add `IF EXISTS`
+- [x] **0.7.2c** `CREATE [TABLE [IF NOT EXISTS]]` — Add `IF NOT EXISTS` / `IF EXISTS` clauses
+- [x] **0.7.2d** `DROP TABLE [IF EXISTS]` — Add `IF EXISTS`
 - [x] **0.7.2e** `REMOVE n.prop` — Full property removal syntax
 - [x] **0.7.2f** `SET n += {prop: val}` / `SET n = {prop: val}` — Map-based property assignment
 - [ ] **0.7.2g** `CREATE CONSTRAINT` / `DROP CONSTRAINT` — Unique constraints, existence constraints

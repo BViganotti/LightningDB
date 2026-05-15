@@ -286,11 +286,13 @@ impl PhysicalPlanner {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             } => Ok(Box::new(
                 crate::processor::operators::ddl::PhysicalDDL::new_create_node(
                     name,
                     columns,
                     primary_key,
+                    if_not_exists,
                     self.db.clone(),
                     self.undo_buffer.clone(),
                 ),
@@ -300,23 +302,26 @@ impl PhysicalPlanner {
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             } => Ok(Box::new(
                 crate::processor::operators::ddl::PhysicalDDL::new_create_rel(
                     name,
                     from_table,
                     to_table,
                     columns,
+                    if_not_exists,
                     self.db.clone(),
                     self.undo_buffer.clone(),
                 ),
             )),
-            LogicalOperator::DropTable(name) => Ok(Box::new(
+            LogicalOperator::DropTable(name, if_exists) => Ok(Box::new(
                 crate::processor::operators::ddl::PhysicalDDL::new_drop(
                     name,
+                    if_exists,
                     self.db.clone(),
                     self.undo_buffer.clone(),
                 ),
-            )),
+            )            ),
             LogicalOperator::Merge {
                 child,
                 pattern,
@@ -511,7 +516,7 @@ impl PhysicalPlanner {
             | LogicalOperator::CreateMacro { .. }
             | LogicalOperator::CreateTableNode { .. }
             | LogicalOperator::CreateTableRel { .. }
-            | LogicalOperator::DropTable(_)
+            | LogicalOperator::DropTable(..)
             | LogicalOperator::CopyFrom { .. }
             | LogicalOperator::CopyTo { .. }
             | LogicalOperator::Transaction(_)

@@ -9,14 +9,16 @@ pub enum DDLAction {
         name: String,
         columns: Vec<PropertyDefinition>,
         primary_key: String,
+        if_not_exists: bool,
     },
     CreateRel {
         name: String,
         from_table: String,
         to_table: String,
         columns: Vec<PropertyDefinition>,
+        if_not_exists: bool,
     },
-    DropTable(String),
+    DropTable(String, bool),
     CreateSequence {
         name: String,
         start_with: u64,
@@ -41,6 +43,7 @@ impl PhysicalDDL {
         name: String,
         columns: Vec<PropertyDefinition>,
         primary_key: String,
+        if_not_exists: bool,
         db: Arc<Database>,
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
@@ -49,6 +52,7 @@ impl PhysicalDDL {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             },
             db,
             undo_buffer,
@@ -61,6 +65,7 @@ impl PhysicalDDL {
         from_table: String,
         to_table: String,
         columns: Vec<PropertyDefinition>,
+        if_not_exists: bool,
         db: Arc<Database>,
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
@@ -70,6 +75,7 @@ impl PhysicalDDL {
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             },
             db,
             undo_buffer,
@@ -77,9 +83,9 @@ impl PhysicalDDL {
         }
     }
 
-    pub fn new_drop(name: String, db: Arc<Database>, undo_buffer: Arc<UndoBuffer>) -> Self {
+    pub fn new_drop(name: String, if_exists: bool, db: Arc<Database>, undo_buffer: Arc<UndoBuffer>) -> Self {
         Self {
-            action: DDLAction::DropTable(name),
+            action: DDLAction::DropTable(name, if_exists),
             db,
             undo_buffer,
             executed: false,
@@ -137,7 +143,15 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             } => {
+                if *if_not_exists {
+                    let catalog = database.catalog.read();
+                    if catalog.get_node_table(name).is_some() {
+                        self.executed = true;
+                        return Ok(None);
+                    }
+                }
                 // 1. Update Catalog
                 let mut catalog = database.catalog.write();
                 catalog.add_node_table(name.clone(), columns.clone(), Some(primary_key.clone()));
@@ -167,7 +181,15 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             } => {
+                if *if_not_exists {
+                    let catalog = database.catalog.read();
+                    if catalog.get_rel_table(name).is_some() {
+                        self.executed = true;
+                        return Ok(None);
+                    }
+                }
                 // 1. Update Catalog
                 let mut catalog = database.catalog.write();
                 catalog.add_rel_table(
@@ -196,7 +218,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 // 5. Mark executed
                 self.executed = true;
             }
-            DDLAction::DropTable(name) => {
+            DDLAction::DropTable(name, if_exists) => {
                 // 1. Get original before dropping
                 let entry = {
                     let catalog = database.catalog.read();
@@ -258,23 +280,29 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     name,
                     columns,
                     primary_key,
+                    if_not_exists,
                 } => DDLAction::CreateNode {
                     name: name.clone(),
                     columns: columns.clone(),
                     primary_key: primary_key.clone(),
+                    if_not_exists: *if_not_exists,
                 },
                 DDLAction::CreateRel {
                     name,
                     from_table,
                     to_table,
                     columns,
+                    if_not_exists,
                 } => DDLAction::CreateRel {
                     name: name.clone(),
                     from_table: from_table.clone(),
                     to_table: to_table.clone(),
                     columns: columns.clone(),
+                    if_not_exists: *if_not_exists,
                 },
-                DDLAction::DropTable(name) => DDLAction::DropTable(name.clone()),
+                DDLAction::DropTable(name, if_exists) => {
+                    DDLAction::DropTable(name.clone(), *if_exists)
+                }
                 DDLAction::CreateSequence {
                     name,
                     start_with,

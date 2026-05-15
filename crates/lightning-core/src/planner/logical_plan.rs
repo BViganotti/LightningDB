@@ -85,14 +85,16 @@ pub enum LogicalOperator {
         name: String,
         columns: Vec<crate::catalog::PropertyDefinition>,
         primary_key: String,
+        if_not_exists: bool,
     },
     CreateTableRel {
         name: String,
         from_table: String,
         to_table: String,
         columns: Vec<crate::catalog::PropertyDefinition>,
+        if_not_exists: bool,
     },
-    DropTable(String),
+    DropTable(String, bool),
     CopyFrom {
         table_name: String,
         file_path: String,
@@ -271,23 +273,29 @@ impl LogicalPlanner {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             } => Ok(LogicalOperator::CreateTableNode {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             }),
             BoundStatement::CreateTableRel {
                 name,
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             } => Ok(LogicalOperator::CreateTableRel {
                 name,
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             }),
-            BoundStatement::DropTable(name) => Ok(LogicalOperator::DropTable(name)),
+            BoundStatement::DropTable(name, if_exists) => {
+                Ok(LogicalOperator::DropTable(name, if_exists))
+            }
             BoundStatement::CopyFrom {
                 table_name,
                 file_path,

@@ -31,14 +31,16 @@ pub enum BoundStatement {
         name: String,
         columns: Vec<crate::catalog::PropertyDefinition>,
         primary_key: String,
+        if_not_exists: bool,
     },
     CreateTableRel {
         name: String,
         from_table: String,
         to_table: String,
         columns: Vec<crate::catalog::PropertyDefinition>,
+        if_not_exists: bool,
     },
-    DropTable(String),
+    DropTable(String, bool),
     CopyFrom {
         table_name: String,
         file_path: String,
@@ -403,6 +405,7 @@ impl<'a> Binder<'a> {
                 name,
                 columns,
                 primary_key,
+                if_not_exists,
             } => {
                 let bound_columns: Vec<_> = columns
                     .iter()
@@ -415,6 +418,7 @@ impl<'a> Binder<'a> {
                     name: name.clone(),
                     columns: bound_columns,
                     primary_key: primary_key.clone(),
+                    if_not_exists: *if_not_exists,
                 })
             }
             Statement::CreateTableRel {
@@ -422,6 +426,7 @@ impl<'a> Binder<'a> {
                 from_table,
                 to_table,
                 columns,
+                if_not_exists,
             } => {
                 let columns = columns
                     .iter()
@@ -435,9 +440,12 @@ impl<'a> Binder<'a> {
                     from_table: from_table.clone(),
                     to_table: to_table.clone(),
                     columns,
+                    if_not_exists: *if_not_exists,
                 })
             }
-            Statement::DropTable(name) => Ok(BoundStatement::DropTable(name.clone())),
+            Statement::DropTable(name, if_exists) => {
+                Ok(BoundStatement::DropTable(name.clone(), *if_exists))
+            }
             Statement::CopyFrom {
                 table_name,
                 file_path,

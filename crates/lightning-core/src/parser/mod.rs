@@ -255,7 +255,18 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             Rule::checkpoint_statement => return Ok(Statement::Checkpoint),
             Rule::create_node_table => {
                 let mut it = i.into_inner();
-                let name = it.next().unwrap().as_str().to_string();
+                let mut if_not_exists = false;
+                let name = loop {
+                    let next = it.next().unwrap();
+                    match next.as_rule() {
+                        Rule::if_not_exists => {
+                            if_not_exists = true;
+                            continue;
+                        }
+                        Rule::table_name => break next.as_str().to_string(),
+                        _ => continue,
+                    }
+                };
                 let mut cols = Vec::new();
                 let mut pk = String::new();
                 for j in it {
@@ -277,6 +288,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     name,
                     columns: cols,
                     primary_key: pk,
+                    if_not_exists,
                 });
             }
             Rule::create_rel_table => {
@@ -284,6 +296,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut from_table = String::new();
                 let mut to_table = String::new();
                 let mut cols = Vec::new();
+                let mut if_not_exists = false;
                 for j in i.into_inner() {
                     match j.as_rule() {
                         Rule::table_name => {
@@ -310,12 +323,24 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     from_table,
                     to_table,
                     columns: cols,
+                    if_not_exists,
                 });
             }
             Rule::drop_table => {
-                return Ok(Statement::DropTable(
-                    i.into_inner().next().unwrap().as_str().to_string(),
-                ));
+                let mut it = i.into_inner();
+                let mut if_exists = false;
+                let name = loop {
+                    let next = it.next().unwrap();
+                    match next.as_rule() {
+                        Rule::if_exists => {
+                            if_exists = true;
+                            continue;
+                        }
+                        Rule::table_name => break next.as_str().to_string(),
+                        _ => continue,
+                    }
+                };
+                return Ok(Statement::DropTable(name, if_exists));
             }
             Rule::match_clause => {
                 let pats = parse_match_clause(i)?;
