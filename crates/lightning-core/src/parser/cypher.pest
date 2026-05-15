@@ -102,8 +102,10 @@ arithmetic_expr = { atom ~ ( arithmetic_operator ~ atom )* }
 comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
 arithmetic_operator = { "+" | "-" | "*" | "/" | "%" }
 
-atom = { exists_subquery | cast_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+atom = { exists_subquery | cast_expression | extract_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
 cast_expression = { ^"CAST" ~ "(" ~ expression ~ ^"AS" ~ data_type ~ ")" }
+extract_expression = { ^"EXTRACT" ~ "(" ~ extract_field ~ ^"FROM" ~ expression ~ ")" }
+extract_field = { ^"YEAR" | ^"MONTH" | ^"DAY" | ^"HOUR" | ^"MINUTE" | ^"SECOND" | ^"QUARTER" | ^"WEEK" | ^"DOW" | ^"DOY" }
 list_subscript = { variable ~ "[" ~ expression ~ range_operator? ~ expression? ~ "]" }
 range_operator = { ".." }
 parameter = @{ "$" ~ variable }

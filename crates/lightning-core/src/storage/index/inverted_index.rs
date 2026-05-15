@@ -8,7 +8,6 @@ use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
 pub struct InvertedIndex {
-    #[allow(dead_code)]
     path: PathBuf,
     index: Index,
     writer: RwLock<IndexWriter>,
@@ -97,6 +96,22 @@ impl InvertedIndex {
         writer
             .commit()
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete(&self, node_id: u64) -> Result<()> {
+        let mut writer = self.writer.write().unwrap();
+        let term = tantivy::Term::from_field_u64(self.id_field, node_id);
+        writer.delete_term(term);
+        Ok(())
+    }
+
+    pub fn delete_batch(&self, node_ids: &[u64]) -> Result<()> {
+        let mut writer = self.writer.write().unwrap();
+        for &node_id in node_ids {
+            let term = tantivy::Term::from_field_u64(self.id_field, node_id);
+            writer.delete_term(term);
+        }
         Ok(())
     }
 

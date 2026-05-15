@@ -1034,6 +1034,21 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                 false,
             ))
         }
+        Rule::extract_expression => {
+            let mut inner = i.into_inner();
+            let field_token = inner.next().unwrap();
+            let field = field_token.as_str().to_uppercase();
+            let _from = inner.next(); // skip FROM
+            let source = parse_expression(inner.next().unwrap())?;
+            Ok(Expression::Function(
+                "DATE_PART".to_string(),
+                vec![
+                    Expression::Literal(Literal::String(field)),
+                    source,
+                ],
+                false,
+            ))
+        }
         Rule::list_subscript => {
             let tokens: Vec<_> = i.into_inner().collect();
             if tokens.is_empty() {

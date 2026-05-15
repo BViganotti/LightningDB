@@ -368,7 +368,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 ### 0.6.1 Fix no-op and stub operators
 
-- [ ] **0.6.1a** `PhysicalASP` — `all_shortest_paths.rs:40-45`: The `run_asp()` method is an empty `Ok(())`. Implement actual all-shortest-paths using Yen's algorithm or Eppstein's algorithm. At minimum, implement a DAG-based all-paths variant.
+- [x] **0.6.1a** `PhysicalASP` — `all_shortest_paths.rs:40-45`: The `run_asp()` method is an empty `Ok(())`. Implement actual all-shortest-paths using Yen's algorithm or Eppstein's algorithm. At minimum, implement a DAG-based all-paths variant.
 - [x] **0.6.1b** `PhysicalCall` — `call.rs`: Only handles `"show_tables"`. Add a procedure registry system where procedures can be registered (like functions). Support the common Cypher procedures: `db.labels()`, `db.relationshipTypes()`, `db.schema()`, etc.
 - [x] **0.6.1c** `PhysicalTransaction` — `transaction.rs:33-37`: The entire operator is a no-op. Transaction BEGIN/COMMIT/ROLLBACK must actually work when used as standalone operators inside queries (not just via the Connection API).
 - [x] **0.6.1d** `PhysicalMultiplicityReducer` — `multiplicity_reducer.rs`: Currently a pure pass-through. Either implement actual Cypher multiplicity (which deduplicates rows from pattern matching), or remove it.
@@ -425,7 +425,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 - [x] **0.7.1c** `NOT IN` — Must be added alongside `IN`
 - [x] **0.7.1d** `XOR` — Add to the grammar, map to `BoundExpression::Logical(left, Xor, right)` or desugar to `(A AND NOT B) OR (NOT A AND B)`
 - [x] **0.7.1e** `CAST(expr AS type)` — Add grammar and binder support. Currently only `CAST` as a function call works.
-- [ ] **0.7.1f** `EXTRACT(field FROM source)` — Add grammar support. Currently only `DATE_PART(field, source)` as a function call works.
+- [x] **0.7.1f** `EXTRACT(field FROM source)` — Add grammar support. Currently only `DATE_PART(field, source)` as a function call works.
 
 ### 0.7.2 Missing DDL / DML
 
@@ -490,7 +490,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 ### 0.8.3 InvertedIndex (FTS) production hardening
 
-- [ ] **0.8.3a** Add document deletion via Tantivy's `delete_term()` — currently stale documents accumulate
+- [x] **0.8.3a** Add document deletion via Tantivy's `delete_term()` — currently stale documents accumulate
 - [ ] **0.8.3b** Expose custom analyzer configuration (per-column language, tokenizer, stop words)
 - [ ] **0.8.3c** Support multiple indexed text fields per table (currently only indexes `content` column)
 - [ ] **0.8.3d** Add `SEARCH()` or `QUERY()` function that exposes Tantivy's query parser syntax
