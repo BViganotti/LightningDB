@@ -108,9 +108,9 @@ The existing 300 tests are impressive but miss critical dimensions:
 
 ### 1.3 Documentation
 
-- [ ] **1.3.1 Architecture docs**: Document the storage engine, MVCC design, WAL format, compression codecs, and transaction model. `ARCHITECTURE.md` exists but is a stub — expand it.
-- [ ] **1.3.2 API reference**: Auto-generated docs for the Python API (`lightning.__init__.py`) and Rust API.
-- [ ] **1.3.3 Cypher query reference**: Document which Cypher features are supported and which are not (COLLECT, CASE WHEN, variable-length paths, etc.).
+- [x] **1.3.1 Architecture docs**: Document the storage engine, MVCC design, WAL format, compression codecs, and transaction model. `ARCHITECTURE.md` exists but is a stub — expand it.
+- [x] **1.3.2 API reference**: Auto-generated docs for the Python API (`lightning.__init__.py`) and Rust API.
+- [x] **1.3.3 Cypher query reference**: Document which Cypher features are supported and which are not (COLLECT, CASE WHEN, variable-length paths, etc.).
 - [ ] **1.3.4 Migration guide**: How to migrate from SQLite/Postgres/Neo4j. How to migrate Lightning versions.
 - [ ] **1.3.5 Performance tuning guide**: Buffer pool sizing, thread count, sync mode, compression settings, prefetch configuration.
 
@@ -124,7 +124,7 @@ The existing 300 tests are impressive but miss critical dimensions:
 ### 1.5 CI/CD
 
 - [ ] **1.5.1 GitHub Actions matrix**: Build + test on Linux (x86_64, aarch64), macOS (x86_64, arm64), Windows (x86_64). Include Python bindings build via maturin.
-- [ ] **1.5.2 Clippy as CI gate**: `cargo clippy --all-targets -- -D warnings` in CI.
+- [x] **1.5.2 Clippy as CI gate**: `cargo clippy --all-targets -- -D warnings` in CI.
 - [ ] **1.5.3 Benchmark regression tracking**: Automate the `benchmark_suite` tests, track results, alert on regressions.
 - [ ] **1.5.4 Release workflow**: Automate `cargo publish`, `maturin publish` to PyPI, and GitHub release creation.
 
