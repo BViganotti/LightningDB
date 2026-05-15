@@ -1,5 +1,5 @@
 use arrow::array::{Float64Array, StringArray, UInt64Array};
-use lightning_core::memory::{MemoryEntity, MemoryStore, SearchResult};
+use lightning_core::memory::{MemoryEntity, MemoryStore, SearchResult, DEFAULT_EMBEDDING_DIM};
 use lightning_core::{Database, SystemConfig};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -10,7 +10,7 @@ fn setup() -> (tempfile::TempDir, Arc<Database>, MemoryStore) {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    let store = MemoryStore::new(conn);
+    let store = MemoryStore::new(conn, DEFAULT_EMBEDDING_DIM);
     // Initialize schema synchronously
     store.ensure_schema().unwrap();
     (dir, db, store)

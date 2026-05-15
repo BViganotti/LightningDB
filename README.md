@@ -188,7 +188,7 @@ use lightning_core::memory::{MemoryEntity, MemoryStore, RagResult};
 
 let db = Database::new("/tmp/memory", SystemConfig::default())?;
 let conn = db.connect();
-let memory = MemoryStore::new(conn);
+let memory = MemoryStore::new(conn, DEFAULT_EMBEDDING_DIM);
 
 memory.store(MemoryEntity {
     id: "msg-1".into(),

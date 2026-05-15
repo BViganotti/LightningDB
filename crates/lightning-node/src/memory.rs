@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use lightning_core::memory::DEFAULT_EMBEDDING_DIM;
 use lightning_core::memory::MemoryEntity;
 use lightning_core::memory::MemoryStore as CoreMemoryStore;
 use lightning_core::{Database, SyncMode, SystemConfig};
@@ -28,7 +29,7 @@ impl JsMemoryStore {
             .map_err(|e| napi::Error::from_reason(format!("Failed to open database: {}", e)))?;
         let conn = db.connect();
         Ok(Self {
-            inner: Arc::new(CoreMemoryStore::new(conn)),
+            inner: Arc::new(CoreMemoryStore::new(conn, DEFAULT_EMBEDDING_DIM)),
         })
     }
 
@@ -44,7 +45,7 @@ impl JsMemoryStore {
             .map_err(|e| napi::Error::from_reason(format!("Failed to open database: {}", e)))?;
         let conn = db.connect();
         Ok(Self {
-            inner: Arc::new(CoreMemoryStore::new(conn)),
+            inner: Arc::new(CoreMemoryStore::new(conn, DEFAULT_EMBEDDING_DIM)),
         })
     }
 
@@ -52,7 +53,7 @@ impl JsMemoryStore {
     pub fn from_database(db: &JsDatabase) -> napi::Result<Self> {
         let conn = db.inner().connect();
         Ok(Self {
-            inner: Arc::new(CoreMemoryStore::new(conn)),
+            inner: Arc::new(CoreMemoryStore::new(conn, DEFAULT_EMBEDDING_DIM)),
         })
     }
 

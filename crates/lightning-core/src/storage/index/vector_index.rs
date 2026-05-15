@@ -12,9 +12,9 @@ fn vi_entry_bytes(dim: usize) -> usize {
     4 + dim * 4
 }
 
-fn vi_entries_per_page() -> usize {
+fn vi_entries_per_page(dim: usize) -> usize {
     let bps = 4096usize;
-    let entry_bytes = 4 + 768 * 4;
+    let entry_bytes = vi_entry_bytes(dim);
     bps / entry_bytes
 }
 
@@ -45,12 +45,16 @@ pub struct VectorIndex {
 }
 
 impl VectorIndex {
-    pub fn new(file_handle: Arc<FileHandle>) -> Self {
+    pub fn new(file_handle: Arc<FileHandle>, dimension: usize) -> Self {
         Self {
             file_handle,
-            dimension: 768,
+            dimension,
             page_header_size: 0,
         }
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.dimension
     }
 
     // --- SIMD-accelerated dot product ---
@@ -118,22 +122,38 @@ impl VectorIndex {
     pub fn insert(
         &self,
         node_id: u64,
-        embedding: &[f32; 768],
+        embedding: &[f32],
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        self.insert_batch(&[(node_id, *embedding)], bm, tx)
+        if embedding.len() != self.dimension {
+            return Err(crate::LightningError::Internal(format!(
+                "Embedding dimension mismatch: expected {} but got {}",
+                self.dimension,
+                embedding.len()
+            )));
+        }
+        self.insert_batch(&[(node_id, embedding.to_vec())], bm, tx)
     }
 
     pub fn insert_batch(
         &self,
-        vectors: &[(u64, [f32; 768])],
+        vectors: &[(u64, Vec<f32>)],
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let dim = self.dimension;
+        for (_, vec) in vectors {
+            if vec.len() != dim {
+                return Err(crate::LightningError::Internal(format!(
+                    "Embedding dimension mismatch: expected {} but got {}",
+                    dim,
+                    vec.len()
+                )));
+            }
+        }
         let entry_bytes = vi_entry_bytes(dim);
-        let eps = vi_entries_per_page();
+        let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
 
         // Ensure header page exists
@@ -224,11 +244,18 @@ impl VectorIndex {
     /// Returns top-k (node_id, cosine_similarity) pairs.
     pub fn search(
         &self,
-        query: &[f32; 768],
+        query: &[f32],
         k: usize,
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Vec<(u64, f32)>> {
+        if query.len() != self.dimension {
+            return Err(crate::LightningError::Internal(format!(
+                "Query dimension mismatch: expected {} but got {}",
+                self.dimension,
+                query.len()
+            )));
+        }
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
         let bps = 4096usize;
@@ -370,7 +397,7 @@ impl VectorIndex {
     ) -> Result<bool> {
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
-        let eps = vi_entries_per_page();
+        let eps = vi_entries_per_page(dim);
 
         let num_entries = self.get_num_entries(bm, tx)? as usize;
         if num_entries == 0 {
@@ -446,13 +473,20 @@ impl VectorIndex {
     pub fn update(
         &self,
         node_id: u64,
-        embedding: &[f32; 768],
+        embedding: &[f32],
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<bool> {
+        if embedding.len() != self.dimension {
+            return Err(crate::LightningError::Internal(format!(
+                "Embedding dimension mismatch: expected {} but got {}",
+                self.dimension,
+                embedding.len()
+            )));
+        }
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
-        let eps = vi_entries_per_page();
+        let eps = vi_entries_per_page(dim);
 
         let num_entries = self.get_num_entries(bm, tx)? as usize;
         if num_entries == 0 {

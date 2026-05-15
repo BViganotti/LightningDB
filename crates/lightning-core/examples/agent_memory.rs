@@ -15,7 +15,7 @@
 ///   9. Streaming queries
 ///  10. PageRank importance scoring
 
-use lightning_core::memory::{MemoryEntity, MemoryStore, RagResult};
+use lightning_core::memory::{DEFAULT_EMBEDDING_DIM, MemoryEntity, MemoryStore, RagResult};
 use lightning_core::{Database, SystemConfig};
 
 fn now_micros() -> i64 {
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db = Database::new(&dir, SystemConfig::default())?;
     let conn = db.connect();
-    let memory = MemoryStore::new(conn);
+    let memory = MemoryStore::new(conn, DEFAULT_EMBEDDING_DIM);
     memory.ensure_schema()?;
     println!("✓ Agent memory initialized");
 

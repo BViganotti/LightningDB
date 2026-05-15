@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 const ENTITY_TABLE: &str = "Entity";
 const RELATES_TABLE: &str = "Relates";
-const DEFAULT_EMBEDDING_DIM: usize = 768;
+pub const DEFAULT_EMBEDDING_DIM: usize = 768;
 const SIMILARITY_THRESHOLD: f64 = 0.82;
 
 /// Configuration for the RAG pipeline.
@@ -94,18 +94,13 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
-    pub fn new(conn: Connection) -> Self {
+    pub fn new(conn: Connection, embedding_dim: usize) -> Self {
         Self {
             conn,
-            embedding_dim: DEFAULT_EMBEDDING_DIM,
+            embedding_dim,
             schema_initialized: std::sync::atomic::AtomicBool::new(false),
             cdc_senders: std::sync::Mutex::new(Vec::new()),
         }
-    }
-
-    pub fn with_embedding_dim(mut self, dim: usize) -> Self {
-        self.embedding_dim = dim;
-        self
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
@@ -135,7 +130,7 @@ impl MemoryStore {
             {
                 let mut storage = db.storage_manager.write();
                 let _ = storage.create_fts_index(ENTITY_TABLE);
-                let _ = storage.create_vector_index(ENTITY_TABLE);
+                let _ = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim);
             }
         }
 
@@ -252,13 +247,7 @@ impl MemoryStore {
         if !embedding.is_empty() && embedding.len() == self.embedding_dim {
             if let Some(vec_idx) = storage.vector_indexes.get(ENTITY_TABLE) {
                 let tx = db.transaction_manager.begin(true)?;
-                let emb: [f32; 768] = embedding
-                    .try_into()
-                    .map_err(|_| crate::LightningError::Internal(format!(
-                        "Expected embedding of length {} but got {}", 768, embedding.len()
-                    )))?;
-
-                if let Ok(vec_results) = vec_idx.search(&emb, top_k * 2, &db.buffer_manager, &tx) {
+                if let Ok(vec_results) = vec_idx.search(embedding, top_k * 2, &db.buffer_manager, &tx) {
                     for (rank, (node_id, _)) in vec_results.iter().enumerate() {
                         if let Some(entity) = self.lookup_by_internal_id(*node_id) {
                             let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
@@ -300,10 +289,11 @@ impl MemoryStore {
         let query_text = query_text.to_string();
         let embedding = embedding.to_vec();
         let conn = self.conn.client_context.database.clone();
+        let embed_dim = self.embedding_dim;
 
         std::thread::spawn(move || {
             let new_conn = conn.connect();
-            let store = MemoryStore::new(new_conn);
+            let store = MemoryStore::new(new_conn, embed_dim);
             let results = match store.recall(&query_text, &embedding, top_k) {
                 Ok(r) => r,
                 Err(e) => {

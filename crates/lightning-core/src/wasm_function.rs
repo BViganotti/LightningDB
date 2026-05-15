@@ -3,12 +3,17 @@ use crate::Result;
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, StringArray};
 use arrow::datatypes::DataType;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Default maximum execution time for a single WASM function call.
+const DEFAULT_WASM_TIMEOUT_MS: u64 = 100;
 
 pub struct WasmFunction {
     name: String,
     wasm_bytes: Vec<u8>,
     func_name: String,
     exec_mode: WasmExecMode,
+    timeout_ms: u64,
 }
 
 enum WasmExecMode {
@@ -60,6 +65,7 @@ impl WasmFunction {
             wasm_bytes,
             func_name: func_name.to_string(),
             exec_mode: WasmExecMode::ScalarF64,
+            timeout_ms: DEFAULT_WASM_TIMEOUT_MS,
         })
     }
 
@@ -75,7 +81,14 @@ impl WasmFunction {
             wasm_bytes,
             func_name: func_name.to_string(),
             exec_mode: WasmExecMode::ScalarF64,
+            timeout_ms: DEFAULT_WASM_TIMEOUT_MS,
         })
+    }
+
+    /// Set a custom execution timeout in milliseconds.
+    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
     }
 
     /// Configure the WASM function to accept multiple f64 arguments.
@@ -107,14 +120,14 @@ impl WasmFunction {
         let exec_mode = self.exec_mode.to_u8();
 
         let engine = wasmi::Engine::default();
-        let module = wasmi::Module::new(&engine, &wasm)
-            .expect("WASM module compilation failed at registration time");
+    let module = wasmi::Module::new(&engine, &wasm)
+        .expect("WASM module compilation failed at registration time");
 
-        let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
-            move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
-                let exec_mode = WasmExecMode::from_u8(exec_mode, args.len());
+    let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
+        move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
+            let exec_mode = WasmExecMode::from_u8(exec_mode, args.len());
 
-                match exec_mode {
+            match exec_mode {
                     WasmExecMode::ScalarF64 | WasmExecMode::MultiArgF64(_) => {
                         // Multi-arg f64 path: pass all args as f64 params
                         let arg_arrays: Vec<&Float64Array> = args.iter().map(|a| {

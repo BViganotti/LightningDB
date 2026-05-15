@@ -158,8 +158,8 @@ The existing 300 tests are impressive but miss critical dimensions:
 
 - [ ] **3.1.1 Security audit**: Third-party audit of the storage engine, WAL, and query execution for data safety issues.
 - [ ] **3.1.2 Fuzzing campaign**: Run `cargo-fuzz` against the Cypher parser, query binder, physical planner, and WAL replay for at least 48 hours.
-- [ ] **3.1.3 Sandboxing**: WASM UDF execution should be in a sandboxed environment with memory limits and instruction budgets. The current `wasmi` usage is sandboxed by default, but add per-call fuel limits.
-- [ ] **3.1.4 Secrets scanning**: Git pre-commit hook for detecting accidental secrets commits.
+- [x] **3.1.3 Sandboxing**: WASM UDF execution should be in a sandboxed environment with memory limits and instruction budgets. The current `wasmi` usage is sandboxed by default, but add per-call fuel limits.
+- [x] **3.1.4 Secrets scanning**: Git pre-commit hook for detecting accidental secrets commits.
 
 ### 3.2 Platform support
 

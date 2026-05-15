@@ -565,10 +565,10 @@ impl StorageManager {
         }
     }
 
-    pub fn create_vector_index(&mut self, table_name: &str) -> Result<()> {
+    pub fn create_vector_index(&mut self, table_name: &str, dim: usize) -> Result<()> {
         let index_path = self.db_path.join(format!("{table_name}_vector.lbug"));
         let fh = Arc::new(FileHandle::open(&index_path)?);
-        let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh));
+        let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh, dim));
         self.vector_indexes.insert(table_name.to_string(), index);
         Ok(())
     }

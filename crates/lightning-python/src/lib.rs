@@ -1,4 +1,4 @@
-use lightning_core::memory::{MemoryEntity, MemoryStore as CoreMemoryStore};
+use lightning_core::memory::{DEFAULT_EMBEDDING_DIM, MemoryEntity, MemoryStore as CoreMemoryStore};
 use lightning_core::{Database, SystemConfig, SyncMode};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -41,7 +41,7 @@ impl PyMemoryStore {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
         let conn = db.connect();
         Ok(Self {
-            inner: CoreMemoryStore::new(conn),
+            inner: CoreMemoryStore::new(conn, DEFAULT_EMBEDDING_DIM),
         })
     }
 

@@ -274,7 +274,7 @@ impl Database {
                 if let Err(e) = storage_manager.create_fts_index(&table_entry.name) {
                     tracing::warn!("FTS index creation failed for {}: {}", table_entry.name, e);
                 }
-                let _ = storage_manager.create_vector_index(&table_entry.name);
+                let _ = storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM);
             }
             for table_entry in cat.rel_tables.values() {
                 let col_defs: Vec<(String, LogicalType)> = table_entry
@@ -1150,6 +1150,7 @@ impl Connection {
 
         // Index all FixedSizeList(Float32) columns as vector embeddings
         if let Some(vec_idx) = vec_opt {
+            let idx_dim = vec_idx.dimension();
             for (col_idx, _col) in table.columns.iter().enumerate() {
                 if col_idx < final_batch.num_columns() {
                     let array = final_batch.column(col_idx);
@@ -1157,16 +1158,18 @@ impl Connection {
                         .as_any()
                         .downcast_ref::<arrow::array::FixedSizeListArray>()
                     {
-                        if list_arr.value_length() == 768 {
+                        let arr_dim = list_arr.value_length() as usize;
+                        if arr_dim == idx_dim {
                             if let Some(values) = list_arr
                                 .values()
                                 .as_any()
                                 .downcast_ref::<arrow::array::Float32Array>()
                             {
-                                let mut batch_vecs = Vec::new();
+                                let mut batch_vecs = Vec::with_capacity(num_rows);
                                 for i in 0..num_rows {
-                                    let mut emb = [0f32; 768];
-                                    emb.copy_from_slice(&values.values()[i * 768..(i + 1) * 768]);
+                                    let start = i * arr_dim;
+                                    let end = (i + 1) * arr_dim;
+                                    let emb = values.values()[start..end].to_vec();
                                     batch_vecs.push((start_id + i as u64, emb));
                                 }
                                 let _ = vec_idx.insert_batch(&batch_vecs, &bm, &tx);
