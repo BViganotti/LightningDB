@@ -58,8 +58,14 @@ impl VectorIndex {
     }
 
     // --- SIMD-accelerated dot product ---
-    // Uses portable SIMD when available, falls back to scalar
+    // Uses NEON on ARM64, AVX2/SSE on x86_64, falls back to scalar
     fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            if a.len() >= 4 {
+                return unsafe { Self::neon_dot(a, b) };
+            }
+        }
         #[cfg(target_feature = "avx2")]
         {
             if a.len() >= 8 {
@@ -73,6 +79,30 @@ impl VectorIndex {
             }
         }
         a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+    }
+
+    /// ARM64 NEON SIMD dot product: processes 4 f32 values per iteration
+    /// using FMA (fused multiply-add) for maximum throughput.
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    unsafe fn neon_dot(a: &[f32], b: &[f32]) -> f32 {
+        use std::arch::aarch64::*;
+        let n = a.len();
+        let mut sum = vdupq_n_f32(0.0);
+        let mut i = 0;
+        while i + 4 <= n {
+            let va = vld1q_f32(a.as_ptr().add(i));
+            let vb = vld1q_f32(b.as_ptr().add(i));
+            sum = vfmaq_f32(sum, va, vb);
+            i += 4;
+        }
+        // Horizontal add: extract lanes and sum
+        let arr: [f32; 4] = std::mem::transmute(sum);
+        let mut result = arr[0] + arr[1] + arr[2] + arr[3];
+        while i < n {
+            result += a[i] * b[i];
+            i += 1;
+        }
+        result
     }
 
     #[cfg(target_feature = "avx2")]

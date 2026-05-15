@@ -41,6 +41,7 @@ pub struct WAL {
     file: Mutex<File>,
     committed_txs: Mutex<HashSet<u64>>,
     sync_mode: SyncMode,
+    archive_path: Option<std::path::PathBuf>,
 }
 
 impl WAL {
@@ -66,7 +67,18 @@ impl WAL {
             file: Mutex::new(file),
             committed_txs: Mutex::new(HashSet::new()),
             sync_mode,
+            archive_path: None,
         })
+    }
+
+    /// Enable WAL archiving to the specified directory.
+    /// Before truncation, the current WAL content is copied to a timestamped
+    /// archive file in this directory, enabling point-in-time recovery.
+    pub fn enable_archive<P: AsRef<std::path::Path>>(&mut self, archive_dir: P) -> Result<()> {
+        let dir = archive_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&dir)?;
+        self.archive_path = Some(dir);
+        Ok(())
     }
 
     fn write_header(file: &mut File) -> Result<()> {
@@ -288,6 +300,30 @@ impl WAL {
 
     pub fn truncate(&self) -> Result<()> {
         let mut file = self.file.lock();
+
+        // Archive WAL before truncation if archiving is enabled
+        if let Some(ref archive_dir) = self.archive_path {
+            let current_len = file.metadata()?.len();
+            if current_len > WAL_HEADER_SIZE as u64 {
+                use std::io::Read;
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros();
+                let archive_name = format!("wal_{}.lbug", timestamp);
+                let archive_path = archive_dir.join(&archive_name);
+                let mut buf = Vec::with_capacity(current_len as usize);
+                file.seek(SeekFrom::Start(0))?;
+                file.read_to_end(&mut buf)?;
+                let mut archive_file = File::create(&archive_path)?;
+                archive_file.write_all(&buf)?;
+                if self.sync_mode == SyncMode::Normal {
+                    archive_file.sync_all()?;
+                }
+                tracing::info!("WAL archived: {} ({} bytes)", archive_name, current_len);
+            }
+        }
+
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
         Self::write_header(&mut file)?;
