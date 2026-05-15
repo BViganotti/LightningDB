@@ -398,6 +398,7 @@ impl Database {
         let reg_mut = reg as *mut crate::processor::functions::FunctionRegistry;
         // SAFETY: register_wasm_function is called during single-threaded
         // initialization before any concurrent access to the function registry.
+        // SAFETY: SAFETY: `register_wasm_function` is called during single-threaded initialization before any concurrent access to the function registry.
         unsafe { (*reg_mut).register_scalar(scalar); }
         tracing::info!("Registered WASM function: {}", func_name);
         Ok(())

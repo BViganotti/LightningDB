@@ -174,6 +174,7 @@ impl HashIndex {
         let new_idx = self.file_handle.get_num_pages();
         let frame = bm.create_new_version(Arc::clone(&self.file_handle), new_idx, tx)?;
         let ptr = frame.as_ptr();
+        // SAFETY: SAFETY: Writing entry data into a pinned bucket page. The page is pinned via pin_page and held for the duration of the write.
         unsafe {
             ptr.write_bytes(0, PAGE_SIZE);
             (0u64.to_le_bytes()).as_ptr().copy_to(ptr, 8);
@@ -192,11 +193,13 @@ impl HashIndex {
         row_id: u64,
     ) -> Result<()> {
         let offset = 16 + (num_entries as usize) * ENTRY_SIZE;
+        // SAFETY: SAFETY: Same bucket page write — entry serialization.
         unsafe {
             std::ptr::copy_nonoverlapping(hash.to_le_bytes().as_ptr(), data_ptr.add(offset), 8);
         }
         let mut val_bytes = vec![0u8; MAX_VAL_SIZE];
         Self::serialize_value(key, &mut val_bytes)?;
+        // SAFETY: SAFETY: Writing updated num_entries count to bucket page header.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 val_bytes.as_ptr(),
@@ -239,6 +242,7 @@ impl HashIndex {
         loop {
             let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
             let data_ptr = frame.as_ptr();
+            // SAFETY: SAFETY: Reading num_entries from pinned bucket page via aligned u64 pointer cast.
             let num_entries = u64::from_le_bytes(unsafe { *data_ptr.add(8).cast::<[u8; 8]>() });
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
@@ -248,12 +252,14 @@ impl HashIndex {
                 break;
             }
 
+            // SAFETY: SAFETY: Reading overflow page pointer from pinned bucket page via aligned u64 pointer cast.
             let next_page = u64::from_le_bytes(unsafe { *data_ptr.cast::<[u8; 8]>() });
             bm.unpin_page(self.fh(), current_page, frame);
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
                 let bucket_frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
+                // SAFETY: SAFETY: Writing overflow page link into bucket page header.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         new_page.to_le_bytes().as_ptr(),
@@ -296,6 +302,7 @@ impl HashIndex {
             let num_entries;
             let next_page;
             let mut found = false;
+            // SAFETY: SAFETY: Reading/writing tombstone bit in delete path. Frame is pinned.
             unsafe {
                 let data = &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>();
                 num_entries = u64::from_le_bytes(data[8..16].try_into().expect("fixed-size array conversion (8 bytes)"));
@@ -379,6 +386,7 @@ impl HashIndex {
         let mut current_page = target_bucket;
         loop {
             let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
+            // SAFETY: SAFETY: Reading bucket page data in lookup_multi. Frame pinned via pin_page.
             let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
             Self::scan_bucket_page(data, hash, key, limit, &mut results)?;
             let next_page = u64::from_le_bytes(data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"));

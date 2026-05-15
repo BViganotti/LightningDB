@@ -32,10 +32,12 @@ impl Frame {
     }
 
     pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: SAFETY: Frame.data is UnsafeCell; access is serialized by shard RwLock or per-page Mutex. All callers hold the appropriate lock before calling as_slice().
         unsafe { &*self.data.get() }
     }
 
     pub fn as_mut_slice(&self) -> &mut [u8] {
+        // SAFETY: SAFETY: Same as as_slice() — exclusive access guaranteed by shard write lock or page-level synchronization.
         unsafe { &mut *self.data.get() }
     }
 }
@@ -268,6 +270,7 @@ impl BufferManager {
                 // On commit, per-row modifications are merged into the latest page.
                 if version == tx_id_marked {
                     best_version = version;
+                    // SAFETY: SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The shard read lock ensures no concurrent write to this slot.
                     source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                     break;
                 }
@@ -280,6 +283,7 @@ impl BufferManager {
                     && (version > best_version || (version == 0 && source_data.is_none()))
                 {
                     best_version = version;
+                    // SAFETY: SAFETY: Same as above — pinned frame, shard read lock held.
                     source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                 }
             }

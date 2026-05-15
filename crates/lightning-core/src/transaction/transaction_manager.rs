@@ -165,6 +165,7 @@ impl TransactionManager {
                                 let vpp = 4096 / es as u64;
                                 let offset_in_page = (row_mod.row_id % vpp) as usize * es;
                                 if offset_in_page + es <= 4096 {
+                                    // SAFETY: SAFETY: `latest_frame` is pinned via pin_latest_committed which returns an Arc<Frame>. The raw pointer write is within the pin-unpin lifecycle. No concurrent writes to this page because merge-on-commit serializes per page.
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(
                                             row_mod.row_data.as_ptr(),

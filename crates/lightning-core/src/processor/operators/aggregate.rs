@@ -22,7 +22,6 @@ const SORT_AGGREGATION_THRESHOLD: usize = 100_000;
 
 pub struct SharedAggregateState {
     pub groups: RwLock<HashMap<Vec<Value>, (Vec<Box<dyn IAggregateFunction>>, usize)>>,
-    pub sorted_rows: parking_lot::Mutex<Vec<(Vec<Value>, Vec<Value>)>>,
     pub num_active_builders: AtomicU64,
     pub is_done: AtomicBool,
     pub final_result: RwLock<Option<RecordBatch>>,
@@ -48,7 +47,6 @@ impl Aggregate {
             aggregates,
             shared_state: Arc::new(SharedAggregateState {
                 groups: RwLock::new(HashMap::new()),
-                sorted_rows: parking_lot::Mutex::new(Vec::new()),
                 num_active_builders: AtomicU64::new(0),
                 is_done: AtomicBool::new(false),
                 final_result: RwLock::new(None),

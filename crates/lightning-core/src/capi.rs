@@ -30,6 +30,7 @@ pub extern "C" fn kuzu_database_init(
     path: *const c_char,
     config: kuzu_system_config,
 ) -> *mut kuzu_database {
+    // SAFETY: SAFETY: `path` is a valid C string pointer provided by the C caller.
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
     let sys_config = SystemConfig {
         buffer_pool_size: config.buffer_pool_size,
@@ -55,7 +56,9 @@ pub extern "C" fn kuzu_database_init(
 #[no_mangle]
 pub extern "C" fn kuzu_database_destroy(database: *mut kuzu_database) {
     if !database.is_null() {
+        // SAFETY: SAFETY: `database` is a valid pointer to a Box<Database> returned by a prior C API call. Taking ownership back into Rust.
         let db = unsafe { Box::from_raw(database) };
+        // SAFETY: SAFETY: Same ownership transfer for inner `db.database` field.
         let _ = unsafe { Box::from_raw(db.database) };
     }
 }
@@ -65,6 +68,7 @@ pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuz
     if database.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: SAFETY: `database` is a valid pointer; we only read through it, never take ownership.
     let db = unsafe { &*(*database).database };
     let conn = Box::new(Connection::new(Arc::clone(db)));
     Box::into_raw(Box::new(kuzu_connection {
@@ -75,7 +79,9 @@ pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuz
 #[no_mangle]
 pub extern "C" fn kuzu_connection_destroy(connection: *mut kuzu_connection) {
     if !connection.is_null() {
+        // SAFETY: SAFETY: Taking ownership of Connection Box from C caller.
         let conn = unsafe { Box::from_raw(connection) };
+        // SAFETY: SAFETY: Same ownership transfer.
         let _ = unsafe { Box::from_raw(conn.connection) };
     }
 }
@@ -88,7 +94,9 @@ pub extern "C" fn kuzu_connection_query(
     if connection.is_null() || query.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: SAFETY: Borrowing Connection through pointer — C caller retains ownership.
     let conn = unsafe { &*(*connection).connection };
+    // SAFETY: SAFETY: `query` is a valid C string from the caller.
     let query_str = unsafe { CStr::from_ptr(query).to_string_lossy() };
 
     match conn.query(&query_str) {
@@ -107,7 +115,9 @@ pub extern "C" fn kuzu_connection_query(
 #[no_mangle]
 pub extern "C" fn kuzu_query_result_destroy(query_result: *mut kuzu_query_result) {
     if !query_result.is_null() {
+        // SAFETY: SAFETY: Taking ownership of QueryResult Box.
         let res = unsafe { Box::from_raw(query_result) };
+        // SAFETY: SAFETY: Same ownership transfer.
         let _ = unsafe { Box::from_raw(res.query_result) };
     }
 }
@@ -117,6 +127,7 @@ pub extern "C" fn kuzu_query_result_is_success(query_result: *mut kuzu_query_res
     if query_result.is_null() {
         return false;
     }
+    // SAFETY: SAFETY: Borrowing QueryResult — C retains ownership.
     let res = unsafe { &*(*query_result).query_result };
     res.is_success()
 }
@@ -128,6 +139,7 @@ pub extern "C" fn kuzu_query_result_get_error_message(
     if query_result.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY: SAFETY: Same borrow pattern.
     let res = unsafe { &*(*query_result).query_result };
     if let Some(msg) = res.error_message() {
         CString::new(msg).unwrap().into_raw()
@@ -139,6 +151,7 @@ pub extern "C" fn kuzu_query_result_get_error_message(
 #[no_mangle]
 pub extern "C" fn kuzu_destroy_string(s: *mut c_char) {
     if !s.is_null() {
+        // SAFETY: SAFETY: String ownership transfer — Rust allocated it, C is giving it back to free.
         let _ = unsafe { CString::from_raw(s) };
     }
 }

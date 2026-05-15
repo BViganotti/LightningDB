@@ -130,6 +130,7 @@ impl CSRIndex {
                 offset_fh.add_new_page()?;
             }
             let frame = bm.create_new_version(offset_fh.clone(), page_idx, tx)?;
+            // SAFETY: SAFETY: Writing CSR offset data into a CoW page frame owned by this transaction.
             unsafe {
                 let ptr = frame.as_ptr();
                 std::ptr::copy_nonoverlapping(
@@ -147,6 +148,7 @@ impl CSRIndex {
                 adj_node_fh.add_new_page()?;
             }
             let frame = bm.create_new_version(adj_node_fh.clone(), page_idx, tx)?;
+            // SAFETY: SAFETY: Writing CSR adjacency data into a CoW page frame.
             unsafe {
                 let ptr = frame.as_ptr();
                 std::ptr::copy_nonoverlapping(

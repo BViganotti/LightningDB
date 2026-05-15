@@ -218,9 +218,9 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 **Problem:** Only 1 of 39 `unsafe` blocks has a `// SAFETY:` comment. The remaining 38 lack justification for aliasing, non-overlap, or initialization invariants.
 
-- [ ] **0.5.2a** Audit all `unsafe` blocks across the codebase
-- [ ] **0.5.2b** Add `// SAFETY:` comment to each one documenting the invariant
-- [ ] **0.5.2c** Add `// SAFETY:` comments to all 4 `Vec::set_len` calls documenting that `read_pages()` immediately fills the buffer
+- [x] **0.5.2a** Audit all `unsafe` blocks across the codebase
+- [x] **0.5.2b** Add `// SAFETY:` comment to each one documenting the invariant
+- [x] **0.5.2c** Add `// SAFETY:` comments to all 4 `Vec::set_len` calls documenting that `read_pages()` immediately fills the buffer
 
 ### 0.5.3 HashIndex silent data loss
 

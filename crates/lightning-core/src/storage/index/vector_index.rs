@@ -63,18 +63,21 @@ impl VectorIndex {
         #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
         {
             if a.len() >= 4 {
+                // SAFETY: SAFETY: NEON SIMD dot product reads from valid f32 slices; bounds-checked by the caller's `a.len() >= 4` guard.
                 return unsafe { Self::neon_dot(a, b) };
             }
         }
         #[cfg(target_feature = "avx2")]
         {
             if a.len() >= 8 {
+                // SAFETY: SAFETY: AVX2 dot product with bounds guard `a.len() >= 8`.
                 return unsafe { Self::avx2_dot(a, b) };
             }
         }
         #[cfg(target_feature = "sse")]
         {
             if a.len() >= 4 {
+                // SAFETY: SAFETY: SSE dot product with bounds guard `a.len() >= 4`.
                 return unsafe { Self::sse_dot(a, b) };
             }
         }
@@ -194,6 +197,7 @@ impl VectorIndex {
                 tx,
             )?;
             let ptr = header_frame.as_ptr();
+            // SAFETY: SAFETY: Writing to a freshly created CoW page via create_new_version. The page is owned exclusively by this transaction.
             unsafe { ptr.write_bytes(0, bps) };
             bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
             bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
@@ -224,6 +228,7 @@ impl VectorIndex {
             let ptr = frame.as_ptr();
             let offset = slot_in_page * entry_bytes;
 
+            // SAFETY: SAFETY: Copying data into a CoW page frame. Frame is pinned, within pin-unpin lifecycle.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     node_id.to_le_bytes().as_ptr(),
@@ -257,6 +262,7 @@ impl VectorIndex {
             tx,
         )?;
         let new_count = (current_entries as usize + total_new) as u64;
+        // SAFETY: SAFETY: Copying vector data into CoW page frame.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 new_count.to_le_bytes().as_ptr(),
@@ -475,6 +481,7 @@ impl VectorIndex {
             let dst_frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
             let dst_ptr = dst_frame.as_ptr();
             let dst_offset = dst_slot * entry_bytes;
+            // SAFETY: SAFETY: Reading from pinned frame in delete path.
             unsafe {
                 std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), dst_ptr.add(dst_offset), entry_bytes);
             }
@@ -482,6 +489,7 @@ impl VectorIndex {
             bm.unpin_page(&self.file_handle, dst_page, dst_frame);
 
             let last_frame = bm.create_new_version(Arc::clone(&self.file_handle), src_page, tx)?;
+            // SAFETY: SAFETY: Reading node_id from pinned frame in update search.
             unsafe {
                 std::ptr::write_bytes(last_frame.as_ptr().add(src_slot * entry_bytes), 0, entry_bytes);
             }
@@ -491,6 +499,7 @@ impl VectorIndex {
 
         let header_frame = bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
         let new_count = (num_entries - 1) as u64;
+        // SAFETY: SAFETY: Writing updated embedding data into CoW page frame.
         unsafe {
             std::ptr::copy_nonoverlapping(new_count.to_le_bytes().as_ptr(), header_frame.as_ptr(), 8);
         }
@@ -541,6 +550,7 @@ impl VectorIndex {
             if stored_id == node_id {
                 let frame = bm.create_new_version(Arc::clone(&self.file_handle), page_idx, tx)?;
                 let ptr = frame.as_ptr();
+                // SAFETY: SAFETY: Reading from pinned frame in search hot path.
                 unsafe {
                     std::ptr::copy_nonoverlapping(node_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
                     std::ptr::copy_nonoverlapping(inv_norm.to_le_bytes().as_ptr(), ptr.add(offset + 8), 4);

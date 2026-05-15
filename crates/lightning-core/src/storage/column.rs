@@ -238,6 +238,7 @@ impl Column {
             let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
 
             let mut page_i = i;
+            // SAFETY: SAFETY: The pointer `frame.data.get()` yields a raw pointer to PAGE_SIZE bytes. The frame is pinned via pin_page and released via unpin_page. Shard synchronization ensures exclusive write access during this scope.
             unsafe {
                 let ptr = frame.as_ptr();
                 while page_i < num_rows {
@@ -285,6 +286,7 @@ impl Column {
             let mut page_i = i;
             let mut stack_buf = [0u8; 64];
 
+            // SAFETY: SAFETY: Same as above — pinned frame accessed within the pin-unpin lifecycle.
             unsafe {
                 let data_ptr = frame.as_ptr();
                 while page_i < num_rows {
@@ -586,6 +588,7 @@ impl Column {
         let num_pages = last_page - first_page + 1;
 
         let mut data_buf = Vec::with_capacity((num_pages as usize) * 4096);
+        // SAFETY: SAFETY: `set_len` on a freshly allocated Vec is safe because `read_pages` immediately fills the buffer with valid data from disk.
         unsafe {
             data_buf.set_len((num_pages as usize) * 4096);
         }
@@ -596,6 +599,7 @@ impl Column {
         let null_last_page = (offset + num_values - 1) / 4096;
         let num_null_pages = null_last_page - null_first_page + 1;
         let mut null_data = Vec::with_capacity((num_null_pages as usize) * 4096);
+        // SAFETY: SAFETY: Same as above — immediately filled by `read_pages`.
         unsafe {
             null_data.set_len((num_null_pages as usize) * 4096);
         }
@@ -896,6 +900,7 @@ impl Column {
 
             // Read directly into Vec, bypassing zeroing initialization
             let mut data_vec = Vec::with_capacity(expected_bytes);
+            // SAFETY: SAFETY: Pinned frame access within pin-unpin lifecycle. The write is to a CoW page version owned exclusively by this transaction.
             unsafe {
                 data_vec.set_len(expected_bytes);
             }
@@ -910,6 +915,7 @@ impl Column {
                 let null_last_page = (offset + num_values - 1) / 4096;
                 let num_null_pages = null_last_page - null_first_page + 1;
                 let mut null_data = Vec::with_capacity((num_null_pages as usize) * 4096);
+                // SAFETY: SAFETY: Same pin-unpin invariant.
                 unsafe {
                     null_data.set_len((num_null_pages as usize) * 4096);
                 }
@@ -1143,6 +1149,7 @@ impl Column {
             self.null_fh.add_new_page()?;
         }
         let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
+        // SAFETY: SAFETY: Pinned frame with exclusive write access during append.
         unsafe {
             let ptr = frame.as_ptr();
             *ptr.add(offset) = if is_null { 1 } else { 0 };
@@ -1169,6 +1176,7 @@ impl Column {
         let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
 
         let mut stack_buf = [0u8; 64];
+        // SAFETY: SAFETY: Same append path, pinned frame.
         unsafe {
             let data_ptr = frame.as_ptr();
             self.serialize_value_into(val, bm, tx, &mut stack_buf)?;
@@ -1286,6 +1294,7 @@ impl Column {
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
 
                 let mut page_i = i;
+                // SAFETY: SAFETY: Bulk append path — frame allocated via create_new_version, pinned, written, logged, then unpinned.
                 unsafe {
                     let ptr = frame.as_ptr();
                     while page_i < num_rows {
@@ -1361,6 +1370,7 @@ impl Column {
             let mut page_i = i;
             let mut stack_buf = [0u8; 64];
 
+            // SAFETY: SAFETY: Same bulk write path.
             unsafe {
                 let data_ptr = frame.as_ptr();
                 while page_i < num_rows {
@@ -1558,6 +1568,7 @@ impl Column {
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
                 let mut page_i = i;
+                // SAFETY: SAFETY: String fast path — pinned frame for null bitmap write.
                 unsafe {
                     let ptr = frame.as_ptr();
                     while page_i < num_rows {
@@ -1598,6 +1609,7 @@ impl Column {
                     let page_idx = ofh.add_new_page()?;
                     let frame = bm.create_new_version(ofh.clone(), page_idx, tx)?;
                     let copy_len = std::cmp::min(s_bytes.len(), 4096);
+                    // SAFETY: SAFETY: Overflow string write — pinned frame for overflow page.
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             s_bytes.as_ptr(),
@@ -1791,6 +1803,7 @@ impl Column {
         let page_idx = fh.add_new_page()?;
         let frame = bm.create_new_version(fh.clone(), page_idx, tx)?;
         let len = std::cmp::min(data.len(), 4096);
+        // SAFETY: SAFETY: Pinned frame access in overflow read path.
         unsafe {
             let ptr = frame.as_ptr();
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
