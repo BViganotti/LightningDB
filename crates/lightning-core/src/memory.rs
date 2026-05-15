@@ -2,7 +2,7 @@ use crate::processor::{DataChunk, Value};
 use crate::Result;
 use crate::Connection;
 use crate::QueryResult;
-use arrow::array::{Array, Int64Array, StringArray, UInt64Array};
+use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crossbeam::channel::Receiver;
@@ -13,7 +13,32 @@ const ENTITY_TABLE: &str = "Entity";
 const RELATES_TABLE: &str = "Relates";
 const DEFAULT_EMBEDDING_DIM: usize = 768;
 const SIMILARITY_THRESHOLD: f64 = 0.82;
-const CONTRADICTION_THRESHOLD: f64 = 0.70;
+
+/// Configuration for the RAG pipeline.
+pub struct RagConfig {
+    /// Number of top initial results to use for graph expansion.
+    pub expansion_depth: usize,
+    /// Weight for the search score in the composite reranking formula.
+    pub search_weight: f64,
+    /// Weight for temporal recency in the composite reranking formula.
+    pub recency_weight: f64,
+    /// Weight for graph degree (number of connections) in the composite formula.
+    pub degree_weight: f64,
+    /// Name of a WASM function to use as a cross-encoder reranker.
+    pub cross_encoder_wasm: String,
+}
+
+impl Default for RagConfig {
+    fn default() -> Self {
+        Self {
+            expansion_depth: 3,
+            search_weight: 2.0,
+            recency_weight: 0.3,
+            degree_weight: 0.0,
+            cross_encoder_wasm: String::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MemoryEntity {
@@ -304,7 +329,20 @@ impl MemoryStore {
     ///   2. Graph expansion via Relates edges for context enrichment
     ///   3. Reranking by search score × graph degree × temporal recency
     ///   4. Assembly into LLM-ready context string
+    ///
+    /// Uses the default RagConfig. For custom settings, use rag_query_with_config.
     pub fn rag_query(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<RagResult> {
+        self.rag_query_with_config(query_text, embedding, top_k, &RagConfig::default())
+    }
+
+    /// Full RAG pipeline with configurable parameters.
+    pub fn rag_query_with_config(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+        config: &RagConfig,
+    ) -> Result<RagResult> {
         self.ensure_schema()?;
 
         // Phase 1: Hybrid search
@@ -319,73 +357,114 @@ impl MemoryStore {
         }
 
         // Phase 2: Graph expansion — find neighbors for top results
-        let top_for_expansion = std::cmp::min(3, initial.len());
-        let db = self.conn.client_context.database.clone();
-        let storage = db.storage_manager.read();
-        let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
-        drop(storage);
+        let top_for_expansion = std::cmp::min(config.expansion_depth, initial.len());
+        if top_for_expansion > 0 {
+            let db = self.conn.client_context.database.clone();
+            let storage = db.storage_manager.read();
+            let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
+            drop(storage);
 
-        if let Some(ref rel_tab) = rel_table {
-            let tx = db.transaction_manager.begin(true)?;
-            let card = rel_tab.stats.read().cardinality;
-            if card > 0 {
-                let mut srcs = Vec::new();
-                let mut dsts = Vec::new();
-                let bm = &db.buffer_manager;
-                let _ = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs);
-                let _ = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts);
+            if let Some(ref rel_tab) = rel_table {
+                let tx = db.transaction_manager.begin(true)?;
+                let card = rel_tab.stats.read().cardinality;
+                if card > 0 {
+                    let mut srcs = Vec::new();
+                    let mut dsts = Vec::new();
+                    let bm = &db.buffer_manager;
+                    let _ = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs);
+                    let _ = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts);
 
-                // Build internal_id -> string_id map from initial results
-                let mut internal_ids: Vec<(u64, String)> = Vec::new();
-                for i in 0..top_for_expansion {
-                    if i >= initial.len() { break; }
-                    let lookup = format!(
-                        "MATCH (e:{}) WHERE e.id = '{}' RETURN e._id LIMIT 1",
-                        ENTITY_TABLE, initial[i].entity.id
-                    );
-                    if let Ok(res) = self.conn.execute(&lookup, None) {
-                        if let Some(b) = res.batches.first() {
-                            let arr = b.column(0).as_any().downcast_ref::<UInt64Array>();
-                            if let Some(a) = arr {
-                                internal_ids.push((a.value(0), initial[i].entity.id.clone()));
+                    let mut internal_ids: Vec<(u64, String)> = Vec::new();
+                    for i in 0..top_for_expansion {
+                        if i >= initial.len() { break; }
+                        let lookup = format!(
+                            "MATCH (e:{}) WHERE e.id = '{}' RETURN e._id LIMIT 1",
+                            ENTITY_TABLE, initial[i].entity.id
+                        );
+                        if let Ok(res) = self.conn.execute(&lookup, None) {
+                            if let Some(b) = res.batches.first() {
+                                let arr = b.column(0).as_any().downcast_ref::<UInt64Array>();
+                                if let Some(a) = arr {
+                                    internal_ids.push((a.value(0), initial[i].entity.id.clone()));
+                                }
+                            }
+                        }
+                    }
+
+                    for (nid, _) in &internal_ids {
+                        for (s, d) in srcs.iter().zip(dsts.iter()) {
+                            let neighbor_eid = if s.as_node() == *nid {
+                                self.lookup_by_internal_id(d.as_node())
+                            } else if d.as_node() == *nid {
+                                self.lookup_by_internal_id(s.as_node())
+                            } else {
+                                continue;
+                            };
+                            if let Some(ne) = neighbor_eid {
+                                if !all_entities.contains_key(&ne.id) {
+                                    all_entities.insert(ne.id.clone(), (ne, 0.0));
+                                }
                             }
                         }
                     }
                 }
-
-                for (nid, _) in &internal_ids {
-                    for (s, d) in srcs.iter().zip(dsts.iter()) {
-                        let neighbor_eid = if s.as_node() == *nid {
-                            self.lookup_by_internal_id(d.as_node())
-                        } else if d.as_node() == *nid {
-                            self.lookup_by_internal_id(s.as_node())
-                        } else {
-                            continue;
-                        };
-                        if let Some(ne) = neighbor_eid {
-                            if !all_entities.contains_key(&ne.id) {
-                                all_entities.insert(ne.id.clone(), (ne, 0.0));
-                            }
-                        }
-                    }
-                }
+                let _ = db.transaction_manager.rollback(&db, &tx);
             }
-            let _ = db.transaction_manager.rollback(&db, &tx);
         }
 
-        // Phase 3: Rerank by composite score
+        // Phase 3: Compute graph degree for all entities
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (id, _) in &all_entities {
+            let count = all_entities.keys().filter(|k| *k != id).count();
+            degree.insert(id.clone(), count);
+        }
+
+        // Phase 4: Rerank by configurable composite score
         let now_secs = Self::now_micros() / 1_000_000;
         let mut ranked: Vec<(MemoryEntity, f64)> = all_entities.into_values().collect();
         for (entity, score) in &mut ranked {
             let search_score = *score;
             let created_secs = (entity.created_at / 1_000_000) as f64;
             let recency = (now_secs as f64 - created_secs).max(0.001).recip();
-            let composite = search_score * 2.0 + recency * 0.3;
+            let deg = *degree.get(&entity.id).unwrap_or(&0) as f64;
+            let composite = config.search_weight * search_score
+                + config.recency_weight * recency
+                + config.degree_weight * deg;
             *score = composite;
         }
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        // Phase 4: Assemble context
+        // Phase 5: Cross-encoder reranking if configured
+        if !config.cross_encoder_wasm.is_empty() {
+            let top_n = std::cmp::min(top_k * 3, ranked.len());
+            let mut cross_scores: Vec<(usize, f64)> = Vec::new();
+            let db = self.conn.client_context.database.clone();
+            for (i, (entity, _)) in ranked.iter().enumerate().take(top_n) {
+                // Try to call the WASM cross-encoder function via the registry
+                if let Some(func) = db.function_registry.get_scalar_function(&config.cross_encoder_wasm) {
+                    let query_arr = arrow::array::StringArray::from(vec![query_text.to_string()]);
+                    let content_arr = arrow::array::StringArray::from(vec![entity.content.clone()]);
+                    let args = vec![
+                        Arc::new(query_arr) as ArrayRef,
+                        Arc::new(content_arr) as ArrayRef,
+                    ];
+                    if let Ok(result) = (func.exec)(&args, 1) {
+                        if let Some(f) = result.as_any().downcast_ref::<Float64Array>() {
+                            cross_scores.push((i, f.value(0)));
+                        }
+                    }
+                }
+            }
+            // Re-rank by cross-encoder score
+            cross_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            let re_ranked: Vec<(MemoryEntity, f64)> = cross_scores
+                .into_iter()
+                .map(|(idx, ce_score)| (ranked[idx].0.clone(), ce_score))
+                .collect();
+            ranked = re_ranked;
+        }
+
+        // Phase 6: Assemble context
         let top_n = std::cmp::min(top_k * 2, ranked.len());
         let used = &ranked[..top_n];
         let sources: Vec<String> = used.iter().map(|(e, _)| e.id.clone()).collect();
