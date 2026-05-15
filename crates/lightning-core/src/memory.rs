@@ -658,14 +658,6 @@ impl MemoryStore {
         self.ensure_schema()?;
 
         let db = self.conn.client_context.database.clone();
-        let storage = db.storage_manager.read();
-        let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
-        drop(storage);
-
-        let rel_table = match rel_table {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
-        };
 
         let internal_id = {
             let id_query = format!(
@@ -689,31 +681,74 @@ impl MemoryStore {
 
         let bm = &db.buffer_manager;
         let tx = db.transaction_manager.begin(true)?;
-        let cardinality = rel_table.stats.read().cardinality;
-        if cardinality == 0 {
-            let _ = db.transaction_manager.rollback(&db, &tx);
-            return Ok(Vec::new());
-        }
 
-        let mut src_col = Vec::new();
-        let mut dst_col = Vec::new();
-        let _ = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col);
-        let _ = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col);
+        // Try to use CSR index for efficient traversal; fall back to full scan
+        let csr_opt = {
+            let storage = db.storage_manager.read();
+            storage.fwd_csr.get(RELATES_TABLE).cloned()
+        };
 
-        let mut type_col: Vec<crate::processor::Value> = Vec::new();
-        if !edge_types.is_empty() && rel_table.columns.len() > 2 {
-            let _ = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col);
-        }
+        let neighbor_ids = if let Some(csr) = csr_opt {
+            // BFS using CSR index
+            let mut visited = std::collections::HashSet::new();
+            let mut current_frontier = Vec::new();
+            let mut next_frontier = Vec::new();
+            let mut all_found = Vec::new();
 
-        let mut neighbor_ids = Vec::new();
-        for (i, (src, dst)) in src_col.iter().zip(dst_col.iter()).enumerate() {
-            let s = src.as_node();
-            let d = dst.as_node();
+            visited.insert(start_id);
+            current_frontier.push(start_id);
 
-            let matches_src = s == start_id;
-            let matches_dst = hops > 1 && d == start_id;
+            for _depth in 0..hops {
+                for &node_id in &current_frontier {
+                    csr.for_each_neighbor(bm, node_id, &tx, |neighbor| {
+                        if visited.insert(neighbor) {
+                            next_frontier.push(neighbor);
+                            all_found.push(neighbor);
+                        }
+                    })?;
+                }
+                std::mem::swap(&mut current_frontier, &mut next_frontier);
+                next_frontier.clear();
+                if current_frontier.is_empty() {
+                    break;
+                }
+            }
 
-            if matches_src || matches_dst {
+            all_found
+        } else {
+            // Fallback: full scan of Relates table for up to `hops` levels
+            let storage = db.storage_manager.read();
+            let rel_table = match storage.rel_tables.get(RELATES_TABLE) {
+                Some(t) => t.clone(),
+                None => {
+                    let _ = db.transaction_manager.rollback(&db, &tx);
+                    return Ok(Vec::new());
+                }
+            };
+            drop(storage);
+
+            let cardinality = rel_table.stats.read().cardinality;
+            if cardinality == 0 {
+                let _ = db.transaction_manager.rollback(&db, &tx);
+                return Ok(Vec::new());
+            }
+
+            let mut src_col = Vec::new();
+            let mut dst_col = Vec::new();
+            let _ = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col);
+            let _ = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col);
+
+            let mut type_col: Vec<crate::processor::Value> = Vec::new();
+            if !edge_types.is_empty() && rel_table.columns.len() > 2 {
+                let _ = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col);
+            }
+
+            // Build adjacency list from scanned edges
+            let mut adj: std::collections::HashMap<u64, Vec<u64>> =
+                std::collections::HashMap::new();
+            for (i, (src, dst)) in src_col.iter().zip(dst_col.iter()).enumerate() {
+                let s = src.as_node();
+                let d = dst.as_node();
                 if !edge_types.is_empty() {
                     if let Some(type_val) = type_col.get(i) {
                         let rel_type_str = format!("{}", type_val).trim_matches('"').to_string();
@@ -722,9 +757,34 @@ impl MemoryStore {
                         }
                     }
                 }
-                neighbor_ids.push(if matches_src { d } else { s });
+                adj.entry(s).or_default().push(d);
+                if hops > 1 {
+                    adj.entry(d).or_default().push(s);
+                }
             }
-        }
+
+            // BFS over adjacency list
+            let mut visited = std::collections::HashSet::new();
+            let mut queue = std::collections::VecDeque::new();
+            visited.insert(start_id);
+            queue.push_back((start_id, 0u32));
+
+            while let Some((current, depth)) = queue.pop_front() {
+                if depth >= hops {
+                    continue;
+                }
+                if let Some(neighbors) = adj.get(&current) {
+                    for &neighbor in neighbors {
+                        if visited.insert(neighbor) {
+                            queue.push_back((neighbor, depth + 1));
+                        }
+                    }
+                }
+            }
+
+            visited.remove(&start_id);
+            visited.into_iter().collect()
+        };
 
         let _ = db.transaction_manager.rollback(&db, &tx);
 
@@ -732,6 +792,7 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
 
+        // Look up neighbor entities by _id
         let conditions: Vec<String> = neighbor_ids.iter()
             .map(|id| format!("e._id = {id}"))
             .collect();
