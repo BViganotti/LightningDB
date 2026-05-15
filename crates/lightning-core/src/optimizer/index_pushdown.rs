@@ -230,7 +230,7 @@ impl IndexPushDown {
                 is_all,
             )),
             LogicalOperator::SingleRow => Ok(plan),
-            LogicalOperator::Scan(.., _) | LogicalOperator::IndexScan(..) => Ok(plan),
+            LogicalOperator::Scan(..) | LogicalOperator::IndexScan(..) => Ok(plan),
             _ => Ok(plan), // Handle unexpected or unimplemented operators by returning as is
         }
     }

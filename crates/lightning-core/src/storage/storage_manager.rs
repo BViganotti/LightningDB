@@ -5,7 +5,6 @@ use crate::storage::compression::CompressionType;
 use crate::storage::file_handle::FileHandle;
 use crate::storage::free_space_manager::FreeSpaceManager;
 use crate::storage::index::hash_index::HashIndex;
-use crate::storage::index::trigram_index::TrigramIndex;
 use crate::storage::row_version::RowVersion;
 use crate::storage::stats::TableStats;
 use crate::storage::trigram_index_worker::TrigramIndexWorker;
@@ -264,7 +263,7 @@ impl Table {
                         } else {
                             &Value::Null
                         };
-                        builder.append_value(&val.to_string());
+                        builder.append_value(val.to_string());
                     }
                     Arc::new(builder.finish())
                 }
@@ -324,7 +323,7 @@ impl Table {
         let should_flush = {
             let mut guard = self.write_buffer.write();
             if let Some(ref mut wb) = *guard {
-                let mut row_copy = values.to_vec();
+                let row_copy = values.to_vec();
                 for val in &row_copy {
                     if let Value::String(ref s) = val {
                         wb.size_bytes += s.len();
@@ -379,10 +378,10 @@ impl Table {
                             break;
                         }
                         if let crate::processor::Value::String(s) = val {
-                            if let Some(worker) = workers.get(&self.columns[col_idx].name) {
+                            if let Some(_worker) = workers.get(&self.columns[col_idx].name) {
                                 entries_by_worker
                                     .entry(self.columns[col_idx].name.clone())
-                                    .or_insert_with(Vec::new)
+                                    .or_default()
                                     .push((row_id, s.clone()));
                             }
                         }
@@ -567,7 +566,7 @@ impl StorageManager {
     }
 
     pub fn create_vector_index(&mut self, table_name: &str) -> Result<()> {
-        let index_path = self.db_path.join(format!("{}_vector.lbug", table_name));
+        let index_path = self.db_path.join(format!("{table_name}_vector.lbug"));
         let fh = Arc::new(FileHandle::open(&index_path)?);
         let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh));
         self.vector_indexes.insert(table_name.to_string(), index);
@@ -575,7 +574,7 @@ impl StorageManager {
     }
 
     pub fn create_fts_index(&mut self, table_name: &str) -> Result<()> {
-        let index_path = self.db_path.join(format!("{}_fts", table_name));
+        let index_path = self.db_path.join(format!("{table_name}_fts"));
         let index = Arc::new(crate::storage::index::inverted_index::InvertedIndex::new(
             &index_path,
         )?);
@@ -584,10 +583,10 @@ impl StorageManager {
     }
 
     pub fn create_csr(&mut self, table_name: &str) -> Result<()> {
-        let fwd_offset_path = self.db_path.join(format!("{}_fwd_offset.lbug", table_name));
-        let fwd_adj_path = self.db_path.join(format!("{}_fwd_adj.lbug", table_name));
-        let bwd_offset_path = self.db_path.join(format!("{}_bwd_offset.lbug", table_name));
-        let bwd_adj_path = self.db_path.join(format!("{}_bwd_adj.lbug", table_name));
+        let fwd_offset_path = self.db_path.join(format!("{table_name}_fwd_offset.lbug"));
+        let fwd_adj_path = self.db_path.join(format!("{table_name}_fwd_adj.lbug"));
+        let bwd_offset_path = self.db_path.join(format!("{table_name}_bwd_offset.lbug"));
+        let bwd_adj_path = self.db_path.join(format!("{table_name}_bwd_adj.lbug"));
 
         let fwd = crate::storage::index::csr::CSRIndex::new(
             Arc::new(FileHandle::open(&fwd_offset_path)?),
@@ -645,12 +644,12 @@ impl StorageManager {
         } else {
             if !column_definitions.iter().any(|(n, _)| n == "_src") {
                 let src_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{}_src.lbug", name)),
+                    &self.db_path.join(format!("{name}_src.lbug")),
                 )?);
                 self.file_handles
                     .insert(src_fh.file_id, Arc::clone(&src_fh));
                 let src_null_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{}_src_null.lbug", name)),
+                    &self.db_path.join(format!("{name}_src_null.lbug")),
                 )?);
                 self.file_handles
                     .insert(src_null_fh.file_id, Arc::clone(&src_null_fh));
@@ -665,12 +664,12 @@ impl StorageManager {
             }
             if !column_definitions.iter().any(|(n, _)| n == "_dst") {
                 let dst_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{}_dst.lbug", name)),
+                    &self.db_path.join(format!("{name}_dst.lbug")),
                 )?);
                 self.file_handles
                     .insert(dst_fh.file_id, Arc::clone(&dst_fh));
                 let dst_null_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{}_dst_null.lbug", name)),
+                    &self.db_path.join(format!("{name}_dst_null.lbug")),
                 )?);
                 self.file_handles
                     .insert(dst_null_fh.file_id, Arc::clone(&dst_null_fh));
@@ -720,7 +719,7 @@ impl StorageManager {
             }
         }
 
-        let mut table = Table::new(name.clone(), columns, Arc::new(PlRwLock::new(table_stats)));
+        let table = Table::new(name.clone(), columns, Arc::new(PlRwLock::new(table_stats)));
 
         if !is_rel {
             let mut workers = table.trigram_workers.write();
@@ -749,7 +748,7 @@ impl StorageManager {
     }
 
     pub fn create_index(&mut self, table_name: &str) -> Result<()> {
-        let index_path = self.db_path.join(format!("{}_pk_index.lbug", table_name));
+        let index_path = self.db_path.join(format!("{table_name}_pk_index.lbug"));
         let index = HashIndex::open_or_create(&index_path)?;
         self.indexes.insert(table_name.to_string(), Arc::new(index));
         Ok(())
@@ -778,12 +777,12 @@ impl StorageManager {
     ) -> Result<Column> {
         let path = self
             .db_path
-            .join(format!("{}_{}.lbug", table_name, col_name));
+            .join(format!("{table_name}_{col_name}.lbug"));
         let fh = Arc::new(FileHandle::open(&path)?);
         self.file_handles.insert(fh.file_id, Arc::clone(&fh));
         let null_path = self
             .db_path
-            .join(format!("{}_{}_null.lbug", table_name, col_name));
+            .join(format!("{table_name}_{col_name}_null.lbug"));
         let null_fh = Arc::new(FileHandle::open(&null_path)?);
         self.file_handles
             .insert(null_fh.file_id, Arc::clone(&null_fh));
@@ -792,7 +791,7 @@ impl StorageManager {
             LogicalType::List(child) => {
                 children.push(self.create_column_recursive(
                     table_name,
-                    &format!("{}_child", col_name),
+                    &format!("{col_name}_child"),
                     *child.clone(),
                     version_info.clone(),
                 )?);
@@ -810,13 +809,13 @@ impl StorageManager {
             LogicalType::Map(key, value) => {
                 children.push(self.create_column_recursive(
                     table_name,
-                    &format!("{}_key", col_name),
+                    &format!("{col_name}_key"),
                     *key.clone(),
                     version_info.clone(),
                 )?);
                 children.push(self.create_column_recursive(
                     table_name,
-                    &format!("{}_value", col_name),
+                    &format!("{col_name}_value"),
                     *value.clone(),
                     version_info.clone(),
                 )?);
@@ -925,7 +924,7 @@ impl StorageManager {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let table = self.get_table(table_name).ok_or_else(|| {
-            crate::LightningError::Query(format!("Table {} not found", table_name))
+            crate::LightningError::Query(format!("Table {table_name} not found"))
         })?;
         let fwd_csr = self.fwd_csr.get(table_name);
         let bwd_csr = self.bwd_csr.get(table_name);

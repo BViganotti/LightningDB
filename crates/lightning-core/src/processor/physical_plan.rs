@@ -1,12 +1,8 @@
-use crate::planner::binder::{BoundExpression, BoundProjectionItem};
+use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
-use crate::processor::evaluator::ExpressionEvaluator;
-use crate::processor::{DataChunk, PhysicalOperator, Value};
+use crate::processor::PhysicalOperator;
 use crate::storage::undo_buffer::UndoBuffer;
 use crate::{LightningError, Result};
-use arrow::array::{Float64Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,7 +39,7 @@ impl PhysicalPlanner {
                     storage
                         .get_table(&table_name)
                         .ok_or_else(|| {
-                            LightningError::Internal(format!("Table {} not found", table_name))
+                            LightningError::Internal(format!("Table {table_name} not found"))
                         })?
                         .clone()
                 };
@@ -328,7 +324,7 @@ impl PhysicalPlanner {
                 on_create_assignments,
                 on_match_assignments,
             } => {
-                let planned_child = self.plan(*child)?;
+                let _planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
                 let table = storage.get_table(&pattern.table_name).unwrap().clone();
                 let num_rows = {
@@ -370,8 +366,7 @@ impl PhysicalPlanner {
                 crate::processor::operators::transaction::PhysicalTransaction::new(action),
             )),
             _ => Err(LightningError::Internal(format!(
-                "Operator not implemented in PhysicalPlanner: {:?}",
-                op
+                "Operator not implemented in PhysicalPlanner: {op:?}"
             ))),
         }
     }

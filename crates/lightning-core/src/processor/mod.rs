@@ -142,18 +142,18 @@ impl Value {
     pub fn to_arrow(&self, num_elements: usize) -> ArrayRef {
         match self {
             Value::String(s) => Arc::new(arrow::array::StringArray::from_iter_values(
-                std::iter::repeat(s).take(num_elements),
+                std::iter::repeat_n(s, num_elements),
             )),
             Value::Number(n) => Arc::new(arrow::array::Float64Array::from_iter_values(
-                std::iter::repeat(*n).take(num_elements),
+                std::iter::repeat_n(*n, num_elements),
             )),
             Value::Boolean(b) => Arc::new(arrow::array::BooleanArray::from_iter(
-                std::iter::repeat(Some(*b)).take(num_elements),
+                std::iter::repeat_n(Some(*b), num_elements),
             )),
             Value::Null => Arc::new(arrow::array::NullArray::new(num_elements)),
             Value::Node(id) | Value::Relationship(id) => {
                 Arc::new(arrow::array::UInt64Array::from_iter_values(
-                    std::iter::repeat(*id).take(num_elements),
+                    std::iter::repeat_n(*id, num_elements),
                 ))
             }
             Value::Path(p) => {
@@ -162,11 +162,11 @@ impl Value {
                 v.to_arrow(num_elements)
             }
             Value::Date(d) => Arc::new(arrow::array::Date32Array::from_iter_values(
-                std::iter::repeat(*d).take(num_elements),
+                std::iter::repeat_n(*d, num_elements),
             )),
             Value::Timestamp(t) => {
                 Arc::new(arrow::array::TimestampMicrosecondArray::from_iter_values(
-                    std::iter::repeat(*t).take(num_elements),
+                    std::iter::repeat_n(*t, num_elements),
                 ))
             }
             Value::List(l) => {
@@ -208,18 +208,18 @@ impl Eq for Value {}
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::String(s) => write!(f, "{}", s),
-            Value::Number(n) => write!(f, "{}", n),
-            Value::Boolean(b) => write!(f, "{}", b),
+            Value::String(s) => write!(f, "{s}"),
+            Value::Number(n) => write!(f, "{n}"),
+            Value::Boolean(b) => write!(f, "{b}"),
             Value::Null => write!(f, "null"),
-            Value::Node(id) => write!(f, "node({})", id),
-            Value::Relationship(id) => write!(f, "rel({})", id),
-            Value::Path(p) => write!(f, "path({:?})", p),
-            Value::Date(d) => write!(f, "date({})", d),
-            Value::Timestamp(t) => write!(f, "timestamp({})", t),
-            Value::List(l) => write!(f, "list({:?})", l),
-            Value::Struct(s) => write!(f, "struct({:?})", s),
-            Value::Map(m) => write!(f, "map({:?})", m),
+            Value::Node(id) => write!(f, "node({id})"),
+            Value::Relationship(id) => write!(f, "rel({id})"),
+            Value::Path(p) => write!(f, "path({p:?})"),
+            Value::Date(d) => write!(f, "date({d})"),
+            Value::Timestamp(t) => write!(f, "timestamp({t})"),
+            Value::List(l) => write!(f, "list({l:?})"),
+            Value::Struct(s) => write!(f, "struct({s:?})"),
+            Value::Map(m) => write!(f, "map({m:?})"),
         }
     }
 }

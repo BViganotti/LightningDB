@@ -5,6 +5,12 @@ use crate::Result;
 
 pub struct SemiJoinPushDown;
 
+impl Default for SemiJoinPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SemiJoinPushDown {
     pub fn new() -> Self {
         Self
@@ -117,7 +123,7 @@ impl SemiJoinPushDown {
                     ) = (&**lhs, &**rhs)
                     {
                         *mask_counter += 1;
-                        let mask_id = format!("sm_{}", mask_counter);
+                        let mask_id = format!("sm_{mask_counter}");
                         let left_mask_idx = if *p1 == 0 || *p1 == 1 {
                             Some(*p1)
                         } else {

@@ -12,6 +12,12 @@ pub struct ColumnStats {
     pub compression_meta: Option<CompressionMetadata>,
 }
 
+impl Default for ColumnStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ColumnStats {
     pub fn new() -> Self {
         Self {

@@ -162,7 +162,7 @@ impl VectorIndex {
             let page_idx = VI_DATA_START_PAGE + (next_entry_idx / eps) as u64;
             let slot_in_page = next_entry_idx % eps;
 
-            while (self.file_handle.get_num_pages() as u64) <= page_idx {
+            while self.file_handle.get_num_pages() <= page_idx {
                 self.file_handle.add_new_page()?;
             }
 

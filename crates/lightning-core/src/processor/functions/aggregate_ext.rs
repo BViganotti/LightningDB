@@ -11,6 +11,12 @@ pub struct StdDevPop {
     m2: f64,
 }
 
+impl Default for StdDevPop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StdDevPop {
     pub fn new() -> Self {
         Self { count: 0, mean: 0.0, m2: 0.0 }
@@ -59,6 +65,12 @@ pub struct StdDevSamp {
     count: u64, mean: f64, m2: f64,
 }
 
+impl Default for StdDevSamp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StdDevSamp {
     pub fn new() -> Self { Self { count: 0, mean: 0.0, m2: 0.0 } }
 }
@@ -103,6 +115,12 @@ impl AggregateFunction for StdDevSamp {
 
 pub struct VarPop {
     count: u64, mean: f64, m2: f64,
+}
+
+impl Default for VarPop {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VarPop {
@@ -151,6 +169,12 @@ pub struct VarSamp {
     count: u64, mean: f64, m2: f64,
 }
 
+impl Default for VarSamp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VarSamp {
     pub fn new() -> Self { Self { count: 0, mean: 0.0, m2: 0.0 } }
 }
@@ -197,6 +221,12 @@ pub struct GroupConcat {
     values: Vec<String>,
 }
 
+impl Default for GroupConcat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GroupConcat {
     pub fn new() -> Self { Self { values: Vec::new() } }
 }
@@ -227,6 +257,12 @@ impl AggregateFunction for GroupConcat {
 
 pub struct Median {
     values: Vec<f64>,
+}
+
+impl Default for Median {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Median {
@@ -271,6 +307,12 @@ impl AggregateFunction for Median {
 
 pub struct CollectDistinct {
     values: HashSet<String>,
+}
+
+impl Default for CollectDistinct {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CollectDistinct {

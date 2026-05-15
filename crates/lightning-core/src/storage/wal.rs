@@ -110,7 +110,7 @@ impl WAL {
         file.write_all(&page_idx.to_le_bytes())?;
         file.write_all(data)?;
 
-        Self::align_position(&mut *file)?;
+        Self::align_position(&mut file)?;
 
         Ok(())
     }
@@ -127,7 +127,7 @@ impl WAL {
         file.write_all(&checksum.to_le_bytes())?;
         file.write_all(&tx_id.to_le_bytes())?;
 
-        Self::align_position(&mut *file)?;
+        Self::align_position(&mut file)?;
 
         file.flush()?;
         if self.sync_mode == SyncMode::Normal {
@@ -270,7 +270,7 @@ impl WAL {
         let mut file = self.file.lock();
         file.set_len(0)?;
         file.seek(SeekFrom::Start(0))?;
-        Self::write_header(&mut *file)?;
+        Self::write_header(&mut file)?;
         if self.sync_mode == SyncMode::Normal {
             file.sync_all()?;
         }

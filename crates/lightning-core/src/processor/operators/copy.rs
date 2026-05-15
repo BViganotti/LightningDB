@@ -148,7 +148,7 @@ impl PhysicalCopy {
 
         let mut fields = Vec::new();
         let mut start_col = 0;
-        if table.columns.len() > 0 && table.columns[0].name == "INTERNAL_ID" {
+        if !table.columns.is_empty() && table.columns[0].name == "INTERNAL_ID" {
             start_col = 1;
         }
 

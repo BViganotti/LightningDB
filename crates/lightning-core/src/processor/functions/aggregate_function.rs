@@ -1,7 +1,6 @@
 use crate::processor::Value;
 use crate::Result;
 use arrow::array::{Array, ArrayRef};
-use std::sync::Arc;
 
 pub trait AggregateFunction: Send + Sync {
     fn name(&self) -> &str;
@@ -15,6 +14,12 @@ pub trait AggregateFunction: Send + Sync {
 
 pub struct Count {
     count: u64,
+}
+
+impl Default for Count {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Count {
@@ -63,6 +68,12 @@ pub struct CountStar {
     count: u64,
 }
 
+impl Default for CountStar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountStar {
     pub fn new() -> Self {
         Self { count: 0 }
@@ -104,6 +115,12 @@ pub struct CountDistinct {
     values: HashSet<String>,
 }
 
+impl Default for CountDistinct {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountDistinct {
     pub fn new() -> Self {
         Self {
@@ -123,7 +140,7 @@ impl AggregateFunction for CountDistinct {
         for &i in row_indices {
             if !values[0].is_null(i) {
                 let val = Value::from_arrow(&values[0], i);
-                self.values.insert(format!("{:?}", val));
+                self.values.insert(format!("{val:?}"));
             }
         }
         Ok(())
@@ -132,7 +149,7 @@ impl AggregateFunction for CountDistinct {
         for i in 0..values.len() {
             if !values.is_null(i) {
                 let val = Value::from_arrow(values, i);
-                self.values.insert(format!("{:?}", val));
+                self.values.insert(format!("{val:?}"));
             }
         }
         Ok(())
@@ -158,6 +175,12 @@ impl AggregateFunction for CountDistinct {
 
 pub struct Sum {
     sum: f64,
+}
+
+impl Default for Sum {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sum {
@@ -221,6 +244,12 @@ impl AggregateFunction for Sum {
 pub struct Avg {
     sum: f64,
     count: u64,
+}
+
+impl Default for Avg {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Avg {
@@ -295,6 +324,12 @@ impl AggregateFunction for Avg {
 
 pub struct Min {
     min: Option<f64>,
+}
+
+impl Default for Min {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Min {
@@ -380,6 +415,12 @@ pub struct Max {
     max: Option<f64>,
 }
 
+impl Default for Max {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Max {
     pub fn new() -> Self {
         Self { max: None }
@@ -461,6 +502,12 @@ impl AggregateFunction for Max {
 
 pub struct Collect {
     values: Vec<Value>,
+}
+
+impl Default for Collect {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Collect {

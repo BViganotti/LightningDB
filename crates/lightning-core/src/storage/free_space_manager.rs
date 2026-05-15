@@ -9,6 +9,12 @@ pub struct FreeSpaceManager {
     pub(crate) free_pages: RwLock<HashMap<u64, VecDeque<u64>>>,
 }
 
+impl Default for FreeSpaceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FreeSpaceManager {
     pub fn new() -> Self {
         Self {

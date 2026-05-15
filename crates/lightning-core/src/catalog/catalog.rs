@@ -2,8 +2,6 @@ use crate::storage::stats::TableStats;
 use lightning_types::LogicalType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyDefinition {
@@ -56,6 +54,12 @@ pub struct Catalog {
     pub rel_tables: HashMap<String, RelTableCatalogEntry>,
     pub sequences: HashMap<String, SequenceCatalogEntry>,
     pub macros: HashMap<String, MacroCatalogEntry>,
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Catalog {

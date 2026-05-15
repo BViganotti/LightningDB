@@ -5,6 +5,12 @@ use crate::Result;
 
 pub struct CountRelTableOptimizer;
 
+impl Default for CountRelTableOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountRelTableOptimizer {
     pub fn new() -> Self {
         Self
@@ -50,7 +56,7 @@ impl CountRelTableOptimizer {
                                     if let (
                                         LogicalOperator::Scan(a_table, _, _, _, _),
                                         LogicalOperator::Scan(r_table, r_alias, _, _, _),
-                                        LogicalOperator::Scan(b_table, _, _, _, _),
+                                        LogicalOperator::Scan(_b_table, _, _, _, _),
                                     ) =
                                         (inner_left.as_ref(), inner_right.as_ref(), right.as_ref())
                                     {

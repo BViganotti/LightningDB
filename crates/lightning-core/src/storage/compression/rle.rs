@@ -71,7 +71,7 @@ impl CompressionAlg for RleCompression {
 
             let to_emit = std::cmp::min(count as u64, num_values - values_emitted);
             for _ in 0..to_emit {
-                let start = (dst_ptr * element_size) as usize;
+                let start = dst_ptr * element_size;
                 dst[start..start + element_size].copy_from_slice(val);
                 dst_ptr += 1;
             }

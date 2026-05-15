@@ -16,6 +16,12 @@ pub struct UndoBuffer {
     records: Mutex<Vec<UndoRecord>>,
 }
 
+impl Default for UndoBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UndoBuffer {
     pub fn new() -> Self {
         Self {

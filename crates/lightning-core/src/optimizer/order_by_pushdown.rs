@@ -4,6 +4,12 @@ use crate::Result;
 
 pub struct OrderByPushDown;
 
+impl Default for OrderByPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OrderByPushDown {
     pub fn new() -> Self {
         Self

@@ -177,7 +177,7 @@ impl TransactionManager {
 
                             // Log the merged page to WAL
                             bm.log_page_update(*file_id, *page_idx, latest_frame.as_slice())?;
-                            bm.unpin_page(&*fh, *page_idx, latest_frame);
+                            bm.unpin_page(&fh, *page_idx, latest_frame);
                         }
                     }
                 }

@@ -38,8 +38,8 @@ fn preprocess_distinct_functions(s: &str) -> String {
 
     for func in patterns {
         let upper = func.to_uppercase();
-        let search = format!("{}(DISTINCT ", upper);
-        let replace = format!("{}_DISTINCT(", upper);
+        let search = format!("{upper}(DISTINCT ");
+        let replace = format!("{upper}_DISTINCT(");
 
         // Case-insensitive replacement
         let mut pos = 0;
@@ -236,7 +236,7 @@ fn parse_union_query(p: pest::iterators::Pair<Rule>) -> Result<UnionQuery, Parse
 }
 
 fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserError> {
-    let inner: Vec<_> = p.clone().into_inner().collect();
+    let _inner: Vec<_> = p.clone().into_inner().collect();
     let mut match_clause_opt = None;
     let mut where_clause_opt = None;
     let mut clauses = Vec::new();
@@ -296,7 +296,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut from_table = String::new();
                 let mut to_table = String::new();
                 let mut cols = Vec::new();
-                let mut if_not_exists = false;
+                let if_not_exists = false;
                 for j in i.into_inner() {
                     match j.as_rule() {
                         Rule::table_name => {
@@ -399,47 +399,44 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut assignments = Vec::new();
                 for j in i.into_inner() {
                     // j is a set_item; look inside for property_assignment or map_assignment
-                    match j.as_rule() {
-                        Rule::set_item => {
-                            for child in j.into_inner() {
-                                match child.as_rule() {
-                                    Rule::property_assignment => {
-                                        let mut parts = child.into_inner();
-                                        let prop_lookup = parts.next().unwrap();
-                                        let value = parts.next().unwrap();
+                    if j.as_rule() == Rule::set_item {
+                        for child in j.into_inner() {
+                            match child.as_rule() {
+                                Rule::property_assignment => {
+                                    let mut parts = child.into_inner();
+                                    let prop_lookup = parts.next().unwrap();
+                                    let value = parts.next().unwrap();
 
-                                        let mut prop_parts = prop_lookup.into_inner();
-                                        let variable = prop_parts.next().unwrap().as_str().to_string();
-                                        let property_key = prop_parts.next().unwrap().as_str().to_string();
+                                    let mut prop_parts = prop_lookup.into_inner();
+                                    let variable = prop_parts.next().unwrap().as_str().to_string();
+                                    let property_key = prop_parts.next().unwrap().as_str().to_string();
 
-                                        assignments.push(PropertyAssignment {
-                                            variable,
-                                            property_key,
-                                            expression: parse_expression(value)?,
-                                        });
-                                    }
-                                    Rule::map_assignment => {
-                                        let mut parts = child.into_inner();
-                                        let variable = parts.next().unwrap().as_str().to_string();
-                                        let _op = parts.next().unwrap().as_str().to_string();
-                                        for item in parts {
-                                            if item.as_rule() == Rule::property_item {
-                                                let mut item_parts = item.into_inner();
-                                                let key = item_parts.next().unwrap().as_str().to_string();
-                                                let val_expr = item_parts.next().unwrap();
-                                                assignments.push(PropertyAssignment {
-                                                    variable: variable.clone(),
-                                                    property_key: key,
-                                                    expression: parse_expression(val_expr)?,
-                                                });
-                                            }
+                                    assignments.push(PropertyAssignment {
+                                        variable,
+                                        property_key,
+                                        expression: parse_expression(value)?,
+                                    });
+                                }
+                                Rule::map_assignment => {
+                                    let mut parts = child.into_inner();
+                                    let variable = parts.next().unwrap().as_str().to_string();
+                                    let _op = parts.next().unwrap().as_str().to_string();
+                                    for item in parts {
+                                        if item.as_rule() == Rule::property_item {
+                                            let mut item_parts = item.into_inner();
+                                            let key = item_parts.next().unwrap().as_str().to_string();
+                                            let val_expr = item_parts.next().unwrap();
+                                            assignments.push(PropertyAssignment {
+                                                variable: variable.clone(),
+                                                property_key: key,
+                                                expression: parse_expression(val_expr)?,
+                                            });
                                         }
                                     }
-                                    _ => {}
                                 }
+                                _ => {}
                             }
                         }
-                        _ => {}
                     }
                 }
                 if !assignments.is_empty() {
@@ -591,20 +588,17 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
             Rule::order_by_clause => {
                 let mut obi = Vec::new();
                 for j in i.into_inner() {
-                    match j.as_rule() {
-                        Rule::sort_item => {
-                            let mut sit = j.into_inner();
-                            let expr = parse_expression(sit.next().unwrap())?;
-                            let desc = sit
-                                .next()
-                                .map(|d| d.as_str().to_uppercase().contains("DESC"))
-                                .unwrap_or(false);
-                            obi.push(OrderByItem {
-                                expression: expr,
-                                descending: desc,
-                            });
-                        }
-                        _ => {}
+                    if j.as_rule() == Rule::sort_item {
+                        let mut sit = j.into_inner();
+                        let expr = parse_expression(sit.next().unwrap())?;
+                        let desc = sit
+                            .next()
+                            .map(|d| d.as_str().to_uppercase().contains("DESC"))
+                            .unwrap_or(false);
+                        obi.push(OrderByItem {
+                            expression: expr,
+                            descending: desc,
+                        });
                     }
                 }
                 order_by = Some(obi);
@@ -781,7 +775,7 @@ fn parse_var_len(
     p: pest::iterators::Pair<Rule>,
 ) -> Result<(Option<u32>, Option<u32>), ParserError> {
     let mut l = None;
-    let mut u = None;
+    let u = None;
     for i in p.into_inner() {
         if i.as_rule() == Rule::number_literal {
             l = Some(i.as_str().parse().unwrap_or(1));

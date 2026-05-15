@@ -22,7 +22,7 @@ impl PhysicalOperator for PhysicalCheckpoint {
     fn get_next(
         &mut self,
         _database: &Database,
-        tx: &crate::transaction::transaction_manager::Transaction,
+        _tx: &crate::transaction::transaction_manager::Transaction,
         _params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if self.executed {

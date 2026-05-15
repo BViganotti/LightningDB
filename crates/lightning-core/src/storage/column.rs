@@ -232,7 +232,7 @@ impl Column {
         let mut i = 0;
         while i < num_rows {
             let page_idx = (start_row_id + i as u64) / 4096;
-            while (self.null_fh.get_num_pages() as u64) <= page_idx {
+            while self.null_fh.get_num_pages() <= page_idx {
                 self.null_fh.add_new_page()?;
             }
             let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
@@ -277,7 +277,7 @@ impl Column {
             }
 
             let page_idx = (start_row_id + i as u64) / values_per_page;
-            while (self.fh.get_num_pages() as u64) <= page_idx {
+            while self.fh.get_num_pages() <= page_idx {
                 self.fh.add_new_page()?;
             }
             let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
@@ -608,7 +608,7 @@ impl Column {
         let mut current_offset = 0i32;
         offsets.push(current_offset);
 
-        let mut null_bits = vec![0xFFu8; (num_values as usize + 7) / 8];
+        let mut null_bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
         let mut has_any_nulls = false;
 
         // Pre-read overflow file if needed — we need it for overflow strings
@@ -733,7 +733,7 @@ impl Column {
                 .any(|&v| v != 0);
 
             let null_buf = if has_nulls {
-                let mut bits = vec![0xFFu8; (num_values as usize + 7) / 8];
+                let mut bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
                 for i in 0..num_values as usize {
                     if null_frame.as_slice()[null_base_offset + i] != 0 {
                         bits[i / 8] &= !(1u8 << (i % 8));
@@ -756,7 +756,7 @@ impl Column {
 
         let mut values_read = 0;
         let mut data_buffer = MutableBuffer::with_capacity(num_values as usize * element_size);
-        let mut null_bits = vec![0xFFu8; (num_values as usize + 7) / 8];
+        let mut null_bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
         let mut has_any_nulls = false;
 
         let null_fh = Arc::clone(&self.null_fh);
@@ -844,7 +844,7 @@ impl Column {
 
         // Always read null bitmap — not relying on null_count stats which
         // can be stale for CREATE→flush_buffer path.
-        let mut null_bits = vec![0xFFu8; (num_values as usize + 7) / 8];
+        let mut null_bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
 
         // Optimization: When offset is page-aligned, we can use fast bulk-reads
         let is_page_aligned = offset % values_per_page == 0;
@@ -886,7 +886,7 @@ impl Column {
 
                 for chunk in chunk_iter.by_ref() {
                     let mut bitmask = 0u8;
-                    bitmask |= chunk[0] << 0;
+                    bitmask |= chunk[0];
                     bitmask |= chunk[1] << 1;
                     bitmask |= chunk[2] << 2;
                     bitmask |= chunk[3] << 3;
@@ -1012,7 +1012,7 @@ impl Column {
                 // Convert byte-packed → bit-packed here.
                 let bytes = data_buf.as_slice();
                 let byte_count = std::cmp::min(bytes.len(), num_values);
-                let mut packed = vec![0u8; (num_values + 7) / 8];
+                let mut packed = vec![0u8; num_values.div_ceil(8)];
                 for i in 0..byte_count {
                     if bytes[i] != 0 {
                         packed[i / 8] |= 1u8 << (i % 8);
@@ -1101,7 +1101,7 @@ impl Column {
     ) -> Result<()> {
         let page_idx = row_id / 4096;
         let offset = (row_id % 4096) as usize;
-        while (self.null_fh.get_num_pages() as u64) <= page_idx {
+        while self.null_fh.get_num_pages() <= page_idx {
             self.null_fh.add_new_page()?;
         }
         let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
@@ -1125,7 +1125,7 @@ impl Column {
         let values_per_page = 4096 / element_size as u64;
         let page_idx = row_id / values_per_page;
         let offset_in_page = (row_id % values_per_page) as usize * element_size;
-        while (self.fh.get_num_pages() as u64) <= page_idx {
+        while self.fh.get_num_pages() <= page_idx {
             self.fh.add_new_page()?;
         }
         let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
@@ -1218,7 +1218,7 @@ impl Column {
             let mut null_page_buf = [0u8; 4096];
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
-                while (self.null_fh.get_num_pages() as u64) <= page_idx {
+                while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
                 // Zero out the buffer (no need to read existing page)
@@ -1242,7 +1242,7 @@ impl Column {
             let mut i = 0;
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
-                while (self.null_fh.get_num_pages() as u64) <= page_idx {
+                while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
@@ -1315,7 +1315,7 @@ impl Column {
 
         while i < num_rows {
             let page_idx = (start_row_id + i as u64) / values_per_page;
-            while (self.fh.get_num_pages() as u64) <= page_idx {
+            while self.fh.get_num_pages() <= page_idx {
                 self.fh.add_new_page()?;
             }
             let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
@@ -1415,9 +1415,9 @@ impl Column {
         let raw_bytes = buffers[buffer_idx].as_slice();
 
         // Ensure file is large enough
-        let num_pages_needed = (num_rows as u64 + values_per_page - 1) / values_per_page;
+        let num_pages_needed = (num_rows as u64).div_ceil(values_per_page);
         let first_page = start_row_id / values_per_page;
-        while (self.fh.get_num_pages() as u64) <= first_page + num_pages_needed {
+        while self.fh.get_num_pages() <= first_page + num_pages_needed {
             self.fh.add_new_page()?;
         }
 
@@ -1429,7 +1429,7 @@ impl Column {
 
         if skip_modified_rows {
             let data_first_page = write_offset / PAGE_SIZE as u64;
-            let data_num_pages = (bytes_to_write as u64 + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64;
+            let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
             bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
         }
 
@@ -1491,7 +1491,7 @@ impl Column {
             let mut i = 0;
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
-                while (self.null_fh.get_num_pages() as u64) <= page_idx {
+                while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
 
@@ -1515,7 +1515,7 @@ impl Column {
             let mut i = 0;
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
-                while (self.null_fh.get_num_pages() as u64) <= page_idx {
+                while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
@@ -1540,8 +1540,7 @@ impl Column {
         }
 
         // 2. Write string data directly to file, bypassing buffer manager
-        let mut data_vec = Vec::with_capacity(num_rows * 64);
-        data_vec.resize(num_rows * 64, 0u8);
+        let mut data_vec = vec![0; num_rows * 64];
 
         // Fill buffer with strings, using overflow for strings > 63 chars.
         // We need the buffer manager for overflow writes only (buffer pool pages).
@@ -1585,8 +1584,8 @@ impl Column {
 
         // Ensure file has enough pages
         let num_pages_needed =
-            (start_row_id + num_rows as u64 + values_per_page - 1) / values_per_page;
-        while (self.fh.get_num_pages() as u64) <= num_pages_needed {
+            (start_row_id + num_rows as u64).div_ceil(values_per_page);
+        while self.fh.get_num_pages() <= num_pages_needed {
             self.fh.add_new_page()?;
         }
 
@@ -1597,10 +1596,10 @@ impl Column {
         // Invalidate buffer manager cache for affected pages
         if skip_modified_rows {
             let data_first_page = write_offset / PAGE_SIZE as u64;
-            let data_num_pages = (data_vec.len() as u64 + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64;
+            let data_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
             bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
             let null_first_page = start_row_id / 4096;
-            let null_num_pages = (num_rows as u64 + 4095) / 4096;
+            let null_num_pages = (num_rows as u64).div_ceil(4096);
             bm.evict_pages_for_file(self.null_fh.file_id, null_first_page, null_num_pages);
         }
 
@@ -1724,7 +1723,7 @@ impl Column {
                     buf[0] = s.len() as u8;
                     let actual_len = std::cmp::min(s.len(), 63);
                     buf[1..1 + actual_len].copy_from_slice(&s.as_bytes()[0..actual_len]);
-                } else if let Some(_) = &self.overflow_fh {
+                } else if self.overflow_fh.is_some() {
                     let (page_idx, offset) = self.append_to_overflow(bm, s.as_bytes(), tx)?;
                     buf[0] = 255;
                     buf[1..9].copy_from_slice(&page_idx.to_le_bytes());
@@ -1805,7 +1804,7 @@ impl Column {
         let pages_needed = if total_values == 0 {
             0
         } else {
-            (total_values + values_per_page - 1) / values_per_page
+            total_values.div_ceil(values_per_page)
         };
         if pages_needed < num_data_pages {
             self.fh.truncate_last_pages(pages_needed)?;

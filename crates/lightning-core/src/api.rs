@@ -38,7 +38,7 @@ pub extern "C" fn lightning_query(
             c_res.into_raw()
         }
         Err(e) => {
-            let err_json = format!("{{\"error\": \"{}\"}}", e);
+            let err_json = format!("{{\"error\": \"{e}\"}}");
             let c_res = CString::new(err_json).unwrap();
             c_res.into_raw()
         }

@@ -1,5 +1,3 @@
-use crate::planner::binder::BoundExpression;
-use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
@@ -7,8 +5,7 @@ use arrow::array::{
     Float64Array, Float64Builder, Int32Array, Int32Builder, Int64Array, Int64Builder, StringArray,
     StringBuilder, TimestampMicrosecondBuilder, UInt64Array, UInt64Builder,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Field, TimeUnit};
 use lightning_types::LogicalType;
 use std::sync::Arc;
 
@@ -115,8 +112,7 @@ pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> R
             .append_null(),
         _ => {
             return Err(LightningError::Internal(format!(
-                "Unsupported type for append_null_to_builder: {:?}",
-                t
+                "Unsupported type for append_null_to_builder: {t:?}"
             )))
         }
     }
@@ -186,8 +182,7 @@ pub fn append_value_to_builder(
                 Ok(())
             }
             _ => Err(LightningError::Internal(format!(
-                "Unsupported type for append_value_to_builder: {:?}",
-                t
+                "Unsupported type for append_value_to_builder: {t:?}"
             ))),
         },
     }

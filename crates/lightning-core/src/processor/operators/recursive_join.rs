@@ -91,7 +91,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         final_columns[chunk.batch.num_columns()].push(Value::Node(node_id));
                         // Add properties of the destination node
                         for (prop_idx, col) in self.dst_table.columns[1..].iter().enumerate() {
-                            let val = col.get_value(&self.bm, node_id as u64, tx)?;
+                            let val = col.get_value(&self.bm, node_id, tx)?;
                             final_columns[chunk.batch.num_columns() + 1 + prop_idx].push(val);
                         }
                     }

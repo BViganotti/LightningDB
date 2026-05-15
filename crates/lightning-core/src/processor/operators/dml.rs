@@ -1,4 +1,4 @@
-use crate::catalog::{Catalog, LazyCatalog};
+use crate::catalog::LazyCatalog;
 use crate::planner::binder::{BoundExpression, BoundNodePattern, BoundPropertyAssignment};
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
@@ -10,7 +10,6 @@ use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -683,7 +682,7 @@ impl PhysicalMerge {
         undo_buffer: Arc<UndoBuffer>,
         tx_id: u64,
         read_ts: u64,
-        current_num_rows: u64,
+        _current_num_rows: u64,
     ) -> Self {
         Self {
             table_name,
@@ -718,7 +717,7 @@ impl PhysicalOperator for PhysicalMerge {
 
             // Check if we can do an index lookup based on the pattern properties
             if let Some(index) = index_opt {
-                for (idx, expr) in &self.pattern.properties {
+                for (_idx, expr) in &self.pattern.properties {
                     if let Ok(val_array) = ExpressionEvaluator::evaluate(
                         expr,
                         None,

@@ -455,8 +455,7 @@ impl<'a> Binder<'a> {
                     && self.catalog.get_rel_table(table_name).is_none()
                 {
                     return Err(LightningError::Query(format!(
-                        "Table {} not found",
-                        table_name
+                        "Table {table_name} not found"
                     )));
                 }
                 Ok(BoundStatement::CopyFrom {
@@ -474,8 +473,7 @@ impl<'a> Binder<'a> {
                     && self.catalog.get_rel_table(table_name).is_none()
                 {
                     return Err(LightningError::Query(format!(
-                        "Table {} not found",
-                        table_name
+                        "Table {table_name} not found"
                     )));
                 }
                 Ok(BoundStatement::CopyTo {
@@ -560,12 +558,11 @@ impl<'a> Binder<'a> {
                     .clone()
                     .ok_or_else(|| LightningError::Query("MERGE must have a variable".into()))?;
                 let node_label = node_pat
-                    .labels
-                    .get(0)
+                    .labels.first()
                     .ok_or_else(|| LightningError::Query("MERGE must have a label".into()))?;
 
                 let node_table = self.catalog.get_node_table(node_label).ok_or_else(|| {
-                    LightningError::Query(format!("Table {} not found", node_label))
+                    LightningError::Query(format!("Table {node_label} not found"))
                 })?;
 
                 self.variables.insert(
@@ -670,14 +667,13 @@ impl<'a> Binder<'a> {
                 .clone()
                 .unwrap_or_else(|| format!("_n{}", self.variables.len()));
             let node_label = node_pat
-                .labels
-                .get(0)
+                .labels.first()
                 .ok_or_else(|| LightningError::Query("MATCH must have a label".into()))?;
 
             let node_table = self
                 .catalog
                 .get_node_table(node_label)
-                .ok_or_else(|| LightningError::Query(format!("Table {} not found", node_label)))?;
+                .ok_or_else(|| LightningError::Query(format!("Table {node_label} not found")))?;
             self.variables.insert(
                 node_var.clone(),
                 BoundVariable {
@@ -707,7 +703,7 @@ impl<'a> Binder<'a> {
                     .unwrap_or_else(|| format!("_rel_{}", self.variables.len()));
                 let rel_label = self.require_single_label(&rel_pat.labels, "MATCH relationship")?;
                 let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
-                    LightningError::Query(format!("Rel Table {} not found", rel_label))
+                    LightningError::Query(format!("Rel Table {rel_label} not found"))
                 })?;
                 self.variables.insert(
                     rel_var.clone(),
@@ -746,7 +742,7 @@ impl<'a> Binder<'a> {
                     let dst_label = self.require_single_label(&dst_pat.labels, "MATCH destination node")?;
 
                     let dst_table = self.catalog.get_node_table(dst_label).ok_or_else(|| {
-                        LightningError::Query(format!("Table {} not found", dst_label))
+                        LightningError::Query(format!("Table {dst_label} not found"))
                     })?;
                     self.variables.insert(
                         dst_var.clone(),
@@ -793,7 +789,7 @@ impl<'a> Binder<'a> {
                 let mut vars = Vec::new();
                 for var in &del.variables {
                     let binding = self.variables.get(var).ok_or_else(|| {
-                        LightningError::Query(format!("Variable {} not found", var))
+                        LightningError::Query(format!("Variable {var} not found"))
                     })?;
                     vars.push((var.clone(), binding.table_name.clone()));
                 }
@@ -890,8 +886,7 @@ impl<'a> Binder<'a> {
                     }
                     let idx = prop_idx.ok_or_else(|| {
                         LightningError::Query(format!(
-                            "Property {} not found in table {}",
-                            property_key, table_name
+                            "Property {property_key} not found in table {table_name}"
                         ))
                     })?;
                     assignments.push(BoundPropertyAssignment {
@@ -944,7 +939,7 @@ impl<'a> Binder<'a> {
                     let dst = &rel_chain.node_pattern;
                     let rel_label = self.require_single_label(&rel.labels, "CREATE relationship")?;
                     let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
-                        LightningError::Query(format!("Rel Table {} not found", rel_label))
+                        LightningError::Query(format!("Rel Table {rel_label} not found"))
                     })?;
 
                     Ok(BoundClause::CreateRel(BoundRelPattern {
@@ -968,13 +963,12 @@ impl<'a> Binder<'a> {
 
     fn bind_node_pattern(&mut self, pat: &NodePattern) -> Result<BoundNodePattern> {
         let label = pat
-            .labels
-            .get(0)
+            .labels.first()
             .ok_or_else(|| LightningError::Query("CREATE must have a label".into()))?;
         let table = self
             .catalog
             .get_node_table(label)
-            .ok_or_else(|| LightningError::Query(format!("Table {} not found", label)))?;
+            .ok_or_else(|| LightningError::Query(format!("Table {label} not found")))?;
 
         let properties = self.bind_property_items(&pat.properties, &table.properties, 0)?;
 
@@ -1017,12 +1011,7 @@ impl<'a> Binder<'a> {
                             self.catalog.get_node_table(&var_binding.table_name)
                         {
                             Some((&t.properties, 0))
-                        } else if let Some(t) = self.catalog.get_rel_table(&var_binding.table_name)
-                        {
-                            Some((&t.properties, 0))
-                        } else {
-                            None
-                        };
+                        } else { self.catalog.get_rel_table(&var_binding.table_name).map(|t| (&t.properties, 0)) };
 
                         if let Some((properties, offset)) = table_info {
                             for (i, prop) in properties.iter().enumerate() {
@@ -1043,7 +1032,7 @@ impl<'a> Binder<'a> {
                     let alias = alias.clone().unwrap_or_else(|| match expr {
                         Expression::Variable(v) => v.clone(),
                         Expression::PropertyLookup(_, p) => p.clone(),
-                        Expression::Function(name, _, _) => format!("{}(...)", name),
+                        Expression::Function(name, _, _) => format!("{name}(...)"),
                         _ => "result".into(),
                     });
                     items.push(BoundProjectionItem {
@@ -1083,7 +1072,7 @@ impl<'a> Binder<'a> {
                 let binding = self
                     .variables
                     .get(var)
-                    .ok_or_else(|| LightningError::Query(format!("Variable {} not found", var)))?;
+                    .ok_or_else(|| LightningError::Query(format!("Variable {var} not found")))?;
                 Ok(BoundExpression::Variable(
                     var.clone(),
                     binding.type_.clone(),
@@ -1104,8 +1093,7 @@ impl<'a> Binder<'a> {
                 }
 
                 Err(LightningError::Query(format!(
-                    "Property {} not found on variable {} (table {})",
-                    prop_name, var, table_name
+                    "Property {prop_name} not found on variable {var} (table {table_name})"
                 )))
             }
             Expression::Comparison(left, op, right) => {
@@ -1417,7 +1405,7 @@ impl<'a> Binder<'a> {
         let binding = self
             .variables
             .get(variable)
-            .ok_or_else(|| LightningError::Query(format!("Variable {} not found", variable)))?;
+            .ok_or_else(|| LightningError::Query(format!("Variable {variable} not found")))?;
 
         if let Some(t) = self.catalog.get_node_table(&binding.table_name) {
             Ok((&t.properties, 0, binding.table_name.clone()))
@@ -1432,7 +1420,8 @@ impl<'a> Binder<'a> {
     }
 
     fn bind_data_type(&self, data_type: &crate::parser::ast::DataType) -> LogicalType {
-        let result = match data_type {
+        
+        match data_type {
             crate::parser::ast::DataType::Int64 => LogicalType::Int64,
             crate::parser::ast::DataType::Int32 => LogicalType::Int32,
             crate::parser::ast::DataType::Double => LogicalType::Double,
@@ -1454,8 +1443,7 @@ impl<'a> Binder<'a> {
                 }
                 LogicalType::Struct(bound_fields)
             }
-        };
-        result
+        }
     }
 
     fn substitute_macro_body(
@@ -1472,7 +1460,7 @@ impl<'a> Binder<'a> {
                 }
             }
             BoundExpression::PropertyLookup(var, prop_idx, type_) => {
-                if let Some(expr) = substitution.get(var) {
+                if let Some(_expr) = substitution.get(var) {
                     Ok(BoundExpression::PropertyLookup(
                         var.clone(),
                         *prop_idx,
@@ -1515,12 +1503,11 @@ impl<'a> Binder<'a> {
     fn require_single_label<'b>(&self, labels: &'b [String], context: &str) -> Result<&'b String> {
         if labels.len() > 1 {
             return Err(LightningError::Query(format!(
-                "Multiple labels in {} are not supported yet. Got: {:?}",
-                context, labels
+                "Multiple labels in {context} are not supported yet. Got: {labels:?}"
             )));
         }
-        labels.get(0).ok_or_else(|| {
-            LightningError::Query(format!("{} must have a label", context))
+        labels.first().ok_or_else(|| {
+            LightningError::Query(format!("{context} must have a label"))
         })
     }
 }

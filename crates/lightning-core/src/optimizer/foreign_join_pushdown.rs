@@ -4,6 +4,12 @@ use crate::Result;
 
 pub struct ForeignJoinPushDown;
 
+impl Default for ForeignJoinPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ForeignJoinPushDown {
     pub fn new() -> Self {
         Self

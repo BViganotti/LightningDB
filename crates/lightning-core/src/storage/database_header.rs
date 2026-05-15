@@ -11,6 +11,12 @@ pub struct DatabaseHeader {
     pub last_checkpoint_ts: u64,
 }
 
+impl Default for DatabaseHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DatabaseHeader {
     pub const MAGIC: [u8; 8] = *b"LIGHTNIG"; // Misspelled just like Ladybug (wait, no, let's use LIGHTNIN)
     pub const VERSION: u32 = 1;

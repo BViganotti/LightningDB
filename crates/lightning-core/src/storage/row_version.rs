@@ -11,6 +11,12 @@ pub struct RowVersion {
     num_shards: usize,
 }
 
+impl Default for RowVersion {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RowVersion {
     pub fn new() -> Self {
         let num_shards = 16;
@@ -40,8 +46,7 @@ impl RowVersion {
         if let Some(&existing_tx) = versions.get(&row_id) {
             if existing_tx != tx_id {
                 return Err(format!(
-                    "Write-Write Conflict: Row {} already modified by active tx {}",
-                    row_id, existing_tx
+                    "Write-Write Conflict: Row {row_id} already modified by active tx {existing_tx}"
                 ));
             }
         }
@@ -49,8 +54,7 @@ impl RowVersion {
         if let Some(&commit_ts) = committed.get(&row_id) {
             if commit_ts > _read_ts {
                 return Err(format!(
-                    "Write-Write Conflict: Row {} modified by committed tx at {}",
-                    row_id, commit_ts
+                    "Write-Write Conflict: Row {row_id} modified by committed tx at {commit_ts}"
                 ));
             }
         }

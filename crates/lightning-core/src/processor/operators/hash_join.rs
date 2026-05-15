@@ -1,6 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
-use arrow::array::{Array, ArrayRef, Int64Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, Int64Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::{Condvar, Mutex, RwLock};

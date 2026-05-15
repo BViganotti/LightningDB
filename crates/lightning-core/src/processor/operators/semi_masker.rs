@@ -41,7 +41,7 @@ impl PhysicalOperator for PhysicalSemiMasker {
 
             if let Some(offsets) = column.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                 let mut mask = self.mask.write();
-                let initial_len = mask.len();
+                let _initial_len = mask.len();
                 for i in 0..offsets.len() {
                     if !Array::is_null(offsets, i) {
                         mask.insert(offsets.value(i));

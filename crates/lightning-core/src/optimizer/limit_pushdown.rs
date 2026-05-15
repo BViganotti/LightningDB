@@ -4,6 +4,12 @@ use crate::Result;
 
 pub struct LimitPushDown {}
 
+impl Default for LimitPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LimitPushDown {
     pub fn new() -> Self {
         Self {}

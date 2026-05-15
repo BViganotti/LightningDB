@@ -131,7 +131,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
     fn get_next(
         &mut self,
         database: &crate::Database,
-        tx: &crate::transaction::transaction_manager::Transaction,
+        _tx: &crate::transaction::transaction_manager::Transaction,
         _params: Option<&std::collections::HashMap<String, crate::processor::Value>>,
     ) -> crate::Result<Option<crate::processor::DataChunk>> {
         if self.executed {
@@ -163,7 +163,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     .map(|c| (c.name.clone(), c.type_.clone()))
                     .collect();
                 storage.create_table(name.clone(), col_defs, false, None)?;
-                storage.create_index(&name)?;
+                storage.create_index(name)?;
                 storage.set_fsm_on_all_file_handles();
 
                 // 3. Register for rollback
@@ -218,7 +218,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 // 5. Mark executed
                 self.executed = true;
             }
-            DDLAction::DropTable(name, if_exists) => {
+            DDLAction::DropTable(name, _if_exists) => {
                 // 1. Get original before dropping
                 let entry = {
                     let catalog = database.catalog.read();

@@ -36,7 +36,7 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
         }
 
         BitPacker::pack_32(&deltas, bit_width, dst);
-        let compressed_size = (32 * bit_width as usize + 7) / 8;
+        let compressed_size = (32 * bit_width as usize).div_ceil(8);
         Ok((compressed_size as u64, num_values))
     }
 

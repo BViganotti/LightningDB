@@ -3,6 +3,12 @@ use crate::Result;
 
 pub struct TopKOptimizer;
 
+impl Default for TopKOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TopKOptimizer {
     pub fn new() -> Self {
         Self {}

@@ -101,7 +101,7 @@ impl PhysicalRecursiveJoin {
                     visited.insert(node as usize);
                     current_frontier.push(node);
                     if depth >= min_depth {
-                        results.push((node, depth as u32));
+                        results.push((node, depth));
                     }
                 }
             }

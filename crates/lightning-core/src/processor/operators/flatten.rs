@@ -40,7 +40,7 @@ impl PhysicalOperator for PhysicalFlatten {
 
                     let single_row_batch =
                         RecordBatch::try_new(batch.schema(), columns).map_err(|e| {
-                            crate::LightningError::Internal(format!("Arrow error: {}", e))
+                            crate::LightningError::Internal(format!("Arrow error: {e}"))
                         })?;
 
                     return Ok(Some(DataChunk {

@@ -6,6 +6,12 @@ use std::collections::HashSet;
 
 pub struct FilterPushDown;
 
+impl Default for FilterPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilterPushDown {
     pub fn new() -> Self {
         Self

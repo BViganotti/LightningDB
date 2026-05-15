@@ -6,6 +6,12 @@ use std::collections::{HashMap, HashSet};
 
 pub struct ProjectionPushDown;
 
+impl Default for ProjectionPushDown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProjectionPushDown {
     pub fn new() -> Self {
         Self
@@ -145,7 +151,7 @@ impl ProjectionPushDown {
     fn push_down(
         &self,
         plan: LogicalOperator,
-        mut required_indices: HashMap<String, HashSet<usize>>,
+        required_indices: HashMap<String, HashSet<usize>>,
     ) -> Result<(LogicalOperator, HashMap<String, HashSet<usize>>)> {
         match plan {
             LogicalOperator::Projection(child, items) => {
@@ -324,7 +330,7 @@ impl ProjectionPushDown {
                 ))
             }
             _ => {
-                if let Some(mut child) = plan.get_child().cloned() {
+                if let Some(child) = plan.get_child().cloned() {
                     let (new_child, child_indices) = self.push_down(child, required_indices)?;
                     let mut new_plan = plan.clone();
                     new_plan.set_child(new_child);

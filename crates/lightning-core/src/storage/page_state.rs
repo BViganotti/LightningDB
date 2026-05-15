@@ -7,6 +7,12 @@ pub struct PageState {
     state_and_version: AtomicU64,
 }
 
+impl Default for PageState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PageState {
     pub const UNLOCKED: u64 = 0;
     pub const LOCKED: u64 = 1;

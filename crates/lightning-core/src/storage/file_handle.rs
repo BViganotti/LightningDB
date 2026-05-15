@@ -30,7 +30,7 @@ impl FileHandle {
         if size % PAGE_SIZE as u64 != 0 {
             file.set_len((size / PAGE_SIZE as u64 + 1) * PAGE_SIZE as u64)?;
         }
-        let num_pages = (size + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64;
+        let num_pages = size.div_ceil(PAGE_SIZE as u64);
 
         let mut page_states = Vec::new();
         for _ in 0..num_pages {

@@ -132,7 +132,7 @@ impl Aggregate {
 
             // Merge into shared state once at the end
             let mut groups = self.shared_state.groups.write();
-            let (agg_funcs, count) = groups
+            let (agg_funcs, _count) = groups
                 .entry(Vec::new())
                 .or_insert_with(|| (self.create_agg_functions(), 0));
 
@@ -182,7 +182,7 @@ impl Aggregate {
 
             let mut fields = Vec::new();
             for i in 0..self.group_by_indices.len() {
-                fields.push(Field::new(&format!("group{}", i), DataType::Utf8, true));
+                fields.push(Field::new(format!("group{i}"), DataType::Utf8, true));
             }
             for (i, (agg_type, _)) in self.aggregates.iter().enumerate() {
                 // Determine return type based on aggregate function
@@ -192,14 +192,14 @@ impl Aggregate {
                     // Others return Float64 for simplicity
                     _ => DataType::Float64,
                 };
-                fields.push(Field::new(&format!("agg{}", i), return_type, true));
+                fields.push(Field::new(format!("agg{i}"), return_type, true));
             }
 
             let mut columns: Vec<Box<dyn arrow::array::ArrayBuilder>> = Vec::new();
             for _ in 0..self.group_by_indices.len() {
                 columns.push(Box::new(arrow::array::StringBuilder::new()));
             }
-            for (i, (agg_type, _)) in self.aggregates.iter().enumerate() {
+            for (_i, (agg_type, _)) in self.aggregates.iter().enumerate() {
                 let builder: Box<dyn arrow::array::ArrayBuilder> = match agg_type {
                     AggregateFunction::Count | AggregateFunction::CountDistinct => {
                         Box::new(arrow::array::Int64Array::builder(num_groups))

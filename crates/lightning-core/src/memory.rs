@@ -2,7 +2,7 @@ use crate::processor::{DataChunk, Value};
 use crate::Result;
 use crate::Connection;
 use crate::QueryResult;
-use arrow::array::{Array, Float64Array, Int64Array, StringArray, UInt64Array};
+use arrow::array::{Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crossbeam::channel::Receiver;
@@ -93,17 +93,15 @@ impl MemoryStore {
 
         if !exists {
             let create_entity = format!(
-                "CREATE NODE TABLE {} (id STRING, type STRING, content STRING, \
+                "CREATE NODE TABLE {ENTITY_TABLE} (id STRING, type STRING, content STRING, \
                  created_at INT64, last_accessed INT64, access_count INT64, \
                  ttl_seconds INT64, metadata STRING, \
-                 valid_from INT64, valid_until INT64, PRIMARY KEY (id))",
-                ENTITY_TABLE
+                 valid_from INT64, valid_until INT64, PRIMARY KEY (id))"
             );
             self.conn.execute(&create_entity, None)?;
 
             let create_relates = format!(
-                "CREATE REL TABLE {} (FROM {} TO {}, type STRING, weight DOUBLE, created_at TIMESTAMP)",
-                RELATES_TABLE, ENTITY_TABLE, ENTITY_TABLE
+                "CREATE REL TABLE {RELATES_TABLE} (FROM {ENTITY_TABLE} TO {ENTITY_TABLE}, type STRING, weight DOUBLE, created_at TIMESTAMP)"
             );
             self.conn.execute(&create_relates, None)?;
 
@@ -269,8 +267,8 @@ impl MemoryStore {
 
         let db = self.conn.client_context.database.clone();
         let storage = db.storage_manager.read();
-        let fts_exists = storage.fts_indexes.contains_key(ENTITY_TABLE);
-        let vec_exists = storage.vector_indexes.contains_key(ENTITY_TABLE);
+        let _fts_exists = storage.fts_indexes.contains_key(ENTITY_TABLE);
+        let _vec_exists = storage.vector_indexes.contains_key(ENTITY_TABLE);
         drop(storage);
 
         let (tx, rx) = crossbeam::channel::unbounded();
@@ -392,14 +390,14 @@ impl MemoryStore {
         let used = &ranked[..top_n];
         let sources: Vec<String> = used.iter().map(|(e, _)| e.id.clone()).collect();
         let mut context = String::new();
-        context.push_str(&format!("Query: {}\n\nRelevant context:\n", query_text));
+        context.push_str(&format!("Query: {query_text}\n\nRelevant context:\n"));
         for (i, (entity, score)) in used.iter().enumerate() {
             context.push_str(&format!(
                 "[{}] (score={:.3}, type={}) {}\n",
                 i + 1, score, entity.entity_type, entity.content
             ));
         }
-        context.push_str(&format!("\n---\nTotal sources: {}", top_n));
+        context.push_str(&format!("\n---\nTotal sources: {top_n}"));
 
         Ok(RagResult {
             context,
@@ -428,14 +426,13 @@ impl MemoryStore {
     pub fn recall_by_type(&self, entity_type: &str, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.type = $type AND e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.type = $type AND e.valid_until = 0 \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.last_accessed DESC LIMIT {}",
-            ENTITY_TABLE, top_k
+             ORDER BY e.last_accessed DESC LIMIT {top_k}"
         );
-        println!("query: {}", query);
+        println!("query: {query}");
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
         let res = self.conn.execute(&query, Some(params))?;
@@ -450,12 +447,11 @@ impl MemoryStore {
     pub fn recall_at_time(&self, at_micros: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.valid_from <= $at AND (e.valid_until = 0 OR e.valid_until > $at) \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_from <= $at AND (e.valid_until = 0 OR e.valid_until > $at) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.last_accessed DESC LIMIT {}",
-            ENTITY_TABLE, top_k
+             ORDER BY e.last_accessed DESC LIMIT {top_k}"
         );
         let mut params = HashMap::new();
         params.insert("at".to_string(), Value::Number(at_micros as f64));
@@ -467,12 +463,11 @@ impl MemoryStore {
     pub fn entity_history(&self, entity_id: &str) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.id = $id \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.valid_from DESC",
-            ENTITY_TABLE
+             ORDER BY e.valid_from DESC"
         );
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(entity_id.to_string()));
@@ -576,8 +571,7 @@ impl MemoryStore {
                     score, all[*idx].id
                 );
                 let query = format!(
-                    "MATCH (e:{} {{id: $id}}) SET e.metadata = $meta",
-                    ENTITY_TABLE
+                    "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.metadata = $meta"
                 );
                 let mut params = HashMap::new();
                 params.insert("id".to_string(), Value::String(all[*idx].id.clone()));
@@ -634,12 +628,11 @@ impl MemoryStore {
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_until = 0 \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.created_at DESC LIMIT {}",
-            ENTITY_TABLE, top_k
+             ORDER BY e.created_at DESC LIMIT {top_k}"
         );
         let res = self.conn.execute(&query, None)?;
         Ok(self.batches_to_entities(&res.batches))
@@ -648,12 +641,11 @@ impl MemoryStore {
     pub fn recall_by_time(&self, start: i64, end: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{}) WHERE e.valid_from >= $start AND e.valid_from <= $end AND e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_from >= $start AND e.valid_from <= $end AND e.valid_until = 0 \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.created_at DESC LIMIT {}",
-            ENTITY_TABLE, top_k
+             ORDER BY e.created_at DESC LIMIT {top_k}"
         );
         let mut params = HashMap::new();
         params.insert("start".to_string(), Value::Number(start as f64));
@@ -662,7 +654,7 @@ impl MemoryStore {
         Ok(self.batches_to_entities(&res.batches))
     }
 
-    pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+    pub fn expand(&self, entity_id: &str, hops: u32, _edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
 
         // Expand using direct Cypher without variable-length paths (which are not implemented)
@@ -680,8 +672,7 @@ impl MemoryStore {
         // Get the internal _id for this entity
         let internal_id = {
             let id_query = format!(
-                "MATCH (e:{}) WHERE e.id = $id RETURN e._id LIMIT 1",
-                ENTITY_TABLE
+                "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
             );
             let mut params = HashMap::new();
             params.insert("id".to_string(), Value::String(entity_id.to_string()));
@@ -733,7 +724,7 @@ impl MemoryStore {
 
         // Look up neighbor entities by _id
         let conditions: Vec<String> = neighbor_ids.iter()
-            .map(|id| format!("e._id = {}", id))
+            .map(|id| format!("e._id = {id}"))
             .collect();
         let query = format!(
             "MATCH (e:{}) WHERE {} AND e.valid_until = 0 \
@@ -752,9 +743,8 @@ impl MemoryStore {
         let now = Self::now_micros();
 
         let query = format!(
-            "MATCH (a:{} {{id: $src_id}}), (b:{} {{id: $dst_id}}) \
-             CREATE (a)-[:{} {{type: $rel_type, weight: $weight, created_at: $created_at}}]->(b)",
-            ENTITY_TABLE, ENTITY_TABLE, RELATES_TABLE
+            "MATCH (a:{ENTITY_TABLE} {{id: $src_id}}), (b:{ENTITY_TABLE} {{id: $dst_id}}) \
+             CREATE (a)-[:{RELATES_TABLE} {{type: $rel_type, weight: $weight, created_at: $created_at}}]->(b)"
         );
 
         let mut params = HashMap::new();
@@ -777,14 +767,12 @@ impl MemoryStore {
 
         // Soft-delete: set valid_until to current time
         let soft_delete = format!(
-            "MATCH (e:{} {{id: '{}'}}) SET e.valid_until = {}",
-            ENTITY_TABLE, entity_id, now
+            "MATCH (e:{ENTITY_TABLE} {{id: '{entity_id}'}}) SET e.valid_until = {now}"
         );
         let _ = conn.execute(&soft_delete, None)?;
 
         let del_rels = format!(
-            "MATCH (a:{} {{id: '{}'}}) OPTIONAL MATCH (a)-[r]-() DELETE r",
-            ENTITY_TABLE, entity_id
+            "MATCH (a:{ENTITY_TABLE} {{id: '{entity_id}'}}) OPTIONAL MATCH (a)-[r]-() DELETE r"
         );
         let _ = conn.execute(&del_rels, None);
 
@@ -800,10 +788,9 @@ impl MemoryStore {
 
         // First find expired entities
         let find = format!(
-            "MATCH (e:{}) WHERE e.ttl_seconds > 0 AND e.valid_until = 0 AND \
-             (e.created_at / 1000000 + e.ttl_seconds) <= {} \
-             RETURN e.id",
-            ENTITY_TABLE, now_secs
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.ttl_seconds > 0 AND e.valid_until = 0 AND \
+             (e.created_at / 1000000 + e.ttl_seconds) <= {now_secs} \
+             RETURN e.id"
         );
         let find_res = conn.execute(&find, None)?;
         let expired_ids: Vec<String> = find_res.batches.iter().flat_map(|b| {
@@ -816,8 +803,7 @@ impl MemoryStore {
         // Set valid_until for each expired entity
         for id in &expired_ids {
             let soft_delete = format!(
-                "MATCH (e:{} {{id: '{}'}}) SET e.valid_until = {}",
-                ENTITY_TABLE, id, now
+                "MATCH (e:{ENTITY_TABLE} {{id: '{id}'}}) SET e.valid_until = {now}"
             );
             let _ = conn.execute(&soft_delete, None);
         }
@@ -827,11 +813,10 @@ impl MemoryStore {
 
     fn lookup_by_internal_id(&self, internal_id: u64) -> Option<MemoryEntity> {
         let query = format!(
-            "MATCH (e:{}) WHERE e._id = {} \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id = {internal_id} \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until LIMIT 1",
-            ENTITY_TABLE, internal_id
+             e.valid_from, e.valid_until LIMIT 1"
         );
         if let Ok(res) = self.conn.execute(&query, None) {
             let entities = self.batches_to_entities(&res.batches);

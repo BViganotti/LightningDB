@@ -11,6 +11,12 @@ pub struct FunctionRegistry {
     >,
 }
 
+impl Default for FunctionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FunctionRegistry {
     pub fn new() -> Self {
         let mut scalar_functions = HashMap::new();
@@ -149,8 +155,7 @@ impl FunctionRegistry {
                         ),
                         _ => {
                             return Err(crate::LightningError::Internal(
-                                format!("Unsupported target type for CAST: {}", target_type_str)
-                                    .into(),
+                                format!("Unsupported target type for CAST: {target_type_str}"),
                             ))
                         }
                     };
@@ -197,7 +202,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         use arrow::compute::cast;
@@ -290,8 +295,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
                             return Err(crate::LightningError::Internal(format!(
-                                "{} requires 2 arguments",
-                                name
+                                "{name} requires 2 arguments"
                             )));
                         }
                         let target_type = args[0].data_type().clone();
@@ -346,8 +350,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 3 {
                             return Err(crate::LightningError::Internal(format!(
-                                "{} requires 3 arguments (condition, true_value, false_value)",
-                                name
+                                "{name} requires 3 arguments (condition, true_value, false_value)"
                             )));
                         }
                         let cond = args[0].as_any()
@@ -407,7 +410,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         if let Some(string_array) =
@@ -428,7 +431,7 @@ impl FunctionRegistry {
                             Ok(Arc::new(result))
                         } else {
                             Err(crate::LightningError::Internal(
-                                format!("{} expects a String or List argument", name).into(),
+                                format!("{name} expects a String or List argument"),
                             ))
                         }
                     }),
@@ -441,7 +444,7 @@ impl FunctionRegistry {
             "CONCAT".to_string(),
             ScalarFunction::new(
                 "CONCAT".to_string(),
-                Arc::new(|args, num_rows| {
+                Arc::new(|args, _num_rows| {
                     if args.is_empty() {
                         return Err(crate::LightningError::Internal(
                             "CONCAT requires at least 1 argument".into(),
@@ -716,7 +719,7 @@ impl FunctionRegistry {
             "LABELS".to_string(),
             ScalarFunction::new(
                 "LABELS".to_string(),
-                Arc::new(|args, num_rows| {
+                Arc::new(|args, _num_rows| {
                     if args.len() != 1 {
                         return Err(crate::LightningError::Internal(
                             "LABELS requires 1 argument".into(),
@@ -742,7 +745,7 @@ impl FunctionRegistry {
             "KEYS".to_string(),
             ScalarFunction::new(
                 "KEYS".to_string(),
-                Arc::new(|args, num_rows| {
+                Arc::new(|args, _num_rows| {
                     if args.len() != 1 {
                         return Err(crate::LightningError::Internal(
                             "KEYS requires 1 argument".into(),
@@ -904,7 +907,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 arguments", name).into(),
+                                format!("{name} requires 2 arguments"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);
@@ -1009,7 +1012,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} expects a String argument", name).into(),
+                                format!("{name} expects a String argument"),
                             ));
                         }
                         let string_array = args[0]
@@ -1017,7 +1020,7 @@ impl FunctionRegistry {
                             .downcast_ref::<arrow::array::StringArray>()
                             .ok_or_else(|| {
                                 crate::LightningError::Internal(
-                                    format!("{} expects a String argument", name).into(),
+                                    format!("{name} expects a String argument"),
                                 )
                             })?;
                         let result: arrow::array::StringArray = string_array
@@ -1047,7 +1050,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 arguments", name).into(),
+                                format!("{name} requires 2 arguments"),
                             ));
                         }
                         let base =
@@ -1099,7 +1102,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 arguments", name).into(),
+                                format!("{name} requires 2 arguments"),
                             ));
                         }
                         let s_arg =
@@ -1129,7 +1132,7 @@ impl FunctionRegistry {
                                 s.chars().take(n).collect::<String>()
                             } else {
                                 let len = s.chars().count();
-                                let start = if n >= len { 0 } else { len - n };
+                                let start = len.saturating_sub(n);
                                 s.chars().skip(start).collect::<String>()
                             };
                             results.append_value(res);
@@ -1219,7 +1222,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let n_arg =
@@ -1264,7 +1267,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
@@ -1604,7 +1607,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);
@@ -1663,7 +1666,7 @@ impl FunctionRegistry {
                         }
                         if (*name == "MAP_KEYS" || *name == "MAP_VALUES") && args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
 
@@ -1715,7 +1718,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 3 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 3 arguments (date, count, unit)", name).into(),
+                                format!("{name} requires 3 arguments (date, count, unit)"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);
@@ -1741,11 +1744,11 @@ impl FunctionRegistry {
                                     "DAY" | "DAYS" => Some(dt + chrono::Duration::days(count)),
                                     "WEEK" | "WEEKS" => Some(dt + chrono::Duration::weeks(count)),
                                     "MONTH" | "MONTHS" => dt
-                                        .checked_add_months(chrono::Months::new(count.abs() as u32))
+                                        .checked_add_months(chrono::Months::new(count.unsigned_abs() as u32))
                                         .map(|d| {
                                             if count < 0 {
                                                 dt.checked_sub_months(chrono::Months::new(
-                                                    count.abs() as u32,
+                                                    count.unsigned_abs() as u32,
                                                 ))
                                                 .unwrap()
                                             } else {
@@ -1829,7 +1832,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 arguments", name).into(),
+                                format!("{name} requires 2 arguments"),
                             ));
                         }
                         let a1 = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
@@ -1878,7 +1881,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let a = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
@@ -1961,7 +1964,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() < 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 2 or 3 arguments", name).into(),
+                                format!("{name} requires 2 or 3 arguments"),
                             ));
                         }
                         let mut results =
@@ -1987,9 +1990,9 @@ impl FunctionRegistry {
                                     let mut res = s.clone();
                                     while res.len() < n {
                                         if *name == "LPAD" {
-                                            res = format!("{}{}", f, res);
+                                            res = format!("{f}{res}");
                                         } else {
-                                            res.push_str(&f);
+                                            res.push_str(f);
                                         }
                                     }
                                     if res.len() > n {
@@ -2172,7 +2175,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let n_arg =
@@ -2237,7 +2240,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let mut results =
@@ -2365,7 +2368,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 3 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 3 arguments (unit, start, end)", name).into(),
+                                format!("{name} requires 3 arguments (unit, start, end)"),
                             ));
                         }
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
@@ -2464,7 +2467,7 @@ impl FunctionRegistry {
             "TO_DATE".to_string(),
             ScalarFunction::new(
                 "TO_DATE".to_string(),
-                Arc::new(|args, num_rows| {
+                Arc::new(|args, _num_rows| {
                     if args.len() != 1 {
                         return Err(crate::LightningError::Internal(
                             "TO_DATE requires 1 argument".into(),
@@ -2480,7 +2483,7 @@ impl FunctionRegistry {
             "TO_TIMESTAMP".to_string(),
             ScalarFunction::new(
                 "TO_TIMESTAMP".to_string(),
-                Arc::new(|args, num_rows| {
+                Arc::new(|args, _num_rows| {
                     if args.len() != 1 {
                         return Err(crate::LightningError::Internal(
                             "TO_TIMESTAMP requires 1 argument".into(),
@@ -2663,7 +2666,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let n_arg =
@@ -3084,7 +3087,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let n_arg =
@@ -3199,7 +3202,7 @@ impl FunctionRegistry {
                         let v = crate::processor::Value::from_arrow(&args[0], i);
                         use std::hash::{Hash, Hasher};
                         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        format!("{:?}", v).hash(&mut hasher); // Quick & dirty stable? hash
+                        format!("{v:?}").hash(&mut hasher); // Quick & dirty stable? hash
                         results.append_value(hasher.finish() as i64);
                     }
                     Ok(Arc::new(results.finish()))
@@ -3217,7 +3220,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let n_arg =
@@ -3256,8 +3259,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(format!(
-                                "{} requires 1 argument",
-                                name
+                                "{name} requires 1 argument"
                             )));
                         }
                         if *name == "IS_NOT_NULL" {
@@ -3405,7 +3407,7 @@ impl FunctionRegistry {
                         % 1_000_000_007;
                     for _ in 0..num_rows {
                         state = (state.wrapping_mul(1664525).wrapping_add(1013904223)) % 4294967296;
-                        let uuid = format!("{:08x}-4000-8000-{:012x}", state, state as u64 * 1024);
+                        let uuid = format!("{:08x}-4000-8000-{:012x}", state, state * 1024);
                         results.append_value(uuid);
                     }
                     Ok(Arc::new(results.finish()))
@@ -3428,7 +3430,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() < 2 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires at least 2 arguments", name).into(),
+                                format!("{name} requires at least 2 arguments"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);
@@ -3502,7 +3504,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument", name).into(),
+                                format!("{name} requires 1 argument"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);
@@ -3641,7 +3643,7 @@ impl FunctionRegistry {
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
-                                format!("{} requires 1 argument (path)", name).into(),
+                                format!("{name} requires 1 argument (path)"),
                             ));
                         }
                         let mut results = Vec::with_capacity(num_rows);

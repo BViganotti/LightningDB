@@ -80,7 +80,7 @@ impl PhysicalIntersect {
                     for col_idx in 0..num_cols {
                         row.push(Value::from_arrow(batch.column(col_idx), row_idx));
                     }
-                    ht.entry(key).or_insert_with(Vec::new).push(row);
+                    ht.entry(key).or_default().push(row);
                 }
             }
         }

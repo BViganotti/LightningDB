@@ -36,12 +36,12 @@ impl WasmFunction {
         let path = wat_path.as_ref();
         let wat_source = std::fs::read_to_string(path)
             .map_err(|e| crate::LightningError::Database(format!(
-                "Failed to read WAT file: {}", e
+                "Failed to read WAT file: {e}"
             )))?;
 
         let wasm_bytes = wat::parse_str(&wat_source)
             .map_err(|e| crate::LightningError::Database(format!(
-                "Failed to compile WAT to WASM: {}", e
+                "Failed to compile WAT to WASM: {e}"
             )))?;
 
         let name = format!("WASM_{}", func_name.to_uppercase());
@@ -56,7 +56,7 @@ impl WasmFunction {
     pub fn from_wat(wat_source: &str, func_name: &str) -> Result<Self> {
         let wasm_bytes = wat::parse_str(wat_source)
             .map_err(|e| crate::LightningError::Database(format!(
-                "Failed to compile WAT to WASM: {}", e
+                "Failed to compile WAT to WASM: {e}"
             )))?;
 
         let name = format!("WASM_{}", func_name.to_uppercase());
@@ -96,12 +96,12 @@ impl WasmFunction {
                 let mut store = wasmi::Store::new(&engine, ());
                 let instance = wasmi::Instance::new(&mut store, &module, &[])
                     .map_err(|e| crate::LightningError::Internal(format!(
-                        "WASM instantiation failed: {}", e
+                        "WASM instantiation failed: {e}"
                     )))?;
 
                 let func = instance.get_typed_func::<f64, f64>(&mut store, &func_name)
                     .map_err(|e| crate::LightningError::Internal(format!(
-                        "WASM function '{}' not found: {}", func_name, e
+                        "WASM function '{func_name}' not found: {e}"
                     )))?;
 
                 let mut results = Vec::with_capacity(num_rows);
@@ -109,7 +109,7 @@ impl WasmFunction {
                     let val = if input.is_valid(i) {
                         func.call(&mut store, input.value(i))
                             .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM call failed: {}", e
+                                "WASM call failed: {e}"
                             )))?
                     } else {
                         f64::NAN

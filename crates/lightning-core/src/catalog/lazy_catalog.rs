@@ -1,8 +1,6 @@
 use crate::catalog::Catalog;
 use crate::Result;
 use parking_lot::RwLock;
-use std::ops::Deref;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -28,7 +26,7 @@ impl LazyCatalog {
 
     pub fn from_disk(path: &std::path::Path) -> std::io::Result<Self> {
         let catalog = Catalog::load_from_disk(path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         Ok(Self::new(catalog, Some(path.to_path_buf())))
     }
 

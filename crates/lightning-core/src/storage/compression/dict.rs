@@ -61,21 +61,21 @@ impl CompressionAlg for DictCompression {
         packed_indices[0..num_values as usize].copy_from_slice(&indices);
         BitPacker::pack_32(&packed_indices, bit_width, &mut dst[offset..]);
 
-        offset += (32 * bit_width as usize + 7) / 8;
+        offset += (32 * bit_width as usize).div_ceil(8);
 
         Ok((offset as u64, num_values))
     }
 
     fn decompress_from_page(
         &self,
-        src: &[u8],
-        src_offset: u64,
-        dst: &mut [u8],
-        dst_offset: u64,
-        num_values: u64,
+        _src: &[u8],
+        _src_offset: u64,
+        _dst: &mut [u8],
+        _dst_offset: u64,
+        _num_values: u64,
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
-        let element_size = 8;
+        let _element_size = 8;
         // Optimization: In real Dict compression, the src_offset would point to the packed indices
         // and the dictionary would be at the start of the page.
         // For our trait-based simple integration, we skip the dict header for now.

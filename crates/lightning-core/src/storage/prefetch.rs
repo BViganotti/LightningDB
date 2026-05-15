@@ -19,6 +19,12 @@ pub struct PrefetchTracker {
     max_transitions_per_page: usize,
 }
 
+impl Default for PrefetchTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PrefetchTracker {
     pub fn new() -> Self {
         Self {

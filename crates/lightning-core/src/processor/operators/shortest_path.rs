@@ -3,7 +3,6 @@ use crate::storage::buffer_manager::BufferManager;
 use crate::Result;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use fixedbitset::FixedBitSet;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -90,8 +89,8 @@ impl PhysicalShortestPath {
                                         true,
                                     )));
                                 }
-                                if !visited_src.contains_key(&n) {
-                                    visited_src.insert(n, Some(curr));
+                                if let std::collections::hash_map::Entry::Vacant(e) = visited_src.entry(n) {
+                                    e.insert(Some(curr));
                                     q_src.push_back(n);
                                 }
                             }
@@ -117,8 +116,8 @@ impl PhysicalShortestPath {
                                         false,
                                     )));
                                 }
-                                if !visited_dst.contains_key(&n) {
-                                    visited_dst.insert(n, Some(curr));
+                                if let std::collections::hash_map::Entry::Vacant(e) = visited_dst.entry(n) {
+                                    e.insert(Some(curr));
                                     q_dst.push_back(n);
                                 }
                             }

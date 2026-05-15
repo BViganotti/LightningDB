@@ -74,13 +74,13 @@ impl PhysicalOperator for PhysicalUnwindDedup {
             for i in 0..batch.num_columns() {
                 let col = batch.column(i);
                 let filtered_col = take(col.as_ref(), &indices, None).map_err(|e| {
-                    crate::LightningError::Internal(format!("Arrow take error: {}", e))
+                    crate::LightningError::Internal(format!("Arrow take error: {e}"))
                 })?;
                 columns.push(filtered_col);
             }
 
             let filtered_batch = RecordBatch::try_new(batch.schema(), columns)
-                .map_err(|e| crate::LightningError::Internal(format!("Arrow error: {}", e)))?;
+                .map_err(|e| crate::LightningError::Internal(format!("Arrow error: {e}")))?;
 
             return Ok(Some(DataChunk {
                 batch: filtered_batch,

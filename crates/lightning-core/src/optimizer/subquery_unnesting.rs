@@ -6,6 +6,12 @@ use std::collections::HashSet;
 
 pub struct SubqueryUnnesting;
 
+impl Default for SubqueryUnnesting {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubqueryUnnesting {
     pub fn new() -> Self {
         Self
@@ -23,7 +29,7 @@ impl SubqueryUnnesting {
 
                 // Typical decorrelation:
                 // If the join condition is true (Cartesian) and it's a Subquery on the right
-                if let LogicalOperator::Subquery(sub_child) = &right_rewritten {
+                if let LogicalOperator::Subquery(_sub_child) = &right_rewritten {
                     // Check for correlation in sub_child (variables from left used in sub_child)
                     let mut left_vars = HashSet::new();
                     left_rewritten.get_variables(&mut left_vars);

@@ -61,8 +61,8 @@ impl CardinalityEstimator {
                     (child_card as f64).sqrt() as u64
                 }
             }
-            LogicalOperator::Limit(_, limit) => *limit as u64,
-            LogicalOperator::Skip(child, skip) => self.estimate(child).saturating_sub(*skip as u64),
+            LogicalOperator::Limit(_, limit) => *limit,
+            LogicalOperator::Skip(child, skip) => self.estimate(child).saturating_sub(*skip),
             LogicalOperator::Union(left, right, _) => self.estimate(left) + self.estimate(right),
             _ => 1000,
         }

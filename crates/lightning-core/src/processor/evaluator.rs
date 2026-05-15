@@ -28,7 +28,7 @@ impl ExpressionEvaluator {
             BoundExpression::Literal(lit) => match lit {
                 Literal::Number(n) => Ok(Arc::new(Float64Array::from_value(*n, num_rows))),
                 Literal::String(s) => Ok(Arc::new(arrow::array::StringArray::from_iter_values(
-                    std::iter::repeat(s.as_str()).take(num_rows),
+                    std::iter::repeat_n(s.as_str(), num_rows),
                 ))),
                 Literal::Boolean(b) => Ok(Arc::new(BooleanArray::from(vec![*b; num_rows]))),
                 Literal::Null => Ok(arrow::array::new_null_array(&DataType::Float64, num_rows)),
@@ -57,8 +57,7 @@ impl ExpressionEvaluator {
                     }
                 }
                 Err(LightningError::Internal(format!(
-                    "Variable {} not found in batch",
-                    name
+                    "Variable {name} not found in batch"
                 )))
             }
             BoundExpression::Comparison(left, op, right) => {
@@ -356,13 +355,12 @@ impl ExpressionEvaluator {
                             )
                         } else {
                             Err(LightningError::Internal(
-                                format!("{} requires lambda", name).into(),
+                                format!("{name} requires lambda"),
                             ))
                         }
                     }
                     _ => Err(LightningError::Internal(format!(
-                        "Function {} not implemented",
-                        name
+                        "Function {name} not implemented"
                     ))),
                 }
             }
@@ -408,7 +406,7 @@ impl ExpressionEvaluator {
             }
             BoundExpression::Parameter(name) => {
                 let val = params.and_then(|p| p.get(name)).ok_or_else(|| {
-                    LightningError::Query(format!("Parameter {} not found", name))
+                    LightningError::Query(format!("Parameter {name} not found"))
                 })?;
                 match val {
                     Value::Number(n) => Ok(Arc::new(Float64Array::from(vec![*n; num_rows]))),
@@ -418,14 +416,12 @@ impl ExpressionEvaluator {
                     ]))),
                     Value::Boolean(b) => Ok(Arc::new(BooleanArray::from(vec![*b; num_rows]))),
                     _ => Err(LightningError::Internal(format!(
-                        "Parameter type not implemented for evaluation: {:?}",
-                        val
+                        "Parameter type not implemented for evaluation: {val:?}"
                     ))),
                 }
             }
             _ => Err(LightningError::Internal(format!(
-                "Expression evaluation not implemented: {:?}",
-                expr
+                "Expression evaluation not implemented: {expr:?}"
             ))),
         }
     }

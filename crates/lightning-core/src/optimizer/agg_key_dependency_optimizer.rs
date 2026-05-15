@@ -5,6 +5,12 @@ use std::collections::HashSet;
 
 pub struct AggKeyDependencyOptimizer;
 
+impl Default for AggKeyDependencyOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AggKeyDependencyOptimizer {
     pub fn new() -> Self {
         Self
@@ -88,7 +94,7 @@ impl AggKeyDependencyOptimizer {
                 }
             }
             _ => {
-                if let Some(child) = op.get_child() {
+                if let Some(_child) = op.get_child() {
                     // Generic recursion for non-aggregate operators
                     // This is tricky because we need to rebuild the operator.
                     // For now, only applying to the top-level or specific branches.

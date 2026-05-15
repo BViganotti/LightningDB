@@ -72,7 +72,7 @@ impl HashIndex {
         match val {
             Value::Number(n) => n.to_bits().hash(&mut hasher),
             Value::String(s) => s.hash(&mut hasher),
-            _ => format!("{:?}", val).hash(&mut hasher),
+            _ => format!("{val:?}").hash(&mut hasher),
         };
         hasher.finish()
     }
@@ -225,7 +225,7 @@ impl HashIndex {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let hash = Self::compute_hash(key);
-        let header_frame = bm.pin_page(Arc::clone(&self.fh()), HEADER_PAGE_IDX, tx)?;
+        let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = {
             let hdr_data = header_frame.as_slice();
             u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
@@ -237,7 +237,7 @@ impl HashIndex {
 
         let mut current_page = target_bucket;
         loop {
-            let frame = bm.pin_page(Arc::clone(&self.fh()), current_page, tx)?;
+            let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
             let data_ptr = frame.as_ptr();
             let num_entries = u64::from_le_bytes(unsafe { *data_ptr.add(8).cast::<[u8; 8]>() });
 
@@ -253,7 +253,7 @@ impl HashIndex {
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
-                let bucket_frame = bm.pin_page(Arc::clone(&self.fh()), current_page, tx)?;
+                let bucket_frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         new_page.to_le_bytes().as_ptr(),
@@ -280,7 +280,7 @@ impl HashIndex {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<bool> {
         let hash = Self::compute_hash(key);
-        let header_frame = bm.pin_page(Arc::clone(&self.fh()), HEADER_PAGE_IDX, tx)?;
+        let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = {
             let hdr_data = header_frame.as_slice();
             u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
@@ -292,7 +292,7 @@ impl HashIndex {
 
         let mut current_page = target_bucket;
         loop {
-            let frame = bm.pin_page(Arc::clone(&self.fh()), current_page, tx)?;
+            let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
             let num_entries;
             let next_page;
             let mut found = false;
@@ -366,7 +366,7 @@ impl HashIndex {
     ) -> Result<Vec<u64>> {
         let hash = Self::compute_hash(key);
         let mut results = Vec::new();
-        let header_frame = bm.pin_page(Arc::clone(&self.fh()), HEADER_PAGE_IDX, tx)?;
+        let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = {
             let hdr_data = header_frame.as_slice();
             u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
@@ -378,7 +378,7 @@ impl HashIndex {
 
         let mut current_page = target_bucket;
         loop {
-            let frame = bm.pin_page(Arc::clone(&self.fh()), current_page, tx)?;
+            let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
             let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
             Self::scan_bucket_page(data, hash, key, limit, &mut results)?;
             let next_page = u64::from_le_bytes(data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"));

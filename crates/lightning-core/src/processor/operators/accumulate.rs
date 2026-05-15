@@ -1,7 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator};
 use crate::Result;
 use std::collections::VecDeque;
-use std::sync::Arc;
 
 pub struct PhysicalAccumulate {
     child: Box<dyn PhysicalOperator>,

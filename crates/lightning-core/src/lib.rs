@@ -11,7 +11,7 @@ pub mod processor;
 pub mod storage;
 pub mod transaction;
 
-use arrow::array::{Array, ArrayRef, StringArray, UInt64Array};
+use arrow::array::{Array, ArrayRef, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use lightning_types::LogicalType;
 use parking_lot::RwLock;
@@ -36,7 +36,6 @@ fn normalize_query(query: &str) -> String {
 
 use crate::catalog::{Catalog, LazyCatalog};
 use crate::parser::parse;
-use crate::planner::logical_plan::LogicalPlanner;
 use crate::planner::Binder;
 use crate::processor::physical_plan::PhysicalPlanner;
 use crate::processor::Processor;
@@ -347,7 +346,7 @@ impl Database {
         // rows that the catalog doesn't know about, causing COUNT(*) to return
         // fewer rows than actually exist.
         {
-            let catalog_path = self._path.join("catalog.lbug");
+            let _catalog_path = self._path.join("catalog.lbug");
             if let Err(e) = self.catalog.force_save() {
                 tracing::warn!("Failed to save catalog during checkpoint: {}", e);
             }
@@ -420,11 +419,9 @@ impl Database {
                         e.num_rows = *actual;
                         e.stats.cardinality = *actual;
                     }
-                } else {
-                    if let Some(e) = cat.get_node_table_mut(name) {
-                        e.num_rows = *actual;
-                        e.stats.cardinality = *actual;
-                    }
+                } else if let Some(e) = cat.get_node_table_mut(name) {
+                    e.num_rows = *actual;
+                    e.stats.cardinality = *actual;
                 }
             }
             self.catalog.mark_dirty();
@@ -529,7 +526,7 @@ impl Connection {
         .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
         let bm = &self.client_context.database.buffer_manager;
-        let db: &Database = &*self.client_context.database;
+        let db: &Database = &self.client_context.database;
 
         self.client_context
             .database
@@ -552,7 +549,7 @@ impl Connection {
             storage
                 .get_table(table_name)
                 .cloned()
-                .ok_or_else(|| LightningError::Query(format!("Table {} not found", table_name)))?
+                .ok_or_else(|| LightningError::Query(format!("Table {table_name} not found")))?
         };
 
         let num_rows = rows.len();
@@ -666,7 +663,7 @@ impl Connection {
                     for row in &rows {
                         let val = row.iter().find(|(n, _)| *n == col.name);
                         match val {
-                            Some((_, v)) => builder.append_value(&v.to_string()),
+                            Some((_, v)) => builder.append_value(v.to_string()),
                             _ => builder.append_null(),
                         }
                     }
@@ -744,7 +741,7 @@ impl Connection {
         }
         .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
-        let db: &Database = &*self.client_context.database;
+        let db: &Database = &self.client_context.database;
         self.client_context
             .database
             .transaction_manager
@@ -880,8 +877,8 @@ impl Connection {
             .active_query_id
             .fetch_add(1, Ordering::SeqCst);
 
-        let mut active_tx_guard = self.transaction.lock();
-        let explicit_tx = active_tx_guard.as_ref().map(|tx| Arc::clone(tx));
+        let active_tx_guard = self.transaction.lock();
+        let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
         let is_autocommit = explicit_tx.is_none();
         drop(active_tx_guard);
 
@@ -900,9 +897,8 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).or_else(|e| {
+            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
                 let _ = db.transaction_manager.rollback(db, &tx);
-                Err(e)
             })?;
         }
 
@@ -922,8 +918,8 @@ impl Connection {
             .active_query_id
             .fetch_add(1, Ordering::SeqCst);
 
-        let mut active_tx_guard = self.transaction.lock();
-        let explicit_tx = active_tx_guard.as_ref().map(|tx| Arc::clone(tx));
+        let active_tx_guard = self.transaction.lock();
+        let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
         let is_autocommit = explicit_tx.is_none();
         drop(active_tx_guard);
 
@@ -938,9 +934,8 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).or_else(|e| {
+            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
                 let _ = db.transaction_manager.rollback(db, &tx);
-                Err(e)
             })?;
         }
 
@@ -958,7 +953,7 @@ impl Connection {
             storage
                 .get_table(table_name)
                 .cloned()
-                .ok_or_else(|| LightningError::Query(format!("Table {} not found", table_name)))?
+                .ok_or_else(|| LightningError::Query(format!("Table {table_name} not found")))?
         };
 
         let tx = db.transaction_manager.begin(false)?;
@@ -1063,7 +1058,7 @@ impl Connection {
 
         // Index all FixedSizeList(Float32) columns as vector embeddings
         if let Some(vec_idx) = vec_opt {
-            for (col_idx, col) in table.columns.iter().enumerate() {
+            for (col_idx, _col) in table.columns.iter().enumerate() {
                 if col_idx < final_batch.num_columns() {
                     let array = final_batch.column(col_idx);
                     if let Some(list_arr) = array

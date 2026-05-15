@@ -5,6 +5,12 @@ use crate::Result;
 
 pub struct AccHashJoinOptimizer;
 
+impl Default for AccHashJoinOptimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AccHashJoinOptimizer {
     pub fn new() -> Self {
         Self
@@ -38,7 +44,7 @@ impl AccHashJoinOptimizer {
                             // Here we just apply the pattern for parity.
 
                             *mask_counter += 1;
-                            let mask_id = format!("acc_sm_{}", mask_counter);
+                            let mask_id = format!("acc_sm_{mask_counter}");
 
                             // 1. Wrap right side in Accumulate
                             new_right = LogicalOperator::Accumulate(Box::new(new_right));

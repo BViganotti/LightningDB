@@ -1,10 +1,9 @@
 use crate::planner::binder::BoundExpression;
-use crate::processor::{DataChunk, PhysicalOperator, Value};
+use crate::processor::{DataChunk, PhysicalOperator};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
 use crate::{LightningError, Result};
 use arrow::array::{Array, ArrayRef, BooleanArray, Int64Array, UInt64Array};
-use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -297,23 +296,21 @@ impl PhysicalOperator for PhysicalScan {
                         })
                         .collect()
                 }
+            } else if let Some(idxs) = &self.projected_idxs {
+                idxs.iter()
+                    .map(|&idx| {
+                        let column = &self.table.columns[idx];
+                        column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx)
+                    })
+                    .collect()
             } else {
-                if let Some(idxs) = &self.projected_idxs {
-                    idxs.iter()
-                        .map(|&idx| {
-                            let column = &self.table.columns[idx];
-                            column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx)
-                        })
-                        .collect()
-                } else {
-                    self.table
-                        .columns
-                        .iter()
-                        .map(|column| {
-                            column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx)
-                        })
-                        .collect()
-                }
+                self.table
+                    .columns
+                    .iter()
+                    .map(|column| {
+                        column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx)
+                    })
+                    .collect()
             };
 
             for res in results {
@@ -493,6 +490,12 @@ impl PhysicalOperator for PhysicalScan {
 pub struct PhysicalSingleRow {
     done: Arc<std::sync::atomic::AtomicBool>,
 }
+impl Default for PhysicalSingleRow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicalSingleRow {
     pub fn new() -> Self {
         Self {

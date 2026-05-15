@@ -5,6 +5,12 @@ use std::collections::HashSet;
 
 pub struct FactorizationRewriter;
 
+impl Default for FactorizationRewriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FactorizationRewriter {
     pub fn new() -> Self {
         Self
