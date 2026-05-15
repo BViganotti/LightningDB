@@ -343,6 +343,59 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 };
                 return Ok(Statement::DropTable(name, if_exists));
             }
+            Rule::alter_table => {
+                let mut it = i.into_inner();
+                let name = it.next().unwrap().as_str().to_string();
+                let op_pair = it.next().unwrap();
+                let op_inner = op_pair.into_inner().next().unwrap();
+                let operation = match op_inner.as_rule() {
+                    Rule::add_column => {
+                        let col_def = op_inner.into_inner().next().unwrap();
+                        let mut cd = col_def.into_inner();
+                        AlterOperation::AddColumn {
+                            name: cd.next().unwrap().as_str().to_string(),
+                            data_type: parse_data_type(cd.next().unwrap())?,
+                        }
+                    }
+                    Rule::drop_column => {
+                        AlterOperation::DropColumn {
+                            name: op_inner.into_inner().next().unwrap().as_str().to_string(),
+                        }
+                    }
+                    Rule::rename_table => {
+                        AlterOperation::RenameTable {
+                            new_name: op_inner.into_inner().next().unwrap().as_str().to_string(),
+                        }
+                    }
+                    Rule::rename_column => {
+                        let mut c = op_inner.into_inner();
+                        AlterOperation::RenameColumn {
+                            old_name: c.next().unwrap().as_str().to_string(),
+                            new_name: c.next().unwrap().as_str().to_string(),
+                        }
+                    }
+                    _ => return Err(ParserError::Internal(format!("Unknown alter operation: {:?}", op_inner.as_rule()))),
+                };
+                return Ok(Statement::AlterTable { name, operation });
+            }
+            Rule::create_constraint => {
+                let mut it = i.into_inner();
+                let name = it.next().unwrap().as_str().to_string();
+                it.next(); // skip node variable (e.g. n)
+                let table_label = it.next().unwrap().as_str().to_string();
+                it.next(); // skip property variable (e.g. n)
+                let property = it.next().unwrap().as_str().to_string();
+                return Ok(Statement::CreateConstraint {
+                    name,
+                    table_label,
+                    property,
+                });
+            }
+            Rule::drop_constraint => {
+                return Ok(Statement::DropConstraint(
+                    i.into_inner().next().unwrap().as_str().to_string(),
+                ));
+            }
             Rule::match_clause => {
                 let pats = parse_match_clause(i)?;
                 match_clause_opt = Some(MatchClause { patterns: pats });
@@ -649,6 +702,7 @@ fn parse_match_clause(p: pest::iterators::Pair<Rule>) -> Result<Vec<Pattern>, Pa
 
 fn parse_pattern(p: pest::iterators::Pair<Rule>) -> Result<Pattern, ParserError> {
     let mut is_shortest_path = false;
+    let mut is_all_shortest_paths = false;
     let mut shortest_path_start = None;
     let mut shortest_path_chain = None;
     let mut shortest_path_end = None;
@@ -657,19 +711,23 @@ fn parse_pattern(p: pest::iterators::Pair<Rule>) -> Result<Pattern, ParserError>
 
     for i in p.into_inner() {
         match i.as_rule() {
-            Rule::shortest_path_pattern => {
-                is_shortest_path = true;
+            Rule::shortest_path_pattern | Rule::all_shortest_paths_pattern => {
+                if i.as_rule() == Rule::shortest_path_pattern {
+                    is_shortest_path = true;
+                } else {
+                    is_all_shortest_paths = true;
+                }
                 for j in i.into_inner() {
                     match j.as_rule() {
                         Rule::node_pattern => {
                             if shortest_path_start.is_none() {
                                 shortest_path_start = Some(parse_node_pattern(j)?);
-                            } else if shortest_path_end.is_none() {
-                                shortest_path_end = Some(parse_node_pattern(j)?);
                             }
                         }
                         Rule::relationship_chain => {
-                            shortest_path_chain = Some(parse_relationship_chain(j)?);
+                            let chain = parse_relationship_chain(j)?;
+                            shortest_path_end = Some(chain.node_pattern.clone());
+                            shortest_path_chain = Some(chain);
                         }
                         _ => {}
                     }
@@ -681,10 +739,13 @@ fn parse_pattern(p: pest::iterators::Pair<Rule>) -> Result<Pattern, ParserError>
         }
     }
 
+    let node = np.or_else(|| shortest_path_start.clone());
+
     Ok(Pattern {
-        node_pattern: np.unwrap(),
+        node_pattern: node.ok_or_else(|| ParserError::Internal("Pattern must have a node".into()))?,
         relationship_chains: rcs,
         is_shortest_path,
+        is_all_shortest_paths,
         shortest_path_start,
         shortest_path_chain,
         shortest_path_end,
@@ -1043,7 +1104,30 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             when_then: Vec::new(),
             else_expression: None,
         }),
-        Rule::exists_subquery => Ok(Expression::Exists(Vec::new())),
+        Rule::exists_subquery | Rule::count_subquery => {
+            let is_count = i.as_rule() == Rule::count_subquery;
+            let mut steps = Vec::new();
+            for inner in i.into_inner() {
+                match inner.as_rule() {
+                    Rule::match_clause => {
+                        let pats = parse_match_clause(inner)?;
+                        steps.push((MatchClause { patterns: pats }, None));
+                    }
+                    Rule::where_clause => {
+                        if let Some(last) = steps.last_mut() {
+                            let expr = parse_expression(inner.into_inner().next().unwrap())?;
+                            *last = (last.0.clone(), Some(WhereClause { expression: expr }));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if is_count {
+                Ok(Expression::CountSubquery(steps))
+            } else {
+                Ok(Expression::Exists(steps))
+            }
+        }
         Rule::cast_expression => {
             let mut inner = i.into_inner();
             let expr = parse_expression(inner.next().unwrap())?;

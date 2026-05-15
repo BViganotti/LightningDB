@@ -1,4 +1,36 @@
+use lightning_types::LogicalType;
 use serde::{Deserialize, Serialize};
+
+pub fn data_type_to_logical(dt: &DataType) -> LogicalType {
+    match dt {
+        DataType::Int64 => LogicalType::Int64,
+        DataType::Int32 => LogicalType::Int32,
+        DataType::Double => LogicalType::Double,
+        DataType::Float => LogicalType::Float,
+        DataType::String => LogicalType::String,
+        DataType::Bool => LogicalType::Bool,
+        DataType::Date => LogicalType::Date,
+        DataType::Timestamp => LogicalType::Timestamp,
+        DataType::List(inner) => LogicalType::List(Box::new(data_type_to_logical(inner))),
+        DataType::Struct(fields) => LogicalType::Struct(
+            fields
+                .iter()
+                .map(|f| lightning_types::StructField {
+                    name: f.name.clone(),
+                    type_: data_type_to_logical(&f.data_type),
+                })
+                .collect(),
+        ),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AlterOperation {
+    AddColumn { name: String, data_type: DataType },
+    DropColumn { name: String },
+    RenameTable { new_name: String },
+    RenameColumn { old_name: String, new_name: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
@@ -30,6 +62,7 @@ pub enum Statement {
         columns: Vec<ColumnDefinition>,
         if_not_exists: bool,
     },
+    AlterTable { name: String, operation: AlterOperation },
     DropTable(String, bool), // name, if_exists
     CopyFrom {
         table_name: String,
@@ -56,6 +89,12 @@ pub enum Statement {
         body: Expression,
     },
     Merge(MergeClause),
+    CreateConstraint {
+        name: String,
+        table_label: String,
+        property: String,
+    },
+    DropConstraint(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,6 +199,7 @@ pub struct Pattern {
     pub node_pattern: NodePattern,
     pub relationship_chains: Vec<RelationshipChain>,
     pub is_shortest_path: bool,
+    pub is_all_shortest_paths: bool,
     pub shortest_path_start: Option<NodePattern>,
     pub shortest_path_chain: Option<RelationshipChain>,
     pub shortest_path_end: Option<NodePattern>,
@@ -245,6 +285,7 @@ pub enum Expression {
     Lambda(String, Box<Expression>), // variable, body
     Parameter(String),               // $name
     Exists(Vec<(MatchClause, Option<WhereClause>)>),
+    CountSubquery(Vec<(MatchClause, Option<WhereClause>)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

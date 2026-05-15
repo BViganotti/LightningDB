@@ -843,6 +843,76 @@ impl StorageManager {
         self.indexes.remove(name);
     }
 
+    pub fn add_column_to_table(
+        &mut self,
+        table_name: &str,
+        col_name: &str,
+        col_type: LogicalType,
+    ) -> Result<()> {
+        let version_info = self
+            .node_tables
+            .get(table_name)
+            .or_else(|| self.rel_tables.get(table_name))
+            .map(|t| t.version_info.clone())
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+
+        // Check for duplicate column
+        let has_dup = self
+            .node_tables
+            .get(table_name)
+            .or_else(|| self.rel_tables.get(table_name))
+            .is_some_and(|t| t.columns.iter().any(|c| c.name == col_name));
+        if has_dup {
+            return Err(crate::LightningError::Database(format!(
+                "Column '{}' already exists in table '{}'",
+                col_name, table_name
+            )));
+        }
+
+        let col = self.create_column_recursive(table_name, col_name, col_type, version_info)?;
+
+        if let Some(ref fsm) = self.free_space_manager {
+            let mut fhs = Vec::new();
+            self.collect_fhs_recursive(&col, &mut fhs);
+            for fh in fhs {
+                fh.set_free_space_manager(Arc::clone(fsm));
+            }
+        }
+
+        let table = self
+            .node_tables
+            .get_mut(table_name)
+            .or_else(|| self.rel_tables.get_mut(table_name))
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+        table.columns.push(col);
+        Ok(())
+    }
+
+    pub fn remove_column_from_table(
+        &mut self,
+        table_name: &str,
+        col_name: &str,
+    ) -> Result<()> {
+        let table = self
+            .node_tables
+            .get_mut(table_name)
+            .or_else(|| self.rel_tables.get_mut(table_name))
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+
+        let idx = table
+            .columns
+            .iter()
+            .position(|c| c.name == col_name)
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!(
+                    "Column '{}' not found in table '{}'",
+                    col_name, table_name
+                ))
+            })?;
+        table.columns.remove(idx);
+        Ok(())
+    }
+
     pub fn get_all_file_handles(&self) -> Vec<Arc<FileHandle>> {
         let mut fhs = vec![Arc::clone(&self.data_fh), Arc::clone(&self.overflow_fh)];
         for table in self.node_tables.values().chain(self.rel_tables.values()) {

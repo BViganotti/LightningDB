@@ -2,6 +2,7 @@ use crate::catalog::PropertyDefinition;
 use crate::processor::*;
 use crate::storage::undo_buffer::{UndoBuffer, UndoRecord};
 use crate::Database;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub enum DDLAction {
@@ -19,6 +20,24 @@ pub enum DDLAction {
         if_not_exists: bool,
     },
     DropTable(String, bool),
+    AlterAddColumn {
+        table_name: String,
+        col_name: String,
+        data_type: lightning_types::LogicalType,
+    },
+    AlterDropColumn {
+        table_name: String,
+        col_name: String,
+    },
+    AlterRenameTable {
+        old_name: String,
+        new_name: String,
+    },
+    AlterRenameColumn {
+        table_name: String,
+        old_name: String,
+        new_name: String,
+    },
     CreateSequence {
         name: String,
         start_with: u64,
@@ -29,13 +48,19 @@ pub enum DDLAction {
         params: Vec<String>,
         body: crate::parser::ast::Expression,
     },
+    CreateConstraint {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropConstraint(String),
 }
 
 pub struct PhysicalDDL {
     action: DDLAction,
     db: Arc<Database>,
     undo_buffer: Arc<UndoBuffer>,
-    executed: bool,
+    executed: Arc<AtomicBool>,
 }
 
 impl PhysicalDDL {
@@ -56,7 +81,7 @@ impl PhysicalDDL {
             },
             db,
             undo_buffer,
-            executed: false,
+            executed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -79,8 +104,8 @@ impl PhysicalDDL {
             },
             db,
             undo_buffer,
-            executed: false,
-        }
+            executed: Arc::new(AtomicBool::new(false)),
+    }
     }
 
     pub fn new_drop(name: String, if_exists: bool, db: Arc<Database>, undo_buffer: Arc<UndoBuffer>) -> Self {
@@ -88,8 +113,8 @@ impl PhysicalDDL {
             action: DDLAction::DropTable(name, if_exists),
             db,
             undo_buffer,
-            executed: false,
-        }
+            executed: Arc::new(AtomicBool::new(false)),
+    }
     }
 
     pub fn new_create_sequence(
@@ -107,8 +132,8 @@ impl PhysicalDDL {
             },
             db,
             undo_buffer,
-            executed: false,
-        }
+            executed: Arc::new(AtomicBool::new(false)),
+    }
     }
 
     pub fn new_create_macro(
@@ -122,8 +147,94 @@ impl PhysicalDDL {
             action: DDLAction::CreateMacro { name, params, body },
             db,
             undo_buffer,
-            executed: false,
+            executed: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn new_create_constraint(
+        name: String,
+        table_name: String,
+        property: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::CreateConstraint { name, table_name, property },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_drop_constraint(
+        name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::DropConstraint(name),
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_alter_add_column(
+        table_name: String,
+        col_name: String,
+        data_type: lightning_types::LogicalType,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::AlterAddColumn { table_name, col_name, data_type },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+    }
+    }
+
+    pub fn new_alter_drop_column(
+        table_name: String,
+        col_name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::AlterDropColumn { table_name, col_name },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+    }
+    }
+
+    pub fn new_alter_rename_table(
+        old_name: String,
+        new_name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::AlterRenameTable { old_name, new_name },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+    }
+    }
+
+    pub fn new_alter_rename_column(
+        table_name: String,
+        old_name: String,
+        new_name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::AlterRenameColumn { table_name, old_name, new_name },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+    }
     }
 }
 
@@ -134,7 +245,14 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
         _tx: &crate::transaction::transaction_manager::Transaction,
         _params: Option<&std::collections::HashMap<String, crate::processor::Value>>,
     ) -> crate::Result<Option<crate::processor::DataChunk>> {
-        if self.executed {
+        if self.executed.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        if self
+            .executed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Ok(None);
         }
 
@@ -148,7 +266,6 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 if *if_not_exists {
                     let catalog = database.catalog.read();
                     if catalog.get_node_table(name).is_some() {
-                        self.executed = true;
                         return Ok(None);
                     }
                 }
@@ -174,7 +291,6 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
 
                 // 5. Mark executed
-                self.executed = true;
             }
             DDLAction::CreateRel {
                 name,
@@ -186,7 +302,6 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 if *if_not_exists {
                     let catalog = database.catalog.read();
                     if catalog.get_rel_table(name).is_some() {
-                        self.executed = true;
                         return Ok(None);
                     }
                 }
@@ -216,7 +331,6 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
 
                 // 5. Mark executed
-                self.executed = true;
             }
             DDLAction::DropTable(name, _if_exists) => {
                 // 1. Get original before dropping
@@ -247,7 +361,6 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     // 5. Save Catalog (lazy - will save on next commit if needed)
                     database.catalog.mark_dirty();
                 }
-                self.executed = true;
             }
             DDLAction::CreateSequence {
                 name,
@@ -259,14 +372,105 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
                 self.undo_buffer
                     .push(UndoRecord::CreateSequence(name.clone()));
-                self.executed = true;
             }
             DDLAction::CreateMacro { name, params, body } => {
                 let mut catalog = database.catalog.write();
                 catalog.add_macro(name.clone(), params.clone(), body.clone());
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::CreateMacro(name.clone()));
-                self.executed = true;
+            }
+            DDLAction::CreateConstraint {
+                name,
+                table_name,
+                property,
+            } => {
+                let mut catalog = database.catalog.write();
+                catalog.add_constraint(
+                    table_name,
+                    crate::catalog::NodeConstraint {
+                        name: name.clone(),
+                        property: property.clone(),
+                    },
+                )?;
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::CreateConstraint {
+                    name: name.clone(),
+                    table_name: table_name.clone(),
+                    property: property.clone(),
+                });
+            }
+            DDLAction::DropConstraint(name) => {
+                let mut catalog = database.catalog.write();
+                catalog.remove_constraint(name)?;
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::DropConstraint(name.clone()));
+            }
+            DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
+                let mut catalog = database.catalog.write();
+                catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone())?;
+                let mut storage = database.storage_manager.write();
+                storage.add_column_to_table(table_name, col_name, data_type.clone())?;
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::AlterAddColumn {
+                    table_name: table_name.clone(),
+                    col_name: col_name.clone(),
+                });
+            }
+            DDLAction::AlterDropColumn { table_name, col_name } => {
+                let mut catalog = database.catalog.write();
+                let removed = catalog.remove_column_from_table(table_name, col_name)?;
+                let mut storage = database.storage_manager.write();
+                storage.remove_column_from_table(table_name, col_name)?;
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::AlterDropColumn {
+                    table_name: table_name.clone(),
+                    col_name: col_name.clone(),
+                    col_type: removed.type_,
+                });
+            }
+            DDLAction::AlterRenameTable { old_name, new_name } => {
+                let mut catalog = database.catalog.write();
+                catalog.rename_table(old_name, new_name)?;
+                {
+                    let mut storage = database.storage_manager.write();
+                    if let Some(table) = storage.node_tables.remove(old_name) {
+                        let mut t = table;
+                        t.name = new_name.clone();
+                        storage.node_tables.insert(new_name.clone(), t);
+                    } else if let Some(table) = storage.rel_tables.remove(old_name) {
+                        let mut t = table;
+                        t.name = new_name.clone();
+                        storage.rel_tables.insert(new_name.clone(), t);
+                    }
+                }
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::AlterRenameTable {
+                    old_name: old_name.clone(),
+                    new_name: new_name.clone(),
+                });
+            }
+            DDLAction::AlterRenameColumn { table_name, old_name, new_name } => {
+                let mut catalog = database.catalog.write();
+                catalog.rename_column_in_table(table_name, old_name, new_name)?;
+                {
+                    let mut storage = database.storage_manager.write();
+                    let table = if storage.node_tables.contains_key(table_name) {
+                        storage.node_tables.get_mut(table_name)
+                    } else {
+                        storage.rel_tables.get_mut(table_name)
+                    };
+                    if let Some(table) = table {
+                        if let Some(col) = table.columns.iter_mut().find(|c| c.name == *old_name) {
+                            col.name = new_name.clone();
+                        }
+                    }
+                }
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::AlterRenameColumn {
+                    table_name: table_name.clone(),
+                    old_name: old_name.clone(),
+                    new_name: new_name.clone(),
+                });
             }
         }
 
@@ -317,10 +521,46 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     params: params.clone(),
                     body: body.clone(),
                 },
+                DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
+                    DDLAction::AlterAddColumn {
+                        table_name: table_name.clone(),
+                        col_name: col_name.clone(),
+                        data_type: data_type.clone(),
+                    }
+                }
+                DDLAction::AlterDropColumn { table_name, col_name } => {
+                    DDLAction::AlterDropColumn {
+                        table_name: table_name.clone(),
+                        col_name: col_name.clone(),
+                    }
+                }
+                DDLAction::AlterRenameTable { old_name, new_name } => {
+                    DDLAction::AlterRenameTable {
+                        old_name: old_name.clone(),
+                        new_name: new_name.clone(),
+                    }
+                }
+                DDLAction::AlterRenameColumn { table_name, old_name, new_name } => {
+                    DDLAction::AlterRenameColumn {
+                        table_name: table_name.clone(),
+                        old_name: old_name.clone(),
+                        new_name: new_name.clone(),
+                    }
+                }
+                DDLAction::CreateConstraint {
+                    name,
+                    table_name,
+                    property,
+                } => DDLAction::CreateConstraint {
+                    name: name.clone(),
+                    table_name: table_name.clone(),
+                    property: property.clone(),
+                },
+                DDLAction::DropConstraint(name) => DDLAction::DropConstraint(name.clone()),
             },
             db: self.db.clone(),
             undo_buffer: self.undo_buffer.clone(),
-            executed: self.executed,
+            executed: Arc::clone(&self.executed),
         })
     }
 }

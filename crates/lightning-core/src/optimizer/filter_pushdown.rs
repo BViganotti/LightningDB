@@ -72,6 +72,37 @@ impl FilterPushDown {
                             | crate::planner::binder::BoundMatchElement::Rel(_, var, _, _, _) => {
                                 vars.insert(var.clone());
                             }
+                            crate::planner::binder::BoundMatchElement::AllShortestPaths {
+                                src_var,
+                                dst_var,
+                                ..
+                            } => {
+                                vars.insert(src_var.clone());
+                                vars.insert(dst_var.clone());
+                            }
+                        }
+                    }
+                    if let Some(bw) = w {
+                        Self::extract_variables(&bw.expression, vars);
+                    }
+                }
+            }
+            BoundExpression::CountSubquery(steps) => {
+                for (m, w) in steps {
+                    for element in &m.elements {
+                        match element {
+                            crate::planner::binder::BoundMatchElement::Node(_, var, _)
+                            | crate::planner::binder::BoundMatchElement::Rel(_, var, _, _, _) => {
+                                vars.insert(var.clone());
+                            }
+                            crate::planner::binder::BoundMatchElement::AllShortestPaths {
+                                src_var,
+                                dst_var,
+                                ..
+                            } => {
+                                vars.insert(src_var.clone());
+                                vars.insert(dst_var.clone());
+                            }
                         }
                     }
                     if let Some(bw) = w {

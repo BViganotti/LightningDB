@@ -10,11 +10,18 @@ pub struct PropertyDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeConstraint {
+    pub name: String,
+    pub property: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeTableCatalogEntry {
     pub name: String,
     pub properties: Vec<PropertyDefinition>,
     pub num_rows: u64,
     pub primary_key: Option<String>,
+    pub constraints: Vec<NodeConstraint>,
     pub stats: TableStats,
 }
 
@@ -72,6 +79,175 @@ impl Catalog {
         }
     }
 
+    fn is_builtin_column(name: &str) -> bool {
+        matches!(name, "_id" | "_src" | "_dst")
+    }
+
+    pub fn add_column_to_table(
+        &mut self,
+        table_name: &str,
+        col_name: String,
+        col_type: LogicalType,
+    ) -> Result<(), crate::LightningError> {
+        if Self::is_builtin_column(&col_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Cannot add built-in column '{}'",
+                col_name
+            )));
+        }
+        if let Some(node) = self.node_tables.get_mut(table_name) {
+            if node.properties.iter().any(|p| p.name == col_name) {
+                return Err(crate::LightningError::Database(format!(
+                    "Column '{}' already exists in table '{}'",
+                    col_name, table_name
+                )));
+            }
+            node.properties.push(PropertyDefinition {
+                name: col_name,
+                type_: col_type,
+            });
+            Ok(())
+        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
+            if rel.properties.iter().any(|p| p.name == col_name) {
+                return Err(crate::LightningError::Database(format!(
+                    "Column '{}' already exists in table '{}'",
+                    col_name, table_name
+                )));
+            }
+            rel.properties.push(PropertyDefinition {
+                name: col_name,
+                type_: col_type,
+            });
+            Ok(())
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                table_name
+            )))
+        }
+    }
+
+    pub fn remove_column_from_table(
+        &mut self,
+        table_name: &str,
+        col_name: &str,
+    ) -> Result<PropertyDefinition, crate::LightningError> {
+        if Self::is_builtin_column(col_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Cannot remove built-in column '{}'",
+                col_name
+            )));
+        }
+        if let Some(node) = self.node_tables.get_mut(table_name) {
+            let idx = node
+                .properties
+                .iter()
+                .position(|p| p.name == col_name)
+                .ok_or_else(|| {
+                    crate::LightningError::Database(format!(
+                        "Column '{}' not found in table '{}'",
+                        col_name, table_name
+                    ))
+                })?;
+            Ok(node.properties.remove(idx))
+        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
+            let idx = rel
+                .properties
+                .iter()
+                .position(|p| p.name == col_name)
+                .ok_or_else(|| {
+                    crate::LightningError::Database(format!(
+                        "Column '{}' not found in table '{}'",
+                        col_name, table_name
+                    ))
+                })?;
+            Ok(rel.properties.remove(idx))
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                table_name
+            )))
+        }
+    }
+
+    pub fn rename_column_in_table(
+        &mut self,
+        table_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), crate::LightningError> {
+        if Self::is_builtin_column(old_name) || Self::is_builtin_column(new_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Cannot rename built-in column"
+            )));
+        }
+        if let Some(node) = self.node_tables.get_mut(table_name) {
+            if node.properties.iter().any(|p| p.name == new_name) {
+                return Err(crate::LightningError::Database(format!(
+                    "Column '{}' already exists in table '{}'",
+                    new_name, table_name
+                )));
+            }
+            let col = node
+                .properties
+                .iter_mut()
+                .find(|p| p.name == old_name)
+                .ok_or_else(|| {
+                    crate::LightningError::Database(format!(
+                        "Column '{}' not found in table '{}'",
+                        old_name, table_name
+                    ))
+                })?;
+            col.name = new_name.to_string();
+            Ok(())
+        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
+            if rel.properties.iter().any(|p| p.name == new_name) {
+                return Err(crate::LightningError::Database(format!(
+                    "Column '{}' already exists in table '{}'",
+                    new_name, table_name
+                )));
+            }
+            let col = rel
+                .properties
+                .iter_mut()
+                .find(|p| p.name == old_name)
+                .ok_or_else(|| {
+                    crate::LightningError::Database(format!(
+                        "Column '{}' not found in table '{}'",
+                        old_name, table_name
+                    ))
+                })?;
+            col.name = new_name.to_string();
+            Ok(())
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                table_name
+            )))
+        }
+    }
+
+    pub fn rename_table(
+        &mut self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), crate::LightningError> {
+        if let Some(mut entry) = self.node_tables.remove(old_name) {
+            entry.name = new_name.to_string();
+            self.node_tables.insert(new_name.to_string(), entry);
+            Ok(())
+        } else if let Some(mut entry) = self.rel_tables.remove(old_name) {
+            entry.name = new_name.to_string();
+            self.rel_tables.insert(new_name.to_string(), entry);
+            Ok(())
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                old_name
+            )))
+        }
+    }
+
     pub fn add_node_table(
         &mut self,
         name: String,
@@ -101,6 +277,7 @@ impl Catalog {
                 properties,
                 num_rows,
                 primary_key,
+                constraints: Vec::new(),
                 stats,
             },
         );
@@ -223,5 +400,57 @@ impl Catalog {
 
     pub fn get_macro(&self, name: &str) -> Option<&MacroCatalogEntry> {
         self.macros.get(name)
+    }
+
+    pub fn add_constraint(
+        &mut self,
+        table_name: &str,
+        constraint: NodeConstraint,
+    ) -> Result<(), crate::LightningError> {
+        let table = self.node_tables.get_mut(table_name).ok_or_else(|| {
+            crate::LightningError::Database(format!("Table '{}' not found", table_name))
+        })?;
+        if table.constraints.iter().any(|c| c.name == constraint.name) {
+            return Err(crate::LightningError::Database(format!(
+                "Constraint '{}' already exists on table '{}'",
+                constraint.name, table_name
+            )));
+        }
+        if table.constraints.iter().any(|c| c.property == constraint.property) {
+            return Err(crate::LightningError::Database(format!(
+                "A constraint on property '{}' already exists on table '{}'",
+                constraint.property, table_name
+            )));
+        }
+        table.constraints.push(constraint);
+        Ok(())
+    }
+
+    pub fn remove_constraint(
+        &mut self,
+        constraint_name: &str,
+    ) -> Result<(String, NodeConstraint), crate::LightningError> {
+        for (table_name, table) in self.node_tables.iter_mut() {
+            if let Some(pos) = table.constraints.iter().position(|c| c.name == constraint_name) {
+                let c = table.constraints.remove(pos);
+                return Ok((table_name.clone(), c));
+            }
+        }
+        Err(crate::LightningError::Database(format!(
+            "Constraint '{}' not found",
+            constraint_name
+        )))
+    }
+
+    pub fn get_constraint(
+        &self,
+        constraint_name: &str,
+    ) -> Option<(&str, &NodeConstraint)> {
+        for (table_name, table) in self.node_tables.iter() {
+            if let Some(c) = table.constraints.iter().find(|c| c.name == constraint_name) {
+                return Some((table_name.as_str(), c));
+            }
+        }
+        None
     }
 }

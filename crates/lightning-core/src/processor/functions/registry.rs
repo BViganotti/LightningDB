@@ -3676,11 +3676,19 @@ impl FunctionRegistry {
         Self {
             scalar_functions,
             aggregate_functions,
+    }
+}
+
+pub fn register_scalar(&mut self, func: ScalarFunction) {
+        let name = func.name.to_uppercase();
+        if self.scalar_functions.contains_key(&name) {
+            tracing::warn!("Duplicate scalar function registration: '{}' — overwriting previous", name);
         }
+        self.scalar_functions.insert(name, func);
     }
 
-    pub fn register_scalar(&mut self, func: ScalarFunction) {
-        self.scalar_functions.insert(func.name.to_uppercase(), func);
+    pub fn has_scalar(&self, name: &str) -> bool {
+        self.scalar_functions.contains_key(&name.to_uppercase())
     }
 
     pub fn get_scalar_function(&self, name: &str) -> Option<&ScalarFunction> {
@@ -3694,5 +3702,33 @@ impl FunctionRegistry {
         self.aggregate_functions
             .get(&name.to_uppercase())
             .map(|f| f())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::ArrayRef;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_register_scalar_duplicate_warning() {
+        let mut registry = FunctionRegistry::new();
+        let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
+            |_args: &[ArrayRef], _num_rows: usize| {
+                Ok(arrow::array::new_null_array(
+                    &arrow::datatypes::DataType::Int64,
+                    1,
+                ))
+            },
+        );
+
+        let first = ScalarFunction::new("MY_FUNC".to_string(), Arc::clone(&exec));
+        let second = ScalarFunction::new("my_func".to_string(), Arc::clone(&exec));
+
+        registry.register_scalar(first);
+        registry.register_scalar(second);
+
+        assert!(registry.has_scalar("MY_FUNC"));
     }
 }

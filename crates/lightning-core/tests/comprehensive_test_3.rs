@@ -951,3 +951,56 @@ fn batch_3_mixed_batch_query() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn agg_count_distinct_string() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 2})", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 3})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN count(DISTINCT t.val)", None)?;
+    assert_val!(res, 0, 0, 3i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn agg_count_distinct_all_same() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    for _ in 0..10 {
+        conn.execute("CREATE (:T {val: 1})", None)?;
+    }
+    let res = conn.execute("MATCH (t:T) RETURN count(DISTINCT t.val)", None)?;
+    assert_val!(res, 0, 0, 1i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn agg_count_distinct_all_unique() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    for i in 0..20 {
+        conn.execute(&format!("CREATE (:T {{val: {}}})", i), None)?;
+    }
+    let res = conn.execute("MATCH (t:T) RETURN count(DISTINCT t.val)", None)?;
+    assert_val!(res, 0, 0, 20i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn agg_count_distinct_with_nulls() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 2})", None)?;
+    conn.execute("CREATE (:T)", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN count(DISTINCT t.val)", None)?;
+    assert_val!(res, 0, 0, 2i64, Int64Array);
+    Ok(())
+}

@@ -290,3 +290,217 @@ gen_tests! {
     test_v_201: 201, test_v_202: 202, test_v_203: 203, test_v_204: 204, test_v_205: 205,
     test_v_206: 206, test_v_207: 207, test_v_208: 208, test_v_209: 209, test_v_210: 210
 }
+
+fn exec(db: &Arc<Database>, query: &str) -> lightning_core::QueryResult {
+    let conn = db.connect();
+    conn.execute(query, None).unwrap()
+}
+
+#[test]
+fn test_alter_add_column() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE Person(name STRING, age INT64)", None)?;
+
+    conn.execute("CREATE (:Person {name: 'Alice', age: 30})", None)?;
+    conn.execute("CREATE (:Person {name: 'Bob', age: 25})", None)?;
+
+    conn.execute("ALTER TABLE Person ADD COLUMN email STRING", None)?;
+
+    conn.execute("MATCH (p:Person {name: 'Alice'}) SET p.email = 'alice@example.com'", None)?;
+    conn.execute(
+        "MATCH (p:Person) WHERE p.name = 'Bob' SET p.email = 'bob@test.com'",
+        None,
+    )?;
+
+    let res = conn.execute("MATCH (p:Person) RETURN p.name, p.email ORDER BY p.name", None)?;
+    assert_count!(res, 2);
+    assert_val!(res, 0, 0, "Alice", StringArray);
+    assert_val!(res, 1, 0, "alice@example.com", StringArray);
+    assert_val!(res, 0, 1, "Bob", StringArray);
+    assert_val!(res, 1, 1, "bob@test.com", StringArray);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_drop_column() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Employee(name STRING, age INT64, department STRING)");
+
+    exec(&db, "CREATE (:Employee {name: 'Alice', age: 30, department: 'Eng'})");
+    exec(&db, "CREATE (:Employee {name: 'Bob', age: 25, department: 'Sales'})");
+
+    exec(&db, "ALTER TABLE Employee DROP COLUMN department");
+
+    let res = exec(&db, "MATCH (e:Employee) RETURN e.name, e.age ORDER BY e.name");
+    assert_count!(res, 2);
+    assert_val!(res, 0, 0, "Alice", StringArray);
+    assert_val!(res, 1, 0, 30, Int64Array);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_rename_column() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Product(name STRING, price DOUBLE)");
+
+    exec(&db, "CREATE (:Product {name: 'Widget', price: 9.99})");
+
+    exec(&db, "ALTER TABLE Product RENAME COLUMN price TO cost");
+
+    let res = exec(&db, "MATCH (p:Product) RETURN p.name, p.cost");
+    assert_count!(res, 1);
+    assert_val!(res, 0, 0, "Widget", StringArray);
+    assert_val!(res, 1, 0, 9.99, Float64Array);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_rename_table() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE OldName(id INT64)", None)?;
+    conn.execute("CREATE (:OldName {id: 1})", None)?;
+    conn.execute("CREATE (:OldName {id: 2})", None)?;
+
+    conn.execute("ALTER TABLE OldName RENAME TO NewName", None)?;
+
+    let res = conn.execute("MATCH (n:NewName) RETURN n.id ORDER BY n.id", None)?;
+    assert_count!(res, 2);
+    assert_val!(res, 0, 0, 1, Int64Array);
+    assert_val!(res, 0, 1, 2, Int64Array);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_add_column_double_type() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Sensor(label STRING)");
+
+    exec(&db, "CREATE (:Sensor {label: 'temp'})");
+
+    exec(&db, "ALTER TABLE Sensor ADD COLUMN reading DOUBLE");
+
+    let res = exec(&db, "MATCH (s:Sensor) RETURN s.label, s.reading");
+    assert_count!(res, 1);
+    assert_val!(res, 0, 0, "temp", StringArray);
+
+    exec(&db, "MATCH (s:Sensor) SET s.reading = 36.5");
+    let res = exec(&db, "MATCH (s:Sensor) RETURN s.reading");
+    assert_val!(res, 0, 0, 36.5, Float64Array);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_add_column_bool_type() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Task(name STRING)");
+
+    exec(&db, "CREATE (:Task {name: 'test'})");
+
+    exec(&db, "ALTER TABLE Task ADD COLUMN completed BOOL");
+
+    exec(&db, "MATCH (t:Task) SET t.completed = true");
+    let res = exec(&db, "MATCH (t:Task) RETURN t.completed");
+    assert_count!(res, 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_add_column_rel_table() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Person(name STRING)");
+    exec(&db, "CREATE (:Person {name: 'Alice'})");
+    exec(&db, "CREATE (:Person {name: 'Bob'})");
+    exec(&db, "CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64)");
+
+    exec(&db, "ALTER TABLE KNOWS ADD COLUMN weight DOUBLE");
+
+    let cat = db.catalog.read();
+    let rel = cat.get_rel_table("KNOWS").unwrap();
+    assert!(rel.properties.iter().any(|p| p.name == "weight"));
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_drop_column_rel_table() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Person(name STRING)");
+    exec(&db, "CREATE (:Person {name: 'Alice'})");
+    exec(&db, "CREATE (:Person {name: 'Bob'})");
+    exec(&db, "CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64, notes STRING)");
+
+    exec(&db, "ALTER TABLE KNOWS DROP COLUMN notes");
+
+    let cat = db.catalog.read();
+    let rel = cat.get_rel_table("KNOWS").unwrap();
+    assert!(!rel.properties.iter().any(|p| p.name == "notes"));
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_rename_column_rel_table() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Person(name STRING)");
+    exec(&db, "CREATE (:Person {name: 'Alice'})");
+    exec(&db, "CREATE (:Person {name: 'Bob'})");
+    exec(&db, "CREATE REL TABLE KNOWS(FROM Person TO Person, since INT64)");
+
+    exec(&db, "ALTER TABLE KNOWS RENAME COLUMN since TO met_year");
+
+    let cat = db.catalog.read();
+    let rel = cat.get_rel_table("KNOWS").unwrap();
+    assert!(rel.properties.iter().any(|p| p.name == "met_year"));
+    assert!(!rel.properties.iter().any(|p| p.name == "since"));
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_add_column_duplicate_error() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Test(x INT64)");
+    exec(&db, "CREATE (:Test {x: 1})");
+
+    let conn = db.connect();
+    let result = conn.execute("ALTER TABLE Test ADD COLUMN x INT64", None);
+    assert!(result.is_err(), "Should error on duplicate column");
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_table_not_found_error() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    let result = conn.execute("ALTER TABLE Nonexistent ADD COLUMN x INT64", None);
+    assert!(result.is_err(), "Should error on nonexistent table");
+
+    Ok(())
+}
+
+#[test]
+fn test_alter_add_column_multiple_rows() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    exec(&db, "CREATE NODE TABLE Items(name STRING)");
+    for i in 0..50 {
+        exec(&db, &format!("CREATE (:Items {{name: 'item_{}'}})", i));
+    }
+
+    exec(&db, "ALTER TABLE Items ADD COLUMN score DOUBLE");
+
+    exec(&db, "MATCH (i:Items) SET i.score = 1.0");
+
+    let res = exec(&db, "MATCH (i:Items) RETURN count(i.score), sum(i.score)");
+    assert_count!(res, 1);
+
+    Ok(())
+}

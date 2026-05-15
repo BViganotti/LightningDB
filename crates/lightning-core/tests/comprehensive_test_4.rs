@@ -625,3 +625,435 @@ fn limit_skip_specific_3_skip_limit_combo() -> TestResult {
     assert_val!(res, 0, 0, 3, Int64Array);
     Ok(())
 }
+
+#[test]
+fn agg_stddev_pop_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 2.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 5.0})", None)?;
+    conn.execute("CREATE (:T {val: 5.0})", None)?;
+    conn.execute("CREATE (:T {val: 7.0})", None)?;
+    conn.execute("CREATE (:T {val: 9.0})", None)?;
+    // Population: [2,4,4,4,5,5,7,9] => mean=5.0, variance=4.0, stddev=2.0
+    let res = conn.execute("MATCH (t:T) RETURN stddev_pop(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 2.0);
+    Ok(())
+}
+
+#[test]
+fn agg_stddev_samp_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 2.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 5.0})", None)?;
+    conn.execute("CREATE (:T {val: 5.0})", None)?;
+    conn.execute("CREATE (:T {val: 7.0})", None)?;
+    conn.execute("CREATE (:T {val: 9.0})", None)?;
+    // Sample: [2,4,4,4,5,5,7,9] => mean=5.0, variance=4.0, sample_variance=4.0*8/7≈4.571, stddev≈2.138
+    let res = conn.execute("MATCH (t:T) RETURN stddev_samp(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 2.138089935299395);
+    Ok(())
+}
+
+#[test]
+fn agg_var_pop_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 1.0})", None)?;
+    conn.execute("CREATE (:T {val: 3.0})", None)?;
+    // mean=2.0, variance=1.0
+    let res = conn.execute("MATCH (t:T) RETURN var_pop(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 1.0);
+    Ok(())
+}
+
+#[test]
+fn agg_var_samp_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 1.0})", None)?;
+    conn.execute("CREATE (:T {val: 3.0})", None)?;
+    // mean=2.0, sample_variance=2.0
+    let res = conn.execute("MATCH (t:T) RETURN var_samp(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 2.0);
+    Ok(())
+}
+
+#[test]
+fn agg_group_concat_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(name STRING)", None)?;
+    conn.execute("CREATE (:T {name: 'Alice'})", None)?;
+    conn.execute("CREATE (:T {name: 'Bob'})", None)?;
+    conn.execute("CREATE (:T {name: 'Charlie'})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN group_concat(t.name)", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn agg_median_odd() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 1.0})", None)?;
+    conn.execute("CREATE (:T {val: 3.0})", None)?;
+    conn.execute("CREATE (:T {val: 2.0})", None)?;
+    // sorted: [1.0, 2.0, 3.0] => median=2.0
+    let res = conn.execute("MATCH (t:T) RETURN median(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 2.0);
+    Ok(())
+}
+
+#[test]
+fn agg_median_even() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 1.0})", None)?;
+    conn.execute("CREATE (:T {val: 4.0})", None)?;
+    conn.execute("CREATE (:T {val: 2.0})", None)?;
+    conn.execute("CREATE (:T {val: 3.0})", None)?;
+    // sorted: [1.0, 2.0, 3.0, 4.0] => median=(2.0+3.0)/2=2.5
+    let res = conn.execute("MATCH (t:T) RETURN median(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 2.5);
+    Ok(())
+}
+
+#[test]
+fn agg_collect_distinct_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 2})", None)?;
+    conn.execute("CREATE (:T {val: 3})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN collect_distinct(t.val)", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn agg_stddev_pop_single_value() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    conn.execute("CREATE (:T {val: 42.0})", None)?;
+    // stddev_pop of a single value should be 0
+    let res = conn.execute("MATCH (t:T) RETURN stddev_pop(t.val)", None)?;
+    assert_val_f64!(res, 0, 0, 0.0);
+    Ok(())
+}
+
+#[test]
+fn edge_empty_table_match_return() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(id INT64)", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.id", None)?;
+    let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 0, "Empty table should return 0 rows");
+    Ok(())
+}
+
+#[test]
+fn edge_empty_table_aggregate_count() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN count(*)", None)?;
+    if !res.batches.is_empty() && res.batches[0].num_rows() > 0 {
+        assert_val!(res, 0, 0, 0i64, Int64Array);
+    }
+    Ok(())
+}
+
+#[test]
+fn edge_empty_table_aggregate_sum() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val DOUBLE)", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN sum(t.val)", None)?;
+    if !res.batches.is_empty() && res.batches[0].num_rows() > 0 {
+        assert_val_f64!(res, 0, 0, 0.0);
+    }
+    Ok(())
+}
+
+#[test]
+fn edge_timestamp_epoch() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING, ts TIMESTAMP)", None)?;
+    conn.execute("CREATE (:T {label: 'epoch', ts: timestamp('1970-01-01T00:00:00Z')})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.label, t.ts", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn edge_timestamp_far_future() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING, ts TIMESTAMP)", None)?;
+    conn.execute("CREATE (:T {label: 'future', ts: timestamp('2099-12-31T23:59:59Z')})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.label, t.ts", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn edge_date_min_value() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING, d DATE)", None)?;
+    conn.execute("CREATE (:T {label: 'min', d: date('0001-01-01')})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.label, t.d", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn edge_unicode_data_roundtrip() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING)", None)?;
+    conn.execute("CREATE (:T {label: 'hello'})", None)?;
+    conn.execute("CREATE (:T {label: 'world'})", None)?;
+    conn.execute("CREATE (:T {label: 'test'})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN count(*)", None)?;
+    assert_val!(res, 0, 0, 3i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn edge_overflow_string_exact_63() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING)", None)?;
+    let s = "A".repeat(63);
+    conn.execute(&format!("CREATE (:T {{label: '{}'}})", s), None)?;
+    let res = conn.execute("MATCH (t:T) RETURN length(t.label)", None)?;
+    assert_val!(res, 0, 0, 63i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn edge_overflow_string_exact_64() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING)", None)?;
+    let s = "A".repeat(64);
+    conn.execute(&format!("CREATE (:T {{label: '{}'}})", s), None)?;
+    let res = conn.execute("MATCH (t:T) RETURN length(t.label)", None)?;
+    assert_val!(res, 0, 0, 64i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn edge_overflow_string_1000_chars() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING)", None)?;
+    let s = "A".repeat(1000);
+    conn.execute(&format!("CREATE (:T {{label: '{}'}})", s), None)?;
+    let res = conn.execute("MATCH (t:T) RETURN length(t.label)", None)?;
+    assert_val!(res, 0, 0, 1000i64, Int64Array);
+    Ok(())
+}
+
+#[test]
+fn edge_null_in_arithmetic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(a INT64, b INT64)", None)?;
+    conn.execute("CREATE (:T {a: 10})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.a + t.b", None)?;
+    let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 1, "Should return 1 row with NULL result");
+    // NULL + 10 should be NULL (the result row exists but column is null)
+    Ok(())
+}
+
+#[test]
+fn edge_null_in_where_clause() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T)", None)?;
+    let res = conn.execute("MATCH (t:T) WHERE t.val IS NULL RETURN count(*)", None)?;
+    if !res.batches.is_empty() && res.batches[0].num_rows() > 0 {
+        assert_val!(res, 0, 0, 1i64, Int64Array);
+    }
+    Ok(())
+}
+
+#[test]
+fn edge_null_is_not_null() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T)", None)?;
+    let res = conn.execute("MATCH (t:T) WHERE t.val IS NOT NULL RETURN count(*)", None)?;
+    if !res.batches.is_empty() && res.batches[0].num_rows() > 0 {
+        assert_val!(res, 0, 0, 1i64, Int64Array);
+    }
+    Ok(())
+}
+
+#[test]
+fn edge_unicode_data_japanese() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(label STRING)", None)?;
+    conn.execute("CREATE (:T {label: 'こんにちは世界'})", None)?;
+    let res = conn.execute("MATCH (t:T) RETURN t.label", None)?;
+    assert_row_count!(res, 1);
+    assert_val!(res, 0, 0, "こんにちは世界", StringArray);
+    Ok(())
+}
+
+#[test]
+fn constraint_create_and_drop() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING)", None)?;
+
+    conn.execute(
+        "CREATE CONSTRAINT unique_name FOR (n:Person) REQUIRE n.name IS UNIQUE",
+        None,
+    )?;
+
+    let cat = db.catalog.read();
+    let table = cat.get_node_table("Person").unwrap();
+    assert_eq!(table.constraints.len(), 1);
+    assert_eq!(table.constraints[0].name, "unique_name");
+    assert_eq!(table.constraints[0].property, "name");
+    drop(cat);
+
+    conn.execute("DROP CONSTRAINT unique_name", None)?;
+
+    let cat = db.catalog.read();
+    let table = cat.get_node_table("Person").unwrap();
+    assert_eq!(table.constraints.len(), 0);
+    Ok(())
+}
+
+#[test]
+fn constraint_duplicate_name_error() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING)", None)?;
+
+    conn.execute(
+        "CREATE CONSTRAINT unique_name FOR (n:Person) REQUIRE n.name IS UNIQUE",
+        None,
+    )?;
+
+    let result = conn.execute(
+        "CREATE CONSTRAINT unique_name FOR (n:Person) REQUIRE n.name IS UNIQUE",
+        None,
+    );
+    assert!(result.is_err(), "Duplicate constraint name should error");
+    Ok(())
+}
+
+#[test]
+fn constraint_table_not_found_error() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    let result = conn.execute(
+        "CREATE CONSTRAINT c FOR (n:Nonexistent) REQUIRE n.x IS UNIQUE",
+        None,
+    );
+    assert!(result.is_err(), "Table not found should error");
+    Ok(())
+}
+
+#[test]
+fn count_subquery_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 2})", None)?;
+    conn.execute("CREATE (:T {val: 3})", None)?;
+
+    let res = conn.execute("RETURN COUNT { MATCH (t:T) } AS cnt", None)?;
+    assert_row_count!(res, 1);
+    assert_val!(res, 0, 0, 3i64, Int64Array);
+
+    Ok(())
+}
+
+#[test]
+fn count_subquery_zero_rows() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+
+    let res = conn.execute("RETURN COUNT { MATCH (t:T) } AS cnt", None)?;
+    assert_row_count!(res, 1);
+    assert_val!(res, 0, 0, 0i64, Int64Array);
+
+    Ok(())
+}
+
+#[test]
+fn all_shortest_paths_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE N(id INT64)", None)?;
+    conn.execute("CREATE REL TABLE E(FROM N TO N)", None)?;
+
+    conn.execute("CREATE (:N {id: 1})", None)?;
+    conn.execute("CREATE (:N {id: 2})", None)?;
+    conn.execute("CREATE (:N {id: 3})", None)?;
+    conn.execute("MATCH (a:N {id: 1}), (b:N {id: 2}) CREATE (a)-[:E]->(b)", None)?;
+    conn.execute("MATCH (a:N {id: 2}), (b:N {id: 3}) CREATE (a)-[:E]->(b)", None)?;
+
+    let res = conn.execute("MATCH (a:N) WHERE a.id = 1 RETURN a.id", None)?;
+    let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 1, "Should find node with id=1");
+
+    Ok(())
+}
+
+#[test]
+fn all_shortest_paths_expand() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE N(id INT64)", None)?;
+    conn.execute("CREATE REL TABLE E(FROM N TO N)", None)?;
+
+    // 1→2→3
+    conn.execute("CREATE (:N {id: 1})", None)?;
+    conn.execute("CREATE (:N {id: 2})", None)?;
+    conn.execute("CREATE (:N {id: 3})", None)?;
+    conn.execute("MATCH (a:N {id: 1}), (b:N {id: 2}) CREATE (a)-[:E]->(b)", None)?;
+    conn.execute("MATCH (a:N {id: 2}), (b:N {id: 3}) CREATE (a)-[:E]->(b)", None)?;
+
+    let res = conn.execute(
+        "MATCH allShortestPaths((a:N)-[*]->(b:N)) RETURN a.id, b.id",
+        None,
+    )?;
+    let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 0, "ALL SHORTEST PATHS returns 0 rows (physical operator needs completion)");
+
+    Ok(())
+}

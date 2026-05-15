@@ -54,6 +54,13 @@ pub enum BoundStatement {
     Transaction(BoundTransactionAction),
     Checkpoint,
     Vacuum,
+    AlterTable { name: String, operation: crate::parser::ast::AlterOperation },
+    CreateConstraint {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropConstraint(String),
     StandaloneCall(String, Vec<Literal>),
     CreateSequence {
         name: String,
@@ -109,6 +116,13 @@ pub enum BoundMatchElement {
         String,
         Option<(Option<u32>, Option<u32>)>,
     ), // table_name, variable, src_variable, dst_variable, bounds
+    AllShortestPaths {
+        rel_table_name: String,
+        src_var: String,
+        dst_var: String,
+        path_var: String,
+        max_depth: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +259,7 @@ pub enum BoundExpression {
     Parameter(String),                    // $name
     NextVal(String),                      // sequence name
     Exists(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
+    CountSubquery(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
 }
 
 impl BoundExpression {
@@ -260,6 +275,7 @@ impl BoundExpression {
             BoundExpression::Not(_) => LogicalType::Bool,
             BoundExpression::Comparison(_, _, _) => LogicalType::Bool,
             BoundExpression::Exists(_) => LogicalType::Bool,
+            BoundExpression::CountSubquery(_) => LogicalType::Int64,
             BoundExpression::Variable(_, t) => t.clone(),
             BoundExpression::PropertyLookup(_, _, t) => t.clone(),
             BoundExpression::Arithmetic(left, _, _) => left.get_type(),
@@ -279,6 +295,9 @@ impl BoundExpression {
                 matches!(
                     name.to_uppercase().as_str(),
                     "COUNT" | "COUNT_DISTINCT" | "SUM" | "AVG" | "MIN" | "MAX"
+                        | "COLLECT" | "GROUP_CONCAT" | "MEDIAN" | "COLLECT_DISTINCT"
+                        | "STDDEV_POP" | "STDDEV" | "STDDEV_SAMP"
+                        | "VAR_POP" | "VAR" | "VAR_SAMP"
                 )
             }
             BoundExpression::Variable(_, _) | BoundExpression::PropertyLookup(_, _, _) => false,
@@ -308,6 +327,7 @@ impl BoundExpression {
             BoundExpression::Aggregate(_, _, _) => true,
             BoundExpression::Lambda(_, body) => body.is_aggregate(),
             BoundExpression::Exists(_)
+            | BoundExpression::CountSubquery(_)
             | BoundExpression::Parameter(_)
             | BoundExpression::NextVal(_) => false,
             BoundExpression::Literal(_) => false,
@@ -446,6 +466,35 @@ impl<'a> Binder<'a> {
             }
             Statement::DropTable(name, if_exists) => {
                 Ok(BoundStatement::DropTable(name.clone(), *if_exists))
+            }
+            Statement::CreateConstraint {
+                name,
+                table_label,
+                property,
+            } => {
+                let table_name = {
+                    self.catalog
+                        .get_node_table(table_label)
+                        .ok_or_else(|| {
+                            LightningError::Query(format!("Table {table_label} not found"))
+                        })?
+                        .name
+                        .clone()
+                };
+                Ok(BoundStatement::CreateConstraint {
+                    name: name.clone(),
+                    table_name,
+                    property: property.clone(),
+                })
+            }
+            Statement::DropConstraint(name) => {
+                Ok(BoundStatement::DropConstraint(name.clone()))
+            }
+            Statement::AlterTable { name, operation } => {
+                Ok(BoundStatement::AlterTable {
+                    name: name.clone(),
+                    operation: operation.clone(),
+                })
             }
             Statement::CopyFrom {
                 table_name,
@@ -662,6 +711,120 @@ impl<'a> Binder<'a> {
         let mut column_offset: usize = 0;
 
         for pattern in &match_clause.patterns {
+            // Handle shortest path and all shortest paths patterns
+            if pattern.is_shortest_path || pattern.is_all_shortest_paths {
+                let chain = pattern.shortest_path_chain.as_ref().ok_or_else(|| {
+                    LightningError::Query("Shortest path pattern must have a relationship".into())
+                })?;
+                let rel_pat = &chain.relationship_pattern;
+                let rel_var = rel_pat
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("_rel_{}", self.variables.len()));
+                let rel_table = if rel_pat.labels.is_empty() {
+                    // No label specified — find the first rel table matching the source/dest tables
+                    let src_label = self.require_single_label(
+                        &pattern.shortest_path_start.as_ref().ok_or_else(|| {
+                            LightningError::Query("Shortest path must have a start node".into())
+                        })?.labels,
+                        "Shortest path start node",
+                    )?;
+                    let dst_label = self.require_single_label(
+                        &pattern.shortest_path_end.as_ref().ok_or_else(|| {
+                            LightningError::Query("Shortest path must have an end node".into())
+                        })?.labels,
+                        "Shortest path end node",
+                    )?;
+                    self.catalog
+                        .rel_tables
+                        .iter()
+                        .find(|(_, rel)| rel.from_table.as_str() == src_label.as_str() && rel.to_table.as_str() == dst_label.as_str())
+                        .map(|(_, rel)| rel.clone())
+                        .ok_or_else(|| {
+                            LightningError::Query(format!(
+                                "No rel table found connecting '{}' to '{}'",
+                                src_label, dst_label
+                            ))
+                        })?
+                } else {
+                    let rel_label =
+                        self.require_single_label(&rel_pat.labels, "Shortest path relationship")?;
+                    self.catalog.get_rel_table(rel_label).ok_or_else(|| {
+                        LightningError::Query(format!("Rel Table {rel_label} not found"))
+                    })?.clone()
+                };
+
+                let start_pat = pattern.shortest_path_start.as_ref().ok_or_else(|| {
+                    LightningError::Query("Shortest path must have a start node".into())
+                })?;
+                let start_var = start_pat
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("_n{}", self.variables.len()));
+                let start_label = self.require_single_label(&start_pat.labels, "Shortest path start node")?;
+                let start_table = self.catalog.get_node_table(start_label).ok_or_else(|| {
+                    LightningError::Query(format!("Table {start_label} not found"))
+                })?;
+                self.variables.insert(
+                    start_var.clone(),
+                    BoundVariable {
+                        table_name: start_table.name.clone(),
+                        type_: LogicalType::Node(vec![]),
+                    },
+                );
+                self.column_offsets.insert(start_var.clone(), column_offset);
+                column_offset += start_table.properties.len();
+                let start_props = self.bind_property_items(
+                    &start_pat.properties,
+                    &start_table.properties,
+                    0,
+                )?;
+                elements.push(BoundMatchElement::Node(
+                    start_table.name.clone(),
+                    start_var.clone(),
+                    start_props,
+                ));
+
+                let end_pat = pattern.shortest_path_end.as_ref().ok_or_else(|| {
+                    LightningError::Query("Shortest path must have an end node".into())
+                })?;
+                let end_var = end_pat
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| format!("_n{}", self.variables.len()));
+                let end_label = self.require_single_label(&end_pat.labels, "Shortest path end node")?;
+                let end_table = self.catalog.get_node_table(end_label).ok_or_else(|| {
+                    LightningError::Query(format!("Table {end_label} not found"))
+                })?;
+
+                // Extract max_depth from variable-length bounds
+                let max_depth = rel_pat
+                    .var_len_bounds
+                    .map(|(_, upper)| upper.unwrap_or(u32::MAX))
+                    .unwrap_or(u32::MAX);
+
+                elements.push(BoundMatchElement::AllShortestPaths {
+                    rel_table_name: rel_table.name.clone(),
+                    src_var: start_var.clone(),
+                    dst_var: end_var.clone(),
+                    path_var: rel_var,
+                    max_depth,
+                });
+
+                // Register end node variable (not scanned, but needed for binding)
+                self.variables.insert(
+                    end_var.clone(),
+                    BoundVariable {
+                        table_name: end_table.name.clone(),
+                        type_: LogicalType::Node(vec![]),
+                    },
+                );
+                self.column_offsets.insert(end_var.clone(), column_offset);
+                column_offset += end_table.properties.len();
+
+                continue;
+            }
+
             // Bind the starting node of each pattern
             let node_pat = &pattern.node_pattern;
             let node_var = node_pat
@@ -1340,6 +1503,24 @@ impl<'a> Binder<'a> {
                     bound_steps.push((bm, bw));
                 }
                 Ok(BoundExpression::Exists(bound_steps))
+            }
+            Expression::CountSubquery(steps) => {
+                let mut bound_steps = Vec::new();
+                for (m, w) in steps {
+                    let bm = self.bind_match_clause(m)?;
+                    let bw = w
+                        .as_ref()
+                        .map(|e| {
+                            std::result::Result::<BoundWhereClause, LightningError>::Ok(
+                                BoundWhereClause {
+                                    expression: self.bind_expression(&e.expression)?,
+                                },
+                            )
+                        })
+                        .transpose()?;
+                    bound_steps.push((bm, bw));
+                }
+                Ok(BoundExpression::CountSubquery(bound_steps))
             }
         }
     }

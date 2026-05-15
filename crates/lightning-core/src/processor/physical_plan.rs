@@ -387,6 +387,93 @@ impl PhysicalPlanner {
                     crate::processor::operators::checkpoint::PhysicalVacuum::new(db),
                 ))
             }
+            LogicalOperator::AllShortestPaths {
+                child,
+                rel_table_name,
+                src_var_name,
+                dst_var_name,
+                path_var_name,
+                max_depth,
+            } => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::gds::all_shortest_paths::PhysicalASP::new(
+                        planned_child,
+                        rel_table_name,
+                        src_var_name,
+                        dst_var_name,
+                        path_var_name,
+                        max_depth,
+                    ),
+                ))
+            }
+            LogicalOperator::CreateConstraint {
+                name,
+                table_name,
+                property,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_constraint(
+                    name,
+                    table_name,
+                    property,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::DropConstraint(name) => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_drop_constraint(
+                    name,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::AlterTable { name, operation } => {
+                match operation {
+                    crate::parser::ast::AlterOperation::AddColumn { name: col_name, data_type } => {
+                        let data_type = crate::parser::ast::data_type_to_logical(&data_type);
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_add_column(
+                                name,
+                                col_name,
+                                data_type,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::DropColumn { name: col_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_drop_column(
+                                name,
+                                col_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::RenameTable { new_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_table(
+                                name,
+                                new_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::RenameColumn { old_name, new_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_column(
+                                name,
+                                old_name,
+                                new_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                }
+            }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"
             ))),
@@ -531,9 +618,12 @@ impl PhysicalPlanner {
             LogicalOperator::CountRelTable { .. }
             | LogicalOperator::CreateSequence { .. }
             | LogicalOperator::CreateMacro { .. }
+            | LogicalOperator::CreateConstraint { .. }
+            | LogicalOperator::DropConstraint(..)
             | LogicalOperator::CreateTableNode { .. }
             | LogicalOperator::CreateTableRel { .. }
             | LogicalOperator::DropTable(..)
+            | LogicalOperator::AlterTable { .. }
             | LogicalOperator::CopyFrom { .. }
             | LogicalOperator::CopyTo { .. }
             | LogicalOperator::Transaction(_)

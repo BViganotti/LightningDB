@@ -108,6 +108,13 @@ pub enum LogicalOperator {
     Transaction(BoundTransactionAction),
     Checkpoint,
     Vacuum,
+    AlterTable { name: String, operation: crate::parser::ast::AlterOperation },
+    CreateConstraint {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropConstraint(String),
     CountRelTable {
         rel_table: String,
         bound_table: String, // Source node table for counting
@@ -318,6 +325,21 @@ impl LogicalPlanner {
             BoundStatement::Transaction(action) => Ok(LogicalOperator::Transaction(action)),
             BoundStatement::Checkpoint => Ok(LogicalOperator::Checkpoint),
             BoundStatement::Vacuum => Ok(LogicalOperator::Vacuum),
+            BoundStatement::AlterTable { name, operation } => {
+                Ok(LogicalOperator::AlterTable { name, operation })
+            }
+            BoundStatement::CreateConstraint {
+                name,
+                table_name,
+                property,
+            } => Ok(LogicalOperator::CreateConstraint {
+                name,
+                table_name,
+                property,
+            }),
+            BoundStatement::DropConstraint(name) => {
+                Ok(LogicalOperator::DropConstraint(name))
+            }
             BoundStatement::StandaloneCall(name, args) => Ok(LogicalOperator::Call(BoundCall {
                 procedure_name: name,
                 parameters: args
@@ -365,6 +387,11 @@ impl LogicalPlanner {
                             }
                             op
                         }
+                        crate::planner::binder::BoundMatchElement::AllShortestPaths { .. } => {
+                            return Err(crate::LightningError::Query(
+                                "MATCH must start with a node".into(),
+                            ));
+                        }
                         crate::planner::binder::BoundMatchElement::Rel(_, _, _, _, _) => {
                             return Err(crate::LightningError::Query(
                                 "MATCH must start with a node".into(),
@@ -374,6 +401,22 @@ impl LogicalPlanner {
 
                     while let Some(element) = match_elements_iter.next() {
                         match element {
+                            crate::planner::binder::BoundMatchElement::AllShortestPaths {
+                                rel_table_name,
+                                src_var,
+                                dst_var: _,
+                                path_var,
+                                max_depth,
+                            } => {
+                                plan = LogicalOperator::AllShortestPaths {
+                                    child: Box::new(plan),
+                                    rel_table_name,
+                                    src_var_name: src_var,
+                                    dst_var_name: path_var.clone(),
+                                    path_var_name: path_var,
+                                    max_depth,
+                                };
+                            }
                             crate::planner::binder::BoundMatchElement::Node(
                                 table,
                                 var,

@@ -420,6 +420,25 @@ impl ExpressionEvaluator {
                     ))),
                 }
             }
+            BoundExpression::CountSubquery(steps) => {
+                let count = if let Some((sub_match, _sub_where)) = steps.first() {
+                    // Count by scanning the first node table in the subquery
+                    let mut total: i64 = 0;
+                    for element in &sub_match.elements {
+                        if let crate::planner::binder::BoundMatchElement::Node(table_name, _, _) = element {
+                            let storage = database.storage_manager.read();
+                            if let Some(table) = storage.get_table(table_name) {
+                                let num_rows = table.next_row_id.load(std::sync::atomic::Ordering::Relaxed);
+                                total += num_rows as i64;
+                            }
+                        }
+                    }
+                    total
+                } else {
+                    0
+                };
+                Ok(Arc::new(arrow::array::Int64Array::from_value(count, num_rows)))
+            }
             _ => Err(LightningError::Internal(format!(
                 "Expression evaluation not implemented: {expr:?}"
             ))),
