@@ -1015,6 +1015,42 @@ fn count_subquery_zero_rows() -> TestResult {
 }
 
 #[test]
+fn map_literal_basic() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    let res = conn.execute(
+        "RETURN {name: 'Alice', age: 30} AS person",
+        None,
+    )?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn map_literal_empty() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    let res = conn.execute("RETURN {} AS empty", None)?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn map_literal_nested_expression() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 42})", None)?;
+
+    let res = conn.execute(
+        "MATCH (t:T) RETURN {label: t.val * 2} AS result",
+        None,
+    )?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
 fn all_shortest_paths_basic() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
@@ -1055,5 +1091,95 @@ fn all_shortest_paths_expand() -> TestResult {
     let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total, 0, "ALL SHORTEST PATHS returns 0 rows (physical operator needs completion)");
 
+    Ok(())
+}
+
+#[test]
+fn index_create_and_drop() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING)", None)?;
+
+    conn.execute(
+        "CREATE INDEX idx_name FOR (n:Person) ON (n.name)",
+        None,
+    )?;
+
+    let storage = db.storage_manager.read();
+    assert!(storage.indexes.contains_key("idx_name"), "Index should exist");
+    drop(storage);
+
+    conn.execute("DROP INDEX idx_name", None)?;
+
+    let storage = db.storage_manager.read();
+    assert!(!storage.indexes.contains_key("idx_name"), "Index should be removed");
+    Ok(())
+}
+
+#[test]
+fn index_table_not_found_error() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    let result = conn.execute(
+        "CREATE INDEX idx FOR (n:Nonexistent) ON (n.x)",
+        None,
+    );
+    assert!(result.is_err(), "Table not found should error");
+    Ok(())
+}
+
+#[test]
+fn list_quantifier_all() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE T(val INT64)", None)?;
+    conn.execute("CREATE (:T {val: 1})", None)?;
+    conn.execute("CREATE (:T {val: 2})", None)?;
+    conn.execute("CREATE (:T {val: 3})", None)?;
+
+    let res = conn.execute(
+        "RETURN ALL(x IN [1, 2, 3] WHERE x > 0) AS result",
+        None,
+    )?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn list_quantifier_any() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+
+    let res = conn.execute(
+        "RETURN ANY(x IN [1, 2, 3] WHERE x > 2) AS result",
+        None,
+    )?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn list_quantifier_none() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+
+    let res = conn.execute(
+        "RETURN NONE(x IN [1, 2, 3] WHERE x > 10) AS result",
+        None,
+    )?;
+    assert_row_count!(res, 1);
+    Ok(())
+}
+
+#[test]
+fn list_quantifier_single() -> TestResult {
+    let (_dir, db) = setup_db()?;
+    let conn = db.connect();
+
+    let res = conn.execute(
+        "RETURN SINGLE(x IN [1, 2, 3] WHERE x = 2) AS result",
+        None,
+    )?;
+    assert_row_count!(res, 1);
     Ok(())
 }

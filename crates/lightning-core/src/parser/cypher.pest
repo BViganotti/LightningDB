@@ -12,7 +12,9 @@ checkpoint_statement = { ^"CHECKPOINT" }
 begin_tx = { ^"BEGIN" ~ ^"TRANSACTION"? }
 commit_tx = { ^"COMMIT" ~ ^"TRANSACTION"? }
 rollback_tx = { ^"ROLLBACK" ~ ^"TRANSACTION"? }
-ddl_statement = _{ create_node_table | create_rel_table | drop_table | alter_table | copy_statement | create_constraint | drop_constraint }
+ddl_statement = _{ create_node_table | create_rel_table | drop_table | alter_table | copy_statement | create_constraint | drop_constraint | create_index | drop_index }
+create_index = { ^"CREATE" ~ ^"INDEX" ~ variable ~ ^"FOR" ~ "(" ~ variable ~ ":" ~ label_name ~ ")" ~ ^"ON" ~ "(" ~ variable ~ "." ~ variable ~ ")" }
+drop_index = { ^"DROP" ~ ^"INDEX" ~ variable }
 create_constraint = { ^"CREATE" ~ ^"CONSTRAINT" ~ variable ~ ^"FOR" ~ "(" ~ variable ~ ":" ~ label_name ~ ")" ~ ^"REQUIRE" ~ variable ~ "." ~ variable ~ ^"IS" ~ ^"UNIQUE" }
 drop_constraint = { ^"DROP" ~ ^"CONSTRAINT" ~ variable }
 alter_table = { ^"ALTER" ~ ^"TABLE" ~ table_name ~ alter_operation }
@@ -114,7 +116,13 @@ arithmetic_expr = { atom ~ ( arithmetic_operator ~ atom )* }
 comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
 arithmetic_operator = { "+" | "-" | "*" | "/" | "%" }
 
-atom = { count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+list_quantifier = { all_q | any_q | none_q | single_q }
+all_q = { ^"ALL" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
+any_q = { ^"ANY" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
+none_q = { ^"NONE" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
+single_q = { ^"SINGLE" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
+map_literal = { "{" ~ (property_item ~ ("," ~ property_item)*)? ~ "}" }
 cast_expression = { ^"CAST" ~ "(" ~ expression ~ ^"AS" ~ data_type ~ ")" }
 extract_expression = { ^"EXTRACT" ~ "(" ~ extract_field ~ ^"FROM" ~ expression ~ ")" }
 extract_field = { ^"YEAR" | ^"MONTH" | ^"DAY" | ^"HOUR" | ^"MINUTE" | ^"SECOND" | ^"QUARTER" | ^"WEEK" | ^"DOW" | ^"DOY" }

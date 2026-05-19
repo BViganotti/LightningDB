@@ -60,8 +60,9 @@ impl PhysicalASP {
         }
     }
 
-    fn get_csr(&self, database: &Database) -> Option<Arc<CSRIndex>> {
+    fn get_csr(&self, database: &Database, tx: &crate::transaction::transaction_manager::Transaction) -> Option<Arc<CSRIndex>> {
         let sm = database.storage_manager.read();
+        let _ = sm.ensure_csr_fresh(&self.rel_table_name, &database.buffer_manager, tx);
         sm.fwd_csr.get(&self.rel_table_name).cloned()
     }
 
@@ -179,7 +180,7 @@ impl PhysicalOperator for PhysicalASP {
                             };
                             self.chunk_row_idx += 1;
 
-                            if let Some(csr) = self.get_csr(database) {
+                            if let Some(csr) = self.get_csr(database, tx) {
                                 self.run_bfs(&csr, src_id, bm, tx)?;
                                 let result_chunk = self.build_chunk_for_source(src_id);
                                 if result_chunk.batch.num_rows() > 0 {

@@ -556,6 +556,120 @@ fn bench_large_strings() {
 }
 
 // ============================================================
+// CONCURRENT THROUGHPUT BENCHMARK
+// ============================================================
+
+/// Measure combined throughput of N concurrent readers + M concurrent writers.
+/// Readers execute aggregate queries; writers create new nodes in batches.
+#[test]
+fn bench_concurrent_throughput() {
+    let dir = tempdir().unwrap();
+    let db = Arc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
+    let conn = db.connect();
+
+    conn.execute("CREATE NODE TABLE T(id INT64, val INT64)", None).unwrap();
+
+    // Seed initial data
+    for i in 0..1000 {
+        conn.execute(&format!("CREATE (:T {{id: {}, val: {}}})", i, i), None).unwrap();
+    }
+
+    // Config
+    let num_readers = 4.max(num_cpus::get() / 2);
+    let num_writers = 2.max(num_cpus::get() / 4);
+    let run_duration = Duration::from_secs(3);
+    let writer_batch = 10;
+
+    let reader_ops = Arc::new(AtomicU64::new(0));
+    let writer_ops = Arc::new(AtomicU64::new(0));
+    let stop = Arc::new(AtomicU64::new(0));
+
+    // Spawn readers
+    let mut handles = Vec::new();
+    for _ in 0..num_readers {
+        let db = Arc::clone(&db);
+        let rops = Arc::clone(&reader_ops);
+        let stop = Arc::clone(&stop);
+        handles.push(std::thread::spawn(move || {
+            let c = db.connect();
+            while stop.load(Ordering::Relaxed) == 0 {
+                if c.execute(
+                    "MATCH (t:T) WHERE t.val > 500 RETURN count(*), avg(t.val)",
+                    None,
+                ).is_ok() {
+                    rops.fetch_add(1, Ordering::Relaxed);
+                }
+                // Also do short range queries
+                if c.execute(
+                    "MATCH (t:T) WHERE t.id < 1000 RETURN max(t.id)",
+                    None,
+                ).is_ok() {
+                    rops.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }));
+    }
+
+    // Spawn writers
+    let next_id = Arc::new(AtomicU64::new(1000));
+    for _ in 0..num_writers {
+        let db = Arc::clone(&db);
+        let wops = Arc::clone(&writer_ops);
+        let stop = Arc::clone(&stop);
+        let nid = Arc::clone(&next_id);
+        handles.push(std::thread::spawn(move || {
+            let c = db.connect();
+            while stop.load(Ordering::Relaxed) == 0 {
+                let start = nid.fetch_add(writer_batch as u64, Ordering::Relaxed);
+                let mut ok = true;
+                for j in 0..writer_batch {
+                    if c.execute(
+                        &format!("CREATE (:T {{id: {}, val: {}}})", start + j, start + j),
+                        None,
+                    ).is_err() {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    wops.fetch_add(writer_batch as u64, Ordering::Relaxed);
+                }
+            }
+        }));
+    }
+
+    // Run for fixed duration
+    std::thread::sleep(run_duration);
+    stop.store(1, Ordering::SeqCst);
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let r_ops = reader_ops.load(Ordering::Relaxed);
+    let w_ops = writer_ops.load(Ordering::Relaxed);
+    let total_ops = r_ops + w_ops;
+    let elapsed = run_duration.as_secs_f64();
+    let throughput = total_ops as f64 / elapsed;
+
+    println!(
+        "BENCH|concurrent|{} readers {} writers|{:.1}s|{}R {}W {}T ({:.0} ops/s)",
+        num_readers,
+        num_writers,
+        elapsed,
+        r_ops,
+        w_ops,
+        total_ops,
+        throughput,
+    );
+
+    assert!(
+        total_ops > 0,
+        "Concurrent benchmark should complete at least 1 operation"
+    );
+}
+
+// ============================================================
 // SUMMARY
 // ============================================================
 

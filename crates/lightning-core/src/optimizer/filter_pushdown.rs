@@ -41,6 +41,11 @@ impl FilterPushDown {
                     Self::extract_variables(arg, vars);
                 }
             }
+            BoundExpression::Map(entries, _) => {
+                for (_, expr) in entries {
+                    Self::extract_variables(expr, vars);
+                }
+            }
             BoundExpression::Case {
                 expression,
                 when_then,

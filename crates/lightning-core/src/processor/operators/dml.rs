@@ -609,11 +609,7 @@ impl PhysicalOperator for PhysicalCreateRel {
                 }
             }
             // Auto-build CSR indices after insert
-            database.storage_manager.read().rebuild_csr(
-                &self.table_name,
-                &self.buffer_manager,
-                tx,
-            )?;
+            database.storage_manager.read().mark_csr_stale(&self.table_name);
         }
         if self
             .shared_state

@@ -292,6 +292,45 @@ impl ExpressionEvaluator {
                 Ok(Arc::new(res))
             }
             BoundExpression::Function(name, args, _) => {
+                // Handle list functions with lambdas BEFORE generic arg evaluation
+                match name.as_str() {
+                    "LIST_FILTER" => {
+                        let list_array = Self::evaluate(
+                            &args[0], batch, params, num_rows, registry, database,
+                        )?;
+                        let lambda = &args[1];
+                        if let BoundExpression::Lambda(var, body) = lambda {
+                            return Self::evaluate_list_filter(
+                                &list_array, var, body, params, registry, database,
+                            );
+                        }
+                    }
+                    "LIST_TRANSFORM" => {
+                        let list_array = Self::evaluate(
+                            &args[0], batch, params, num_rows, registry, database,
+                        )?;
+                        let lambda = &args[1];
+                        if let BoundExpression::Lambda(var, body) = lambda {
+                            return Self::evaluate_list_transform(
+                                &list_array, var, body, params, registry, database,
+                            );
+                        }
+                    }
+                    "LIST_ANY" | "LIST_ALL" | "LIST_SINGLE" | "LIST_NONE" => {
+                        let list_array = Self::evaluate(
+                            &args[0], batch, params, num_rows, registry, database,
+                        )?;
+                        let lambda = &args[1];
+                        if let BoundExpression::Lambda(var, body) = lambda {
+                            return Self::evaluate_list_predicate(
+                                &list_array, var, body, name.as_str(),
+                                params, registry, database,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+
                 let mut arg_arrays = Vec::new();
                 for arg in args {
                     arg_arrays.push(Self::evaluate(
@@ -303,66 +342,9 @@ impl ExpressionEvaluator {
                     return func.execute(&arg_arrays, num_rows);
                 }
 
-                match name.as_str() {
-                    "LIST_FILTER" => {
-                        let list_array = arg_arrays[0].clone();
-                        let lambda = &args[1];
-                        if let BoundExpression::Lambda(var, body) = lambda {
-                            Self::evaluate_list_filter(
-                                &list_array,
-                                var,
-                                body,
-                                params,
-                                registry,
-                                database,
-                            )
-                        } else {
-                            Err(LightningError::Internal(
-                                "LIST_FILTER requires lambda".into(),
-                            ))
-                        }
-                    }
-                    "LIST_TRANSFORM" => {
-                        let list_array = arg_arrays[0].clone();
-                        let lambda = &args[1];
-                        if let BoundExpression::Lambda(var, body) = lambda {
-                            Self::evaluate_list_transform(
-                                &list_array,
-                                var,
-                                body,
-                                params,
-                                registry,
-                                database,
-                            )
-                        } else {
-                            Err(LightningError::Internal(
-                                "LIST_TRANSFORM requires lambda".into(),
-                            ))
-                        }
-                    }
-                    "LIST_ANY" | "LIST_ALL" | "LIST_SINGLE" | "LIST_NONE" => {
-                        let list_array = arg_arrays[0].clone();
-                        let lambda = &args[1];
-                        if let BoundExpression::Lambda(var, body) = lambda {
-                            Self::evaluate_list_predicate(
-                                &list_array,
-                                var,
-                                body,
-                                name.as_str(),
-                                params,
-                                registry,
-                                database,
-                            )
-                        } else {
-                            Err(LightningError::Internal(
-                                format!("{name} requires lambda"),
-                            ))
-                        }
-                    }
-                    _ => Err(LightningError::Internal(format!(
-                        "Function {name} not implemented"
-                    ))),
-                }
+                Err(LightningError::Internal(format!(
+                    "Function {name} not implemented"
+                )))
             }
             BoundExpression::List(exprs, list_type) => {
                 let mut arrays = Vec::new();
@@ -403,6 +385,45 @@ impl ExpressionEvaluator {
                 let list_array = ListArray::try_new(field, offsets, values_arr, None)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
                 Ok(Arc::new(list_array))
+            }
+            BoundExpression::Map(entries, struct_type) => {
+                let field_defs = if let LogicalType::Struct(fds) = struct_type {
+                    fds
+                } else {
+                    return Err(LightningError::Internal("Map must have Struct type".into()));
+                };
+                if field_defs.is_empty() {
+                    return Ok(arrow::array::new_null_array(
+                        &arrow::datatypes::DataType::Struct(arrow::datatypes::Fields::default()),
+                        num_rows,
+                    ));
+                }
+                let mut fields = Vec::new();
+                let mut arrays = Vec::new();
+                for ((_key, expr), field_def) in entries.iter().zip(field_defs.iter()) {
+                    let arr = Self::evaluate(
+                        expr, batch, params, num_rows, registry, database,
+                    )?;
+                    let arrow_type = crate::processor::arrow_utils::logical_type_to_arrow_type(
+                        &field_def.type_,
+                    );
+                    // Cast if needed
+                    let cast_arr = if arr.data_type() != &arrow_type {
+                        arrow::compute::kernels::cast::cast(&arr, &arrow_type)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?
+                    } else {
+                        arr
+                    };
+                    fields.push(Arc::new(arrow::datatypes::Field::new(
+                        &field_def.name,
+                        arrow_type,
+                        true,
+                    )));
+                    arrays.push(cast_arr);
+                }
+                let struct_array = arrow::array::StructArray::try_new(fields.into(), arrays, None)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                Ok(Arc::new(struct_array))
             }
             BoundExpression::Parameter(name) => {
                 let val = params.and_then(|p| p.get(name)).ok_or_else(|| {

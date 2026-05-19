@@ -17,6 +17,7 @@ use parking_lot::RwLock as PlRwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const DEFAULT_WRITE_BUFFER_THRESHOLD: usize = 200;
@@ -522,7 +523,7 @@ pub struct StorageManager {
     pub vector_indexes: HashMap<String, Arc<crate::storage::index::vector_index::VectorIndex>>,
     pub fwd_csr: HashMap<String, Arc<crate::storage::index::csr::CSRIndex>>,
     pub bwd_csr: HashMap<String, Arc<crate::storage::index::csr::CSRIndex>>,
-    csr_cardinalities: HashMap<String, u64>,
+    csr_cardinalities: PlRwLock<HashMap<String, u64>>,
     file_handles: HashMap<u64, Arc<FileHandle>>,
     free_space_manager: Option<Arc<FreeSpaceManager>>,
 }
@@ -544,7 +545,7 @@ impl StorageManager {
             vector_indexes: HashMap::new(),
             fwd_csr: HashMap::new(),
             bwd_csr: HashMap::new(),
-            csr_cardinalities: HashMap::new(),
+            csr_cardinalities: PlRwLock::new(HashMap::new()),
             file_handles: HashMap::new(),
             free_space_manager: None,
         })
@@ -953,12 +954,14 @@ impl StorageManager {
         }
     }
 
-    pub fn mark_csr_stale(&mut self, table_name: &str) {
-        self.csr_cardinalities.remove(table_name);
+    pub fn mark_csr_stale(&self, table_name: &str) {
+        self.csr_cardinalities.write().remove(table_name);
     }
 
-    pub fn rebuild_csr_if_stale(
-        &mut self,
+    /// Ensure the CSR for the given table is up-to-date. If stale, rebuild it.
+    /// Call this before using the CSR for query execution.
+    pub fn ensure_csr_fresh(
+        &self,
         table_name: &str,
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
@@ -971,12 +974,35 @@ impl StorageManager {
             Some(t) => t.stats.read().cardinality,
             None => return Ok(()),
         };
-        let last_rebuilt = self.csr_cardinalities.get(table_name).copied().unwrap_or(0);
+        let last_rebuilt = self.csr_cardinalities.read().get(table_name).copied().unwrap_or(0);
         if current_cardinality == last_rebuilt {
             return Ok(());
         }
         self.rebuild_csr(table_name, bm, tx)?;
-        self.csr_cardinalities.insert(table_name.to_string(), current_cardinality);
+        self.csr_cardinalities.write().insert(table_name.to_string(), current_cardinality);
+        Ok(())
+    }
+
+    pub fn rebuild_csr_if_stale(
+        &self,
+        table_name: &str,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        let has_csr = self.fwd_csr.contains_key(table_name) || self.bwd_csr.contains_key(table_name);
+        if !has_csr {
+            return Ok(());
+        }
+        let current_cardinality = match self.get_table(table_name) {
+            Some(t) => t.stats.read().cardinality,
+            None => return Ok(()),
+        };
+        let last_rebuilt = self.csr_cardinalities.read().get(table_name).copied().unwrap_or(0);
+        if current_cardinality == last_rebuilt {
+            return Ok(());
+        }
+        self.rebuild_csr(table_name, bm, tx)?;
+        self.csr_cardinalities.write().insert(table_name.to_string(), current_cardinality);
         Ok(())
     }
 

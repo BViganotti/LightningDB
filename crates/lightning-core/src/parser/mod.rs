@@ -396,6 +396,24 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     i.into_inner().next().unwrap().as_str().to_string(),
                 ));
             }
+            Rule::create_index => {
+                let mut it = i.into_inner();
+                let name = it.next().unwrap().as_str().to_string();
+                it.next(); // skip node variable (e.g. n)
+                let table_label = it.next().unwrap().as_str().to_string();
+                it.next(); // skip property variable (e.g. n)
+                let property = it.next().unwrap().as_str().to_string();
+                return Ok(Statement::CreateIndex {
+                    name,
+                    table_label,
+                    property,
+                });
+            }
+            Rule::drop_index => {
+                return Ok(Statement::DropIndex(
+                    i.into_inner().next().unwrap().as_str().to_string(),
+                ));
+            }
             Rule::match_clause => {
                 let pats = parse_match_clause(i)?;
                 match_clause_opt = Some(MatchClause { patterns: pats });
@@ -837,10 +855,15 @@ fn parse_var_len(
     p: pest::iterators::Pair<Rule>,
 ) -> Result<(Option<u32>, Option<u32>), ParserError> {
     let mut l = None;
-    let u = None;
+    let mut u = None;
     for i in p.into_inner() {
         if i.as_rule() == Rule::number_literal {
-            l = Some(i.as_str().parse().unwrap_or(1));
+            let val = i.as_str().parse().unwrap_or(1);
+            if l.is_none() {
+                l = Some(val);
+            } else {
+                u = Some(val);
+            }
         }
     }
     Ok((l, u))
@@ -1097,6 +1120,36 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                 is.push(parse_expression(i)?);
             }
             Ok(Expression::List(is))
+        }
+        Rule::map_literal => {
+            let mut entries = Vec::new();
+            for item in i.into_inner() {
+                let pi = parse_property_item(item)?;
+                entries.push((pi.key, pi.value));
+            }
+            Ok(Expression::Map(entries))
+        }
+        Rule::list_quantifier => {
+            let inner = i.into_inner().next().unwrap();
+            let func_name = match inner.as_rule() {
+                Rule::all_q => "LIST_ALL",
+                Rule::any_q => "LIST_ANY",
+                Rule::none_q => "LIST_NONE",
+                Rule::single_q => "LIST_SINGLE",
+                _ => return Err(ParserError::Internal(format!("Unknown quantifier: {:?}", inner.as_rule()))),
+            };
+            let mut parts = inner.into_inner();
+            let var = parts.next().unwrap().as_str().to_string();
+            let list_expr = parse_expression(parts.next().unwrap())?;
+            let pred_expr = parse_expression(parts.next().unwrap())?;
+            Ok(Expression::Function(
+                func_name.to_string(),
+                vec![
+                    list_expr,
+                    Expression::Lambda(var, Box::new(pred_expr)),
+                ],
+                false,
+            ))
         }
         Rule::parenthesized_expression => parse_expression(i.into_inner().next().unwrap()),
         Rule::case_expression => Ok(Expression::Case {

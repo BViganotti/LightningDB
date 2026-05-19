@@ -61,6 +61,12 @@ pub enum BoundStatement {
         property: String,
     },
     DropConstraint(String),
+    CreateIndex {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropIndex(String),
     StandaloneCall(String, Vec<Literal>),
     CreateSequence {
         name: String,
@@ -260,6 +266,7 @@ pub enum BoundExpression {
     NextVal(String),                      // sequence name
     Exists(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
     CountSubquery(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
+    Map(Vec<(String, BoundExpression)>, LogicalType),
 }
 
 impl BoundExpression {
@@ -276,6 +283,7 @@ impl BoundExpression {
             BoundExpression::Comparison(_, _, _) => LogicalType::Bool,
             BoundExpression::Exists(_) => LogicalType::Bool,
             BoundExpression::CountSubquery(_) => LogicalType::Int64,
+            BoundExpression::Map(_, t) => t.clone(),
             BoundExpression::Variable(_, t) => t.clone(),
             BoundExpression::PropertyLookup(_, _, t) => t.clone(),
             BoundExpression::Arithmetic(left, _, _) => left.get_type(),
@@ -328,6 +336,7 @@ impl BoundExpression {
             BoundExpression::Lambda(_, body) => body.is_aggregate(),
             BoundExpression::Exists(_)
             | BoundExpression::CountSubquery(_)
+            | BoundExpression::Map(_, _)
             | BoundExpression::Parameter(_)
             | BoundExpression::NextVal(_) => false,
             BoundExpression::Literal(_) => false,
@@ -489,6 +498,29 @@ impl<'a> Binder<'a> {
             }
             Statement::DropConstraint(name) => {
                 Ok(BoundStatement::DropConstraint(name.clone()))
+            }
+            Statement::CreateIndex {
+                name,
+                table_label,
+                property,
+            } => {
+                let table_name = {
+                    self.catalog
+                        .get_node_table(table_label)
+                        .ok_or_else(|| {
+                            LightningError::Query(format!("Table {table_label} not found"))
+                        })?
+                        .name
+                        .clone()
+                };
+                Ok(BoundStatement::CreateIndex {
+                    name: name.clone(),
+                    table_name,
+                    property: property.clone(),
+                })
+            }
+            Statement::DropIndex(name) => {
+                Ok(BoundStatement::DropIndex(name.clone()))
             }
             Statement::AlterTable { name, operation } => {
                 Ok(BoundStatement::AlterTable {
@@ -1294,9 +1326,6 @@ impl<'a> Binder<'a> {
             }
             Expression::Function(name, args, distinct) => {
                 let mut bound_args = Vec::new();
-                for arg in args {
-                    bound_args.push(self.bind_expression(arg)?);
-                }
 
                 // Handle DISTINCT - convert COUNT(DISTINCT x) to COUNT_DISTINCT
                 let actual_name = if *distinct {
@@ -1307,6 +1336,57 @@ impl<'a> Binder<'a> {
                 } else {
                     name.to_uppercase()
                 };
+
+                // CHECK FOR LIST FUNCTIONS WITH LAMBDAS — bind before generic arg pass
+                if let (
+                    Some("LIST_FILTER")
+                    | Some("LIST_TRANSFORM")
+                    | Some("LIST_ANY")
+                    | Some("LIST_ALL")
+                    | Some("LIST_SINGLE")
+                    | Some("LIST_NONE"),
+                    [list_expr, lambda_expr],
+                ) = (Some(actual_name.as_str()), args.as_slice())
+                {
+                    let bound_list = self.bind_expression(list_expr)?;
+                    let element_type = if let LogicalType::List(el) = bound_list.get_type() {
+                        *el
+                    } else {
+                        LogicalType::Any
+                    };
+
+                    if let Expression::Lambda(var, body) = lambda_expr {
+                        let mut inner_binder = Binder {
+                            catalog: self.catalog,
+                            function_registry: self.function_registry,
+                            variables: self.variables.clone(),
+                            column_offsets: self.column_offsets.clone(),
+                        };
+                        inner_binder.variables.insert(
+                            var.clone(),
+                            BoundVariable {
+                                table_name: "".into(),
+                                type_: element_type,
+                            },
+                        );
+                        let bound_body = inner_binder.bind_expression(body)?;
+                        let bound_lambda =
+                            BoundExpression::Lambda(var.clone(), Box::new(bound_body));
+
+                        let ret_type = match actual_name.as_str() {
+                            "LIST_FILTER" => bound_list.get_type(),
+                            "LIST_TRANSFORM" => {
+                                LogicalType::List(Box::new(bound_lambda.get_type()))
+                            }
+                            _ => LogicalType::Bool,
+                        };
+                        return Ok(BoundExpression::Function(
+                            actual_name,
+                            vec![bound_list, bound_lambda],
+                            ret_type,
+                        ));
+                    }
+                }
 
                 // CHECK FOR NEXTVAL
                 if actual_name == "NEXTVAL" {
@@ -1350,6 +1430,11 @@ impl<'a> Binder<'a> {
                     self.variables.extend(prev_vars);
 
                     return self.substitute_macro_body(&bound_body, &substitution);
+                }
+
+                // Generic argument binding for non-lambda functions
+                for arg in args {
+                    bound_args.push(self.bind_expression(arg)?);
                 }
 
                 let arg_types: Vec<_> = bound_args.iter().map(|a| a.get_type()).collect();
@@ -1445,6 +1530,23 @@ impl<'a> Binder<'a> {
                 Ok(BoundExpression::List(
                     bound_exprs,
                     LogicalType::List(Box::new(element_type)),
+                ))
+            }
+            Expression::Map(entries) => {
+                let mut bound_entries = Vec::new();
+                let mut field_types = Vec::new();
+                for (key, val_expr) in entries {
+                    let bound_val = self.bind_expression(val_expr)?;
+                    let val_type = bound_val.get_type();
+                    field_types.push(lightning_types::StructField {
+                        name: key.clone(),
+                        type_: val_type.clone(),
+                    });
+                    bound_entries.push((key.clone(), bound_val));
+                }
+                Ok(BoundExpression::Map(
+                    bound_entries,
+                    LogicalType::Struct(field_types),
                 ))
             }
             Expression::Lambda(var, body) => {

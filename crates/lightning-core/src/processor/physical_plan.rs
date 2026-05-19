@@ -278,6 +278,129 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
+            LogicalOperator::CreateConstraint {
+                name,
+                table_name,
+                property,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_constraint(
+                    name,
+                    table_name,
+                    property,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::RecursiveJoin {
+                child,
+                rel_table: rel_table_name,
+                src_var: _,
+                dst_node_table,
+                bounds,
+                mask_id: _,
+                ..
+            } => {
+                let planned_child = self.plan(*child)?;
+                let storage = self.db.storage_manager.read();
+                let rel_table = storage.get_table(&rel_table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Rel table {rel_table_name} not found"))
+                })?.clone();
+                let dst_table = storage.get_table(&dst_node_table).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table {dst_node_table} not found"))
+                })?.clone();
+                drop(storage);
+
+                let src_idx = 0;
+                let min_d = bounds.and_then(|b| b.0).unwrap_or(1);
+                let max_d = bounds.and_then(|b| b.1).unwrap_or(u32::MAX);
+
+                Ok(Box::new(
+                    crate::processor::operators::recursive_join::PhysicalRecursiveJoin::new(
+                        planned_child,
+                        rel_table,
+                        dst_table,
+                        self.db.buffer_manager.clone(),
+                        0,
+                        src_idx,
+                        (min_d, max_d),
+                        self.read_ts,
+                    ),
+                ))
+            }
+            LogicalOperator::DropConstraint(name) => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_drop_constraint(
+                    name,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::CreateIndex {
+                name,
+                table_name,
+                property,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_index(
+                    name,
+                    table_name,
+                    property,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::DropIndex(name) => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_drop_index(
+                    name,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::AlterTable { name, operation } => {
+                match operation {
+                    crate::parser::ast::AlterOperation::AddColumn { name: col_name, data_type } => {
+                        let data_type = crate::parser::ast::data_type_to_logical(&data_type);
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_add_column(
+                                name,
+                                col_name,
+                                data_type,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::DropColumn { name: col_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_drop_column(
+                                name,
+                                col_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::RenameTable { new_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_table(
+                                name,
+                                new_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                    crate::parser::ast::AlterOperation::RenameColumn { old_name, new_name } => {
+                        Ok(Box::new(
+                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_column(
+                                name,
+                                old_name,
+                                new_name,
+                                self.db.clone(),
+                                self.undo_buffer.clone(),
+                            ),
+                        ))
+                    }
+                }
+            }
             LogicalOperator::CreateTableNode {
                 name,
                 columns,
@@ -317,38 +440,7 @@ impl PhysicalPlanner {
                     self.db.clone(),
                     self.undo_buffer.clone(),
                 ),
-            )            ),
-            LogicalOperator::Merge {
-                child,
-                pattern,
-                on_create_assignments,
-                on_match_assignments,
-            } => {
-                let _planned_child = self.plan(*child)?;
-                let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pattern.table_name).unwrap().clone();
-                let num_rows = {
-                    let cat = self.db.catalog.read();
-                    cat.get_node_table(&pattern.table_name).unwrap().num_rows
-                };
-                let effective_num_rows = num_rows;
-                let table_name = pattern.table_name.clone();
-                Ok(Box::new(
-                    crate::processor::operators::dml::PhysicalMerge::new(
-                        table_name,
-                        table,
-                        pattern,
-                        on_create_assignments,
-                        on_match_assignments,
-                        self.db.buffer_manager.clone(),
-                        self.undo_buffer.clone(),
-                        self.tx_id,
-                        self.read_ts,
-                        effective_num_rows,
-                    ),
-                ))
-            }
-
+            )),
             LogicalOperator::Union(left, right, is_all) => {
                 let l = self.plan(*left)?;
                 let r = self.plan(*right)?;
@@ -407,72 +499,35 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
-            LogicalOperator::CreateConstraint {
-                name,
-                table_name,
-                property,
-            } => Ok(Box::new(
-                crate::processor::operators::ddl::PhysicalDDL::new_create_constraint(
-                    name,
-                    table_name,
-                    property,
-                    self.db.clone(),
-                    self.undo_buffer.clone(),
-                ),
-            )),
-            LogicalOperator::DropConstraint(name) => Ok(Box::new(
-                crate::processor::operators::ddl::PhysicalDDL::new_drop_constraint(
-                    name,
-                    self.db.clone(),
-                    self.undo_buffer.clone(),
-                ),
-            )),
-            LogicalOperator::AlterTable { name, operation } => {
-                match operation {
-                    crate::parser::ast::AlterOperation::AddColumn { name: col_name, data_type } => {
-                        let data_type = crate::parser::ast::data_type_to_logical(&data_type);
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_add_column(
-                                name,
-                                col_name,
-                                data_type,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::DropColumn { name: col_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_drop_column(
-                                name,
-                                col_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::RenameTable { new_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_table(
-                                name,
-                                new_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::RenameColumn { old_name, new_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_column(
-                                name,
-                                old_name,
-                                new_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                }
+            LogicalOperator::Merge {
+                child,
+                pattern,
+                on_create_assignments,
+                on_match_assignments,
+            } => {
+                let _planned_child = self.plan(*child)?;
+                let storage = self.db.storage_manager.read();
+                let table = storage.get_table(&pattern.table_name).unwrap().clone();
+                let num_rows = {
+                    let cat = self.db.catalog.read();
+                    cat.get_node_table(&pattern.table_name).unwrap().num_rows
+                };
+                let effective_num_rows = num_rows;
+                let table_name = pattern.table_name.clone();
+                Ok(Box::new(
+                    crate::processor::operators::dml::PhysicalMerge::new(
+                        table_name,
+                        table,
+                        pattern,
+                        on_create_assignments,
+                        on_match_assignments,
+                        self.db.buffer_manager.clone(),
+                        self.undo_buffer.clone(),
+                        self.tx_id,
+                        self.read_ts,
+                        effective_num_rows,
+                    ),
+                ))
             }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"
@@ -619,8 +674,10 @@ impl PhysicalPlanner {
             | LogicalOperator::CreateSequence { .. }
             | LogicalOperator::CreateMacro { .. }
             | LogicalOperator::CreateConstraint { .. }
-            | LogicalOperator::DropConstraint(..)
-            | LogicalOperator::CreateTableNode { .. }
+             | LogicalOperator::DropConstraint(..)
+             | LogicalOperator::CreateIndex { .. }
+             | LogicalOperator::DropIndex(..)
+             | LogicalOperator::CreateTableNode { .. }
             | LogicalOperator::CreateTableRel { .. }
             | LogicalOperator::DropTable(..)
             | LogicalOperator::AlterTable { .. }

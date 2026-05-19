@@ -115,6 +115,12 @@ pub enum LogicalOperator {
         property: String,
     },
     DropConstraint(String),
+    CreateIndex {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropIndex(String),
     CountRelTable {
         rel_table: String,
         bound_table: String, // Source node table for counting
@@ -339,6 +345,18 @@ impl LogicalPlanner {
             }),
             BoundStatement::DropConstraint(name) => {
                 Ok(LogicalOperator::DropConstraint(name))
+            }
+            BoundStatement::CreateIndex {
+                name,
+                table_name,
+                property,
+            } => Ok(LogicalOperator::CreateIndex {
+                name,
+                table_name,
+                property,
+            }),
+            BoundStatement::DropIndex(name) => {
+                Ok(LogicalOperator::DropIndex(name))
             }
             BoundStatement::StandaloneCall(name, args) => Ok(LogicalOperator::Call(BoundCall {
                 procedure_name: name,

@@ -95,6 +95,12 @@ pub enum Statement {
         property: String,
     },
     DropConstraint(String),
+    CreateIndex {
+        name: String,
+        table_label: String,
+        property: String,
+    },
+    DropIndex(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -286,6 +292,7 @@ pub enum Expression {
     Parameter(String),               // $name
     Exists(Vec<(MatchClause, Option<WhereClause>)>),
     CountSubquery(Vec<(MatchClause, Option<WhereClause>)>),
+    Map(Vec<(String, Expression)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -34,6 +34,11 @@ pub enum UndoRecord {
         property: String,
     },
     DropConstraint(String),
+    CreateIndex {
+        name: String,
+        index_path: std::path::PathBuf,
+    },
+    DropIndex(String),
 }
 
 pub struct UndoBuffer {
@@ -182,8 +187,18 @@ impl UndoBuffer {
                 }
                 UndoRecord::DropConstraint(name) => {
                     // Drop constraint undo is more complex — we'd need to re-add the constraint.
-                    // For now, just log and skip (constraint drop is rare and easy to re-create).
                     tracing::warn!("Drop constraint rollback not fully implemented: {name}");
+                }
+                UndoRecord::CreateIndex {
+                    name,
+                    index_path,
+                } => {
+                    let mut storage = db.storage_manager.write();
+                    storage.indexes.remove(&name);
+                    let _ = std::fs::remove_file(&index_path);
+                }
+                UndoRecord::DropIndex(name) => {
+                    tracing::warn!("Drop index rollback not fully implemented: {name}");
                 }
             }
         }

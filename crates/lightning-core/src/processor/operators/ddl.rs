@@ -54,6 +54,12 @@ pub enum DDLAction {
         property: String,
     },
     DropConstraint(String),
+    CreateIndex {
+        name: String,
+        table_name: String,
+        property: String,
+    },
+    DropIndex(String),
 }
 
 pub struct PhysicalDDL {
@@ -173,6 +179,34 @@ impl PhysicalDDL {
     ) -> Self {
         Self {
             action: DDLAction::DropConstraint(name),
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_create_index(
+        name: String,
+        table_name: String,
+        property: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::CreateIndex { name, table_name, property },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_drop_index(
+        name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::DropIndex(name),
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
@@ -405,6 +439,29 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::DropConstraint(name.clone()));
             }
+            DDLAction::CreateIndex {
+                name,
+                table_name,
+                property: _,
+            } => {
+                let mut storage = database.storage_manager.write();
+                let index_path = database._path.join(format!("{table_name}_{name}_idx.lbug"));
+                let index = crate::storage::index::hash_index::HashIndex::open_or_create(
+                    &index_path,
+                )?;
+                storage.indexes.insert(name.clone(), Arc::new(index));
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::CreateIndex {
+                    name: name.clone(),
+                    index_path,
+                });
+            }
+            DDLAction::DropIndex(name) => {
+                let mut storage = database.storage_manager.write();
+                storage.indexes.remove(name);
+                database.catalog.mark_dirty();
+                self.undo_buffer.push(UndoRecord::DropIndex(name.clone()));
+            }
             DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
                 let mut catalog = database.catalog.write();
                 catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone())?;
@@ -557,6 +614,16 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     property: property.clone(),
                 },
                 DDLAction::DropConstraint(name) => DDLAction::DropConstraint(name.clone()),
+                DDLAction::CreateIndex {
+                    name,
+                    table_name,
+                    property,
+                } => DDLAction::CreateIndex {
+                    name: name.clone(),
+                    table_name: table_name.clone(),
+                    property: property.clone(),
+                },
+                DDLAction::DropIndex(name) => DDLAction::DropIndex(name.clone()),
             },
             db: self.db.clone(),
             undo_buffer: self.undo_buffer.clone(),

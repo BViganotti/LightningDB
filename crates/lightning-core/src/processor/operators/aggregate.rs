@@ -173,22 +173,38 @@ impl Aggregate {
                         all_rows.push((group_key, row_values));
                     }
                 } else {
-                    // Hash-based aggregation (default for small result sets)
+                    // Vectorized hash-based aggregation:
+                    // Build local group → row_indices map for this chunk,
+                    // then call update_vector() per group (not per row).
+                    let mut local_groups: HashMap<Vec<Value>, Vec<usize>> = HashMap::new();
                     for row_idx in 0..num_rows {
                         let mut group_key = Vec::with_capacity(self.group_by_indices.len());
                         for &idx in &self.group_by_indices {
                             group_key.push(Value::from_arrow(batch.column(idx), row_idx));
                         }
+                        local_groups.entry(group_key).or_default().push(row_idx);
+                    }
 
-                        let mut groups = self.shared_state.groups.write();
+                    // Now merge local groups into shared state with vectorized updates
+                    let mut groups = self.shared_state.groups.write();
+                    for (group_key, row_indices) in local_groups {
                         let (agg_funcs, count) = groups
                             .entry(group_key)
                             .or_insert_with(|| (self.create_agg_functions(), 0));
 
-                        *count += 1;
+                        *count += row_indices.len();
                         for (i, (_, col_idx)) in self.aggregates.iter().enumerate() {
                             let col = batch.column(*col_idx);
-                            agg_funcs[i].update(&[col.clone()], &[row_idx])?;
+                            // Gather the rows belonging to this group into a contiguous array
+                            let idx_array = arrow::array::UInt64Array::from(
+                                row_indices.iter().map(|&r| r as u64).collect::<Vec<_>>(),
+                            );
+                            let gathered = arrow::compute::take(
+                                col,
+                                &idx_array,
+                                None,
+                            )?;
+                            agg_funcs[i].update_vector(&gathered)?;
                         }
                     }
                 }

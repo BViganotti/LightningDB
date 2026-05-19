@@ -64,6 +64,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
             // Adjacency lookup mechanism
             let storage = database.storage_manager.read();
+            storage.ensure_csr_fresh(&self.rel_table.name, &self.bm, tx)?;
             let csr = storage.fwd_csr.get(&self.rel_table.name);
 
             for i in 0..chunk.batch.num_rows() {
