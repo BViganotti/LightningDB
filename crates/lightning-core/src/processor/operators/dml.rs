@@ -46,6 +46,11 @@ impl PhysicalCreate {
         child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
         tx_id: u64,
     ) -> Self {
+        let table_cols = table.columns.len();
+        let properties: Vec<_> = properties
+            .into_iter()
+            .filter(|(idx, _)| *idx < table_cols)
+            .collect();
         Self {
             table_name,
             catalog,

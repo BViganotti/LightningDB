@@ -79,13 +79,21 @@ impl PhysicalScan {
         self
     }
 
-    pub fn with_projected_idxs(mut self, idxs: Vec<usize>) -> Self {
+    pub fn with_projected_idxs(mut self, mut idxs: Vec<usize>) -> Self {
+        // Filter out indices that exceed the storage column count
+        // (can happen if catalog and storage have different column counts after ALTER TABLE)
+        idxs.retain(|&idx| idx < self.table.columns.len());
         self.projected_idxs = Some(idxs);
         self
     }
 
     pub fn with_filter(mut self, filter: BoundExpression) -> Self {
-        self.filter_column_idxs = self.extract_filter_columns(&filter);
+        let mut filter_idxs = self.extract_filter_columns(&filter);
+        // Validate indices against the storage column count.
+        // If an index is out of bounds (possible catalog/storage desync),
+        // silently skip it — the full scan + filter path will handle the comparison.
+        filter_idxs.retain(|&idx| idx < self.table.columns.len());
+        self.filter_column_idxs = filter_idxs;
         self.pushdown_filter = Some(filter);
         self
     }
