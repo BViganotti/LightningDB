@@ -101,8 +101,9 @@ impl HashIndex {
             let idx = self.file_handle.add_new_page()?;
             let frame = bm.create_new_version(Arc::clone(self.fh()), idx, tx)?;
             unsafe {
-                (0u64.to_le_bytes()).as_ptr().copy_to(frame.as_ptr(), 8);
-                (0u64.to_le_bytes()).as_ptr().copy_to(frame.as_ptr().add(8), 8);
+                let zero8 = 0u64.to_le_bytes();
+                zero8.as_ptr().copy_to(frame.as_ptr(), 8);
+                zero8.as_ptr().copy_to(frame.as_ptr().add(8), 8);
             }
             bm.log_page_update(self.file_handle.file_id, idx, frame.as_slice())?;
             bm.unpin_page(self.fh(), idx, frame);
@@ -114,8 +115,9 @@ impl HashIndex {
             let ptr = frame.as_ptr();
             unsafe {
                 ptr.write_bytes(0, PAGE_SIZE);
-                (0u64.to_le_bytes()).as_ptr().copy_to(ptr, 8);     // next_page = 0
-                (0u64.to_le_bytes()).as_ptr().copy_to(ptr.add(8), 8); // num_entries = 0
+                let zero8 = 0u64.to_le_bytes();
+                zero8.as_ptr().copy_to(ptr, 8);
+                zero8.as_ptr().copy_to(ptr.add(8), 8);
             }
             bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(self.fh(), page_idx, frame);
@@ -352,8 +354,10 @@ impl HashIndex {
         // SAFETY: SAFETY: Writing entry data into a pinned bucket page. The page is pinned via pin_page and held for the duration of the write.
         unsafe {
             ptr.write_bytes(0, PAGE_SIZE);
-            (0u64.to_le_bytes()).as_ptr().copy_to(ptr, 8);
-            (1u64.to_le_bytes()).as_ptr().copy_to(ptr.add(8), 8);
+            let zero8 = 0u64.to_le_bytes();
+            let one8 = 1u64.to_le_bytes();
+            zero8.as_ptr().copy_to(ptr, 8);
+            one8.as_ptr().copy_to(ptr.add(8), 8);
         }
         bm.log_page_update(self.file_handle.file_id, new_idx, frame.as_slice())?;
         bm.unpin_page(&self.file_handle, new_idx, frame);
