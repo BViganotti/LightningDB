@@ -2,6 +2,7 @@ pub mod api;
 pub mod catalog;
 pub use api::*;
 pub mod capi;
+pub mod fusion;
 pub mod memory;
 pub mod optimizer;
 pub mod wasm_function;

@@ -4,6 +4,17 @@
 
 Lightning is an **embedded, columnar, graph-native database** with built-in vector search, full-text search, and AI agent memory capabilities. It runs in-process — no server, no separate processes.
 
+## Crate Map
+
+| Crate | Purpose | Language |
+|---|---|---|
+| `lightning-types` | Common types (`LogicalType`, `Value`) shared across the stack | Rust |
+| `lightning-arrow` | Arrow FFI bridge (C Data Interface for zero-copy interop) | Rust |
+| `lightning-core` | Core engine: storage, MVCC, Cypher parser/planner/executor, MemoryStore, Fusion | Rust |
+| `lightning` | **Rust driver crate** — ergonomic public API wrapping `lightning-core` | Rust |
+| `lightning-python` | Python bindings via PyO3 (`lightning.MemoryStore`, `lightning.LightningDatabase`) | Rust → Python |
+| `lightning-node` | Node.js bindings via napi-rs (`@lightning-db/core`) | Rust → Node.js |
+
 ## Storage Engine
 
 ### Columnar Layout
@@ -29,7 +40,7 @@ The column stats module analyzes data distribution and selects compression. Impl
 - **RLE** — for run-length encodable data
 - **Constant** — for single-value columns
 
-Currently analyzed but not activated (always uncompressed pending integration).
+Compression is activated: `column.rs:optimize()` analyzes column data and applies the optimal codec. The compression metadata (`compression_meta`) is stored in column stats and reused on subsequent reads.
 
 ### MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation: each transaction sees a consistent snapshot at its `read_ts`

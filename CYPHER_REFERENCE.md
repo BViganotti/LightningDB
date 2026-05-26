@@ -9,14 +9,20 @@ Lightning implements a subset of the Cypher graph query language with extensions
 ```cypher
 MATCH (n:Label {prop: value})
 MATCH (n:Label) WHERE n.prop > 10
+MATCH (n) WHERE n.prop IS NULL
+MATCH (n) WHERE n.prop IS NOT NULL
+MATCH (n) WHERE n.prop IN [1, 2, 3]
+MATCH (n) WHERE n.prop NOT IN [1, 2, 3]
 MATCH (n)-[:REL_TYPE]->(m)
-MATCH (n)-[*1..3]->(m)              -- Variable-length paths
 MATCH (n)-[r]->(m) WHERE r.weight > 0.5
+MATCH p = shortestPath((a)-[*]->(b))
+MATCH p = allShortestPaths((a)-[*]->(b))
 OPTIONAL MATCH (n)-->(m)
 MATCH (n) RETURN n.prop AS alias
 MATCH (n) RETURN DISTINCT n.prop
 MATCH (n) RETURN count(*), sum(n.val), avg(n.val), min(n.val), max(n.val)
 MATCH (n) RETURN n.prop ORDER BY n.prop DESC SKIP 10 LIMIT 5
+CASE WHEN n.prop > 10 THEN 'big' ELSE 'small' END
 ```
 
 ### Writing Data
@@ -41,6 +47,14 @@ CREATE NODE TABLE IF NOT EXISTS Name(id INT64, prop STRING, PRIMARY KEY (id))
 CREATE REL TABLE Name FROM NodeA TO NodeB (prop INT64)
 DROP TABLE Name
 DROP TABLE Name IF EXISTS
+ALTER TABLE Name ADD prop_name INT64
+ALTER TABLE Name DROP prop_name
+ALTER TABLE Name RENAME TO new_name
+ALTER TABLE Name RENAME COLUMN prop_name TO new_prop
+CREATE INDEX ON TableName(column_name)
+DROP INDEX index_name
+CREATE CONSTRAINT ON TableName ASSERT column_name IS UNIQUE
+DROP CONSTRAINT constraint_name
 ```
 
 ### Schema and Procedures
@@ -79,6 +93,7 @@ EXTRACT(YEAR FROM n.date_field)
 n.prop IN (subquery)
 list[0]
 list[0..3]
+n.prop IS NULL / n.prop IS NOT NULL
 ```
 
 ### Aggregates
@@ -161,20 +176,11 @@ COPY TableName TO '/path/to/output.json' (FORMAT JSON)
 
 ## Not Yet Supported
 
-- `COLLECT` with ordering
-- `COLLECT(DISTINCT x)` (use `COLLECT_DISTINCT(x)`)
-- `CASE WHEN` with expression form (`CASE expr WHEN ...`)
-- Window functions (`ROW_NUMBER()`, `RANK()`, `LAG()`, `LEAD()`)
-- Pattern comprehension (`[... | ... | ...]`)
-- `SHORTEST_PATH` function form
-- `ALL SHORTEST PATHS`
-- `WSHORTEST`, `TRAIL`, `ACYCLIC` path qualifiers
-- List comprehensions (`[x IN list | ...]`)
+- Path qualifiers: `WSHORTEST`, `TRAIL`, `ACYCLIC`
+- Window functions (`ROW_NUMBER()`, `RANK()`, `LAG()`, `LEAD()`, `OVER`)
+- Pattern comprehension (`[... | ... | ...]`, `[x IN list | ...]`)
 - `FOREACH`
-- `ALTER TABLE`
-- `CREATE CONSTRAINT` / `DROP CONSTRAINT`
-- `CREATE INDEX` / `DROP INDEX`
-- `IS NULL` / `IS NOT NULL` (available as functions: `IS_NULL(expr)`, `IS_NOT_NULL(expr)`)
-- `IN` with subquery
+- `IN` with subquery (static lists work)
 - Multi-label matching (`(n:A:B)`)
 - `Decimal`, `Time`, `TimestampTZ`, `UUID`, `Interval` types
+- `CASE expr WHEN val THEN ...` (expression form; searched `CASE WHEN cond THEN ...` is supported)

@@ -22,6 +22,90 @@ impl LightningDatabase {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
         Ok(Self { db })
     }
+
+    /// Execute a Cypher query and return results as a JSON string.
+    /// Each row is a JSON object with column names as keys.
+    /// Returns: {"columns": [...], "rows": [{...}, ...], "num_rows": N}
+    fn execute(&self, query: &str) -> PyResult<String> {
+        use arrow::array::*;
+        use serde_json::{json, Map, Value};
+
+        let conn = self.db.connect();
+        let result = conn
+            .query(query)
+            .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {}", e)))?;
+
+        let mut rows: Vec<Value> = Vec::new();
+
+        for batch in &result.batches {
+            let schema = batch.schema();
+            for row_idx in 0..batch.num_rows() {
+                let mut row = Map::new();
+                for col_idx in 0..batch.num_columns() {
+                    let col_name = schema.field(col_idx).name();
+                    let col = batch.column(col_idx);
+                    let arr = col.as_ref();
+
+                    let value: Value = if arr.is_null(row_idx) {
+                        Value::Null
+                    } else {
+                        match arr.data_type() {
+                            t if t == &arrow::datatypes::DataType::Int8 => {
+                                let c = arr.as_any().downcast_ref::<Int8Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Int16 => {
+                                let c = arr.as_any().downcast_ref::<Int16Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Int32 => {
+                                let c = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Int64 => {
+                                let c = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Float32 => {
+                                let c = arr.as_any().downcast_ref::<Float32Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Float64 => {
+                                let c = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Boolean => {
+                                let c = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            t if t == &arrow::datatypes::DataType::Utf8
+                                || t == &arrow::datatypes::DataType::LargeUtf8 =>
+                            {
+                                let c = arr.as_any().downcast_ref::<StringArray>().unwrap();
+                                json!(c.value(row_idx))
+                            }
+                            _ => Value::Null,
+                        }
+                    };
+                    row.insert(col_name.to_string(), value);
+                }
+                rows.push(Value::Object(row));
+            }
+        }
+
+        // Collect column names from the schema of first non-empty batch
+        let col_names: Vec<String> = result.batches.first()
+            .map(|b| b.schema().fields().iter().map(|f| f.name().to_string()).collect())
+            .unwrap_or_default();
+
+        let response = json!({
+            "columns": col_names,
+            "rows": rows,
+            "num_rows": rows.len(),
+        });
+
+        Ok(serde_json::to_string(&response).unwrap())
+    }
 }
 
 #[pyclass]
@@ -267,7 +351,7 @@ impl PyMemoryStore {
 }
 
 #[pymodule]
-fn lightning(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMemoryStore>()?;
     m.add_class::<LightningDatabase>()?;
     Ok(())

@@ -59,7 +59,10 @@ fn preprocess_distinct_functions(s: &str) -> String {
 }
 
 fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>) {
-    let mut result = s.to_string();
+    // Normalize newlines to spaces so text-based search for " SKIP ", " LIMIT ", etc.
+    // works regardless of line breaks in the query. The actual parser (pest) handles
+    // whitespace between tokens natively.
+    let mut result = s.replace('\n', " ").replace('\r', " ");
     let mut ord = None;
     let mut skp = None;
     let mut lmt = None;
@@ -76,10 +79,18 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
             let order_rest = &result[order_expr_start..];
             let order_upper = order_rest.to_uppercase();
             // Find end of ORDER BY expression
-            let end = order_upper
-                .find(" LIMIT ")
-                .or(order_upper.find(" SKIP "))
-                .unwrap_or(order_rest.len());
+            // SKIP and LIMIT may follow; use whichever comes FIRST so we
+            // don't swallow the other into the ORDER BY expression.
+            let end = {
+                let l = order_upper.find(" LIMIT ");
+                let s = order_upper.find(" SKIP ");
+                match (l, s) {
+                    (Some(lp), Some(sp)) => std::cmp::min(lp, sp),
+                    (Some(lp), None) => lp,
+                    (None, Some(sp)) => sp,
+                    (None, None) => order_rest.len(),
+                }
+            };
             ord = Some(order_rest[..end].trim().to_string());
             // Remove only "ORDER BY <expr>" part, not the RETURN items before it
             result = format!(

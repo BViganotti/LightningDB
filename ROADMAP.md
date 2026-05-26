@@ -1,6 +1,6 @@
 # Lightning Roadmap: Pre-Alpha → Alpha → Beta
 
-> **Current state:** Pre-alpha. 300+ tests passing. Core engine works. Critical durability gaps exist.
+> **Current state:** Pre-alpha. 400+ tests passing. Core engine works. Phase 0 critical fixes complete.
 > **Goal:** A production-grade embedded graph+vector+hybrid database that replaces 4 separate services.
 
 ## Progress Tracker
@@ -8,20 +8,20 @@
 | Phase | Tasks | Done | Target |
 |-------|-------|------|--------|
 | **0: Critical Fixes** | 15 | 15 | Week 1-2 |
-| **0.5: Soundness & Correctness** | 35 | 10 | Week 4-6 |
-| **0.6: Operator Completeness** | 28 | 0 | Week 5-7 |
-| **0.7: Parser & Language** | 32 | 0 | Week 6-10 |
-| **0.8: Index Engineering** | 25 | 0 | Week 6-12 |
-| **0.9: Concurrency & Infra** | 20 | 0 | Week 8-14 |
-| **1: Alpha Readiness** | 36 | 0 | Month 2-3 |
-| **1.6: Language Expansion** | 30 | 0 | Month 3-4 |
+| **0.5: Soundness & Correctness** | 35 | 22 | Week 4-6 |
+| **0.6: Operator Completeness** | 28 | 16 | Week 5-7 |
+| **0.7: Parser & Language** | 32 | 18 | Week 6-10 |
+| **0.8: Index Engineering** | 25 | 7 | Week 6-12 |
+| **0.9: Concurrency & Infra** | 20 | 4 | Week 8-14 |
+| **1: Alpha Readiness** | 36 | 14 | Month 2-3 |
+| **1.6: Language Expansion** | 30 | 3 | Month 3-4 |
 | **1.7: Python Bindings & Integrations** | 35 | 0 | Month 3-4 |
 | **2: Beta Readiness** | 35 | 0 | Month 3-6 |
 | **2.8: Compression Codec Overhaul** | 30 | 0 | Month 4-5 |
 | **2.9: Storage Engine Hardening** | 25 | 0 | Month 4-5 |
 | **3: Release Readiness** | 58 | 0 | Month 6+ |
 
-**Total tasks: ~404** | **Completed: 64** | **Actual `[ ]` remaining: ~276** | **Target: Production Beta in 6-9 months**
+**Total tasks: ~404** | **Completed: 98** | **Target: Production Beta in 6-9 months**
 
 ### How To Track Progress
 
@@ -132,15 +132,15 @@ The existing 300 tests are impressive but miss critical dimensions:
 ## Appendix: Current State vs Target
 
 | Dimension | Current (Pre-Alpha) | Alpha Target | Beta Target |
-|---|---|---|---|
-| **Durability** | Uncommitted pages leaked to disk, bulk writes bypass WAL | No uncommitted data reaches disk, all writes WAL-logged | ARIES WAL, SSI isolation, online backup |
-| **Tests** | 300 tests, no crash recovery tests | 500+ tests including crash/recovery, concurrent stress | 1000+ tests, 48h fuzz campaign |
-| **Agent API** | 22 methods, 3 have gaps | All methods production-complete | Cross-encoder RAG, real-time CDC |
-| **Performance** | Basic benchmarks exist | Optimized checkpoint, compression tuning | SIMD scan, parallel checkpoint, adaptive prefetch |
-| **Clients** | Python (PyO3), C FFI | Python + Node.js + Go | Python + Node.js + Go + WASM browser + gRPC |
-| **Observability** | None | Prometheus metrics, tracing | Slow query log, EXPLAIN ANALYZE |
-| **Platform** | macOS x86_64 | macOS + Linux x86_64 + aarch64 | All platforms + WASM + musl static builds |
-| **Docs** | README only | Architecture + API + Cypher docs | Full reference + migration + tuning guides |
+|---|---|---|---|---|
+| **Durability** | WAL + CRC32, committed-only checkpoint, row-level OCC | ARIES WAL, before-image logging | SSI isolation, online backup |
+| **Tests** | 400+ tests, crash recovery, concurrency | 500+ tests including stress | 1000+ tests, 48h fuzz campaign |
+| **Agent API** | 22 methods, all production-complete | Cross-encoder RAG | Real-time CDC via WAL parsing |
+| **Performance** | Compression active, learned prefetch | Optimized checkpoint, SIMD vector scan | Adaptive prefetch, parallel checkpoint |
+| **Clients** | Python, Node.js, Rust driver, C FFI | Go bindings | gRPC, WASM browser |
+| **Observability** | DB metrics (hit rate, WAL bytes, queries) | Prometheus metrics, per-query tracing | Slow query log, EXPLAIN ANALYZE, operator timing |
+| **Platform** | macOS + Linux (x86_64 + aarch64) | ARM NEON SIMD | WASM + musl static builds |
+| **Docs** | README + Architecture + Cypher + Tuning + Migration + LLMS | Full API reference | Tutorials, video walkthrough |
 
 ---
 
@@ -350,7 +350,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 ### 0.7.2 Missing DDL / DML
 
 - [x] **0.7.2a** `DETACH DELETE` — Most graph databases require `DETACH DELETE` to remove a node AND all its relationships. Without it, deleting a node with relationships leaves orphan edges.
-- [ ] **0.7.2b** `ALTER TABLE` — Four operations needed:
+- [x] **0.7.2b** `ALTER TABLE` — Four operations needed:
   - `ALTER TABLE name ADD [COLUMN] name type` (add property)
   - `ALTER TABLE name DROP [COLUMN] name` (drop property)
   - `ALTER TABLE name RENAME TO new_name` (rename table)
@@ -359,13 +359,13 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 - [x] **0.7.2d** `DROP TABLE [IF EXISTS]` — Add `IF EXISTS`
 - [x] **0.7.2e** `REMOVE n.prop` — Full property removal syntax
 - [x] **0.7.2f** `SET n += {prop: val}` / `SET n = {prop: val}` — Map-based property assignment
-- [ ] **0.7.2g** `CREATE CONSTRAINT` / `DROP CONSTRAINT` — Unique constraints, existence constraints
-- [ ] **0.7.2h** `CREATE INDEX` / `DROP INDEX` — Explicit index management
+- [x] **0.7.2g** `CREATE CONSTRAINT` / `DROP CONSTRAINT` — Unique constraints, existence constraints
+- [x] **0.7.2h** `CREATE INDEX` / `DROP INDEX` — Explicit index management
 
 ### 0.7.3 Path and graph pattern features
 
 - [ ] **0.7.3a** Variable-length path aggregation — Currently `MATCH (a)-[*]->(b)` works but `MATCH p = (a)-[*]->(b) RETURN p` does not return the path properly
-- [ ] **0.7.3b** `ALL SHORTEST PATHS` grammar — The PEG grammar doesn't parse `ALL SHORTEST` (only `shortestPath`). Add grammar support even though the physical operator needs completion.
+- [x] **0.7.3b** `ALL SHORTEST PATHS` grammar — The PEG grammar now parses both `shortestPath` and `allShortestPaths`. Physical operator implemented via `PhysicalASP`.
 - [ ] **0.7.3c** `WSHORTEST`, `TRAIL`, `ACYCLIC` path qualifiers — Advanced path modes for recursive traversal
 
 ### 0.7.4 Expression and type features
@@ -384,8 +384,8 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 ### 0.8.1 HashIndex production hardening
 
-- [ ] **0.8.1a** Dynamic resize: When insertion exceeds 75% fill ratio, allocate multiply by factor 2, rehash all entries, update header
-- [ ] **0.8.1b** Overflow chaining: Extend to overflow pages when a bucket is full (alternative to resize for write-heavy workloads)
+- [x] **0.8.1a** Dynamic resize: When insertion exceeds 75% fill ratio, allocate multiply by factor 2, rehash all entries, update header
+- [x] **0.8.1b** Overflow chaining: Extend to overflow pages when a bucket is full (alternative to resize for write-heavy workloads)
 - [x] **0.8.1c** Delete support: Tombstone entries with a `DELETED_BIT` in the hash field; `lookup` skips tombstones; compaction cleans them up
 - [x] **0.8.1d** Configurable initial bucket count (not hardcoded 64)
 - [ ] **0.8.1e** Thread-safety audit: All operations go through BufferManager pinning, verify concurrent reads/writes are safe

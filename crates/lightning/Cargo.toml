@@ -1,0 +1,18 @@
+[package]
+name = "lightning"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "LightningDB — a high-performance graph+vector database with MVCC. Rust driver crate."
+repository = "https://github.com/lightning-db/lightning"
+keywords = ["graph", "vector", "database", "cypher", "mvcc"]
+
+[dependencies]
+lightning-core.workspace = true
+arrow = { workspace = true }
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+crossbeam.workspace = true
+parking_lot.workspace = true

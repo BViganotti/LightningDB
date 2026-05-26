@@ -42,11 +42,11 @@ SystemConfig { max_num_threads: 0 }
 ## Sync Mode
 
 ```rust
-pub enum SyncMode { Normal, Lazy }
+pub enum SyncMode { Normal, Off }
 ```
 
 - **Normal** (default): `fsync` on every commit — maximum durability, ~100-1000µs per commit
-- **Lazy**: No `fsync` — up to 10x faster writes, risk of losing last ~1 second of committed data on crash
+- **Off**: No `fsync` — up to 10x faster writes, risk of losing uncommitted data on crash
 
 ## Compression
 

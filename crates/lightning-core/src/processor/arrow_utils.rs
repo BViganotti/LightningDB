@@ -476,3 +476,17 @@ pub fn values_to_array(values: &[Value], data_type: &DataType) -> ArrayRef {
         _ => Arc::new(arrow::array::NullArray::new(values.len())),
     }
 }
+
+pub fn str_col(batch: &arrow::record_batch::RecordBatch, col: usize) -> std::result::Result<&StringArray, LightningError> {
+    batch.column(col)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| LightningError::Internal("Column is not a string array".into()))
+}
+
+pub fn i64_col(batch: &arrow::record_batch::RecordBatch, col: usize) -> std::result::Result<&Int64Array, LightningError> {
+    batch.column(col)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| LightningError::Internal("Column is not an int64 array".into()))
+}

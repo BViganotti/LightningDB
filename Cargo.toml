@@ -5,6 +5,7 @@ members = [
     "crates/lightning-arrow",
     "crates/lightning-python",
     "crates/lightning-node",
+    "crates/lightning",
 ]
 resolver = "2"
 
@@ -18,6 +19,7 @@ repository = "https://github.com/lightning-db/lightning"
 [workspace.dependencies]
 lightning-types = { path = "crates/lightning-types" }
 lightning-core = { path = "crates/lightning-core" }
+lightning = { path = "crates/lightning" }
 lightning-arrow = { path = "crates/lightning-arrow" }
 arrow = { version = "58.0.0", features = ["ffi", "csv"] }
 serde = { version = "1.0", features = ["derive"] }

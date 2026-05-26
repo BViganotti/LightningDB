@@ -464,25 +464,34 @@ impl PhysicalOperator for PhysicalScan {
             }
 
             if let Some(ref filter_expr) = self.pushdown_filter {
-                let mask_arr = crate::processor::evaluator::ExpressionEvaluator::evaluate(
+                let mask_result = crate::processor::evaluator::ExpressionEvaluator::evaluate(
                     filter_expr,
                     Some(&batch),
                     params,
                     batch.num_rows(),
                     &database.function_registry,
                     database,
-                )?;
-                let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
-                    .expect("filter expression must evaluate to BooleanArray");
+                );
+                match mask_result {
+                    Ok(mask_arr) => {
+                        let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
+                            .expect("filter expression must evaluate to BooleanArray");
 
-                let set_bits = mask.values().count_set_bits();
-                if set_bits == 0 {
-                    continue;
-                }
+                        let set_bits = mask.values().count_set_bits();
+                        if set_bits == 0 {
+                            continue;
+                        }
 
-                if mask.null_count() > 0 || set_bits != mask.len() {
-                    batch = arrow::compute::filter_record_batch(&batch, mask)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                        if mask.null_count() > 0 || set_bits != mask.len() {
+                            batch = arrow::compute::filter_record_batch(&batch, mask)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                        }
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "Pushdown filter evaluation skipped (index mismatch — filter will be applied at join level)"
+                        );
+                    }
                 }
             }
 

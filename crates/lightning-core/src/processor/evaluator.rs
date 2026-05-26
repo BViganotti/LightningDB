@@ -69,10 +69,12 @@ impl ExpressionEvaluator {
                         BoundExpression::Literal(lit),
                     ) = (&**left, &**right)
                     {
-                        if let Some(result) = Self::compare_column_literal(
-                            b.column(*col_idx), lit, op, num_rows,
-                        ) {
-                            return result;
+                        if *col_idx < b.num_columns() {
+                            if let Some(result) = Self::compare_column_literal(
+                                b.column(*col_idx), lit, op, num_rows,
+                            ) {
+                                return result;
+                            }
                         }
                     }
                     // Literal op Column
@@ -81,24 +83,26 @@ impl ExpressionEvaluator {
                         BoundExpression::PropertyLookup(_, col_idx, _),
                     ) = (&**left, &**right)
                     {
-                        // For symmetric comparisons (eq/neq), just swap
-                        let swapped_op = match op {
-                            crate::parser::ast::ComparisonOperator::Equal => Some(*op),
-                            crate::parser::ast::ComparisonOperator::NotEqual => Some(*op),
-                            crate::parser::ast::ComparisonOperator::LessThan =>
-                                Some(crate::parser::ast::ComparisonOperator::GreaterThan),
-                            crate::parser::ast::ComparisonOperator::LessThanOrEqual =>
-                                Some(crate::parser::ast::ComparisonOperator::GreaterThanOrEqual),
-                            crate::parser::ast::ComparisonOperator::GreaterThan =>
-                                Some(crate::parser::ast::ComparisonOperator::LessThan),
-                            crate::parser::ast::ComparisonOperator::GreaterThanOrEqual =>
-                                Some(crate::parser::ast::ComparisonOperator::LessThanOrEqual),
-                        };
-                        if let Some(swapped) = swapped_op {
-                            if let Some(result) = Self::compare_column_literal(
-                                b.column(*col_idx), lit, &swapped, num_rows,
-                            ) {
-                                return result;
+                        if *col_idx < b.num_columns() {
+                            // For symmetric comparisons (eq/neq), just swap
+                            let swapped_op = match op {
+                                crate::parser::ast::ComparisonOperator::Equal => Some(*op),
+                                crate::parser::ast::ComparisonOperator::NotEqual => Some(*op),
+                                crate::parser::ast::ComparisonOperator::LessThan =>
+                                    Some(crate::parser::ast::ComparisonOperator::GreaterThan),
+                                crate::parser::ast::ComparisonOperator::LessThanOrEqual =>
+                                    Some(crate::parser::ast::ComparisonOperator::GreaterThanOrEqual),
+                                crate::parser::ast::ComparisonOperator::GreaterThan =>
+                                    Some(crate::parser::ast::ComparisonOperator::LessThan),
+                                crate::parser::ast::ComparisonOperator::GreaterThanOrEqual =>
+                                    Some(crate::parser::ast::ComparisonOperator::LessThanOrEqual),
+                            };
+                            if let Some(swapped) = swapped_op {
+                                if let Some(result) = Self::compare_column_literal(
+                                    b.column(*col_idx), lit, &swapped, num_rows,
+                                ) {
+                                    return result;
+                                }
                             }
                         }
                     }

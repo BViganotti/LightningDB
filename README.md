@@ -64,6 +64,8 @@ const snapshot = await memory.recallAtTime(timestamp)     // Time-travel query
 | **Learned cache prefetch** | ✅ Markov chain | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Python bindings** | ✅ PyO3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Node.js bindings** | ✅ napi-rs | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Rust driver** | ✅ Ergonomic | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **C FFI** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | **LangChain integration** | ✅ VectorStore | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
 | **Arrow native** | ✅ Zero-copy | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Written in Rust** | ✅ | C | C++ | Java | Go | C++ | Python |
@@ -179,36 +181,49 @@ index = VectorStoreIndex.from_documents(documents, vector_store=vector_store)
 
 ```toml
 [dependencies]
-lightning-core = { git = "https://github.com/BViganotti/lightning" }
+lightning = { git = "https://github.com/BViganotti/lightning" }
 ```
 
 ```rust
-use lightning_core::{Database, SystemConfig};
-use lightning_core::memory::{MemoryEntity, MemoryStore, RagResult};
+use lightning::prelude::*;
 
-let db = Database::new("/tmp/memory", SystemConfig::default())?;
+let db = Database::open("/tmp/memory").unwrap();
 let conn = db.connect();
 let memory = MemoryStore::new(conn, DEFAULT_EMBEDDING_DIM);
 
+// Store an entity
 memory.store(MemoryEntity {
     id: "msg-1".into(),
     entity_type: "preference".into(),
-    content: "User prefers Python".into(),
-    created_at: 0, last_accessed: 0,
-    access_count: 1, ttl_seconds: 0,
-    metadata: "{}".into(),
-    valid_from: 0, valid_until: 0,
-})?;
+    content: "User prefers Rust".into(),
+    ..Default::default()
+}).unwrap();
+
+// Hybrid search (FTS + vector fused via RRF)
+let results: Vec<SearchResult> = memory.recall("rust", &[], 5).unwrap();
 
 // RAG pipeline
-let rag: RagResult = memory.rag_query("user background", &[], 5)?;
+let rag: RagResult = memory.rag_query("user background", &[], 5).unwrap();
 println!("{}", rag.context);
 
-// Streaming query
-let rx = memory.query_stream("MATCH (e:Entity) RETURN e.id, e.content")?;
-while let Ok(Ok(chunk)) = rx.recv() {
-    println!("Got chunk: {} rows", chunk.batch.num_rows());
+// Typed JSON results
+let typed = conn.execute_typed("MATCH (e:Entity) RETURN e.id, e.content LIMIT 10", None).unwrap();
+for row in &typed.rows {
+    println!("{}: {}", row["e.id"], row["e.content"]);
 }
+
+// Streaming queries
+let rx = conn.query_stream("MATCH (e:Entity) RETURN e.id, e.content").unwrap();
+while let Ok(Ok(chunk)) = rx.recv() {
+    println!("Got chunk: {} rows", chunk.num_rows());
+}
+
+// Graph traversal
+let neighbors = memory.expand("msg-1", 2, &["related_to"]).unwrap();
+
+// Memory consolidation
+let report = memory.consolidate().unwrap();
+println!("Linked {}, contradictions {}", report.links_created, report.contradictions_found);
 ```
 
 ### Node.js / TypeScript
@@ -335,7 +350,7 @@ Two transactions modifying different rows on the same page can both commit. Thei
 ┌───────────────────────────────────────────────────────────────────┐
 │                        Agent Application                          │
 ├───────────────────────────────────────────────────────────────────┤
-│   Node.js (napi-rs) · Python · LangChain · LlamaIndex · Rust / C   │
+│  Rust (lightning) · Python · Node.js (napi-rs) · LangChain · C FFI│
 ├───────────────────────────────────────────────────────────────────┤
 │                          MemoryStore API                          │
 │         store · recall · expand · associate · rag_query          │
@@ -356,36 +371,35 @@ Two transactions modifying different rows on the same page can both commit. Thei
 
 ## Test Coverage
 
-**298 tests, 0 failures** (release mode):
+**400+ tests, 0 failures** (release mode):
 
 | Suite | Tests | Scope |
 |---|---|---|
-| Core engine | 223 | CRUD, DML, optimizer, planner, FTS, vector, compression |
-| Memory store | 36 | Temporal queries, RAG, consolidation, CDC, WASM |
+| Core engine | 300+ | CRUD, DML, optimizer, planner, FTS, vector, compression, indexes |
+| Memory store | 60+ | Temporal queries, RAG, consolidation, CDC, WASM, streaming |
 | Benchmarks | 14 | Insert, scan, filter, graph, memory, crash recovery |
-| Fuzz | 17 | 200+ random query patterns, edge cases |
-| Torture | 18 | WAL replay, memory pressure, concurrent schema, graph scale |
-| Streaming | 4 | Stream cancel, empty results, recall stream |
-| Bugfix | 3 | BOOL storage, string overflow, MVCC concurrency |
+| Fuzz / torture | 50+ | Random query patterns, WAL replay, memory pressure, concurrency, edge cases |
 
 ## Run the Agent Memory Demo
 
 ```bash
-cargo run --example agent_memory --release
+cargo run -p lightning-core --example agent_memory --release
 ```
 
 This exercises: store, hybrid search, graph traversal, temporal queries, RAG pipeline, consolidation, WAL CDC, streaming queries, and WASM functions — all on the same data.
 
 ## Status
 
-Pre-alpha. The core engine is functional with 298 passing tests in release mode. Python bindings are new (PyO3). Node.js bindings are new (napi-rs). WASM runtime uses `wasmi` interpreter (no native compilation).
+Pre-alpha. The core engine is functional with 400+ passing tests in release mode. Python bindings (PyO3), Node.js bindings (napi-rs), and the Rust driver (`lightning` crate) are available. WASM runtime uses `wasmi` interpreter.
 
 ### Known Limitations
-- Vector index is hardcoded to 768 dimensions
-- WAL replay of DELETE operations has a StringArray null-buffer alignment issue
-- Columnar compression is analyzed but not yet activated (always uncompressed)
-- Python bindings not yet published to PyPI (install from source)
-- Node.js bindings not yet published to npm (install from source)
+- Window functions not yet implemented
+- LIST indexing/slicing: `list[0]`, `list[1..3]` not yet exposed in Cypher syntax (internally supported)
+- Map/struct literal expressions not yet supported in RETURN clauses
+- Variable-length path aggregation (`RETURN p`, `nodes(p)`) returns raw IDs, not structured path objects
+- Python bindings not published to PyPI (install from source)
+- Node.js bindings not published to npm (install from source)
+- String overflow file (`overflow_file.rs`) exists but `write_string()` is a no-op; production writes use `append_to_overflow()` in column.rs directly
 
 ## License
 

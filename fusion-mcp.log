@@ -104,6 +104,7 @@ Generated CLAUDE.md for Claude Code support.
 [2m2026-05-15T13:24:15.733808Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=9
 [2m2026-05-15T13:24:15.736605Z[0m [34mDEBUG[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=10
 [FUSION] Using database: /Users/bviga/.fusion_mcp.db
+<<<<<<< HEAD
 [2m2026-05-20T10:50:28.641191Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
 [2m2026-05-20T10:50:28.641401Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3366
 [2m2026-05-20T10:50:28.701871Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
@@ -129,3 +130,19 @@ Generated CLAUDE.md for Claude Code support.
 [2m2026-05-26T08:16:44.604239Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
 [2m2026-05-26T08:16:49.596315Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
 [2m2026-05-26T08:16:49.600321Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+=======
+[2m2026-05-25T07:34:39.600709Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Loading embedding model: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-25T07:34:39.604208Z[0m [33m WARN[0m [2mmcp::server[0m[2m:[0m Port 3366 in use, falling back to 127.0.0.1:3370
+[2m2026-05-25T07:34:39.604239Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m REST/SSE Server listening on http://127.0.0.1:3370
+[2m2026-05-25T07:34:39.682937Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Using Metal GPU acceleration for embeddings
+[2m2026-05-25T07:34:39.689468Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m Architecture: nomic_bert | hidden=768 | max_tokens=8192
+[2m2026-05-25T07:34:42.218422Z[0m [32m INFO[0m [2mfusion_core::embeddings[0m[2m:[0m HF embedding model ready: nomic-ai/nomic-embed-text-v1.5
+[2m2026-05-25T07:34:42.219527Z[0m [32m INFO[0m [2mmcp::server[0m[2m:[0m Embedding model loaded successfully
+[2m2026-05-25T07:35:01.277564Z[0m [34mDEBUG[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"MATCH (o:Observation) WHERE o.is_stale = false RETURN o.content ORDER BY o.created_at DESC LIMIT 20"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=0
+[2m2026-05-25T07:35:01.278199Z[0m [32m INFO[0m [2mfusion_core::db[0m[2m:[0m insert_telemetry: memory dur=18ms
+[2m2026-05-25T07:35:01.284519Z[0m [34mDEBUG[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE (t:Telemetry {id:'4c81c444-4d39-4667-89b2-85a12465887c',tool_name:'memory',arguments:'{\"action\":\"context\"}',result:'{\"content\":[{\"text\":\"## Session Context\\n\\n- Research monorepo overview: - **fusion/**: Rust code intelligence engine. Workspace with 6 crates: core (AST parsing, code graph, PageRank, embeddings, sea',duration_ms:18,timestamp:'2026-05-25T07:35:01.278030+00:00'})"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=1
+[2m2026-05-25T07:35:23.838183Z[0m [34mDEBUG[0m [2mlightning_core::processor::functions::registry[0m[2m:[0m CONTAINS: first row s='worker', p='MemoryStore public API methods insert query delete get', result=false
+[2m2026-05-25T07:35:23.843209Z[0m [34mDEBUG[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"MATCH (n:CodeNode) WHERE CONTAINS(n.name, 'MemoryStore public API methods insert query delete get') RETURN n.id, n.node_type, n.name, n.file_path, n.start_line, n.start_col, n.end_line, n.docstring, n.signature, n.source_hash LIMIT 10"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=2
+[2m2026-05-25T07:35:23.843380Z[0m [32m INFO[0m [2mfusion_core::db[0m[2m:[0m insert_telemetry: search dur=10ms
+[2m2026-05-25T07:35:23.849204Z[0m [34mDEBUG[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE (t:Telemetry {id:'87e57f69-555e-4140-b6de-c88c886825aa',tool_name:'search',arguments:'{\"mode\":\"hybrid\",\"query\":\"MemoryStore public API methods insert query delete get\"}',result:'{\"content\":[{\"text\":\"## Search\\n\\n- **Query**: `MemoryStore public API methods insert query delete get`\\n- **Mode**: hybrid\\n- **Max Results**: 10\\n\\nNo results found.\\n⏱ 9ms\",\"type\":\"text\"}]}',duration_ms:10,timestamp:'2026-05-25T07:35:23.843323+00:00'})"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Catalog save skipped: dirty=false, tx_since_last_save=3
+>>>>>>> 3e1a994 (Update docs, Python bindings, evaluator fixes, fusion module)

@@ -1203,6 +1203,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightning"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "crossbeam",
+ "lightning-core",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "lightning-arrow"
 version = "0.1.0"
 dependencies = [
@@ -1266,6 +1279,7 @@ dependencies = [
 name = "lightning-python"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "lightning-core",
  "pyo3",
  "serde_json",
