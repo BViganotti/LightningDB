@@ -53,6 +53,8 @@ pub enum LightningError {
     Database(String),
     #[error("Query error: {0}")]
     Query(String),
+    #[error("Configuration error: {0}")]
+    Config(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -90,6 +92,11 @@ pub struct SystemConfig {
     /// Queries exceeding this duration (in milliseconds) are logged as warnings.
     /// Set to 0 to disable slow query logging.
     pub slow_query_threshold_ms: u64,
+    /// Base directory for COPY FROM/TO file operations.
+    /// When set, all COPY file paths must resolve within this directory.
+    /// When None (default), only relative paths are allowed and resolved
+    /// relative to the database directory.
+    pub copy_base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for SystemConfig {
@@ -104,7 +111,39 @@ impl Default for SystemConfig {
             prefetch_depth: 2,
             prefetch_confidence: 0.15,
             slow_query_threshold_ms: 100,
+            copy_base_dir: None,
         }
+    }
+}
+
+impl SystemConfig {
+    pub fn validate(&self) -> Result<()> {
+        if self.buffer_pool_size == 0 {
+            return Err(LightningError::Config(
+                "buffer_pool_size must be greater than 0".into()
+            ));
+        }
+        if self.buffer_pool_size < 1024 * 1024 {
+            return Err(LightningError::Config(
+                "buffer_pool_size must be at least 1MB".into()
+            ));
+        }
+        if self.vacuum_interval_ms < 100 {
+            return Err(LightningError::Config(
+                "vacuum_interval_ms must be at least 100ms".into()
+            ));
+        }
+        if self.prefetch_depth > 100 {
+            return Err(LightningError::Config(
+                "prefetch_depth must be <= 100".into()
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.prefetch_confidence) {
+            return Err(LightningError::Config(
+                "prefetch_confidence must be between 0.0 and 1.0".into()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -216,9 +255,14 @@ impl Drop for Database {
             let sm = self.storage_manager.read();
             sm.get_all_file_handles()
         };
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        for _ in 0..20 {
+            let dirty_exists = self.buffer_manager.dirty_page_count() > 0;
+            if !dirty_exists {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         self.buffer_manager.flush_all_with_handles(&fhs);
-        std::thread::sleep(std::time::Duration::from_millis(100));
         drop(fhs);
 
         let remaining_dirty = self.buffer_manager.dirty_page_count();
@@ -233,6 +277,7 @@ impl Drop for Database {
 
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P, config: SystemConfig) -> Result<Arc<Self>> {
+        config.validate()?;
         let path = path.as_ref().to_path_buf();
         let header_path = path.join("database.header");
         let header = if header_path.exists() {
@@ -275,7 +320,9 @@ impl Database {
                 if let Err(e) = storage_manager.create_fts_index(&table_entry.name) {
                     tracing::warn!("FTS index creation failed for {}: {}", table_entry.name, e);
                 }
-                let _ = storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM);
+                if let Err(e) = storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM) {
+                    tracing::warn!("Vector index creation failed for {}: {}", table_entry.name, e);
+                }
             }
             for table_entry in cat.rel_tables.values() {
                 let col_defs: Vec<(String, LogicalType)> = table_entry
@@ -417,7 +464,9 @@ impl Database {
         // Persist free space map
         {
             let fsm_path = self._path.join("free_space.bin");
-            let _ = self.free_space_manager.save(&fsm_path);
+            if let Err(e) = self.free_space_manager.save(&fsm_path) {
+                tracing::warn!("Failed to save free space map during checkpoint: {}", e);
+            }
         }
 
         // Persist catalog to disk so num_rows and other metadata survive restart.
@@ -425,7 +474,22 @@ impl Database {
         // rows that the catalog doesn't know about, causing COUNT(*) to return
         // fewer rows than actually exist.
         {
-            let catalog_path = self._path.join("catalog.lbug");
+            // Sync column statistics of all tables in storage to the catalog
+            let storage = self.storage_manager.read();
+            let mut cat = self.catalog.write();
+            for (table_name, table) in &storage.node_tables {
+                table.update_column_stats();
+                if let Some(entry) = cat.node_tables.get_mut(table_name) {
+                    entry.stats = table.stats.read().clone();
+                }
+            }
+            for (table_name, table) in &storage.rel_tables {
+                table.update_column_stats();
+                if let Some(entry) = cat.rel_tables.get_mut(table_name) {
+                    entry.stats = table.stats.read().clone();
+                }
+            }
+            drop(cat); // Explicitly drop lock before saving
             if let Err(e) = self.catalog.force_save() {
                 tracing::warn!("Failed to save catalog during checkpoint: {}", e);
             }
@@ -442,6 +506,19 @@ impl Database {
 
         self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
         Ok(())
+    }
+
+    pub fn is_column_indexed(&self, table_name: &str, col_name: &str) -> bool {
+        let cat = self.catalog.read();
+        if let Some(entry) = cat.node_tables.get(table_name) {
+            if entry.primary_key.as_deref() == Some(col_name) {
+                return true;
+            }
+            if entry.constraints.iter().any(|c| c.property == col_name) {
+                return true;
+            }
+        }
+        false
     }
 
     /// VACUUM: compact the database by reclaiming space from deleted rows.
@@ -465,14 +542,17 @@ impl Database {
             };
             if let Some(ref table) = table {
                 for col in &table.columns {
-                    col.optimize(bm, &tx)?;
+                    let is_indexed = self.is_column_indexed(table_name, &col.name);
+                    col.optimize(bm, &tx, is_indexed)?;
                 }
             }
             // Rebuild CSR indexes if present
             self.storage_manager.write().rebuild_csr_if_stale(table_name, bm, &tx)?;
         }
 
-        let _ = self.transaction_manager.rollback(&self, &tx);
+        if let Err(e) = self.transaction_manager.rollback(self, &tx) {
+            tracing::warn!("VACUUM transaction rollback failed: {}", e);
+        }
 
         // Force a checkpoint to persist the optimized state
         self.checkpoint()?;
@@ -1018,7 +1098,9 @@ impl Connection {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
             db.transaction_manager.commit(&tx, bm, db).or_else(|e| {
-                let _ = db.transaction_manager.rollback(db, &tx);
+                if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
+                    tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
+                }
                 Err(e)
             })?;
         }
@@ -1059,7 +1141,9 @@ impl Connection {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
             db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
-                let _ = db.transaction_manager.rollback(db, &tx);
+                if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
+                    tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
+                }
             })?;
         }
 
@@ -1119,6 +1203,7 @@ impl Connection {
         let fts_opt = storage.fts_indexes.get(table_name).cloned();
         let vec_opt = storage.vector_indexes.get(table_name).cloned();
         let index_opt = storage.get_index(table_name);
+        drop(storage);
 
         // Find primary key column index if it exists
         let pk_idx = db
@@ -1163,30 +1248,50 @@ impl Connection {
             }
         }
 
-        // Index all string columns into FTS
+        // Index all string columns into FTS (one document per row with all column values)
         if let Some(fts) = fts_opt {
-            for (col_idx, col) in table.columns.iter().enumerate() {
-                if col_idx < final_batch.num_columns() {
-                    let array = final_batch.column(col_idx);
-                    if let Some(str_arr) =
-                        array.as_any().downcast_ref::<arrow::array::StringArray>()
-                    {
-                        let mut batch_docs = Vec::new();
-                        for i in 0..num_rows {
-                            if str_arr.is_valid(i) {
-                                batch_docs.push((start_id + i as u64, str_arr.value(i)));
-                            }
-                        }
-                        if !batch_docs.is_empty() {
-                            if let Err(e) = fts.insert_batch(&batch_docs, &bm, &tx) {
-                                tracing::warn!("FTS insert_batch error for column {}: {}", col.name, e);
+            let string_cols: Vec<usize> = table
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(col_idx, col)| {
+                    *col_idx < final_batch.num_columns()
+                        && col.data_type == lightning_types::LogicalType::String
+                })
+                .map(|(i, _)| i)
+                .collect();
+
+            if !string_cols.is_empty() {
+                let mut batch_docs: Vec<(u64, Vec<&str>)> = Vec::with_capacity(num_rows);
+                for i in 0..num_rows {
+                    let node_id = start_id + i as u64;
+                    let mut fields = Vec::new();
+                    for &col_idx in &string_cols {
+                        let array = final_batch.column(col_idx);
+                        if let Some(str_arr) =
+                            array.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
+                            if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
+                                fields.push(str_arr.value(i));
                             }
                         }
                     }
+                    if !fields.is_empty() {
+                        batch_docs.push((node_id, fields));
+                    }
                 }
-            }
-            if let Err(e) = fts.commit() {
-                tracing::warn!("FTS commit error: {}", e);
+                if !batch_docs.is_empty() {
+                    if let Err(e) = fts.insert_multi_field_batch(&batch_docs) {
+                        tracing::warn!(
+                            "FTS insert_multi_field_batch error for table {}: {}",
+                            table_name,
+                            e
+                        );
+                    }
+                }
+                if let Err(e) = fts.commit() {
+                    tracing::warn!("FTS commit error: {}", e);
+                }
             }
         }
 

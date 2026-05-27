@@ -1,6 +1,6 @@
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
 
 /// Maximum candidate ratio - if more than this fraction of total rows match a trigram,
 /// we skip the trigram index and fall back to full scan.
@@ -99,7 +99,7 @@ impl TrigramIndex {
     /// Returns statistics about this index for query planning.
     pub fn stats(&self) -> TrigramStats {
         let total_trigrams = self.total_trigrams.load(Ordering::Relaxed);
-        let posting_count = self.trigrams.read().unwrap().len() as u64;
+        let posting_count = self.trigrams.read().len() as u64;
         TrigramStats {
             total_rows: self.total_rows.load(Ordering::Relaxed),
             total_trigrams,
@@ -135,7 +135,7 @@ impl TrigramIndex {
             if trigrams.is_empty() {
                 return (0, 0, false);
             }
-            let map = self.trigrams.read().unwrap();
+            let map = self.trigrams.read();
             let mut min_candidates = u64::MAX;
             let mut max_candidates = 0u64;
             let mut is_common = false;
@@ -155,7 +155,7 @@ impl TrigramIndex {
             (min_candidates, max_candidates, is_common)
         } else if pattern_bytes.len() == 2 {
             let key = [pattern_bytes[0], pattern_bytes[1]];
-            let map = self.bigrams.read().unwrap();
+            let map = self.bigrams.read();
             if let Some(list) = map.get(&key) {
                 let len = list.len() as u64;
                 (len, len, len > self.total_rows.load(Ordering::Relaxed) / 2)
@@ -164,7 +164,7 @@ impl TrigramIndex {
             }
         } else {
             let key = pattern_bytes[0];
-            let map = self.unigrams.read().unwrap();
+            let map = self.unigrams.read();
             if let Some(list) = map.get(&key) {
                 let len = list.len() as u64;
                 (len, len, len > self.total_rows.load(Ordering::Relaxed) / 2)
@@ -208,7 +208,7 @@ impl TrigramIndex {
     pub fn insert(&self, row_id: u64, value: &str) {
         {
             let trigrams = Self::extract_trigrams(value);
-            let mut map = self.trigrams.write().unwrap();
+            let mut map = self.trigrams.write();
             for tri in trigrams {
                 let list = map.entry(tri).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
@@ -218,7 +218,7 @@ impl TrigramIndex {
         }
         {
             let bigrams = Self::extract_bigrams(value);
-            let mut map = self.bigrams.write().unwrap();
+            let mut map = self.bigrams.write();
             for bi in bigrams {
                 let list = map.entry(bi).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
@@ -228,7 +228,7 @@ impl TrigramIndex {
         }
         {
             let unigrams = Self::extract_unigrams(value);
-            let mut map = self.unigrams.write().unwrap();
+            let mut map = self.unigrams.write();
             for u in unigrams {
                 let list = map.entry(u).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
@@ -247,9 +247,9 @@ impl TrigramIndex {
         let mut bigram_count = 0u64;
         let mut unigram_count = 0u64;
 
-        let mut tri_map = self.trigrams.write().unwrap();
-        let mut bi_map = self.bigrams.write().unwrap();
-        let mut uni_map = self.unigrams.write().unwrap();
+        let mut tri_map = self.trigrams.write();
+        let mut bi_map = self.bigrams.write();
+        let mut uni_map = self.unigrams.write();
 
         for &(row_id, value) in entries {
             let tris = Self::extract_trigrams(value);
@@ -364,7 +364,7 @@ impl TrigramIndex {
                 return None;
             }
 
-            let map = self.trigrams.read().unwrap();
+            let map = self.trigrams.read();
             let mut posting_lists: Vec<&Vec<u64>> = Vec::new();
 
             for tri in &trigrams {
@@ -393,7 +393,7 @@ impl TrigramIndex {
             })
         } else if pattern_bytes.len() == 2 {
             let key = [pattern_bytes[0], pattern_bytes[1]];
-            let map = self.bigrams.read().unwrap();
+            let map = self.bigrams.read();
             match map.get(&key) {
                 Some(list) => {
                     let candidate_count = list.len() as u64;
@@ -414,7 +414,7 @@ impl TrigramIndex {
             }
         } else {
             let key = pattern_bytes[0];
-            let map = self.unigrams.read().unwrap();
+            let map = self.unigrams.read();
             match map.get(&key) {
                 Some(list) => {
                     let candidate_count = list.len() as u64;
@@ -452,7 +452,7 @@ impl TrigramIndex {
             if trigrams.is_empty() {
                 return None;
             }
-            let map = self.trigrams.read().unwrap();
+            let map = self.trigrams.read();
             let mut posting_lists: Vec<&Vec<u64>> = Vec::new();
             for tri in &trigrams {
                 match map.get(tri) {
@@ -465,7 +465,7 @@ impl TrigramIndex {
         } else if pattern_bytes.len() == 2 {
             // Use bigram
             let key = [pattern_bytes[0], pattern_bytes[1]];
-            let map = self.bigrams.read().unwrap();
+            let map = self.bigrams.read();
             match map.get(&key) {
                 Some(list) => Some(list.clone()),
                 None => Some(Vec::new()),
@@ -473,7 +473,7 @@ impl TrigramIndex {
         } else {
             // Single char — use unigram
             let key = pattern_bytes[0];
-            let map = self.unigrams.read().unwrap();
+            let map = self.unigrams.read();
             match map.get(&key) {
                 Some(list) => Some(list.clone()),
                 None => Some(Vec::new()),
@@ -521,14 +521,13 @@ impl TrigramIndex {
 
     /// Returns the number of unique trigrams indexed.
     pub fn trigram_count(&self) -> usize {
-        self.trigrams.read().unwrap().len()
+        self.trigrams.read().len()
     }
 
     /// Returns the total number of postings across all trigrams.
     pub fn total_postings(&self) -> usize {
         self.trigrams
             .read()
-            .unwrap()
             .values()
             .map(|v| v.len())
             .sum()

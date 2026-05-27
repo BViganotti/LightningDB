@@ -91,7 +91,7 @@ fn test_intersect_operator() {
         db.buffer_manager.clone(),
         5,
         100,
-    ));
+    ).unwrap());
     // Build 2: Scan Follows
     let scan2 = Box::new(PhysicalScan::new(
         follows_table,
@@ -99,7 +99,7 @@ fn test_intersect_operator() {
         db.buffer_manager.clone(),
         5,
         100,
-    ));
+    ).unwrap());
 
     // Probe side: provides [(0, 1)] (one row, two columns: a=0, b=1)
     #[derive(Clone)]

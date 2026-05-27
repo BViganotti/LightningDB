@@ -409,8 +409,8 @@ impl PhysicalOperator for PhysicalDelete {
                                                 .unwrap_or(0)
                                         };
                                         if num_rel_rows == 0 { continue; }
-                                        let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx)?;
-                                        let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx)?;
+                                        let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                                        let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
                                         for row_idx in 0..num_rel_rows as usize {
                                             let from_val = match Value::from_arrow(&from_arr, row_idx) {
                                                 Value::Node(id) => id,
@@ -830,8 +830,12 @@ impl PhysicalOperator for PhysicalMerge {
                         })
                         .collect();
                     if !text_fields.is_empty() {
-                        let _ = fts.insert_multi_field(next_id, &text_fields);
-                        let _ = fts.commit();
+                        if let Err(e) = fts.insert_multi_field(next_id, &text_fields) {
+                            tracing::error!("FTS insert_multi_field error during merge: {}", e);
+                        }
+                        if let Err(e) = fts.commit() {
+                            tracing::error!("FTS commit error during merge: {}", e);
+                        }
                     }
                 }
 

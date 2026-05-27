@@ -1,7 +1,10 @@
 use crate::processor::arrow_utils;
 use crate::Connection;
-use crate::LightningError;
 use serde::Serialize;
+
+fn sq(s: &str) -> String {
+    s.replace('\'', "\\'")
+}
 
 pub enum ConnectedDirection {
     Incoming,
@@ -28,7 +31,7 @@ impl FusionApp {
 
     /// Find CodeNode IDs by exact name match.
     pub fn find_node_by_name(conn: &Connection, name: &str) -> Result<Vec<String>, crate::LightningError> {
-        let q = format!("MATCH (n:CodeNode) WHERE n.name = '{}' RETURN n.id", name.replace('\'', ""));
+        let q = format!("MATCH (n:CodeNode) WHERE n.name = '{}' RETURN n.id", sq(name));
         let result = conn.query(&q)?;
         let mut ids = Vec::new();
         for batch in &result.batches {
@@ -94,11 +97,11 @@ impl FusionApp {
         let q = match direction {
             ConnectedDirection::Incoming => format!(
                 "MATCH (n:CodeNode {{id: '{}'}})<-[r:{edges}]-(connected:CodeNode) RETURN connected.id",
-                node_id.replace('\'', "")
+                sq(node_id)
             ),
             ConnectedDirection::Outgoing => format!(
                 "MATCH (n:CodeNode {{id: '{}'}})-[r:{edges}]->(connected:CodeNode) RETURN connected.id",
-                node_id.replace('\'', "")
+                sq(node_id)
             ),
         };
         let result = conn.query(&q)?;
@@ -122,7 +125,7 @@ impl FusionApp {
         for node_id in ids {
             let q = format!(
                 "MATCH (n:CodeNode {{id: '{}'}}) RETURN n.id, n.name, n.node_type",
-                node_id.replace('\'', "")
+                sq(node_id)
             );
             if let Ok(result) = conn.query(&q) {
                 for batch in &result.batches {
@@ -154,8 +157,8 @@ impl FusionApp {
     ) -> Result<(), crate::LightningError> {
         let q = format!(
             "CREATE (o:Observation {{id: '{}', content: '{}', is_stale: false, created_at: '{}'}})",
-            id.replace('\'', ""),
-            content.replace('\'', "").replace('\n', " "),
+            sq(&id),
+            sq(&content).replace('\n', " "),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs().to_string())
@@ -189,18 +192,55 @@ impl FusionApp {
     pub fn compute_architecture_cohesion(
         conn: &Connection,
     ) -> Result<Vec<ModuleCohesion>, crate::LightningError> {
-        // Group nodes by module (directory from file_path) and count
-        // internal vs external edges per module.
-        let q = "MATCH (n:CodeNode)-[r]-(m:CodeNode) \
+        let relation_types = ["Calls", "Imports", "References", "Implements", "Contains", "Extends"];
+        let mut module_map: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+        for rel_type in &relation_types {
+            let q = format!(
+                "MATCH (n:CodeNode)-[r:{rel_type}]-(m:CodeNode) \
                  WITH n.file_path AS nf, m.file_path AS mf \
                  WITH split(nf, '/') AS np, split(mf, '/') AS mp \
                  WITH np[0] AS n_mod, mp[0] AS m_mod \
                  WHERE n_mod IS NOT NULL AND m_mod IS NOT NULL \
                  RETURN n_mod, m_mod, count(*) AS edge_count \
-                 ORDER BY n_mod";
-        let result = conn.query(q)?;
-        // ... complex logic omitted for brevity
-        Ok(Vec::new())
+                 ORDER BY n_mod"
+            );
+            if let Ok(rows) = conn.query(&q) {
+                for batch in &rows.batches {
+                    if let (Ok(src_col), Ok(dst_col), Ok(cnt_col)) = (
+                        arrow_utils::str_col(batch, 0),
+                        arrow_utils::str_col(batch, 1),
+                        arrow_utils::i64_col(batch, 2),
+                    ) {
+                        for i in 0..batch.num_rows() {
+                            let src_mod = src_col.value(i).to_string();
+                            let dst_mod = dst_col.value(i).to_string();
+                            let count = cnt_col.value(i) as u64;
+                            let same_module = src_mod == dst_mod;
+                            let (internal, external) = module_map.entry(src_mod).or_insert((0, 0));
+                            if same_module {
+                                *internal += count;
+                            } else {
+                                *external += count;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut results: Vec<ModuleCohesion> = module_map
+            .into_iter()
+            .map(|(module_path, (internal_edges, external_edges))| {
+                let total = internal_edges + external_edges;
+                let cohesion_score = if total > 0 {
+                    internal_edges as f64 / total as f64
+                } else {
+                    0.0
+                };
+                ModuleCohesion { module_path, internal_edges, external_edges, cohesion_score }
+            })
+            .collect();
+        results.sort_by(|a, b| b.cohesion_score.partial_cmp(&a.cohesion_score).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(results)
     }
 
     /// Export the entire graph as D3 JSON format.

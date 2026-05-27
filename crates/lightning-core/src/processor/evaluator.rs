@@ -3,7 +3,7 @@ use crate::planner::binder::BoundExpression;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, ListArray, RecordBatch,
+    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray,
 };
 use arrow::compute::cast;
 use arrow::compute::kernels::boolean::{and, not, or};
@@ -27,10 +27,17 @@ impl ExpressionEvaluator {
         match expr {
             BoundExpression::Literal(lit) => match lit {
                 Literal::Number(n) => Ok(Arc::new(Float64Array::from_value(*n, num_rows))),
-                Literal::String(s) => Ok(Arc::new(arrow::array::StringArray::from_iter_values(
+                Literal::String(s) => Ok(Arc::new(StringArray::from_iter_values(
                     std::iter::repeat_n(s.as_str(), num_rows),
                 ))),
-                Literal::Boolean(b) => Ok(Arc::new(BooleanArray::from(vec![*b; num_rows]))),
+                Literal::Boolean(b) => {
+                    let fill = if *b { 0xFFu8 } else { 0x00 };
+                    let byte_count = num_rows.div_ceil(8);
+                    let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                    buf.as_mut().fill(fill);
+                    let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                    Ok(Arc::new(BooleanArray::new(values, None)))
+                }
                 Literal::Null => Ok(arrow::array::new_null_array(&DataType::Float64, num_rows)),
             },
             BoundExpression::PropertyLookup(_, idx, _) => {
@@ -169,16 +176,21 @@ impl ExpressionEvaluator {
                 Ok(Arc::new(res))
             }
             BoundExpression::Arithmetic(left, op, right) => {
-                let l = cast(
-                    &Self::evaluate(left, batch, params, num_rows, registry, database)?,
-                    &DataType::Float64,
-                )
-                .map_err(|e| LightningError::Internal(e.to_string()))?;
-                let r = cast(
-                    &Self::evaluate(right, batch, params, num_rows, registry, database)?,
-                    &DataType::Float64,
-                )
-                .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let left_arr =
+                    Self::evaluate(left, batch, params, num_rows, registry, database)?;
+                let right_arr =
+                    Self::evaluate(right, batch, params, num_rows, registry, database)?;
+
+                if left_arr.data_type() == &DataType::Int64
+                    && right_arr.data_type() == &DataType::Int64
+                {
+                    return Self::evaluate_arith_int64(&left_arr, &right_arr, op);
+                }
+
+                let l = cast(&left_arr, &DataType::Float64)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let r = cast(&right_arr, &DataType::Float64)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
 
                 let l_f64 = l
                     .as_any()
@@ -434,12 +446,18 @@ impl ExpressionEvaluator {
                     LightningError::Query(format!("Parameter {name} not found"))
                 })?;
                 match val {
-                    Value::Number(n) => Ok(Arc::new(Float64Array::from(vec![*n; num_rows]))),
-                    Value::String(s) => Ok(Arc::new(arrow::array::StringArray::from(vec![
-                        s.as_str();
-                        num_rows
-                    ]))),
-                    Value::Boolean(b) => Ok(Arc::new(BooleanArray::from(vec![*b; num_rows]))),
+                    Value::Number(n) => Ok(Arc::new(Float64Array::from_value(*n, num_rows))),
+                    Value::String(s) => Ok(Arc::new(StringArray::from_iter_values(
+                        std::iter::repeat_n(s.as_str(), num_rows),
+                    ))),
+                    Value::Boolean(b) => {
+                        let fill = if *b { 0xFFu8 } else { 0x00 };
+                        let byte_count = num_rows.div_ceil(8);
+                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        buf.as_mut().fill(fill);
+                        let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                        Ok(Arc::new(BooleanArray::new(values, None)))
+                    }
                     _ => Err(LightningError::Internal(format!(
                         "Parameter type not implemented for evaluation: {val:?}"
                     ))),
@@ -468,6 +486,32 @@ impl ExpressionEvaluator {
                 "Expression evaluation not implemented: {expr:?}"
             ))),
         }
+    }
+
+    fn evaluate_arith_int64(
+        left: &ArrayRef,
+        right: &ArrayRef,
+        op: &crate::parser::ast::ArithmeticOperator,
+    ) -> Result<ArrayRef> {
+        let l = left
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| LightningError::Internal("Expected Int64Array for left operand".into()))?;
+        let r = right
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| LightningError::Internal("Expected Int64Array for right operand".into()))?;
+
+        use crate::parser::ast::ArithmeticOperator::*;
+        let res = match op {
+            Add => arrow::compute::kernels::numeric::add(l, r),
+            Subtract => arrow::compute::kernels::numeric::sub(l, r),
+            Multiply => arrow::compute::kernels::numeric::mul(l, r),
+            Divide => arrow::compute::kernels::numeric::div(l, r),
+            Modulo => arrow::compute::kernels::numeric::rem(l, r),
+        };
+        res.map(|a| Arc::new(a) as ArrayRef)
+            .map_err(|e| LightningError::Internal(e.to_string()))
     }
 
     fn compare_column_literal(
@@ -565,8 +609,9 @@ impl ExpressionEvaluator {
 
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
+            let prev = *new_offsets.last().unwrap_or(&0);
             if values.is_empty() {
-                new_offsets.push(*new_offsets.last().unwrap());
+                new_offsets.push(prev);
                 continue;
             }
 
@@ -576,8 +621,7 @@ impl ExpressionEvaluator {
                 true,
             )])));
             let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
-
-            let bool_res = Self::evaluate(
+            let res = Self::evaluate(
                 body,
                 Some(&sub_batch),
                 params,
@@ -585,15 +629,8 @@ impl ExpressionEvaluator {
                 registry,
                 database,
             )?;
-            let bool_arr = bool_res
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
-
-            let filtered = arrow::compute::filter(&values, bool_arr)
-                .map_err(|e| LightningError::Internal(e.to_string()))?;
-            new_offsets.push(*new_offsets.last().unwrap() + filtered.len() as i32);
-            filtered_values.push(filtered);
+            new_offsets.push(prev + res.len() as i32);
+            filtered_values.push(res);
         }
 
         let flat_values = arrow::compute::concat(
@@ -647,8 +684,9 @@ impl ExpressionEvaluator {
 
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
+            let prev = *new_offsets.last().unwrap_or(&0);
             if values.is_empty() {
-                new_offsets.push(*new_offsets.last().unwrap());
+                new_offsets.push(prev);
                 continue;
             }
 
@@ -667,7 +705,7 @@ impl ExpressionEvaluator {
                 registry,
                 database,
             )?;
-            new_offsets.push(*new_offsets.last().unwrap() + res.len() as i32);
+            new_offsets.push(prev + res.len() as i32);
             transformed_values.push(res);
         }
 

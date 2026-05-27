@@ -42,6 +42,7 @@ pub extern "C" fn kuzu_database_init(
         prefetch_depth: 2,
         prefetch_confidence: 0.15,
         slow_query_threshold_ms: 100,
+        copy_base_dir: None,
     };
 
     match Database::new(path_str, sys_config) {
@@ -142,7 +143,7 @@ pub extern "C" fn kuzu_query_result_get_error_message(
     // SAFETY: SAFETY: Same borrow pattern.
     let res = unsafe { &*(*query_result).query_result };
     if let Some(msg) = res.error_message() {
-        CString::new(msg).unwrap().into_raw()
+        CString::new(msg).unwrap_or_else(|_| CString::new("error").unwrap()).into_raw()
     } else {
         std::ptr::null_mut()
     }

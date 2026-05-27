@@ -50,7 +50,7 @@ impl OverflowFile {
             remaining -= to_read;
             if remaining > 0 {
                 let next_page_bytes = &page_data[usable_size..page_size];
-                let next_page_idx = u32::from_le_bytes(next_page_bytes.try_into().unwrap());
+                let next_page_idx = u32::from_le_bytes(next_page_bytes.try_into().expect("4-byte array"));
                 current_page_idx = next_page_idx;
                 current_offset = 0;
             }

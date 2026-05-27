@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 10
+    versioning-strategy: "increase"

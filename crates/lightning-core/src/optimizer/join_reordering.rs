@@ -110,7 +110,9 @@ impl JoinReordering {
     ) -> Result<LogicalOperator> {
         let n = relations.len();
         if n == 1 {
-            return Ok(relations.into_iter().next().unwrap());
+            return Ok(relations.into_iter().next().ok_or_else(|| {
+                crate::LightningError::Internal("Expected at least one relation in join reordering".into())
+            })?);
         }
 
         let relation_vars: Vec<HashSet<String>> = relations
@@ -181,7 +183,9 @@ impl JoinReordering {
                             BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
                         } else {
                             let mut it = bridge_conds.into_iter();
-                            let mut res = it.next().unwrap();
+                            let mut res = it.next().ok_or_else(|| {
+                                crate::LightningError::Internal("Expected at least one bridge condition in join clique".into())
+                            })?;
                             for next in it {
                                 res = BoundExpression::Logical(
                                     Box::new(res),
@@ -204,7 +208,7 @@ impl JoinReordering {
                         let card = self.estimator.estimate(&plan);
                         let cost = card + l_cost + r_cost;
 
-                        if best_for_subset.is_none() || cost < best_for_subset.as_ref().unwrap().2 {
+                        if best_for_subset.as_ref().map_or(true, |best| cost < best.2) {
                             best_for_subset = Some((plan, card, cost, current_used));
                         }
                     }

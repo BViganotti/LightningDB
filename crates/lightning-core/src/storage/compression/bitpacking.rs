@@ -33,6 +33,19 @@ impl BitPacker {
     }
 
     fn write_bits(val: u64, bit_width: u8, bit_offset: usize, data: &mut [u8]) {
+        if bit_width == 0 {
+            return;
+        }
+        let word_idx = bit_offset / 64;
+        let bit_in_word = bit_offset % 64;
+
+        if bit_in_word + bit_width as usize <= 64 {
+            let word_ptr = unsafe { &mut *(data[word_idx * 8..].as_mut_ptr() as *mut u64) };
+            let mask = ((1u64 << bit_width) - 1) << bit_in_word;
+            *word_ptr = (*word_ptr & !mask) | ((val << bit_in_word) & mask);
+            return;
+        }
+
         let mut bits_written = 0;
         while bits_written < bit_width {
             let byte_idx = (bit_offset + bits_written as usize) / 8;
@@ -50,6 +63,18 @@ impl BitPacker {
     }
 
     fn read_bits(bit_width: u8, bit_offset: usize, data: &[u8]) -> u64 {
+        if bit_width == 0 {
+            return 0;
+        }
+        let word_idx = bit_offset / 64;
+        let bit_in_word = bit_offset % 64;
+
+        if bit_in_word + bit_width as usize <= 64 {
+            let word_ptr = unsafe { &*(data[word_idx * 8..].as_ptr() as *const u64) };
+            let mask = (1u64 << bit_width) - 1;
+            return (word_ptr >> bit_in_word) & mask;
+        }
+
         let mut val = 0u64;
         let mut bits_read = 0;
         while bits_read < bit_width {

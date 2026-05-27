@@ -8,6 +8,12 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Uses SipHash 1-3 (via DefaultHasher). The hash is used for bucket
+/// distribution only — stored hashes are compared against recomputed values
+/// within the same process.  In-memory HashMap protections via RandomState
+/// are orthogonal; SipHash provides adequate collision resistance for
+/// bucket assignment.
+
 pub struct HashIndex {
     file_handle: Arc<FileHandle>,
     num_buckets: std::sync::atomic::AtomicU64,
@@ -18,6 +24,15 @@ const MAX_VAL_SIZE: usize = 256;
 const ENTRY_SIZE: usize = 8 + MAX_VAL_SIZE + 8;
 const MAX_ENTRIES_PER_PAGE: usize = (PAGE_SIZE - 16) / ENTRY_SIZE;
 const DELETED_BIT: u64 = 1 << 63;
+
+fn read_u64_at(data: &[u8], offset: usize) -> Result<u64> {
+    let bytes: [u8; 8] = data
+        .get(offset..offset + 8)
+        .ok_or_else(|| LightningError::Internal("buffer too short for u64".into()))?
+        .try_into()
+        .map_err(|_| LightningError::Internal("array conversion failed".into()))?;
+    Ok(u64::from_le_bytes(bytes))
+}
 
 impl HashIndex {
     pub fn open_or_create(path: &Path) -> Result<Self> {
@@ -140,11 +155,7 @@ impl HashIndex {
     ) -> Result<Vec<(u64, Value, u64)>> {
         let mut all = Vec::new();
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = u64::from_le_bytes(
-            header_frame.as_slice()[0..8]
-                .try_into()
-                .expect("fixed-size array conversion (8 bytes)"),
-        );
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
 
         for bucket_idx in 1..=num_buckets {
@@ -152,26 +163,16 @@ impl HashIndex {
             loop {
                 let frame = bm.pin_page(Arc::clone(self.fh()), current, tx)?;
                 let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
-                let num_entries = u64::from_le_bytes(
-                    data[8..16].try_into().expect("fixed-size array conversion (8 bytes)"),
-                );
-                let next_page = u64::from_le_bytes(
-                    data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"),
-                );
+                let num_entries = read_u64_at(data, 8)?;
+                let next_page = read_u64_at(data, 0)?;
                 for i in 0..num_entries as usize {
                     let offset = 16 + i * ENTRY_SIZE;
-                    let stored_hash = u64::from_le_bytes(
-                        data[offset..offset + 8].try_into().expect("fixed-size array conversion (8 bytes)"),
-                    );
+                    let stored_hash = read_u64_at(data, offset)?;
                     if stored_hash & DELETED_BIT != 0 {
                         continue;
                     }
                     let val_bytes = &data[offset + 8..offset + 8 + MAX_VAL_SIZE];
-                    let row_id = u64::from_le_bytes(
-                        data[offset + 8 + MAX_VAL_SIZE..offset + 16 + MAX_VAL_SIZE]
-                            .try_into()
-                            .expect("fixed-size array conversion (8 bytes)"),
-                    );
+                    let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
                     let key = Self::deserialize_value(&Value::Number(0.0), val_bytes)?;
                     all.push((stored_hash, key, row_id));
                 }
@@ -197,11 +198,7 @@ impl HashIndex {
     ) -> Result<()> {
         // Read num_buckets directly from the file header (already updated by resize)
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = u64::from_le_bytes(
-            header_frame.as_slice()[0..8]
-                .try_into()
-                .expect("fixed-size array conversion (8 bytes)"),
-        );
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
 
         if num_buckets == 0 {
@@ -211,9 +208,9 @@ impl HashIndex {
 
         let mut current_page = target_bucket;
         loop {
-            let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
+            let frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
             let data_ptr = frame.as_ptr();
-            let num_entries = u64::from_le_bytes(unsafe { *data_ptr.add(8).cast::<[u8; 8]>() });
+            let num_entries = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 8)?;
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
                 Self::write_entry_to_page(data_ptr, num_entries, hash, key, row_id)?;
@@ -222,12 +219,12 @@ impl HashIndex {
                 return Ok(());
             }
 
-            let next_page = u64::from_le_bytes(unsafe { *data_ptr.cast::<[u8; 8]>() });
+            let next_page = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 0)?;
             bm.unpin_page(self.fh(), current_page, frame);
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
-                let bucket_frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
+                let bucket_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         new_page.to_le_bytes().as_ptr(),
@@ -251,7 +248,7 @@ impl HashIndex {
             Value::String(s) => s.hash(&mut hasher),
             _ => format!("{val:?}").hash(&mut hasher),
         };
-        hasher.finish()
+        hasher.finish() & !DELETED_BIT
     }
     fn serialize_value(val: &Value, buf: &mut [u8]) -> Result<()> {
         match val {
@@ -316,7 +313,7 @@ impl HashIndex {
         limit: Option<usize>,
         results: &mut Vec<u64>,
     ) -> Result<()> {
-        let num_entries = u64::from_le_bytes(data[8..16].try_into().expect("fixed-size array conversion (8 bytes)"));
+        let num_entries = read_u64_at(data, 8)?;
         for i in 0..num_entries as usize {
             if let Some(l) = limit {
                 if results.len() >= l {
@@ -324,7 +321,7 @@ impl HashIndex {
                 }
             }
             let offset = 16 + i * ENTRY_SIZE;
-            let stored_hash = u64::from_le_bytes(data[offset..offset + 8].try_into().expect("fixed-size array conversion (8 bytes)"));
+            let stored_hash = read_u64_at(data, offset)?;
             if stored_hash & DELETED_BIT != 0 {
                 continue;
             }
@@ -332,11 +329,7 @@ impl HashIndex {
                 let stored_val =
                     Self::deserialize_value(key, &data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
                 if stored_val == *key {
-                    results.push(u64::from_le_bytes(
-                        data[offset + 8 + MAX_VAL_SIZE..offset + 16 + MAX_VAL_SIZE]
-                            .try_into()
-                            .expect("fixed-size array conversion (8 bytes)"),
-                    ));
+                    results.push(read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?);
                 }
             }
         }
@@ -408,10 +401,7 @@ impl HashIndex {
     ) -> Result<()> {
         let hash = Self::compute_hash(key);
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = {
-            let hdr_data = header_frame.as_slice();
-            u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
-        };
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         if num_buckets == 0 {
             return Err(LightningError::Internal("HashIndex header corrupted: num_buckets=0".into()));
         }
@@ -419,10 +409,9 @@ impl HashIndex {
 
         let mut current_page = target_bucket;
         loop {
-            let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
+            let frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
             let data_ptr = frame.as_ptr();
-            // SAFETY: SAFETY: Reading num_entries from pinned bucket page via aligned u64 pointer cast.
-            let num_entries = u64::from_le_bytes(unsafe { *data_ptr.add(8).cast::<[u8; 8]>() });
+            let num_entries = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 8)?;
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
                 Self::write_entry_to_page(data_ptr, num_entries, hash, key, row_id)?;
@@ -431,14 +420,14 @@ impl HashIndex {
                 break;
             }
 
-            // SAFETY: SAFETY: Reading overflow page pointer from pinned bucket page via aligned u64 pointer cast.
-            let next_page = u64::from_le_bytes(unsafe { *data_ptr.cast::<[u8; 8]>() });
+            // SAFETY: SAFETY: Reading overflow page pointer from newly created version via cast.
+            let next_page = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 0)?;
             bm.unpin_page(self.fh(), current_page, frame);
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
-                let bucket_frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
-                // SAFETY: SAFETY: Writing overflow page link into bucket page header.
+                let bucket_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
+                // SAFETY: SAFETY: Writing overflow page link into newly created version.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         new_page.to_le_bytes().as_ptr(),
@@ -466,30 +455,28 @@ impl HashIndex {
     ) -> Result<bool> {
         let hash = Self::compute_hash(key);
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = {
-            let hdr_data = header_frame.as_slice();
-            u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
-        };
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         if num_buckets == 0 {
             return Ok(false);
         }
+        bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
         let target_bucket = 1 + (hash % num_buckets);
 
         let mut current_page = target_bucket;
+        let mut found_offset: Option<usize> = None;
         loop {
             let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
             let num_entries;
             let next_page;
             let mut found = false;
-            // SAFETY: SAFETY: Reading/writing tombstone bit in delete path. Frame is pinned.
+            // SAFETY: SAFETY: Reading data in delete path. Frame is pinned.
             unsafe {
                 let data = &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>();
-                num_entries = u64::from_le_bytes(data[8..16].try_into().expect("fixed-size array conversion (8 bytes)"));
-                next_page = u64::from_le_bytes(data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"));
+                num_entries = read_u64_at(data, 8)?;
+                next_page = read_u64_at(data, 0)?;
                 for i in 0..num_entries as usize {
                     let offset = 16 + i * ENTRY_SIZE;
-                    let stored_hash =
-                        u64::from_le_bytes(data[offset..offset + 8].try_into().expect("fixed-size array conversion (8 bytes)"));
+                    let stored_hash = read_u64_at(data, offset)?;
                     if stored_hash & DELETED_BIT != 0 {
                         continue;
                     }
@@ -499,20 +486,10 @@ impl HashIndex {
                             &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
                         )?;
                         if stored_val == *key {
-                            let stored_row_id = u64::from_le_bytes(
-                                data[offset + 8 + MAX_VAL_SIZE..offset + 16 + MAX_VAL_SIZE]
-                                    .try_into()
-                                    .expect("fixed-size array conversion (8 bytes)"),
-                            );
+                            let stored_row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
                             if stored_row_id == row_id {
-                                let ptr = frame.as_ptr();
-                                let tombstone = (hash | DELETED_BIT).to_le_bytes();
-                                std::ptr::copy_nonoverlapping(
-                                    tombstone.as_ptr(),
-                                    ptr.add(offset),
-                                    8,
-                                );
                                 found = true;
+                                found_offset = Some(offset);
                                 break;
                             }
                         }
@@ -520,8 +497,21 @@ impl HashIndex {
                 }
             }
             if found {
-                bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, frame.as_slice())?;
                 bm.unpin_page(self.fh(), current_page, frame);
+                if let Some(offset) = found_offset {
+                    let write_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
+                    unsafe {
+                        let ptr = write_frame.as_ptr();
+                        let tombstone = (hash | DELETED_BIT).to_le_bytes();
+                        std::ptr::copy_nonoverlapping(
+                            tombstone.as_ptr(),
+                            ptr.add(offset),
+                            8,
+                        );
+                    }
+                    bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, write_frame.as_slice())?;
+                    bm.unpin_page(self.fh(), current_page, write_frame);
+                }
                 return Ok(true);
             }
             bm.unpin_page(self.fh(), current_page, frame);
@@ -553,10 +543,7 @@ impl HashIndex {
         let hash = Self::compute_hash(key);
         let mut results = Vec::new();
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = {
-            let hdr_data = header_frame.as_slice();
-            u64::from_le_bytes(hdr_data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
-        };
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         if num_buckets == 0 {
             return Ok(Vec::new());
         }
@@ -568,7 +555,7 @@ impl HashIndex {
             // SAFETY: SAFETY: Reading bucket page data in lookup_multi. Frame pinned via pin_page.
             let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
             Self::scan_bucket_page(data, hash, key, limit, &mut results)?;
-            let next_page = u64::from_le_bytes(data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"));
+            let next_page = read_u64_at(data, 0)?;
             bm.unpin_page(self.fh(), current_page, frame);
             if next_page == 0 {
                 break;
@@ -593,10 +580,7 @@ impl HashIndex {
     ) -> Result<Vec<(Value, u64)>> {
         let mut results = Vec::new();
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
-        let num_buckets = {
-            let hdr = header_frame.as_slice();
-            u64::from_le_bytes(hdr[0..8].try_into().expect("fixed-size array conversion (8 bytes)"))
-        };
+        let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
 
         for bucket_idx in 1..=num_buckets {
@@ -604,18 +588,12 @@ impl HashIndex {
             loop {
                 let frame = bm.pin_page(Arc::clone(self.fh()), current_page, tx)?;
                 let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
-                let num_entries = u64::from_le_bytes(
-                    data[8..16].try_into().expect("fixed-size array conversion (8 bytes)"),
-                );
-                let next_page = u64::from_le_bytes(
-                    data[0..8].try_into().expect("fixed-size array conversion (8 bytes)"),
-                );
+                let num_entries = read_u64_at(data, 8)?;
+                let next_page = read_u64_at(data, 0)?;
 
                 for i in 0..num_entries as usize {
                     let offset = 16 + i * ENTRY_SIZE;
-                    let stored_hash = u64::from_le_bytes(
-                        data[offset..offset + 8].try_into().expect("fixed-size array conversion (8 bytes)"),
-                    );
+                    let stored_hash = read_u64_at(data, offset)?;
                     if stored_hash & DELETED_BIT != 0 {
                         continue;
                     }
@@ -623,11 +601,7 @@ impl HashIndex {
                         &Value::Number(0.0),
                         &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
                     )?;
-                    let row_id = u64::from_le_bytes(
-                        data[offset + 8 + MAX_VAL_SIZE..offset + 16 + MAX_VAL_SIZE]
-                            .try_into()
-                            .expect("fixed-size array conversion (8 bytes)"),
-                    );
+                    let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
                     results.push((key, row_id));
                 }
 

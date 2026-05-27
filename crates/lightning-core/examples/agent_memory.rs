@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             metadata: "{}".to_string(),
             valid_from: ts,
             valid_until: 0,
+            embedding: Vec::new(),
         }
     }
 

@@ -1,9 +1,7 @@
 use crate::processor::functions::ScalarFunction;
 use crate::Result;
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, StringArray};
-use arrow::datatypes::DataType;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Default maximum execution time for a single WASM function call.
 const DEFAULT_WASM_TIMEOUT_MS: u64 = 100;
@@ -114,14 +112,26 @@ impl WasmFunction {
     }
 
     pub fn to_scalar_function(&self) -> ScalarFunction {
-        let wasm = self.wasm_bytes.clone();
-        let func_name = self.func_name.clone();
-        let name = self.name.clone();
         let exec_mode = self.exec_mode.to_u8();
+        let func_name = self.func_name.clone();
+        let wasm = self.wasm_bytes.clone();
 
         let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, &wasm)
-        .expect("WASM module compilation failed at registration time");
+        let module = match wasmi::Module::new(&engine, &wasm) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!("WASM module compilation failed for '{}': {e}", self.name);
+                let name = self.name.clone();
+                return ScalarFunction::new(
+                    name,
+                    Arc::new(move |_: &[ArrayRef], _: usize| {
+                        Err(crate::LightningError::Internal(
+                            format!("WASM module '{func_name}' failed to compile")
+                        ))
+                    }),
+                );
+            }
+        };
 
     let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
         move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
@@ -233,7 +243,7 @@ impl WasmFunction {
                         let write_offset = 0i32;
                         let num_elements = num_rows as i32;
                         {
-                            let mut mem_data = mem.data_mut(&mut store);
+                            let mem_data = mem.data_mut(&mut store);
                             let write_len = input_bytes.len().min(mem_data.len());
                             mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
                         }
@@ -285,7 +295,7 @@ impl WasmFunction {
                             let input_bytes = input_str.as_bytes();
                             let write_offset = 0i32;
                             {
-                                let mut mem_data = mem.data_mut(&mut store);
+                                let mem_data = mem.data_mut(&mut store);
                                 let write_len = input_bytes.len().min(mem_data.len());
                                 mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
                             }
@@ -314,7 +324,7 @@ impl WasmFunction {
             },
         );
 
-        ScalarFunction::new(name, exec)
+        ScalarFunction::new(self.name.clone(), exec)
     }
 }
 

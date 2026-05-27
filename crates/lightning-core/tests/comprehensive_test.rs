@@ -91,11 +91,15 @@ fn node_5_delete_node() -> TestResult {
     let conn = db.connect();
     conn.execute("CREATE NODE TABLE Test(id INT64, PRIMARY KEY (id))", None)?;
     conn.execute("CREATE (:Test {id: 1})", None)?;
-    conn.execute("MATCH (t:Test) WHERE t.id = 1 DELETE t", None)?;
+    let before = conn.execute("MATCH (t:Test) RETURN t.id", None)?;
+    println!("BEFORE DELETE: {:?}", before.batches);
+    let del_res = conn.execute("MATCH (t:Test) WHERE t.id = 1 DELETE t", None)?;
+    println!("DELETE AFFECTED: {:?}", del_res.batches);
+    let after = conn.execute("MATCH (t:Test) RETURN t.id", None)?;
+    println!("AFTER DELETE: {:?}", after.batches);
     let res = conn.execute("MATCH (t:Test) RETURN count(*)", None)?;
-    // If the table is empty, count(*) might return no rows in our current implementation
+    println!("COUNT(*) RESULT: {:?}", res.batches);
     if !res.batches.is_empty() && res.batches[0].num_rows() > 0 {
-        // COUNT returns Int64 in C++ implementation
         assert_val!(res, 0, 0, 0i64, Int64Array);
     }
     Ok(())

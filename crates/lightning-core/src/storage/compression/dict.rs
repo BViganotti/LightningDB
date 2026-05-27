@@ -1,5 +1,6 @@
 use crate::storage::compression::bitpacking::BitPacker;
 use crate::storage::compression::{CompressionAlg, CompressionMetadata, CompressionType};
+use crate::LightningError;
 use crate::Result;
 use std::collections::HashMap;
 
@@ -68,18 +69,57 @@ impl CompressionAlg for DictCompression {
 
     fn decompress_from_page(
         &self,
-        _src: &[u8],
-        _src_offset: u64,
-        _dst: &mut [u8],
-        _dst_offset: u64,
-        _num_values: u64,
+        src: &[u8],
+        src_offset: u64,
+        dst: &mut [u8],
+        dst_offset: u64,
+        num_values: u64,
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
-        let _element_size = 8;
-        // Optimization: In real Dict compression, the src_offset would point to the packed indices
-        // and the dictionary would be at the start of the page.
-        // For our trait-based simple integration, we skip the dict header for now.
-        // Actually, I'll just skip it for now and use it as a placeholder.
+        let element_size = 8;
+
+        if num_values == 0 {
+            return Ok(());
+        }
+
+        let dict_count = {
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(&src[..4]);
+            u32::from_le_bytes(bytes) as usize
+        };
+
+        if dict_count == 0 {
+            return Ok(());
+        }
+
+        let dict_start = 4;
+        let dict_end = dict_start + dict_count * element_size;
+        let packed_start = dict_end;
+
+        let bit_width = std::cmp::max(64 - (dict_count as u32).leading_zeros(), 1) as u8;
+
+        let mut indices = [0u64; 32];
+        BitPacker::unpack_32(&src[packed_start..], bit_width, &mut indices);
+
+        let dict_bytes = &src[dict_start..dict_end];
+
+        for i in 0..num_values as usize {
+            let val_idx = ((src_offset as usize) + i) % 32;
+            let dict_idx = indices[val_idx] as usize;
+
+            if dict_idx >= dict_count {
+                return Err(LightningError::Internal(format!(
+                    "Dict decompression: index {} out of bounds (dict_count={})",
+                    dict_idx, dict_count
+                )));
+            }
+
+            let entry_start = dict_idx * element_size;
+            let dst_start = ((dst_offset as usize) + i) * element_size;
+            dst[dst_start..dst_start + element_size]
+                .copy_from_slice(&dict_bytes[entry_start..entry_start + element_size]);
+        }
+
         Ok(())
     }
 }

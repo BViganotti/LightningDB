@@ -6,11 +6,27 @@ pub struct LightningConnection {
     conn: crate::Connection,
 }
 
+fn c_str_to_str(ptr: *const c_char) -> Result<&'static str, crate::LightningError> {
+    if ptr.is_null() {
+        return Err(crate::LightningError::Internal("null pointer".into()));
+    }
+    let c_str = unsafe { CStr::from_ptr(ptr) };
+    c_str
+        .to_str()
+        .map_err(|_| crate::LightningError::Internal("invalid UTF-8 from C caller".into()))
+}
+
+fn c_string_from_str(s: &str) -> Result<CString, crate::LightningError> {
+    CString::new(s)
+        .map_err(|_| crate::LightningError::Internal("string contains null byte".into()))
+}
+
 #[no_mangle]
 pub extern "C" fn lightning_open(path: *const c_char) -> *mut LightningConnection {
-    // SAFETY: SAFETY: `path` is a valid C string from the C caller.
-    let c_str = unsafe { CStr::from_ptr(path) };
-    let path_str = c_str.to_str().unwrap();
+    let path_str = match c_str_to_str(path) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
     let db = match Database::new(
         std::path::Path::new(path_str),
         crate::SystemConfig::default(),
@@ -26,24 +42,45 @@ pub extern "C" fn lightning_query(
     conn_ptr: *mut LightningConnection,
     query: *const c_char,
 ) -> *const c_char {
-    // SAFETY: SAFETY: `conn_ptr` points to a valid Arc<Connection> wrapper.
+    if conn_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
     let conn_wrapper = unsafe { &*conn_ptr };
-    // SAFETY: SAFETY: `query` is a valid C string from the caller.
-    let c_str = unsafe { CStr::from_ptr(query) };
-    let query_str = c_str.to_str().unwrap();
+    let query_str = match c_str_to_str(query) {
+        Ok(s) => s,
+        Err(e) => {
+            let err_json = format!("{{\"error\": \"{e}\"}}");
+            return match c_string_from_str(&err_json) {
+                Ok(c) => c.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            };
+        }
+    };
 
-    // Use the persistent session context!
     let conn_obj = &conn_wrapper.conn;
     match conn_obj.query(query_str) {
         Ok(res) => {
-            let res_json = serde_json::to_string(&res).unwrap();
-            let c_res = CString::new(res_json).unwrap();
-            c_res.into_raw()
+            let res_json = match serde_json::to_string(&res) {
+                Ok(j) => j,
+                Err(e) => {
+                    let err_json = format!("{{\"error\": \"{e}\"}}");
+                    return match c_string_from_str(&err_json) {
+                        Ok(c) => c.into_raw(),
+                        Err(_) => std::ptr::null_mut(),
+                    };
+                }
+            };
+            match c_string_from_str(&res_json) {
+                Ok(c_res) => c_res.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
         Err(e) => {
             let err_json = format!("{{\"error\": \"{e}\"}}");
-            let c_res = CString::new(err_json).unwrap();
-            c_res.into_raw()
+            match c_string_from_str(&err_json) {
+                Ok(c_res) => c_res.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
         }
     }
 }
@@ -51,7 +88,6 @@ pub extern "C" fn lightning_query(
 #[no_mangle]
 pub extern "C" fn lightning_close(conn: *mut LightningConnection) {
     if !conn.is_null() {
-        // SAFETY: SAFETY: Result string is Rust-allocated; CString::new is infallible for valid UTF-8.
         unsafe {
             let _ = Box::from_raw(conn);
         }
@@ -61,7 +97,6 @@ pub extern "C" fn lightning_close(conn: *mut LightningConnection) {
 #[no_mangle]
 pub extern "C" fn lightning_free_string(s: *mut c_char) {
     if !s.is_null() {
-        // SAFETY: SAFETY: Same pattern — CString from Rust-allocated data.
         unsafe {
             let _ = CString::from_raw(s);
         }

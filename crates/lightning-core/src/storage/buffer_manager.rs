@@ -80,7 +80,8 @@ impl BufferManager {
         prefetch_depth: usize,
         prefetch_confidence: f64,
     ) -> Self {
-        let num_shards = 16;
+        let num_shards: usize = 16;
+        debug_assert!(num_shards.count_ones() == 1, "num_shards must be a power of 2");
         let shard_capacity = capacity / num_shards;
         let prefetch_tracker = Arc::new(crate::storage::prefetch::PrefetchTracker::new());
         let mut shards = Vec::with_capacity(num_shards);
@@ -125,7 +126,7 @@ impl BufferManager {
         h ^= h >> 33;
         h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
         h ^= h >> 33;
-        (h as usize) % self.num_shards
+        (h as usize) & (self.num_shards - 1)
     }
 
     fn get_page_lock(&self, pool: &mut BufferPool, key: (u64, u64)) -> Arc<Mutex<()>> {
@@ -154,7 +155,7 @@ impl BufferManager {
                 let mut best_version: u64 = 0;
                 let mut found_our_own = false;
 
-                for &idx in slot_indices {
+                for &idx in slot_indices.iter().rev() {
                     let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                     if version == tx_id_marked {
                         best_frame = Some(Arc::clone(&pool.slots[idx].frame));
@@ -187,7 +188,7 @@ impl BufferManager {
             let mut best_version: u64 = 0;
             let mut found_our_own = false;
 
-            for &idx in slot_indices {
+            for &idx in slot_indices.iter().rev() {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                 if version == tx_id_marked {
                     best_frame = Some(Arc::clone(&pool.slots[idx].frame));
@@ -403,7 +404,7 @@ impl BufferManager {
         let tx_id_marked = tx_id | UNCOMMITTED_BIT;
         let shard_idx = self.get_shard_idx(key);
 
-        let mut pool = self.shards[shard_idx].write();
+        let pool = self.shards[shard_idx].write();
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             for &idx in slot_indices {
                 let current_version = pool.slots[idx].frame.version.load(Ordering::Acquire);
@@ -540,10 +541,8 @@ impl BufferManager {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
-        use std::sync::Mutex;
-
-        let synced_fids: Mutex<std::collections::HashSet<u64>> =
-            Mutex::new(std::collections::HashSet::new());
+        let synced_fids: parking_lot::Mutex<std::collections::HashSet<u64>> =
+            parking_lot::Mutex::new(std::collections::HashSet::new());
 
         // Phase 1: Parallel flush of dirty pages across all shards
         let results: Vec<Result<()>> = self.shards.par_iter().map(|shard| {
@@ -557,7 +556,7 @@ impl BufferManager {
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
-                            synced_fids.lock().unwrap().insert(fid);
+                            synced_fids.lock().insert(fid);
                             pool.slots[i].dirty = false;
                         }
                     }
@@ -576,7 +575,7 @@ impl BufferManager {
         }
 
         // Phase 2: Sync each file handle once
-        let fids: Vec<u64> = synced_fids.lock().unwrap().iter().copied().collect();
+        let fids: Vec<u64> = synced_fids.lock().iter().copied().collect();
         for shard in &self.shards {
             let pool = shard.read();
             for fid in &fids {

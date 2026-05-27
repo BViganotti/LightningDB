@@ -29,15 +29,11 @@ impl Scheduler {
         let params_arc = params.map(Arc::new);
 
         if self.num_threads == 1 {
-            // Single-threaded fast path: avoid cloning the operator tree.
             let mut op = operator;
-            let ch_tx = ch_tx.clone();
-            self.pool.spawn(move || loop {
+            loop {
                 match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
                     Ok(Some(chunk)) => {
-                        if ch_tx.send(Ok(chunk)).is_err() {
-                            break;
-                        }
+                        if ch_tx.send(Ok(chunk)).is_err() { break; }
                     }
                     Ok(None) => break,
                     Err(e) => {
@@ -45,7 +41,7 @@ impl Scheduler {
                         break;
                     }
                 }
-            });
+            }
         } else {
             for _ in 0..self.num_threads {
                 let mut op = operator.clone_box();
@@ -62,7 +58,9 @@ impl Scheduler {
                         }
                         Ok(None) => break,
                         Err(e) => {
-                            let _ = ch_tx.send(Err(e));
+                            if ch_tx.send(Err(e)).is_err() {
+                                tracing::warn!("Failed to send query error to channel");
+                            }
                             break;
                         }
                     }

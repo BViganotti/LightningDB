@@ -12,14 +12,12 @@ use std::sync::Arc;
 pub struct PhysicalRecursiveJoin {
     child: Box<dyn PhysicalOperator>,
     rel_tables: Vec<String>,
-    #[allow(dead_code)]
-    rel_var: String,
     src_var: String,
     dst_node_table: String,
     dst_var: String,
     bounds: Option<(Option<u32>, Option<u32>)>,
     src_col_idx: Option<usize>,
-    output_buffer: VecDeque<(u64, u64, u32)>, // (src, dst, depth)
+    output_buffer: VecDeque<(u64, u64, u32)>,
     exhausted_child: bool,
 }
 
@@ -27,7 +25,6 @@ impl PhysicalRecursiveJoin {
     pub fn new(
         child: Box<dyn PhysicalOperator>,
         rel_tables: Vec<String>,
-        rel_var: String,
         src_var: String,
         dst_node_table: String,
         dst_var: String,
@@ -36,7 +33,6 @@ impl PhysicalRecursiveJoin {
         Self {
             child,
             rel_tables,
-            rel_var,
             src_var,
             dst_node_table,
             dst_var,
@@ -60,10 +56,15 @@ impl PhysicalRecursiveJoin {
         let storage = db.storage_manager.read();
         let bm = &db.buffer_manager;
 
-        let max_id = storage
-            .get_table(&self.dst_node_table)
-            .map(|t| t.next_row_id.load(std::sync::atomic::Ordering::SeqCst))
-            .unwrap_or(1_000_000);
+        let max_id = match storage.get_table(&self.dst_node_table) {
+            Some(t) => t.next_row_id.load(std::sync::atomic::Ordering::SeqCst),
+            None => {
+                return Err(crate::LightningError::Internal(format!(
+                    "destination node table '{}' not found",
+                    self.dst_node_table
+                )));
+            }
+        };
 
         let mut results = Vec::new();
         let mut visited = FixedBitSet::with_capacity(max_id as usize);
@@ -88,7 +89,9 @@ impl PhysicalRecursiveJoin {
                     let mut neighbors = Vec::new();
                     for rel_table in rel_tables {
                         if let Some(fwd_csr) = storage.fwd_csr.get(rel_table) {
-                            let _ = fwd_csr.for_each_neighbor(bm, node, tx, |n| neighbors.push(n));
+                            if let Err(e) = fwd_csr.for_each_neighbor(bm, node, tx, |n| neighbors.push(n)) {
+                                tracing::warn!("CSR traversal error for node {} in BFS: {}", node, e);
+                            }
                         }
                     }
                     neighbors
@@ -125,7 +128,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
         while !self.exhausted_child && self.output_buffer.is_empty() {
             if let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let src_idx = self.src_col_idx
-                    .expect("src_col_idx was just initialized if needed");
+                    .ok_or_else(|| crate::LightningError::Internal("src_col_idx not initialized".into()))?;
                 let num_rows = chunk.num_rows();
 
                 for i in 0..num_rows {
@@ -180,7 +183,6 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
         Box::new(Self {
             child: self.child.clone_box(),
             rel_tables: self.rel_tables.clone(),
-            rel_var: self.rel_var.clone(),
             src_var: self.src_var.clone(),
             dst_node_table: self.dst_node_table.clone(),
             dst_var: self.dst_var.clone(),

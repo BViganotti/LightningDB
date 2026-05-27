@@ -22,7 +22,7 @@ use crate::storage::buffer_manager::PAGE_SIZE;
 use crate::SyncMode;
 use crate::Result;
 use parking_lot::Mutex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -183,7 +183,7 @@ impl WAL {
         file.seek(SeekFrom::Start(WAL_HEADER_SIZE as u64))?;
 
         let mut commits: HashSet<u64> = HashSet::new();
-        let mut updates: Vec<(u64, u64, u64, Vec<u8>)> = Vec::new();
+        let mut pending: HashMap<u64, Vec<(u64, u64, Vec<u8>)>> = HashMap::new();
 
         let mut records_read = 0u64;
         let mut corrupt_records_skipped = 0u64;
@@ -236,7 +236,12 @@ impl WAL {
                     let tx_id = u64::from_le_bytes(tx_id_bytes);
                     let file_id = u64::from_le_bytes(file_id_bytes);
                     let page_idx = u64::from_le_bytes(page_idx_bytes);
-                    updates.push((tx_id, file_id, page_idx, data));
+
+                    if commits.contains(&tx_id) && tx_id > last_checkpoint_ts {
+                        apply_page(file_id, page_idx, &data)?;
+                    } else {
+                        pending.entry(tx_id).or_default().push((file_id, page_idx, data));
+                    }
                     true
                 }
                 RECORD_TYPE_COMMIT => {
@@ -263,6 +268,14 @@ impl WAL {
 
                     let tx_id = u64::from_le_bytes(tx_id_bytes);
                     commits.insert(tx_id);
+
+                    if tx_id > last_checkpoint_ts {
+                        if let Some(updates) = pending.remove(&tx_id) {
+                            for (file_id, page_idx, data) in updates {
+                                apply_page(file_id, page_idx, &data)?;
+                            }
+                        }
+                    }
                     true
                 }
                 _ => {
@@ -279,9 +292,11 @@ impl WAL {
             }
         }
 
-        for (tx_id, file_id, page_idx, data) in &updates {
-            if *tx_id > last_checkpoint_ts && commits.contains(tx_id) {
-                apply_page(*file_id, *page_idx, data)?;
+        for (tx_id, updates) in pending.drain() {
+            if tx_id > last_checkpoint_ts && commits.contains(&tx_id) {
+                for (file_id, page_idx, data) in updates {
+                    apply_page(file_id, page_idx, &data)?;
+                }
             }
         }
 
@@ -312,11 +327,16 @@ impl WAL {
                     .as_micros();
                 let archive_name = format!("wal_{}.lbug", timestamp);
                 let archive_path = archive_dir.join(&archive_name);
-                let mut buf = Vec::with_capacity(current_len as usize);
                 file.seek(SeekFrom::Start(0))?;
-                file.read_to_end(&mut buf)?;
                 let mut archive_file = File::create(&archive_path)?;
-                archive_file.write_all(&buf)?;
+                let mut buf = [0u8; 65536];
+                loop {
+                    let n = file.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    archive_file.write_all(&buf[..n])?;
+                }
                 if self.sync_mode == SyncMode::Normal {
                     archive_file.sync_all()?;
                 }

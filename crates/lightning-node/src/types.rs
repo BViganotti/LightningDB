@@ -7,6 +7,7 @@ pub struct JsSearchResult {
     pub entity_type: String,
     pub score: f64,
     pub metadata: String,
+    pub embedding: Vec<f64>,
 }
 
 #[napi(object)]
@@ -21,6 +22,7 @@ pub struct JsMemoryEntity {
     pub metadata: String,
     pub valid_from: i64,
     pub valid_until: i64,
+    pub embedding: Vec<f64>,
 }
 
 #[napi(object)]
@@ -46,8 +48,8 @@ pub struct JsChangeEvent {
 }
 
 impl JsSearchResult {
-    pub fn from_parts(id: String, content: String, entity_type: String, score: f64, metadata: String) -> Self {
-        Self { id, content, entity_type, score, metadata }
+    pub fn from_parts(id: String, content: String, entity_type: String, score: f64, metadata: String, embedding: Vec<f64>) -> Self {
+        Self { id, content, entity_type, score, metadata, embedding }
     }
 }
 
@@ -64,6 +66,7 @@ impl JsMemoryEntity {
             metadata: e.metadata,
             valid_from: e.valid_from,
             valid_until: e.valid_until,
+            embedding: e.embedding.iter().map(|&v| v as f64).collect(),
         }
     }
 }

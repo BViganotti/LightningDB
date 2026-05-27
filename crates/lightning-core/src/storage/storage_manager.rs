@@ -17,7 +17,6 @@ use parking_lot::RwLock as PlRwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 const DEFAULT_WRITE_BUFFER_THRESHOLD: usize = 200;
@@ -358,6 +357,7 @@ impl Table {
         if num_rows == 0 {
             return Ok(());
         }
+        let mut all_modified_rows = Vec::new();
         for col_idx in 0..num_cols {
             let mut vals = Vec::with_capacity(num_rows);
             for row in rows {
@@ -367,7 +367,11 @@ impl Table {
                     crate::processor::Value::Null
                 });
             }
-            self.columns[col_idx].batch_append_values(bm, &vals, start_id, tx)?;
+            let col_modified = self.columns[col_idx].batch_append_values(bm, &vals, start_id, tx)?;
+            all_modified_rows.extend(col_modified);
+        }
+        if !all_modified_rows.is_empty() {
+            tx.modified_rows.lock().extend(all_modified_rows);
         }
         if let Some(workers) = self.trigram_workers.try_read() {
             if !workers.is_empty() {
@@ -475,9 +479,17 @@ impl Table {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         for col in &mut self.columns {
-            col.optimize(bm, tx)?;
+            col.optimize(bm, tx, true)?;
         }
         Ok(())
+    }
+
+    pub fn update_column_stats(&self) {
+        let mut table_stats = self.stats.write();
+        table_stats.column_stats.clear();
+        for col in &self.columns {
+            table_stats.column_stats.push(col.stats.read().clone());
+        }
     }
 
     pub fn bulk_append_trigram_batch(&self, start_id: u64, batch: &RecordBatch) -> Result<()> {
@@ -712,6 +724,7 @@ impl StorageManager {
                 stats.min = cat_stat.min.clone();
                 stats.max = cat_stat.max.clone();
                 stats.distinct_count = cat_stat.distinct_count;
+                stats.page_bounds = cat_stat.page_bounds.clone();
                 if let Some(ref meta) = cat_stat.compression_meta {
                     if meta.compression != CompressionType::Uncompressed {
                         stats.compression_meta = Some(meta.clone());
@@ -942,6 +955,26 @@ impl StorageManager {
             for table in self.node_tables.values().chain(self.rel_tables.values()) {
                 table.flush_pending(bm, tx)?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn sync_all_data_files(&self) -> Result<()> {
+        for table in self.node_tables.values().chain(self.rel_tables.values()) {
+            for col in &table.columns {
+                self.sync_column_files(col)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_column_files(&self, col: &Column) -> Result<()> {
+        if col.dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            col.fh.sync()?;
+            col.null_fh.sync()?;
+        }
+        for child in &col.child_columns {
+            self.sync_column_files(child)?;
         }
         Ok(())
     }

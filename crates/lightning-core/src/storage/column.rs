@@ -11,9 +11,14 @@ use arrow::buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuff
 use arrow::datatypes::{DataType, Field};
 use lightning_types::LogicalType;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::processor::Value;
+
+pub struct ZoneMapEq {
+    pub value: Value,
+}
 
 pub struct Column {
     pub name: String,
@@ -24,6 +29,7 @@ pub struct Column {
     pub stats: Arc<RwLock<ColumnStats>>,
     pub version_info: Arc<RowVersion>,
     pub child_columns: Vec<Column>,
+    pub dirty: AtomicBool,
 }
 
 impl Clone for Column {
@@ -37,6 +43,7 @@ impl Clone for Column {
             stats: Arc::clone(&self.stats),
             version_info: Arc::clone(&self.version_info),
             child_columns: self.child_columns.clone(),
+            dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
         }
     }
 }
@@ -59,6 +66,7 @@ impl Column {
             stats: Arc::new(RwLock::new(ColumnStats::new())),
             version_info,
             child_columns: Vec::new(),
+            dirty: AtomicBool::new(false),
         }
     }
 
@@ -80,6 +88,7 @@ impl Column {
             stats: Arc::new(RwLock::new(ColumnStats::new())),
             version_info,
             child_columns,
+            dirty: AtomicBool::new(false),
         }
     }
 
@@ -103,6 +112,7 @@ impl Column {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
         let is_val_null = matches!(val, Value::Null);
         self.set_null(bm, row_id, is_val_null, tx)?;
         if is_val_null {
@@ -222,10 +232,10 @@ impl Column {
         vals: &[Value],
         start_row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<()> {
+    ) -> Result<Vec<(Arc<RowVersion>, u64)>> {
         let num_rows = vals.len();
         if num_rows == 0 {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         // 1. Write null bitmap in batches
@@ -265,7 +275,7 @@ impl Column {
 
         let mut i = 0;
         let mut stats = self.stats.write();
-        let mut modified_rows_batch = Vec::with_capacity(std::cmp::min(num_rows, 1024));
+        let mut modified_rows_batch = Vec::with_capacity(num_rows);
 
         while i < num_rows {
             if matches!(
@@ -305,18 +315,17 @@ impl Column {
                             element_size,
                         );
                         stats.update(&vals[page_i]);
+                        stats.update_page_bounds(page_idx as usize, &vals[page_i]);
                     }
 
                     if !self.name.starts_with('_') {
-                        let _ = self
+                        if let Err(e) = self
                             .version_info
-                            .mark_row(current_row, tx.tx_id, tx.read_ts);
-                        modified_rows_batch.push((self.version_info.clone(), current_row));
-                        if modified_rows_batch.len() >= 1024 {
-                            tx.modified_rows
-                                .lock()
-                                .extend(modified_rows_batch.drain(..));
+                            .mark_row(current_row, tx.tx_id, tx.read_ts)
+                        {
+                            tracing::error!("Failed to mark row {} in version_info: {}", current_row, e);
                         }
+                        modified_rows_batch.push((self.version_info.clone(), current_row));
                     }
 
                     page_i += 1;
@@ -327,11 +336,7 @@ impl Column {
             i = page_i;
         }
 
-        if !modified_rows_batch.is_empty() {
-            tx.modified_rows.lock().extend(modified_rows_batch);
-        }
-
-        Ok(())
+        Ok(modified_rows_batch)
     }
 
     pub fn scan(
@@ -370,6 +375,7 @@ impl Column {
         offset: u64,
         num_values: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
+        zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
         let analyzer_meta = self.stats.read().compression_meta.clone();
         let element_size = self.element_size();
@@ -383,7 +389,7 @@ impl Column {
 
         if compression == CompressionType::Uncompressed && self.can_vectorize(&target_type) {
             if target_type == DataType::Utf8 {
-                return self.scan_string_vectorized(bm, offset, num_values, tx);
+                return self.scan_string_vectorized(bm, offset, num_values, tx, zone_map);
             }
             return self.scan_to_array_vectorized(
                 bm,
@@ -392,6 +398,7 @@ impl Column {
                 tx,
                 element_size,
                 &target_type,
+                zone_map,
             );
         }
 
@@ -409,12 +416,27 @@ impl Column {
         });
 
         let null_fh = Arc::clone(&self.null_fh);
+        let data_type = &self.data_type;
 
         while values_read < num_values {
             let current_offset = offset + values_read;
             let page_idx = current_offset / values_per_page;
             let offset_in_page = (current_offset % values_per_page) as usize;
             let to_read = std::cmp::min(num_values - values_read, 32);
+
+            let skip_page = self.zone_map_should_skip(page_idx, zone_map);
+
+            if skip_page {
+                for _ in 0..to_read as usize {
+                    crate::processor::arrow_utils::append_null_to_builder(
+                        &mut *builder,
+                        &target_type,
+                    )?;
+                }
+                values_read += to_read;
+                continue;
+            }
+
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
             alg.decompress_from_page(
                 page.as_slice(),
@@ -441,7 +463,7 @@ impl Column {
                     crate::processor::arrow_utils::append_raw_to_builder(
                         &mut *builder,
                         &temp_block[start..start + element_size],
-                        &self.data_type,
+                        data_type,
                     )?;
                 }
             }
@@ -464,18 +486,33 @@ impl Column {
         )
     }
 
+    fn zone_map_should_skip(&self, page_idx: u64, zone_map: Option<&ZoneMapEq>) -> bool {
+        let Some(zone_map) = zone_map else {
+            return false;
+        };
+        let stats = self.stats.read();
+        if page_idx as usize >= stats.page_bounds.len() {
+            return false;
+        }
+        let Some(bounds) = &stats.page_bounds[page_idx as usize] else {
+            return false;
+        };
+        !bounds.value_can_be_in_page(&zone_map.value, &self.data_type)
+    }
+
     fn scan_string_vectorized(
         &self,
         bm: &BufferManager,
         offset: u64,
         num_values: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
+        zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
         use arrow::array::StringBuilder;
         let values_per_page = 4096 / 64u64;
 
         // Check if we can use direct file reads (no uncommitted modifications in range)
-        let can_direct_read = !self.version_info.has_modifications();
+        let can_direct_read = !self.version_info.has_modifications() && zone_map.is_none();
 
         if can_direct_read {
             return self.scan_string_direct(offset, num_values);
@@ -523,8 +560,7 @@ impl Column {
                 values_per_page - offset_in_page as u64,
             ) as usize;
 
-            let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
-            let base_offset = offset_in_page * 64;
+            let skip_page = self.zone_map_should_skip(page_idx, zone_map);
 
             let null_page_idx = current_offset / 4096;
             let null_frame = &null_frames
@@ -534,6 +570,17 @@ impl Column {
                 .1;
             let null_base_offset = (current_offset % 4096) as usize;
 
+            if skip_page {
+                for _ in 0..to_read {
+                    builder.append_null();
+                }
+                values_read += to_read as u64;
+                continue;
+            }
+
+            let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
+            let base_offset = offset_in_page * 64;
+
             for i in 0..to_read {
                 let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
                 if is_null {
@@ -542,8 +589,6 @@ impl Column {
                     let slot_offset = base_offset + i * 64;
                     let marker = page.as_slice()[slot_offset];
                     let s = if marker == 255 {
-                        // Overflow string: read from overflow file via parse_value
-                        // (which handles buffer manager pinning internally)
                         match self.parse_value(
                             &page.as_slice()[slot_offset..slot_offset + 64],
                             bm,
@@ -750,16 +795,15 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
         element_size: usize,
         target_type: &DataType,
+        zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
         let values_per_page = 4096 / element_size as u64;
 
-        // Direct file read for unmodified columns
-        if !self.version_info.has_modifications() {
-            return self.scan_primitive_direct(offset, num_values, element_size, target_type);
+        if !self.version_info.has_modifications() && zone_map.is_none() {
+            return self.scan_primitive_direct(offset, num_values, element_size, target_type, zone_map);
         }
 
-        // FIX #4: Fast path for full page reads - zero copy (shallow copy for now)
-        if num_values == values_per_page && offset % values_per_page == 0 {
+        if num_values == values_per_page && offset % values_per_page == 0 && zone_map.is_none() {
             let page_idx = offset / values_per_page;
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
 
@@ -813,13 +857,25 @@ impl Column {
                 values_per_page - offset_in_page as u64,
             ) as usize;
 
+            let skip_page = self.zone_map_should_skip(page_idx, zone_map);
+
+            if skip_page {
+                let skip_bytes = to_read * element_size;
+                data_buffer.extend_from_slice(&vec![0u8; skip_bytes]);
+                for j in 0..to_read {
+                    null_bits[(output_offset + j) / 8] &= !(1u8 << ((output_offset + j) % 8));
+                    has_any_nulls = true;
+                }
+                values_read += to_read as u64;
+                output_offset += to_read;
+                continue;
+            }
+
             let page = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
             let src_start = offset_in_page * element_size;
             let src_end = src_start + to_read * element_size;
             data_buffer.extend_from_slice(&page.as_slice()[src_start..src_end]);
 
-            // Always read null bitmap — not relying on null_count stats which
-            // can be stale for newly written data via the CREATE→append_row path.
             {
                 let null_page_idx = current_offset / 4096;
                 let null_frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
@@ -877,6 +933,7 @@ impl Column {
         num_values: u64,
         element_size: usize,
         target_type: &DataType,
+        _zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
         let values_per_page = 4096 / element_size as u64;
         let total_bytes = num_values as usize * element_size;
@@ -960,56 +1017,73 @@ impl Column {
 
             Buffer::from(data_vec)
         } else {
+            let first_page = offset / values_per_page;
+            let last_page = (offset + num_values - 1) / values_per_page;
+            let num_pages = last_page - first_page + 1;
+            let mut pages_buf = Vec::with_capacity((num_pages as usize) * 4096);
+            // SAFETY: SAFETY: Immediately filled by read_pages syscall.
+            unsafe {
+                pages_buf.set_len((num_pages as usize) * 4096);
+            }
+            self.fh.read_pages(first_page, num_pages, &mut pages_buf)?;
+
+            let null_first_page = offset / 4096;
+            let null_last_page = (offset + num_values - 1) / 4096;
+            let num_null_pages = null_last_page - null_first_page + 1;
+            let mut null_pages = Vec::with_capacity((num_null_pages as usize) * 4096);
+            // SAFETY: SAFETY: Immediately filled by read_pages syscall.
+            unsafe {
+                null_pages.set_len((num_null_pages as usize) * 4096);
+            }
+            self.null_fh
+                .read_pages(null_first_page, num_null_pages, &mut null_pages)?;
+
             let mut data_buffer = MutableBuffer::with_capacity(total_bytes);
-            let mut page_buf = [0u8; 4096];
-            let mut null_buf = [0u8; 4096];
 
             while values_read < num_values {
-                    let current_offset = offset + values_read;
-                    let page_idx = current_offset / values_per_page;
-                    let offset_in_page = (current_offset % values_per_page) as usize;
-                    let to_read = std::cmp::min(
-                        num_values - values_read,
-                        values_per_page - offset_in_page as u64,
-                    ) as usize;
+                let current_offset = offset + values_read;
+                let page_idx = current_offset / values_per_page;
+                let offset_in_page = (current_offset % values_per_page) as usize;
+                let to_read = std::cmp::min(
+                    num_values - values_read,
+                    values_per_page - offset_in_page as u64,
+                ) as usize;
 
-                    // Direct file reads
-                    self.fh.read_page(page_idx, &mut page_buf)?;
-                    let null_page_idx = current_offset / 4096;
-                    self.null_fh.read_page(null_page_idx, &mut null_buf)?;
+                let page_offset = ((page_idx - first_page) as usize) * 4096;
+                let src_start = page_offset + offset_in_page * element_size;
+                let src_end = src_start + to_read * element_size;
+                data_buffer.extend_from_slice(&pages_buf[src_start..src_end]);
 
-                    let src_start = offset_in_page * element_size;
-                    let src_end = src_start + to_read * element_size;
-                    data_buffer.extend_from_slice(&page_buf[src_start..src_end]);
+                let null_page_idx = current_offset / 4096;
+                let null_page_offset = ((null_page_idx - null_first_page) as usize) * 4096;
+                let null_base_offset = (current_offset % 4096) as usize;
+                let null_src = &null_pages
+                    [null_page_offset + null_base_offset..null_page_offset + null_base_offset + to_read];
 
-                    let null_base_offset = (current_offset % 4096) as usize;
-                    let null_src = &null_buf[null_base_offset..null_base_offset + to_read];
-
-                    // Process in 8-byte chunks
-                    let mut i = 0;
-                    while i + 8 <= to_read {
-                        let bytes = &null_src[i..i + 8];
-                        let mut word: u8 = 0;
-                        for j in 0..8 {
-                            if bytes[j] != 0 {
-                                word |= 1 << j;
-                                has_any_nulls = true;
-                            }
-                        }
-                        null_bits[(output_offset + i) / 8] &= !word;
-                        i += 8;
-                    }
-                    for j in i..to_read {
-                        if null_src[j] != 0 {
-                            null_bits[(output_offset + j) / 8] &=
-                                !(1u8 << ((output_offset + j) % 8));
+                let mut i = 0;
+                while i + 8 <= to_read {
+                    let bytes = &null_src[i..i + 8];
+                    let mut word: u8 = 0;
+                    for j in 0..8 {
+                        if bytes[j] != 0 {
+                            word |= 1 << j;
                             has_any_nulls = true;
                         }
                     }
-
-                    values_read += to_read as u64;
-                    output_offset += to_read;
+                    null_bits[(output_offset + i) / 8] &= !word;
+                    i += 8;
                 }
+                for j in i..to_read {
+                    if null_src[j] != 0 {
+                        null_bits[(output_offset + j) / 8] &=
+                            !(1u8 << ((output_offset + j) % 8));
+                        has_any_nulls = true;
+                    }
+                }
+
+                values_read += to_read as u64;
+                output_offset += to_read;
+            }
             Buffer::from(data_buffer)
         };
 
@@ -1143,6 +1217,7 @@ impl Column {
         is_null: bool,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        self.dirty.store(true, Ordering::Release);
         let page_idx = row_id / 4096;
         let offset = (row_id % 4096) as usize;
         while self.null_fh.get_num_pages() <= page_idx {
@@ -1188,7 +1263,9 @@ impl Column {
         }
 
         if !self.name.starts_with('_') {
-            let _ = self.version_info.mark_row(row_id, tx.tx_id, tx.read_ts);
+            if let Err(e) = self.version_info.mark_row(row_id, tx.tx_id, tx.read_ts) {
+                tracing::error!("Failed to mark row {} in version_info: {}", row_id, e);
+            }
             tx.modified_rows
                 .lock()
                 .push((self.version_info.clone(), row_id));
@@ -1214,7 +1291,11 @@ impl Column {
 
         bm.log_page_update(self.fh.file_id, page_idx, frame.as_slice())?;
         bm.unpin_page(&self.fh, page_idx, frame);
-        self.stats.write().update(val);
+        {
+            let mut stats = self.stats.write();
+            stats.update(val);
+            stats.update_page_bounds(page_idx as usize, val);
+        }
         Ok(())
     }
 
@@ -1253,6 +1334,8 @@ impl Column {
         if num_rows == 0 {
             return Ok(());
         }
+
+        self.dirty.store(true, Ordering::Release);
 
         // 1. Write null bitmap in bulk
         let nulls = array.nulls();
@@ -1358,7 +1441,9 @@ impl Column {
 
         let mut i = 0;
         let mut stats = self.stats.write();
-        let mut modified_rows_batch = Vec::with_capacity(1024);
+        let mut modified_rows_batch = Vec::with_capacity(num_rows);
+        let mut modified_page_rows_batch =
+            Vec::with_capacity(if skip_modified_rows { 0 } else { num_rows });
 
         while i < num_rows {
             let page_idx = (start_row_id + i as u64) / values_per_page;
@@ -1391,14 +1476,14 @@ impl Column {
                             element_size,
                         );
                         stats.update(&val);
+                        stats.update_page_bounds(page_idx as usize, &val);
                     }
 
                     if !skip_modified_rows && !self.name.starts_with('_') {
                         modified_rows_batch.push((self.version_info.clone(), current_row));
-                        // Record row data for merge-on-commit
                         let mut row_data = [0u8; 64];
                         row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
-                        tx.modified_page_rows.lock().push(
+                        modified_page_rows_batch.push(
                             crate::transaction::transaction_manager::PageRowMod {
                                 file_id: self.fh.file_id,
                                 page_idx,
@@ -1407,11 +1492,6 @@ impl Column {
                                 row_data,
                             }
                         );
-                        if modified_rows_batch.len() >= 1024 {
-                            tx.modified_rows
-                                .lock()
-                                .extend(modified_rows_batch.drain(..));
-                        }
                     }
 
                     page_i += 1;
@@ -1422,8 +1502,15 @@ impl Column {
             i = page_i;
         }
 
-        if !skip_modified_rows && !modified_rows_batch.is_empty() {
-            tx.modified_rows.lock().extend(modified_rows_batch);
+        if !skip_modified_rows {
+            if !modified_rows_batch.is_empty() {
+                tx.modified_rows.lock().extend(modified_rows_batch);
+            }
+            if !modified_page_rows_batch.is_empty() {
+                tx.modified_page_rows
+                    .lock()
+                    .extend(modified_page_rows_batch);
+            }
         }
 
         Ok(())
@@ -1497,6 +1584,7 @@ impl Column {
             let mut stats = self.stats.write();
             stats.num_values += num_rows as u64;
             stats.null_count += null_count as u64;
+            stats.invalidate_page_bounds();
         }
         Ok(())
     }
@@ -1667,6 +1755,7 @@ impl Column {
             let mut stats = self.stats.write();
             stats.num_values += num_rows as u64;
             stats.null_count += null_count as u64;
+            stats.invalidate_page_bounds();
         }
         Ok(())
     }
@@ -1825,11 +1914,94 @@ impl Column {
         }
     }
 
-    pub fn optimize(
+    pub fn compute_page_bounds(
         &self,
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        use crate::storage::stats::PageBounds;
+
+        let element_size = self.element_size();
+        let stats = self.stats.read();
+        let compression = stats
+            .compression_meta
+            .as_ref()
+            .map(|m| m.compression)
+            .unwrap_or(CompressionType::Uncompressed);
+        let values_per_page = if compression == CompressionType::Uncompressed {
+            4096 / element_size as u64
+        } else {
+            32
+        };
+        if values_per_page == 0 {
+            return Ok(());
+        }
+        let total_values = stats.num_values;
+        if total_values == 0 {
+            return Ok(());
+        }
+        let num_pages = total_values.div_ceil(values_per_page);
+        drop(stats);
+
+        let mut page_bounds: Vec<Option<PageBounds>> = Vec::with_capacity(num_pages as usize);
+
+        for page_idx in 0..num_pages {
+            let start_offset = page_idx * values_per_page;
+            let values_in_this_page = std::cmp::min(values_per_page, total_values - start_offset);
+            if values_in_this_page == 0 {
+                break;
+            }
+
+            let array = self.scan_to_array(bm, start_offset, values_in_this_page, tx, None)?;
+
+            let mut page_min: Option<Value> = None;
+            let mut page_max: Option<Value> = None;
+
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    continue;
+                }
+                let val = Value::from_arrow(&array, i);
+                if matches!(val, Value::Null) {
+                    continue;
+                }
+                match page_min {
+                    None => {
+                        page_min = Some(val.clone());
+                        page_max = Some(val.clone());
+                    }
+                    Some(ref cur_min) if &val < cur_min => {
+                        page_min = Some(val.clone());
+                    }
+                    Some(ref cur_max) if &val > cur_max => {
+                        page_max = Some(val.clone());
+                    }
+                    _ => {}
+                }
+            }
+
+            if let (Some(min), Some(max)) = (page_min, page_max) {
+                page_bounds.push(Some(PageBounds { min, max }));
+            } else {
+                page_bounds.push(None);
+            }
+        }
+
+        let mut stats = self.stats.write();
+        stats.page_bounds = page_bounds;
+        Ok(())
+    }
+
+    pub fn optimize(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        is_indexed: bool,
+    ) -> Result<()> {
+        if is_indexed {
+            self.compute_page_bounds(bm, tx)?;
+        }
+
         let num_data_pages = self.fh.get_num_pages();
         if num_data_pages == 0 {
             return Ok(());
@@ -1857,6 +2029,7 @@ impl Column {
             total_values.div_ceil(values_per_page)
         };
         if pages_needed < num_data_pages {
+            self.dirty.store(true, Ordering::Release);
             self.fh.truncate_last_pages(pages_needed)?;
         }
 

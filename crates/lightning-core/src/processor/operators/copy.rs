@@ -2,6 +2,7 @@ use crate::parser::ast::Literal;
 use crate::processor::arrow_utils::logical_type_to_arrow_type;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::storage_manager::Table;
+use crate::LightningError;
 use crate::Database;
 use crate::Result;
 use arrow::array::{ArrayRef, Float64Array, UInt64Array};
@@ -11,7 +12,40 @@ use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
+    let path = Path::new(file_path);
+    if path.is_absolute() && base_dir.is_none() {
+        return Err(LightningError::Config(
+            "Absolute paths in COPY are disabled. Set copy_base_dir in SystemConfig to enable.".into()
+        ));
+    }
+    let base = base_dir.unwrap_or(database_path);
+    let resolved = base.join(path);
+    let canonical = resolved.canonicalize().map_err(|e| {
+        LightningError::Config(format!("Cannot resolve COPY path '{}': {}", file_path, e))
+    })?;
+    let canonical_base = base.canonicalize().map_err(|e| {
+        LightningError::Config(format!("Cannot resolve base directory: {}", e))
+    })?;
+    if !canonical.starts_with(&canonical_base) {
+        return Err(LightningError::Config(format!(
+            "COPY path '{}' escapes base directory '{}'",
+            file_path,
+            canonical_base.display()
+        )));
+    }
+    for component in canonical.components() {
+        if let Component::ParentDir = component {
+            return Err(LightningError::Config(
+                format!("COPY path '{}' contains '..' traversal", file_path)
+            ));
+        }
+    }
+    Ok(canonical)
+}
 
 pub struct PhysicalCopy {
     table_name: String,
@@ -97,7 +131,8 @@ impl PhysicalOperator for PhysicalCopy {
         let count_array =
             Arc::new(Float64Array::from(vec![affected as f64])) as arrow::array::ArrayRef;
         Ok(Some(DataChunk {
-            batch: RecordBatch::try_new(output_schema, vec![count_array])            .expect("copy output schema must match count array"),
+            batch: RecordBatch::try_new(output_schema, vec![count_array])
+                .map_err(|e| crate::LightningError::Internal(format!("Failed to create COPY output batch: {}", e)))?,
         }))
     }
 
@@ -122,7 +157,12 @@ impl PhysicalCopy {
         database: &Database,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<u64> {
-        let file = File::open(&self.file_path)?;
+        let validated_path = validate_copy_path(
+            &database._path,
+            &self.file_path,
+            database._config.copy_base_dir.as_deref(),
+        )?;
+        let file = File::open(&validated_path)?;
         let delimiter = self
             .options
             .get("DELIM")
@@ -267,7 +307,12 @@ impl PhysicalCopy {
 
         match format.as_str() {
             "JSON" => {
-                let mut file = File::create(&self.file_path)?;
+                let validated_path = validate_copy_path(
+                    &database._path,
+                    &self.file_path,
+                    database._config.copy_base_dir.as_deref(),
+                )?;
+                let mut file = File::create(&validated_path)?;
                 file.write_all(b"[")?;
                 let mut first_row = true;
                 while position < num_rows {
@@ -333,7 +378,12 @@ impl PhysicalCopy {
                     })
                     .unwrap_or(true);
 
-                let file = File::create(&self.file_path)?;
+                let validated_path = validate_copy_path(
+                    &database._path,
+                    &self.file_path,
+                    database._config.copy_base_dir.as_deref(),
+                )?;
+                let file = File::create(&validated_path)?;
                 let mut writer = csv::WriterBuilder::new()
                     .with_header(has_header)
                     .with_delimiter(delimiter)
@@ -369,7 +419,7 @@ impl PhysicalCopy {
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(col_idxs.len());
         for &col_idx in col_idxs {
             let col = &table.columns[col_idx];
-            let array = col.scan_to_array(bm, offset, num_rows, tx)?;
+            let array = col.scan_to_array(bm, offset, num_rows, tx, None)?;
             columns.push(array);
         }
         RecordBatch::try_new(Arc::new(schema.clone()), columns)

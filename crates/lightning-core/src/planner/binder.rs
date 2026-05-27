@@ -921,7 +921,9 @@ impl<'a> Binder<'a> {
                 // Check if the destination variable is already bound (self-referential)
                 let (dst_table_name, dst_properties) = if self.variables.contains_key(&dst_var) {
                     // Variable already exists, get its properties from the bound variable
-                    let bound_var = self.variables.get(&dst_var).unwrap().clone();
+                    let bound_var = self.variables.get(&dst_var).ok_or_else(|| {
+                        crate::LightningError::Internal(format!("Variable '{}' not found in scope", dst_var))
+                    })?.clone();
                     let src_table = self
                         .catalog
                         .get_node_table(&bound_var.table_name)

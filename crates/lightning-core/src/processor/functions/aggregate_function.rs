@@ -352,7 +352,7 @@ impl AggregateFunction for Min {
             for i in row_indices {
                 if !arr_float.is_null(*i) {
                     let v = arr_float.value(*i);
-                    if self.min.is_none() || v < self.min.unwrap() {
+                    if self.min.map_or(true, |m| v < m) {
                         self.min = Some(v);
                     }
                 }
@@ -363,7 +363,7 @@ impl AggregateFunction for Min {
             for i in row_indices {
                 if !arr_int.is_null(*i) {
                     let v = arr_int.value(*i) as f64;
-                    if self.min.is_none() || v < self.min.unwrap() {
+                    if self.min.map_or(true, |m| v < m) {
                         self.min = Some(v);
                     }
                 }
@@ -375,7 +375,7 @@ impl AggregateFunction for Min {
         if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
             let v = arrow::compute::kernels::aggregate::min(arr_float);
             if let Some(v_val) = v {
-                if self.min.is_none() || v_val < self.min.unwrap() {
+                if self.min.map_or(true, |m| v_val < m) {
                     self.min = Some(v_val);
                 }
             }
@@ -383,7 +383,7 @@ impl AggregateFunction for Min {
             let v = arrow::compute::kernels::aggregate::min(arr_int);
             if let Some(v_val) = v {
                 let v_f64 = v_val as f64;
-                if self.min.is_none() || v_f64 < self.min.unwrap() {
+                if self.min.map_or(true, |m| v_f64 < m) {
                     self.min = Some(v_f64);
                 }
             }
@@ -393,9 +393,9 @@ impl AggregateFunction for Min {
     fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
         if let Some(other_min) = other.as_any().downcast_ref::<Min>() {
             if let Some(v) = other_min.min {
-                if self.min.is_none() || v < self.min.unwrap() {
-                    self.min = Some(v);
-                }
+                    if self.min.map_or(true, |m| v < m) {
+                        self.min = Some(v);
+                    }
             }
         }
         Ok(())
@@ -441,7 +441,7 @@ impl AggregateFunction for Max {
             for i in row_indices {
                 if !arr_float.is_null(*i) {
                     let v = arr_float.value(*i);
-                    if self.max.is_none() || v > self.max.unwrap() {
+                    if self.max.map_or(true, |m| v > m) {
                         self.max = Some(v);
                     }
                 }
@@ -452,7 +452,7 @@ impl AggregateFunction for Max {
             for i in row_indices {
                 if !arr_int.is_null(*i) {
                     let v = arr_int.value(*i) as f64;
-                    if self.max.is_none() || v > self.max.unwrap() {
+                    if self.max.map_or(true, |m| v > m) {
                         self.max = Some(v);
                     }
                 }
@@ -464,7 +464,7 @@ impl AggregateFunction for Max {
         if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
             let v = arrow::compute::kernels::aggregate::max(arr_float);
             if let Some(v_val) = v {
-                if self.max.is_none() || v_val > self.max.unwrap() {
+                if self.max.map_or(true, |m| v_val > m) {
                     self.max = Some(v_val);
                 }
             }
@@ -472,7 +472,7 @@ impl AggregateFunction for Max {
             let v = arrow::compute::kernels::aggregate::max(arr_int);
             if let Some(v_val) = v {
                 let v_f64 = v_val as f64;
-                if self.max.is_none() || v_f64 > self.max.unwrap() {
+                if self.max.map_or(true, |m| v_f64 > m) {
                     self.max = Some(v_f64);
                 }
             }
@@ -482,7 +482,7 @@ impl AggregateFunction for Max {
     fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
         if let Some(other_max) = other.as_any().downcast_ref::<Max>() {
             if let Some(v) = other_max.max {
-                if self.max.is_none() || v > self.max.unwrap() {
+                if self.max.map_or(true, |m| v > m) {
                     self.max = Some(v);
                 }
             }

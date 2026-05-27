@@ -303,6 +303,7 @@ impl VectorIndex {
 
         let query_norm = (query.iter().map(|v| v * v).sum::<f32>().sqrt() + 1e-10).recip();
         let query_normed: Vec<f32> = query.iter().map(|v| v * query_norm).collect();
+        let num_pages = self.file_handle.get_num_pages();
 
         let heap: BinaryHeap<ScoredNode> = (0..num_entries)
             .into_par_iter()
@@ -312,7 +313,7 @@ impl VectorIndex {
                     let page_idx = VI_DATA_START_PAGE + ((entry_idx * entry_bytes) / bps) as u64;
                     let page_off = (entry_idx * entry_bytes) % bps;
 
-                    if page_idx >= self.file_handle.get_num_pages() {
+                    if page_idx >= num_pages {
                         return heap;
                     }
 
@@ -346,37 +347,12 @@ impl VectorIndex {
                     let inv_norm = f32::from_le_bytes(inv_norm_bytes);
 
                     let emb_offset = offset + 12;
-                    let mut dot = 0.0f32;
-                    let mut i = 0;
-                    while i + 8 <= dim {
-                        let mut va = [0.0f32; 8];
-                        let mut vb = [0.0f32; 8];
-                        for j in 0..8 {
-                            let idx = emb_offset + (i + j) * 4;
-                            if idx + 4 <= bps {
-                                let bytes: [u8; 4] = match frame.as_slice()[idx..idx + 4].try_into() {
-                                    Ok(b) => b,
-                                    Err(_) => break,
-                                };
-                                va[j] = f32::from_le_bytes(bytes);
-                                vb[j] = query_normed[i + j];
-                            }
-                        }
-                        dot += Self::dot_product(&va, &vb);
-                        i += 8;
-                    }
-                    while i < dim {
-                        let idx = emb_offset + i * 4;
-                        if idx + 4 <= bps {
-                            let bytes: [u8; 4] = match frame.as_slice()[idx..idx + 4].try_into() {
-                                Ok(b) => b,
-                                Err(_) => break,
-                            };
-                            let emb_val = f32::from_le_bytes(bytes);
-                            dot += emb_val * query_normed[i];
-                        }
-                        i += 1;
-                    }
+                    let frame_slice = frame.as_slice();
+                    let emb_bytes = &frame_slice[emb_offset..emb_offset + dim * 4];
+                    let emb_f32: &[f32] = unsafe {
+                        std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)
+                    };
+                    let dot = Self::dot_product(emb_f32, &query_normed);
 
                     bm.unpin_page(&self.file_handle, page_idx, frame);
 

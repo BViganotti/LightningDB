@@ -22,7 +22,11 @@ pub fn parse(query_str: &str) -> Result<Query, ParserError> {
 
     let (clean, order_by, skip, limit) = strip_modifiers(&preprocessed);
     let mut pairs = CypherParser::parse(Rule::query, &clean)?;
-    let mut q = parse_query(pairs.next().unwrap())?;
+    let mut q = parse_query(
+        pairs
+            .next()
+            .ok_or_else(|| ParserError::Internal("unexpected end of input".into()))?,
+    )?;
 
     if order_by.is_some() || skip.is_some() || limit.is_some() {
         inject_modifiers(&mut q, order_by, skip, limit)?;
@@ -897,7 +901,11 @@ fn parse_property_item(p: pest::iterators::Pair<Rule>) -> Result<PropertyItem, P
 }
 
 fn parse_expression(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
-    parse_logical_or(p.into_inner().next().unwrap())
+    parse_logical_or(
+        p.into_inner()
+            .next()
+            .ok_or_else(|| ParserError::Internal("empty expression".into()))?,
+    )
 }
 
 fn parse_logical_or(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {

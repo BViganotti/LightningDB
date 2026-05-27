@@ -124,15 +124,23 @@ impl UndoBuffer {
                 }
                 UndoRecord::AlterAddColumn { table_name, col_name } => {
                     let mut catalog = db.catalog.write();
-                    let _ = catalog.remove_column_from_table(&table_name, &col_name);
+                    if let Err(e) = catalog.remove_column_from_table(&table_name, &col_name) {
+                        tracing::error!("Rollback AlterAddColumn: failed to remove column from catalog: {}", e);
+                    }
                     let mut storage = db.storage_manager.write();
-                    let _ = storage.remove_column_from_table(&table_name, &col_name);
+                    if let Err(e) = storage.remove_column_from_table(&table_name, &col_name) {
+                        tracing::error!("Rollback AlterAddColumn: failed to remove column from storage: {}", e);
+                    }
                 }
                 UndoRecord::AlterDropColumn { table_name, col_name, col_type } => {
                     let mut catalog = db.catalog.write();
-                    let _ = catalog.add_column_to_table(&table_name, col_name.clone(), col_type.clone());
+                    if let Err(e) = catalog.add_column_to_table(&table_name, col_name.clone(), col_type.clone()) {
+                        tracing::error!("Rollback AlterDropColumn: failed to add column to catalog: {}", e);
+                    }
                     let mut storage = db.storage_manager.write();
-                    let _ = storage.add_column_to_table(&table_name, &col_name, col_type);
+                    if let Err(e) = storage.add_column_to_table(&table_name, &col_name, col_type) {
+                        tracing::error!("Rollback AlterDropColumn: failed to add column to storage: {}", e);
+                    }
                 }
                 UndoRecord::AlterRenameTable { old_name, new_name } => {
                     {
@@ -156,7 +164,9 @@ impl UndoBuffer {
                 }
                 UndoRecord::AlterRenameColumn { table_name, old_name, new_name } => {
                     let mut catalog = db.catalog.write();
-                    let _ = catalog.rename_column_in_table(&table_name, &new_name, &old_name);
+                    if let Err(e) = catalog.rename_column_in_table(&table_name, &new_name, &old_name) {
+                        tracing::error!("Rollback AlterRenameColumn: failed to rename column in catalog: {}", e);
+                    }
                     let mut storage = db.storage_manager.write();
                     let table = if storage.node_tables.contains_key(&table_name) {
                         storage.node_tables.get_mut(&table_name)
@@ -195,7 +205,9 @@ impl UndoBuffer {
                 } => {
                     let mut storage = db.storage_manager.write();
                     storage.indexes.remove(&name);
-                    let _ = std::fs::remove_file(&index_path);
+                    if let Err(e) = std::fs::remove_file(&index_path) {
+                        tracing::error!("Rollback CreateIndex: failed to remove index file {}: {}", index_path.display(), e);
+                    }
                 }
                 UndoRecord::DropIndex(name) => {
                     tracing::warn!("Drop index rollback not fully implemented: {name}");

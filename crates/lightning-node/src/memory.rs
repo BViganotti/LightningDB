@@ -82,6 +82,7 @@ impl JsMemoryStore {
                 metadata: metadata.unwrap_or_else(|| "{}".to_string()),
                 valid_from: now,
                 valid_until: 0,
+                embedding: Vec::new(),
             };
             inner.store(entity)
         })
@@ -111,6 +112,7 @@ impl JsMemoryStore {
                         r.entity.entity_type,
                         r.score,
                         r.entity.metadata,
+                        r.entity.embedding.iter().map(|&v| v as f64).collect(),
                     )
                 })
                 .collect()
@@ -144,6 +146,7 @@ impl JsMemoryStore {
                         r.entity.entity_type,
                         r.score,
                         r.entity.metadata,
+                        r.entity.embedding.iter().map(|&v| v as f64).collect(),
                     )
                 })
                 .collect()
@@ -304,6 +307,7 @@ impl JsMemoryStore {
                     metadata: if e.metadata.is_empty() { "{}".to_string() } else { e.metadata },
                     valid_from: if e.valid_from == 0 { now } else { e.valid_from },
                     valid_until: e.valid_until,
+                    embedding: e.embedding,
                 }
             })
             .collect();

@@ -79,11 +79,36 @@ impl CompressionAlg for AlpAlg {
         dst: &mut [u8],
         _metadata: &CompressionMetadata,
     ) -> Result<(u64, u64)> {
-        // Simple ALP mock: just copy 32 values
-        let to_copy = std::cmp::min(num_values_remaining, 32);
-        let size = to_copy * 8;
-        dst[0..size as usize].copy_from_slice(&src[0..size as usize]);
-        Ok((size, to_copy))
+        let num_values = std::cmp::min(num_values_remaining, 32);
+        if num_values == 0 {
+            return Ok((0, 0));
+        }
+
+        let mut best_shared_exp = 0u8;
+        let mut best_cost = u64::MAX;
+
+        for exp_idx in 0..=10u8 {
+            let mut cost: u64 = 0;
+            for i in 0..num_values as usize {
+                let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().unwrap());
+                let encoded = Alp::encode_value(val, 0, exp_idx);
+                cost = cost.saturating_add(encoded.unsigned_abs());
+            }
+            if cost < best_cost {
+                best_cost = cost;
+                best_shared_exp = exp_idx;
+            }
+        }
+
+        dst[0] = best_shared_exp;
+        for i in 0..num_values as usize {
+            let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().unwrap());
+            let encoded = Alp::encode_value(val, 0, best_shared_exp);
+            let dst_start = 1 + i * 8;
+            dst[dst_start..dst_start + 8].copy_from_slice(&encoded.to_le_bytes());
+        }
+
+        Ok(((1 + num_values * 8) as u64, num_values))
     }
 
     fn decompress_from_page(
@@ -95,14 +120,13 @@ impl CompressionAlg for AlpAlg {
         num_values: u64,
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
-        // Simple ALP decompression from bit-packed values
-        // For now, assume fac=0, exp=0 (uncompressed i64)
+        let exp_idx = src[0];
         for i in 0..num_values as usize {
-            let start = (src_offset as usize + i) * 8;
+            let start = 1 + (src_offset as usize + i) * 8;
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&src[start..start + 8]);
             let encoded = i64::from_le_bytes(bytes);
-            let decoded = Alp::decode_value(encoded, 0, 0);
+            let decoded = Alp::decode_value(encoded, 0, exp_idx);
             let dst_start = (dst_offset as usize + i) * 8;
             dst[dst_start..dst_start + 8].copy_from_slice(&decoded.to_le_bytes());
         }

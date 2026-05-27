@@ -1,7 +1,7 @@
 use crate::storage::buffer_manager::BufferManager;
 use crate::Result;
+use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
@@ -60,11 +60,31 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let writer = self.writer.read().unwrap();
+        let writer = self.writer.read();
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
             doc.add_text(self.content_field, text);
+            writer
+                .add_document(doc)
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub fn insert_multi_field_batch(
+        &self,
+        docs: &[(u64, Vec<&str>)],
+    ) -> Result<()> {
+        let writer = self.writer.read();
+        for (node_id, fields) in docs {
+            let mut doc = TantivyDocument::default();
+            doc.add_u64(self.id_field, *node_id);
+            for text in fields {
+                if !text.is_empty() {
+                    doc.add_text(self.content_field, text);
+                }
+            }
             writer
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -77,7 +97,7 @@ impl InvertedIndex {
         node_id: u64,
         fields: &[&str],
     ) -> Result<()> {
-        let writer = self.writer.read().unwrap();
+        let writer = self.writer.read();
         let mut doc = TantivyDocument::default();
         doc.add_u64(self.id_field, node_id);
         for text in fields {
@@ -92,7 +112,7 @@ impl InvertedIndex {
     }
 
     pub fn commit(&self) -> Result<()> {
-        let mut writer = self.writer.write().unwrap();
+        let mut writer = self.writer.write();
         writer
             .commit()
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -100,14 +120,14 @@ impl InvertedIndex {
     }
 
     pub fn delete(&self, node_id: u64) -> Result<()> {
-        let writer = self.writer.write().unwrap();
+        let writer = self.writer.write();
         let term = tantivy::Term::from_field_u64(self.id_field, node_id);
         writer.delete_term(term);
         Ok(())
     }
 
     pub fn delete_batch(&self, node_ids: &[u64]) -> Result<()> {
-        let writer = self.writer.write().unwrap();
+        let writer = self.writer.write();
         for &node_id in node_ids {
             let term = tantivy::Term::from_field_u64(self.id_field, node_id);
             writer.delete_term(term);

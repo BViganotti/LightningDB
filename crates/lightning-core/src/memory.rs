@@ -2,7 +2,7 @@ use crate::processor::{DataChunk, Value};
 use crate::Result;
 use crate::Connection;
 use crate::QueryResult;
-use arrow::array::{Array, ArrayRef, Float64Array, Int64Array, StringArray, UInt64Array};
+use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crossbeam::channel::Receiver;
@@ -52,6 +52,7 @@ pub struct MemoryEntity {
     pub metadata: String,
     pub valid_from: i64,
     pub valid_until: i64,
+    pub embedding: Vec<f32>,
 }
 
 impl Default for MemoryEntity {
@@ -67,6 +68,7 @@ impl Default for MemoryEntity {
             metadata: "{}".to_string(),
             valid_from: 0,
             valid_until: i64::MAX,
+            embedding: Vec::new(),
         }
     }
 }
@@ -90,7 +92,7 @@ pub struct MemoryStore {
     conn: Connection,
     embedding_dim: usize,
     schema_initialized: std::sync::atomic::AtomicBool,
-    cdc_senders: std::sync::Mutex<Vec<std::sync::mpsc::Sender<ChangeEvent>>>,
+    cdc_senders: parking_lot::Mutex<Vec<std::sync::mpsc::Sender<ChangeEvent>>>,
 }
 
 impl MemoryStore {
@@ -99,7 +101,7 @@ impl MemoryStore {
             conn,
             embedding_dim,
             schema_initialized: std::sync::atomic::AtomicBool::new(false),
-            cdc_senders: std::sync::Mutex::new(Vec::new()),
+            cdc_senders: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -129,8 +131,12 @@ impl MemoryStore {
 
             {
                 let mut storage = db.storage_manager.write();
-                let _ = storage.create_fts_index(ENTITY_TABLE);
-                let _ = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim);
+                if let Err(e) = storage.create_fts_index(ENTITY_TABLE) {
+                    tracing::warn!("MemoryStore: failed to create FTS index for {}: {}", ENTITY_TABLE, e);
+                }
+                if let Err(e) = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim) {
+                    tracing::warn!("MemoryStore: failed to create vector index for {}: {}", ENTITY_TABLE, e);
+                }
             }
         }
 
@@ -142,6 +148,10 @@ impl MemoryStore {
         Self::now_micros()
     }
 
+    pub fn embedding_dim(&self) -> usize {
+        self.embedding_dim
+    }
+
     fn now_micros() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -151,7 +161,9 @@ impl MemoryStore {
 
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
         self.ensure_schema()?;
-        let _ = self.forget(&entity.id);
+        if let Err(e) = self.forget(&entity.id) {
+            tracing::warn!("MemoryStore: failed to forget entity {} before storing: {}", entity.id, e);
+        }
         self.store_batch(vec![entity])?;
         self.emit_cdc_event(None, Some("INSERT".to_string()));
         Ok(())
@@ -177,20 +189,23 @@ impl MemoryStore {
         let mut valid_from = Vec::with_capacity(num_rows);
         let mut valid_until = Vec::with_capacity(num_rows);
 
-        for e in entities {
-            ids.push(e.id);
-            types.push(e.entity_type);
-            contents.push(e.content);
+        for e in &entities {
+            ids.push(e.id.clone());
+            types.push(e.entity_type.clone());
+            contents.push(e.content.clone());
             created_at.push(e.created_at.max(now));
             last_accessed.push(now);
             access_counts.push(e.access_count.max(1));
             ttl_seconds.push(e.ttl_seconds);
-            metadatas.push(e.metadata);
+            metadatas.push(e.metadata.clone());
             valid_from.push(e.valid_from.max(now));
             valid_until.push(if e.valid_until == 0 { 0i64 } else { e.valid_until });
         }
 
-        let schema = Schema::new(vec![
+        let emb_dim = self.embedding_dim;
+        let has_embedding = entities.iter().any(|e| !e.embedding.is_empty());
+
+        let mut fields: Vec<Field> = vec![
             Field::new("id", DataType::Utf8, false),
             Field::new("type", DataType::Utf8, false),
             Field::new("content", DataType::Utf8, false),
@@ -201,23 +216,46 @@ impl MemoryStore {
             Field::new("metadata", DataType::Utf8, false),
             Field::new("valid_from", DataType::Int64, false),
             Field::new("valid_until", DataType::Int64, false),
-        ]);
+        ];
 
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(ids)),
-                Arc::new(arrow::array::StringArray::from(types)),
-                Arc::new(arrow::array::StringArray::from(contents)),
-                Arc::new(arrow::array::Int64Array::from(created_at)),
-                Arc::new(arrow::array::Int64Array::from(last_accessed)),
-                Arc::new(arrow::array::Int64Array::from(access_counts)),
-                Arc::new(arrow::array::Int64Array::from(ttl_seconds)),
-                Arc::new(arrow::array::StringArray::from(metadatas)),
-                Arc::new(arrow::array::Int64Array::from(valid_from)),
-                Arc::new(arrow::array::Int64Array::from(valid_until)),
-            ],
-        )?;
+        let mut columns: Vec<ArrayRef> = vec![
+            Arc::new(arrow::array::StringArray::from(ids)),
+            Arc::new(arrow::array::StringArray::from(types)),
+            Arc::new(arrow::array::StringArray::from(contents)),
+            Arc::new(arrow::array::Int64Array::from(created_at)),
+            Arc::new(arrow::array::Int64Array::from(last_accessed)),
+            Arc::new(arrow::array::Int64Array::from(access_counts)),
+            Arc::new(arrow::array::Int64Array::from(ttl_seconds)),
+            Arc::new(arrow::array::StringArray::from(metadatas)),
+            Arc::new(arrow::array::Int64Array::from(valid_from)),
+            Arc::new(arrow::array::Int64Array::from(valid_until)),
+        ];
+
+        if has_embedding {
+            let mut emb_values: Vec<f32> = Vec::with_capacity(num_rows * emb_dim);
+            for e in &entities {
+                if e.embedding.len() == emb_dim {
+                    emb_values.extend_from_slice(&e.embedding);
+                } else {
+                    emb_values.extend(std::iter::repeat(0.0f32).take(emb_dim));
+                }
+            }
+            let emb_values_array = Float32Array::from(emb_values);
+            let emb_list = FixedSizeListArray::new(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                emb_dim as i32,
+                Arc::new(emb_values_array),
+                None,
+            );
+            fields.push(Field::new("embedding", DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                emb_dim as i32,
+            ), true));
+            columns.push(Arc::new(emb_list));
+        }
+
+        let schema = Schema::new(fields);
+        let batch = RecordBatch::try_new(Arc::new(schema), columns)?;
 
         self.conn.bulk_insert_batch(ENTITY_TABLE, &batch)
     }
@@ -241,7 +279,9 @@ impl MemoryStore {
                     }
                 }
             }
-            let _ = db.transaction_manager.rollback(&db, &tx);
+            if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                tracing::warn!("MemoryStore: FTS transaction rollback failed: {}", e);
+            }
         }
 
         if !embedding.is_empty() && embedding.len() == self.embedding_dim {
@@ -255,7 +295,9 @@ impl MemoryStore {
                         }
                     }
                 }
-                let _ = db.transaction_manager.rollback(&db, &tx);
+                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                    tracing::warn!("MemoryStore: vector index transaction rollback failed: {}", e);
+                }
             }
         }
 
@@ -297,7 +339,9 @@ impl MemoryStore {
             let results = match store.recall(&query_text, &embedding, top_k) {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(e));
+                    if tx.send(Err(e)).is_err() {
+                        tracing::warn!("MemoryStore: recall_stream channel closed, dropping error");
+                    }
                     return;
                 }
             };
@@ -361,8 +405,12 @@ impl MemoryStore {
                     let mut srcs = Vec::new();
                     let mut dsts = Vec::new();
                     let bm = &db.buffer_manager;
-                    let _ = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs);
-                    let _ = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts);
+                    if let Err(e) = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs) {
+                        tracing::warn!("MemoryStore: failed to scan src column in rag_query: {}", e);
+                    }
+                    if let Err(e) = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts) {
+                        tracing::warn!("MemoryStore: failed to scan dst column in rag_query: {}", e);
+                    }
 
                     let mut internal_ids: Vec<(u64, String)> = Vec::new();
                     for i in 0..top_for_expansion {
@@ -398,7 +446,9 @@ impl MemoryStore {
                         }
                     }
                 }
-                let _ = db.transaction_manager.rollback(&db, &tx);
+        if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+            tracing::warn!("MemoryStore: expand transaction rollback failed: {}", e);
+        }
             }
         }
 
@@ -587,7 +637,9 @@ impl MemoryStore {
                     let jaccard = intersection as f64 / union as f64;
 
                     if jaccard > 0.35 {
-                        let _ = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard);
+                        if let Err(e) = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard) {
+                            tracing::warn!("MemoryStore: failed to associate RelatedTo link: {}", e);
+                        }
                         adjacency[i].push((j, jaccard));
                         adjacency[j].push((i, jaccard));
                         links_created += 1;
@@ -598,7 +650,9 @@ impl MemoryStore {
                         let len_sim = 1.0 - (all[i].content.len() as f64 - all[j].content.len() as f64).abs()
                             / all[i].content.len().max(all[j].content.len()).max(1) as f64;
                         if len_sim > 0.8 {
-                            let _ = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard);
+                            if let Err(e) = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard) {
+                                tracing::warn!("MemoryStore: failed to associate Contradicts link: {}", e);
+                            }
                             contradictions_found += 1;
                         }
                     }
@@ -645,7 +699,9 @@ impl MemoryStore {
                 let mut params = HashMap::new();
                 params.insert("id".to_string(), Value::String(all[*idx].id.clone()));
                 params.insert("meta".to_string(), Value::String(new_meta));
-                let _ = self.conn.execute(&query, Some(params));
+                if let Err(e) = self.conn.execute(&query, Some(params)) {
+                    tracing::warn!("MemoryStore: failed to update PageRank metadata: {}", e);
+                }
             }
         }
 
@@ -665,7 +721,7 @@ impl MemoryStore {
     /// and pushes ChangeEvents into the channel.
     pub fn subscribe_changes(&self) -> Result<std::sync::mpsc::Receiver<ChangeEvent>> {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.cdc_senders.lock().unwrap().push(tx);
+        self.cdc_senders.lock().push(tx);
         Ok(rx)
     }
 
@@ -677,10 +733,8 @@ impl MemoryStore {
             entity_id,
             operation_type,
         };
-        let senders = self.cdc_senders.lock().unwrap();
-        senders.iter().for_each(|tx| {
-            let _ = tx.send(event.clone());
-        });
+        let mut senders = self.cdc_senders.lock();
+        senders.retain(|tx| tx.send(event.clone()).is_ok());
     }
 
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
@@ -779,7 +833,9 @@ impl MemoryStore {
             let rel_table = match storage.rel_tables.get(RELATES_TABLE) {
                 Some(t) => t.clone(),
                 None => {
-                    let _ = db.transaction_manager.rollback(&db, &tx);
+                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                    tracing::warn!("MemoryStore: rag_query transaction rollback failed: {}", e);
+                }
                     return Ok(Vec::new());
                 }
             };
@@ -787,18 +843,26 @@ impl MemoryStore {
 
             let cardinality = rel_table.stats.read().cardinality;
             if cardinality == 0 {
-                let _ = db.transaction_manager.rollback(&db, &tx);
+                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                    tracing::warn!("MemoryStore: expand transaction rollback failed: {}", e);
+                }
                 return Ok(Vec::new());
             }
 
             let mut src_col = Vec::new();
             let mut dst_col = Vec::new();
-            let _ = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col);
-            let _ = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col);
+            if let Err(e) = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col) {
+                tracing::warn!("MemoryStore: failed to scan src column in expand: {}", e);
+            }
+            if let Err(e) = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col) {
+                tracing::warn!("MemoryStore: failed to scan dst column in expand: {}", e);
+            }
 
             let mut type_col: Vec<crate::processor::Value> = Vec::new();
             if !edge_types.is_empty() && rel_table.columns.len() > 2 {
-                let _ = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col);
+                if let Err(e) = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col) {
+                    tracing::warn!("MemoryStore: failed to scan type column in expand: {}", e);
+                }
             }
 
             // Build adjacency list from scanned edges
@@ -901,7 +965,9 @@ impl MemoryStore {
         let del_rels = format!(
             "MATCH (a:{ENTITY_TABLE} {{id: '{entity_id}'}}) OPTIONAL MATCH (a)-[r]-() DELETE r"
         );
-        let _ = conn.execute(&del_rels, None);
+        if let Err(e) = conn.execute(&del_rels, None) {
+            tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
+        }
 
         self.emit_cdc_event(Some(entity_id.to_string()), Some("DELETE".to_string()));
         Ok(true)
@@ -933,7 +999,9 @@ impl MemoryStore {
             let soft_delete = format!(
                 "MATCH (e:{ENTITY_TABLE} {{id: '{id}'}}) SET e.valid_until = {now}"
             );
-            let _ = conn.execute(&soft_delete, None);
+            if let Err(e) = conn.execute(&soft_delete, None) {
+                tracing::warn!("MemoryStore: failed to soft-delete expired entity {}: {}", id, e);
+            }
         }
 
         Ok(count)
@@ -967,9 +1035,29 @@ impl MemoryStore {
             let metadatas = batch.column(7).as_any().downcast_ref::<StringArray>();
             let valid_from = batch.column(8).as_any().downcast_ref::<Int64Array>();
             let valid_until = batch.column(9).as_any().downcast_ref::<Int64Array>();
+            let embeddings: Option<&FixedSizeListArray> = if batch.num_columns() > 10 {
+                batch.column(10).as_any().downcast_ref::<FixedSizeListArray>()
+            } else {
+                None
+            };
 
             let num_rows = batch.num_rows();
+            let emb_dim = self.embedding_dim;
             for i in 0..num_rows {
+                let embedding = if let Some(emb_arr) = embeddings {
+                    emb_arr
+                        .values()
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .map(|vals| {
+                            let start = i * emb_dim;
+                            let end = (i + 1) * emb_dim;
+                            vals.values()[start..end].to_vec()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 entities.push(MemoryEntity {
                     id: ids.map(|a| a.value(i).to_string()).unwrap_or_default(),
                     entity_type: types.map(|a| a.value(i).to_string()).unwrap_or_default(),
@@ -981,6 +1069,7 @@ impl MemoryStore {
                     metadata: metadatas.map(|a| a.value(i).to_string()).unwrap_or_default(),
                     valid_from: valid_from.map(|a| a.value(i)).unwrap_or(0),
                     valid_until: valid_until.map(|a| a.value(i)).unwrap_or(0),
+                    embedding,
                 });
             }
         }

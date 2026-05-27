@@ -71,20 +71,28 @@ impl TrigramIndexWorker {
     }
 
     pub fn insert(&self, row_id: u64, value: String) {
-        let _ = self.task_tx.send(TrigramIndexTask::Insert(row_id, value));
+        if self.task_tx.send(TrigramIndexTask::Insert(row_id, value)).is_err() {
+            tracing::warn!("TrigramIndex: lost insert task (channel closed)");
+        }
     }
 
     pub fn insert_batch(&self, entries: Vec<(u64, String)>) {
-        let _ = self.task_tx.send(TrigramIndexTask::InsertBatch(entries));
+        if self.task_tx.send(TrigramIndexTask::InsertBatch(entries)).is_err() {
+            tracing::warn!("TrigramIndex: lost insert_batch task (channel closed)");
+        }
     }
 
     pub fn flush(&self) {
-        let _ = self.task_tx.send(TrigramIndexTask::Flush);
+        if self.task_tx.send(TrigramIndexTask::Flush).is_err() {
+            tracing::warn!("TrigramIndex: lost flush task (channel closed)");
+        }
     }
 }
 
 impl Drop for TrigramIndexWorker {
     fn drop(&mut self) {
-        let _ = self.task_tx.send(TrigramIndexTask::Shutdown);
+        if self.task_tx.send(TrigramIndexTask::Shutdown).is_err() {
+            tracing::warn!("TrigramIndex: lost shutdown task (channel closed)");
+        }
     }
 }

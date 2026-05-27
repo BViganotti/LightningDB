@@ -50,8 +50,11 @@ impl PhysicalPlanner {
                         .or_else(|| cat.get_rel_table(&table_name).map(|t| t.num_rows))
                         .unwrap_or(0)
                 };
-                // Use next_row_id as the effective row count if catalog num_rows is stale
-                let effective_num_rows = num_rows;
+                // Use the storage table's next_row_id as the effective row count.
+                // The catalog's num_rows is only updated during DDL and bulk_insert, but
+                // regular DML (CREATE) bypasses it. The storage manager always has the
+                // correct count via next_row_id and stats.cardinality.
+                let effective_num_rows = table.next_row_id.load(std::sync::atomic::Ordering::Acquire).max(num_rows);
                 let mut scan = crate::processor::operators::scan::PhysicalScan::new(
                     table,
                     var.clone(),
@@ -92,7 +95,9 @@ impl PhysicalPlanner {
                             scan = scan.with_mask(mask, None);
                         } else {
                             let mask_col = scan.mask_column_idx;
-                            let existing_mask = scan.mask.as_ref().unwrap().clone();
+                            let existing_mask = scan.mask.as_ref().ok_or_else(|| {
+                                crate::LightningError::Internal("Expected mask on semi-join scan".into())
+                            })?.clone();
                             let mask = Arc::new(RwLock::new(
                                 crate::processor::operators::semi_mask::SemiMask::new(),
                             ));
@@ -205,7 +210,9 @@ impl PhysicalPlanner {
             LogicalOperator::CreateNode(child, pat) => {
                 let planned_child = child.map(|c| self.plan(*c)).transpose()?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pat.table_name).unwrap().clone();
+                let table = storage.get_table(&pat.table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table '{}' not found for CREATE", pat.table_name))
+                })?.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalCreate::new(
                         pat.table_name,
@@ -231,7 +238,9 @@ impl PhysicalPlanner {
                 };
                 let planned_child = child.map(|c| self.plan(*c)).transpose()?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pat.table_name).unwrap().clone();
+                let table = storage.get_table(&pat.table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table '{}' not found for CREATE REL", pat.table_name))
+                })?.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalCreateRel::new(
                         pat.table_name,
@@ -250,7 +259,9 @@ impl PhysicalPlanner {
                 let planned_child = self.plan(*child)?;
                 let table_name = &vars[0].1;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(table_name).unwrap().clone();
+                let table = storage.get_table(table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table '{table_name}' not found for DELETE"))
+                })?.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalDelete::new(
                         planned_child,
@@ -266,7 +277,9 @@ impl PhysicalPlanner {
                 let planned_child = self.plan(*child)?;
                 let table_name = &assignments[0].table_name;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(table_name).unwrap().clone();
+                let table = storage.get_table(table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table '{table_name}' not found for SET"))
+                })?.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalSet::new(
                         planned_child,
@@ -507,10 +520,14 @@ impl PhysicalPlanner {
             } => {
                 let _planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pattern.table_name).unwrap().clone();
+                let table = storage.get_table(&pattern.table_name).ok_or_else(|| {
+                    crate::LightningError::Internal(format!("Table '{}' not found for MERGE", pattern.table_name))
+                })?.clone();
                 let num_rows = {
                     let cat = self.db.catalog.read();
-                    cat.get_node_table(&pattern.table_name).unwrap().num_rows
+                    cat.get_node_table(&pattern.table_name).ok_or_else(|| {
+                        crate::LightningError::Internal(format!("Table '{}' not found in catalog for MERGE", pattern.table_name))
+                    })?.num_rows
                 };
                 let effective_num_rows = num_rows;
                 let table_name = pattern.table_name.clone();

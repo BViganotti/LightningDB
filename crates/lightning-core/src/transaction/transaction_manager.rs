@@ -122,6 +122,31 @@ impl TransactionManager {
             // Flush any pending write buffers so all data reaches the columns
             db.storage_manager.read().flush_all_pending(bm, tx)?;
 
+            // Sync all data files to disk before committing.
+            // This ensures column data is durable before the WAL commit record
+            // is written, maintaining the invariant that WAL entries only reference
+            // data that has already been persisted to column files.
+            db.storage_manager.read().sync_all_data_files()?;
+
+            // Sync the catalog's num_rows from the storage stats so that
+            // subsequent connections see the correct row count even if the
+            // catalog metadata wasn't explicitly dirtied by DML operators.
+            {
+                let storage = db.storage_manager.read();
+                let mut cat = db.catalog.write();
+                for (name, table) in storage.node_tables.iter() {
+                    if let Some(entry) = cat.get_node_table_mut(name) {
+                        entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                    }
+                }
+                for (name, table) in storage.rel_tables.iter() {
+                    if let Some(entry) = cat.get_rel_table_mut(name) {
+                        entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                    }
+                }
+                db.catalog.mark_dirty();
+            }
+
             let commit_ts = self.current_ts.fetch_add(1, Ordering::SeqCst) + 1;
             tx.commit_ts.store(commit_ts, Ordering::SeqCst);
 

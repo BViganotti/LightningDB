@@ -76,7 +76,7 @@ impl CSRIndex {
             let adj_frame = bm.pin_page(self.adj_node_fh.clone(), adj_page, tx)?;
 
             let remaining_in_page = (PAGE_SIZE as u64 - adj_offset_in_page) / 8;
-            let to_read = std::cmp::min((end - i), remaining_in_page) as usize;
+            let to_read = std::cmp::min(end - i, remaining_in_page) as usize;
 
             for j in 0..to_read {
                 let offset = (adj_offset_in_page as usize) + (j * 8);
