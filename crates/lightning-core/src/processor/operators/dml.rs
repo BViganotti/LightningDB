@@ -585,13 +585,13 @@ impl PhysicalOperator for PhysicalCreateRel {
                         };
 
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
-                        if row_data.len() >= 2 {
-                            row_data[0] = Value::Node(src_id);
-                            row_data[1] = Value::Node(dst_id);
-                        }
-                        for (idx, arr) in &col_arrays {
-                            row_data[*idx] = Value::from_arrow(arr, i);
-                        }
+                    if row_data.len() >= 2 {
+                        row_data[0] = Value::Node(src_id);
+                        row_data[1] = Value::Node(dst_id);
+                    }
+                    for (idx, arr) in &col_arrays {
+                        row_data[*idx] = Value::from_arrow(arr, i);
+                    }
                         rows.push(row_data);
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));

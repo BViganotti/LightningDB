@@ -657,7 +657,7 @@ impl<'a> Binder<'a> {
                 );
 
                 let bound_properties =
-                    self.bind_property_items(&node_pat.properties, &node_table.properties, 0)?;
+                    self.bind_property_items(&node_pat.properties, &node_table.properties, 1)?;
 
                 let bound_pattern = BoundNodePattern {
                     table_name: node_table.name.clone(),
@@ -809,7 +809,7 @@ impl<'a> Binder<'a> {
                 let start_props = self.bind_property_items(
                     &start_pat.properties,
                     &start_table.properties,
-                    0,
+                    1,
                 )?;
                 elements.push(BoundMatchElement::Node(
                     start_table.name.clone(),
@@ -881,7 +881,7 @@ impl<'a> Binder<'a> {
             self.column_offsets.insert(node_var.clone(), column_offset);
             let num_node_cols = node_table.properties.len();
             let properties =
-                self.bind_property_items(&node_pat.properties, &node_table.properties, 0)?;
+                self.bind_property_items(&node_pat.properties, &node_table.properties, 1)?;
             elements.push(BoundMatchElement::Node(
                 node_table.name.clone(),
                 node_var.clone(),
@@ -934,7 +934,7 @@ impl<'a> Binder<'a> {
                             ))
                         })?;
                     let props =
-                        self.bind_property_items(&dst_pat.properties, &src_table.properties, 0)?;
+                        self.bind_property_items(&dst_pat.properties, &src_table.properties, 1)?;
                     (bound_var.table_name, props)
                 } else {
                     // Variable not bound yet, need label
@@ -954,7 +954,7 @@ impl<'a> Binder<'a> {
                     let num_dst_cols = dst_table.properties.len();
                     column_offset += num_dst_cols;
                     let props =
-                        self.bind_property_items(&dst_pat.properties, &dst_table.properties, 0)?;
+                        self.bind_property_items(&dst_pat.properties, &dst_table.properties, 1)?;
                     (dst_table.name.clone(), props)
                 };
 
@@ -1151,7 +1151,7 @@ impl<'a> Binder<'a> {
                         properties: self.bind_property_items(
                             &rel.properties,
                             &rel_table.properties,
-                            0,
+                            2,
                         )?,
                         var_len_bounds: rel.var_len_bounds,
                     }))
@@ -1169,7 +1169,7 @@ impl<'a> Binder<'a> {
             .get_node_table(label)
             .ok_or_else(|| LightningError::Query(format!("Table {label} not found")))?;
 
-        let properties = self.bind_property_items(&pat.properties, &table.properties, 0)?;
+        let properties = self.bind_property_items(&pat.properties, &table.properties, 1)?;
 
         Ok(BoundNodePattern {
             table_name: table.name.clone(),
@@ -1695,9 +1695,9 @@ impl<'a> Binder<'a> {
             .ok_or_else(|| LightningError::Query(format!("Variable {variable} not found")))?;
 
         if let Some(t) = self.catalog.get_node_table(&binding.table_name) {
-            Ok((&t.properties, 0, binding.table_name.clone()))
+            Ok((&t.properties, 1, binding.table_name.clone()))
         } else if let Some(t) = self.catalog.get_rel_table(&binding.table_name) {
-            Ok((&t.properties, 0, binding.table_name.clone()))
+            Ok((&t.properties, 2, binding.table_name.clone()))
         } else {
             Err(LightningError::Query(format!(
                 "Table {} not found for variable {}",

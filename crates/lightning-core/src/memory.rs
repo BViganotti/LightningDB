@@ -416,10 +416,11 @@ impl MemoryStore {
                     for i in 0..top_for_expansion {
                         if i >= initial.len() { break; }
                         let lookup = format!(
-                            "MATCH (e:{}) WHERE e.id = '{}' RETURN e._id LIMIT 1",
-                            ENTITY_TABLE, initial[i].entity.id
+                            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
                         );
-                        if let Ok(res) = self.conn.execute(&lookup, None) {
+                        let mut params = HashMap::new();
+                        params.insert("id".to_string(), Value::String(initial[i].entity.id.clone()));
+                        if let Ok(res) = self.conn.execute(&lookup, Some(params)) {
                             if let Some(b) = res.batches.first() {
                                 let arr = b.column(0).as_any().downcast_ref::<UInt64Array>();
                                 if let Some(a) = arr {
@@ -1009,7 +1010,7 @@ impl MemoryStore {
         let _ = conn.execute(&soft_delete, Some(params))?;
 
         let del_rels = format!(
-            "MATCH (a:{ENTITY_TABLE} {{id: $id}}) OPTIONAL MATCH (a)-[r]-() DELETE r"
+            "MATCH (a:{ENTITY_TABLE} {{id: $id}}) OPTIONAL MATCH (a)-[r:{RELATES_TABLE}]-() DELETE r"
         );
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(entity_id.to_string()));
@@ -1031,10 +1032,12 @@ impl MemoryStore {
         // First find expired entities
         let find = format!(
             "MATCH (e:{ENTITY_TABLE}) WHERE e.ttl_seconds > 0 AND e.valid_until = 0 AND \
-             (e.created_at / 1000000 + e.ttl_seconds) <= {now_secs} \
+             (e.created_at / 1000000 + e.ttl_seconds) <= $now \
              RETURN e.id"
         );
-        let find_res = conn.execute(&find, None)?;
+        let mut params = HashMap::new();
+        params.insert("now".to_string(), Value::Number(now_secs as f64));
+        let find_res = conn.execute(&find, Some(params))?;
         let expired_ids: Vec<String> = find_res.batches.iter().flat_map(|b| {
             let arr = b.column(0).as_any().downcast_ref::<arrow::array::StringArray>()?;
             Some((0..b.num_rows()).map(|i| arr.value(i).to_string()).collect::<Vec<_>>())
@@ -1060,12 +1063,14 @@ impl MemoryStore {
 
     fn lookup_by_internal_id(&self, internal_id: u64) -> Option<MemoryEntity> {
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id = {internal_id} \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id = $id \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until LIMIT 1"
         );
-        if let Ok(res) = self.conn.execute(&query, None) {
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::Number(internal_id as f64));
+        if let Ok(res) = self.conn.execute(&query, Some(params)) {
             let entities = self.batches_to_entities(&res.batches);
             entities.into_iter().next()
         } else {
