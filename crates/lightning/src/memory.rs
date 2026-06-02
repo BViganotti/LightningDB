@@ -64,6 +64,12 @@ impl MemoryStore {
         }
     }
 
+    /// Retrieve an entity by its exact ID.
+    /// Returns `None` if the entity does not exist or has been soft-deleted.
+    pub fn get(&self, entity_id: &str) -> Result<Option<MemoryEntity>> {
+        self.inner.get(entity_id)
+    }
+
     /// Ensure the Entity and Relates tables exist.
     /// Called automatically by most methods; safe to call explicitly at init.
     pub fn ensure_schema(&self) -> Result<()> {
