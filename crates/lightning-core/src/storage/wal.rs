@@ -36,6 +36,16 @@ const RECORD_TYPE_COMMIT: u8 = 2;
 
 const WAL_CHECKSUM_SIZE: usize = 4;
 const WAL_ALIGNMENT: usize = 8;
+const MAX_REPLAY_RECORDS: u64 = 10_000_000;
+
+fn align_stream_position(file: &mut File) -> std::io::Result<()> {
+    let pos = file.stream_position()?;
+    let aligned = (pos + WAL_ALIGNMENT as u64 - 1) & !(WAL_ALIGNMENT as u64 - 1);
+    if pos != aligned {
+        file.seek(SeekFrom::Start(aligned))?;
+    }
+    Ok(())
+}
 
 pub struct WAL {
     file: Mutex<File>,
@@ -191,6 +201,12 @@ impl WAL {
 
         let mut record_type = [0u8; 1];
         loop {
+            if records_read >= MAX_REPLAY_RECORDS {
+                return Err(crate::LightningError::Internal(
+                    "WAL replay exceeded maximum record count — possible infinite loop or corrupt WAL".into(),
+                ));
+            }
+
             match file.read_exact(&mut record_type) {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -242,6 +258,8 @@ impl WAL {
                     } else {
                         pending.entry(tx_id).or_default().push((file_id, page_idx, data));
                     }
+
+                    align_stream_position(&mut *file)?;
                     true
                 }
                 RECORD_TYPE_COMMIT => {
@@ -276,13 +294,21 @@ impl WAL {
                             }
                         }
                     }
+
+                    align_stream_position(&mut *file)?;
                     true
                 }
                 _ => {
                     tracing::warn!(
-                        "Skipping unknown WAL record type: {}",
-                        record_type[0]
+                        "Skipping unknown WAL record type: {} at offset {}",
+                        record_type[0],
+                        file.stream_position().unwrap_or(0) - 1,
                     );
+                    // Skip past alignment padding or stray bytes by advancing to next alignment boundary
+                    if let Err(e) = align_stream_position(&mut *file) {
+                        tracing::warn!("Failed to skip past unknown record: {e}");
+                        break;
+                    }
                     false
                 }
             };

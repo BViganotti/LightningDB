@@ -1,6 +1,11 @@
 /target
 .fusion_mcp.db
 .fusion/
+.analyst_data/
+:memory:
+rust_out
+findings.jsonl
+findings.md
 *.lbug
 *.patch
 __pycache__/

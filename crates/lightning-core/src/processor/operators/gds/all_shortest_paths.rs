@@ -2,6 +2,9 @@ use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::index::csr::CSRIndex;
 use crate::Database;
 use crate::Result;
+use arrow::array::Float64Array;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -116,11 +119,6 @@ impl PhysicalASP {
                 distances.push(dist as f64);
             }
         }
-
-        use arrow::array::Float64Array;
-        use arrow::datatypes::{DataType, Field, Schema};
-        use arrow::record_batch::RecordBatch;
-        use std::sync::Arc;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new(&self.src_var_name, DataType::Float64, false),

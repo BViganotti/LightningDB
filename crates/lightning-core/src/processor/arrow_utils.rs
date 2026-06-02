@@ -40,61 +40,49 @@ pub fn logical_type_to_arrow_type(t: &LogicalType) -> DataType {
     }
 }
 
+fn downcast_builder_mut<'a, T: ArrayBuilder + 'static>(
+    builder: &'a mut dyn ArrayBuilder,
+    expected: &DataType,
+) -> Result<&'a mut T> {
+    builder.as_any_mut().downcast_mut::<T>().ok_or_else(|| {
+        LightningError::Internal(format!(
+            "Builder type mismatch: expected {:?}, got {}",
+            expected,
+            std::any::type_name::<T>(),
+        ))
+    })
+}
+
+fn downcast_array_ref<'a, T: Array + 'static>(
+    array: &'a dyn Array,
+    expected: &DataType,
+) -> Result<&'a T> {
+    array.as_any().downcast_ref::<T>().ok_or_else(|| {
+        LightningError::Internal(format!(
+            "Array type mismatch: expected {:?}, got {}",
+            expected,
+            std::any::type_name::<T>(),
+        ))
+    })
+}
+
 pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> Result<()> {
     match t {
-        DataType::Int64 => builder
-            .as_any_mut()
-            .downcast_mut::<Int64Builder>()
-            .unwrap()
-            .append_null(),
-        DataType::Int32 => builder
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .unwrap()
-            .append_null(),
-        DataType::UInt64 => builder
-            .as_any_mut()
-            .downcast_mut::<UInt64Builder>()
-            .unwrap()
-            .append_null(),
-        DataType::Float64 => builder
-            .as_any_mut()
-            .downcast_mut::<Float64Builder>()
-            .unwrap()
-            .append_null(),
-        DataType::Boolean => builder
-            .as_any_mut()
-            .downcast_mut::<BooleanBuilder>()
-            .unwrap()
-            .append_null(),
-        DataType::Utf8 => builder
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .unwrap()
-            .append_null(),
-        DataType::Date32 => builder
-            .as_any_mut()
-            .downcast_mut::<Date32Builder>()
-            .unwrap()
-            .append_null(),
-        DataType::Timestamp(_, _) => builder
-            .as_any_mut()
-            .downcast_mut::<TimestampMicrosecondBuilder>()
-            .unwrap()
-            .append_null(),
+        DataType::Int64 => downcast_builder_mut::<Int64Builder>(builder, t)?.append_null(),
+        DataType::Int32 => downcast_builder_mut::<Int32Builder>(builder, t)?.append_null(),
+        DataType::UInt64 => downcast_builder_mut::<UInt64Builder>(builder, t)?.append_null(),
+        DataType::Float64 => downcast_builder_mut::<Float64Builder>(builder, t)?.append_null(),
+        DataType::Boolean => downcast_builder_mut::<BooleanBuilder>(builder, t)?.append_null(),
+        DataType::Utf8 => downcast_builder_mut::<StringBuilder>(builder, t)?.append_null(),
+        DataType::Date32 => downcast_builder_mut::<Date32Builder>(builder, t)?.append_null(),
+        DataType::Timestamp(_, _) => downcast_builder_mut::<TimestampMicrosecondBuilder>(builder, t)?.append_null(),
         DataType::List(ref inner) => {
-            // For List types, handle null append based on inner type
             match inner.data_type() {
                 DataType::Float32 => {
-                    builder
-                        .as_any_mut()
-                        .downcast_mut::<arrow::array::ListBuilder<arrow::array::Float32Builder>>()
-                        .unwrap()
+                    downcast_builder_mut::<arrow::array::ListBuilder<arrow::array::Float32Builder>>(builder, t)?
                         .append_null();
                 }
                 DataType::Null => {
-                    // List of nulls - this is an empty list, just return Ok
-                    // since there's nothing meaningful to append for Null type
                     return Ok(());
                 }
                 _ => {
@@ -105,11 +93,7 @@ pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> R
                 }
             }
         }
-        DataType::Float32 => builder
-            .as_any_mut()
-            .downcast_mut::<arrow::array::Float32Builder>()
-            .unwrap()
-            .append_null(),
+        DataType::Float32 => downcast_builder_mut::<arrow::array::Float32Builder>(builder, t)?.append_null(),
         _ => {
             return Err(LightningError::Internal(format!(
                 "Unsupported type for append_null_to_builder: {t:?}"
@@ -124,24 +108,22 @@ pub fn append_value_to_builder(
     val: &Value,
     t: &LogicalType,
 ) -> Result<()> {
+    let arrow_type = logical_type_to_arrow_type(t);
     match val {
-        Value::Null => append_null_to_builder(builder, &logical_type_to_arrow_type(t)),
+        Value::Null => append_null_to_builder(builder, &arrow_type),
         _ => match t {
             LogicalType::Int64 => {
-                let b = builder.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
+                let b = downcast_builder_mut::<Int64Builder>(builder, &arrow_type)?;
                 b.append_value(val.as_number() as i64);
                 Ok(())
             }
             LogicalType::Int32 => {
-                let b = builder.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+                let b = downcast_builder_mut::<Int32Builder>(builder, &arrow_type)?;
                 b.append_value(val.as_number() as i32);
                 Ok(())
             }
             LogicalType::Uint64 | LogicalType::Node(_) => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<UInt64Builder>()
-                    .unwrap();
+                let b = downcast_builder_mut::<UInt64Builder>(builder, &arrow_type)?;
                 match val {
                     Value::Node(id) => b.append_value(*id),
                     Value::Number(n) => b.append_value(*n as u64),
@@ -150,18 +132,12 @@ pub fn append_value_to_builder(
                 Ok(())
             }
             LogicalType::Double => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<Float64Builder>()
-                    .unwrap();
+                let b = downcast_builder_mut::<Float64Builder>(builder, &arrow_type)?;
                 b.append_value(val.as_number());
                 Ok(())
             }
             LogicalType::String => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<StringBuilder>()
-                    .unwrap();
+                let b = downcast_builder_mut::<StringBuilder>(builder, &arrow_type)?;
                 if let Value::String(s) = val {
                     b.append_value(s);
                 } else {
@@ -170,10 +146,7 @@ pub fn append_value_to_builder(
                 Ok(())
             }
             LogicalType::Bool => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<BooleanBuilder>()
-                    .unwrap();
+                let b = downcast_builder_mut::<BooleanBuilder>(builder, &arrow_type)?;
                 if let Value::Boolean(bv) = val {
                     b.append_value(*bv);
                 } else {
@@ -188,67 +161,109 @@ pub fn append_value_to_builder(
     }
 }
 
+fn read_u64_le(data: &[u8], type_name: &str) -> Result<u64> {
+    let bytes = data
+        .get(0..8)
+        .ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer too short for {type_name}: expected 8 bytes, got {}",
+                data.len()
+            ))
+        })?;
+    Ok(u64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn read_i64_le(data: &[u8], type_name: &str) -> Result<i64> {
+    let bytes = data
+        .get(0..8)
+        .ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer too short for {type_name}: expected 8 bytes, got {}",
+                data.len()
+            ))
+        })?;
+    Ok(i64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn read_i32_le(data: &[u8], type_name: &str) -> Result<i32> {
+    let bytes = data
+        .get(0..4)
+        .ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer too short for {type_name}: expected 4 bytes, got {}",
+                data.len()
+            ))
+        })?;
+    Ok(i32::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn read_f64_le(data: &[u8], type_name: &str) -> Result<f64> {
+    let bytes = data
+        .get(0..8)
+        .ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer too short for {type_name}: expected 8 bytes, got {}",
+                data.len()
+            ))
+        })?;
+    Ok(f64::from_le_bytes(bytes.try_into().unwrap()))
+}
+
 pub fn append_raw_to_builder(
     builder: &mut dyn ArrayBuilder,
     data: &[u8],
     logical_type: &LogicalType,
 ) -> Result<()> {
+    let arrow_type = logical_type_to_arrow_type(logical_type);
     match logical_type {
         LogicalType::Int64 => {
-            let b = builder.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().unwrap()));
+            let b = downcast_builder_mut::<Int64Builder>(builder, &arrow_type)?;
+            b.append_value(read_i64_le(data, "Int64")?);
         }
         LogicalType::Int32 => {
-            let b = builder.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().unwrap()));
+            let b = downcast_builder_mut::<Int32Builder>(builder, &arrow_type)?;
+            b.append_value(read_i32_le(data, "Int32")?);
         }
         LogicalType::Uint64 | LogicalType::Node(_) => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<UInt64Builder>()
-                .unwrap();
-            b.append_value(u64::from_le_bytes(data[0..8].try_into().unwrap()));
+            let b = downcast_builder_mut::<UInt64Builder>(builder, &arrow_type)?;
+            b.append_value(read_u64_le(data, "UInt64")?);
         }
         LogicalType::Double => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Float64Builder>()
-                .unwrap();
-            b.append_value(f64::from_le_bytes(data[0..8].try_into().unwrap()));
+            let b = downcast_builder_mut::<Float64Builder>(builder, &arrow_type)?;
+            b.append_value(read_f64_le(data, "Double")?);
         }
         LogicalType::Bool => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<BooleanBuilder>()
-                .unwrap();
-            b.append_value(data[0] != 0);
+            let b = downcast_builder_mut::<arrow::array::BooleanBuilder>(builder, &arrow_type)?;
+            let val = *data.first().ok_or_else(|| {
+                LightningError::Internal("Buffer too short for Bool: expected at least 1 byte".to_string())
+            })?;
+            b.append_value(val != 0);
         }
         LogicalType::String => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<StringBuilder>()
-                .unwrap();
-            let len = if data[0] == 255 { 63 } else { data[0] as usize };
+            let b = downcast_builder_mut::<StringBuilder>(builder, &arrow_type)?;
+            let prefix = *data.first().ok_or_else(|| {
+                LightningError::Internal("Buffer too short for String: expected at least 1 byte".to_string())
+            })?;
+            let len = if prefix == 255 { 63 } else { prefix as usize };
             let actual_len = std::cmp::min(len, 63);
-            b.append_value(std::str::from_utf8(&data[1..1 + actual_len]).unwrap_or(""));
+            let end = 1 + actual_len;
+            if data.len() < end {
+                return Err(LightningError::Internal(format!(
+                    "Buffer too short for String: expected {end} bytes, got {}",
+                    data.len()
+                )));
+            }
+            b.append_value(std::str::from_utf8(&data[1..end]).unwrap_or(""));
         }
         LogicalType::Timestamp => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-                .unwrap();
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().unwrap()));
+            let b = downcast_builder_mut::<TimestampMicrosecondBuilder>(builder, &arrow_type)?;
+            b.append_value(read_i64_le(data, "Timestamp")?);
         }
         LogicalType::Date => {
-            let b = builder
-                .as_any_mut()
-                .downcast_mut::<Date32Builder>()
-                .unwrap();
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().unwrap()));
+            let b = downcast_builder_mut::<Date32Builder>(builder, &arrow_type)?;
+            b.append_value(read_i32_le(data, "Date")?);
         }
         LogicalType::List(_) => {
-            // Lists (like embeddings) are variable-length and not suitable for raw append
-            // Just append an empty/null list for now
             return Ok(());
         }
         _ => {
@@ -266,28 +281,22 @@ pub fn from_arrow(array: &ArrayRef, i: usize) -> Value {
     }
     match array.data_type() {
         DataType::Float64 => {
-            let a = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            Value::Number(a.value(i))
+            array.as_any().downcast_ref::<Float64Array>().map(|a| Value::Number(a.value(i))).unwrap_or(Value::Null)
         }
         DataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>().unwrap();
-            Value::String(a.value(i).to_string())
+            array.as_any().downcast_ref::<StringArray>().map(|a| Value::String(a.value(i).to_string())).unwrap_or(Value::Null)
         }
         DataType::Boolean => {
-            let a = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-            Value::Boolean(a.value(i))
+            array.as_any().downcast_ref::<BooleanArray>().map(|a| Value::Boolean(a.value(i))).unwrap_or(Value::Null)
         }
         DataType::UInt64 => {
-            let a = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-            Value::Node(a.value(i))
+            array.as_any().downcast_ref::<UInt64Array>().map(|a| Value::Node(a.value(i))).unwrap_or(Value::Null)
         }
         DataType::Int64 => {
-            let a = array.as_any().downcast_ref::<Int64Array>().unwrap();
-            Value::Number(a.value(i) as f64)
+            array.as_any().downcast_ref::<Int64Array>().map(|a| Value::Number(a.value(i) as f64)).unwrap_or(Value::Null)
         }
         DataType::Int32 => {
-            let a = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            Value::Number(a.value(i) as f64)
+            array.as_any().downcast_ref::<Int32Array>().map(|a| Value::Number(a.value(i) as f64)).unwrap_or(Value::Null)
         }
         _ => Value::Null,
     }
@@ -302,78 +311,44 @@ pub fn append_to_builder(
         append_null_to_builder(builder, array.data_type())?;
         return Ok(());
     }
-    match array.data_type() {
+    let dt = array.data_type();
+    match dt {
         DataType::Int64 => {
-            let a = array.as_any().downcast_ref::<Int64Array>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<Int64Builder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<Int64Array>(array.as_ref(), dt)?;
+            downcast_builder_mut::<Int64Builder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Int32 => {
-            let a = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<Int32Builder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<Int32Array>(array.as_ref(), dt)?;
+            downcast_builder_mut::<Int32Builder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::UInt64 => {
-            let a = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<UInt64Builder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<UInt64Array>(array.as_ref(), dt)?;
+            downcast_builder_mut::<UInt64Builder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Float64 => {
-            let a = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<Float64Builder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<Float64Array>(array.as_ref(), dt)?;
+            downcast_builder_mut::<Float64Builder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Boolean => {
-            let a = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<BooleanBuilder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<BooleanArray>(array.as_ref(), dt)?;
+            downcast_builder_mut::<BooleanBuilder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<StringBuilder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<StringArray>(array.as_ref(), dt)?;
+            downcast_builder_mut::<StringBuilder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Date32 => {
-            let a = array.as_any().downcast_ref::<Date32Array>().unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<Date32Builder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<Date32Array>(array.as_ref(), dt)?;
+            downcast_builder_mut::<Date32Builder>(builder, dt)?.append_value(a.value(idx));
         }
         DataType::Timestamp(_, _) => {
-            let a = array
-                .as_any()
-                .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
-                .unwrap();
-            builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-                .unwrap()
-                .append_value(a.value(idx));
+            let a = downcast_array_ref::<arrow::array::TimestampMicrosecondArray>(array.as_ref(), dt)?;
+            downcast_builder_mut::<TimestampMicrosecondBuilder>(builder, dt)?.append_value(a.value(idx));
         }
         _ => {
             return Err(LightningError::Internal(format!(
                 "Unsupported type for append_to_builder: {:?}",
-                array.data_type()
+                dt
             )))
         }
     }

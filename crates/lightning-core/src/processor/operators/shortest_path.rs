@@ -1,6 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
-use crate::Result;
+use crate::{LightningError, Result};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::collections::{HashMap, VecDeque};
@@ -76,7 +76,7 @@ impl PhysicalShortestPath {
             if !q_src.is_empty() {
                 for _ in 0..q_src.len() {
                     let curr = q_src.pop_front()
-                        .expect("BFS source queue should not be empty during iteration");
+                        .ok_or_else(|| LightningError::Internal("BFS source queue should not be empty during iteration".into()))?;
                     for csr in &csrs_fwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
                             for n in neighbors {
@@ -103,7 +103,7 @@ impl PhysicalShortestPath {
             if !q_dst.is_empty() {
                 for _ in 0..q_dst.len() {
                     let curr = q_dst.pop_front()
-                        .expect("BFS destination queue should not be empty during iteration");
+                        .ok_or_else(|| LightningError::Internal("BFS destination queue should not be empty during iteration".into()))?;
                     for csr in &csrs_bwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
                             for n in neighbors {

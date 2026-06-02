@@ -11,7 +11,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -54,7 +54,6 @@ pub struct PhysicalCopy {
     is_from: bool,
     db: Arc<Database>,
     executed: bool,
-    scanned_columns: Vec<String>,
     scan_position: u64,
 }
 
@@ -72,7 +71,6 @@ impl PhysicalCopy {
             is_from: true,
             db,
             executed: false,
-            scanned_columns: Vec::new(),
             scan_position: 0,
         }
     }
@@ -90,7 +88,6 @@ impl PhysicalCopy {
             is_from: false,
             db,
             executed: false,
-            scanned_columns: Vec::new(),
             scan_position: 0,
         }
     }
@@ -144,7 +141,6 @@ impl PhysicalOperator for PhysicalCopy {
             is_from: self.is_from,
             db: self.db.clone(),
             executed: self.executed,
-            scanned_columns: self.scanned_columns.clone(),
             scan_position: self.scan_position,
         })
     }
@@ -312,7 +308,8 @@ impl PhysicalCopy {
                     &self.file_path,
                     database._config.copy_base_dir.as_deref(),
                 )?;
-                let mut file = File::create(&validated_path)?;
+                let file = File::create(&validated_path)?;
+                let mut file = BufWriter::new(file);
                 file.write_all(b"[")?;
                 let mut first_row = true;
                 while position < num_rows {
@@ -410,7 +407,7 @@ impl PhysicalCopy {
         &self,
         table: &Table,
         col_idxs: &[usize],
-        schema: &Schema,
+        schema: &Arc<Schema>,
         offset: u64,
         num_rows: u64,
         bm: &crate::storage::buffer_manager::BufferManager,
@@ -422,7 +419,7 @@ impl PhysicalCopy {
             let array = col.scan_to_array(bm, offset, num_rows, tx, None)?;
             columns.push(array);
         }
-        RecordBatch::try_new(Arc::new(schema.clone()), columns)
+        RecordBatch::try_new(Arc::clone(schema), columns)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))
     }
 }
