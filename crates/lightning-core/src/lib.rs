@@ -446,7 +446,6 @@ impl Database {
         let reg_mut = reg as *mut crate::processor::functions::FunctionRegistry;
         // SAFETY: register_wasm_function is called during single-threaded
         // initialization before any concurrent access to the function registry.
-        // SAFETY: SAFETY: `register_wasm_function` is called during single-threaded initialization before any concurrent access to the function registry.
         unsafe { (*reg_mut).register_scalar(scalar); }
         tracing::info!("Registered WASM function: {}", func_name);
         Ok(())
@@ -1328,7 +1327,12 @@ impl Connection {
         }
 
         db.storage_manager.read().flush_all_pending(&bm, &tx)?;
-        db.transaction_manager.commit(&tx, &bm, &db)?;
+        if let Err(e) = db.transaction_manager.commit(&tx, &bm, &db) {
+            if let Err(rollback_err) = db.transaction_manager.rollback(&*db, &tx) {
+                tracing::warn!("Rollback after commit failure also failed: {rollback_err}");
+            }
+            return Err(e);
+        }
 
         // Update catalog with the new row count
         {
