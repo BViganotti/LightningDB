@@ -950,6 +950,49 @@ impl MemoryStore {
         Ok(())
     }
 
+    pub fn get(&self, entity_id: &str) -> Result<Option<MemoryEntity>> {
+        use arrow::array::Array;
+        let conn = self.conn.client_context.database.connect();
+        let now = Self::now_micros();
+        let query = format!(
+            "MATCH (e:{ENTITY_TABLE} {{id: $id}}) WHERE e.valid_until > $now RETURN e.id, e.entity_type, e.content, e.metadata"
+        );
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(entity_id.to_string()));
+        params.insert("now".to_string(), Value::Number(now as f64));
+        match conn.execute(&query, Some(params)) {
+            Ok(res) => {
+                for batch in &res.batches {
+                    if batch.num_rows() == 0 { continue; }
+                    let ids = batch.column(0).as_any().downcast_ref::<StringArray>();
+                    let types = batch.column(1).as_any().downcast_ref::<StringArray>();
+                    let contents = batch.column(2).as_any().downcast_ref::<StringArray>();
+                    let metadatas = batch.column(3).as_any().downcast_ref::<StringArray>();
+                    if let (Some(ids), Some(types), Some(contents), Some(metadatas)) = (ids, types, contents, metadatas) {
+                        if !ids.is_null(0) {
+                            return Ok(Some(MemoryEntity {
+                                id: ids.value(0).to_string(),
+                                entity_type: types.value(0).to_string(),
+                                content: contents.value(0).to_string(),
+                                metadata: metadatas.value(0).to_string(),
+                                ..Default::default()
+                            }));
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("not found") || msg.contains("exist") || msg.contains("no such table") {
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     pub fn forget(&self, entity_id: &str) -> Result<bool> {
         self.ensure_schema()?;
 
@@ -958,14 +1001,19 @@ impl MemoryStore {
         let conn = db.connect();
 
         let soft_delete = format!(
-            "MATCH (e:{ENTITY_TABLE} {{id: '{entity_id}'}}) SET e.valid_until = {now}"
+            "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.valid_until = $now"
         );
-        let _ = conn.execute(&soft_delete, None)?;
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(entity_id.to_string()));
+        params.insert("now".to_string(), Value::Number(now as f64));
+        let _ = conn.execute(&soft_delete, Some(params))?;
 
         let del_rels = format!(
-            "MATCH (a:{ENTITY_TABLE} {{id: '{entity_id}'}}) OPTIONAL MATCH (a)-[r]-() DELETE r"
+            "MATCH (a:{ENTITY_TABLE} {{id: $id}}) OPTIONAL MATCH (a)-[r]-() DELETE r"
         );
-        if let Err(e) = conn.execute(&del_rels, None) {
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(entity_id.to_string()));
+        if let Err(e) = conn.execute(&del_rels, Some(params)) {
             tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
         }
 
@@ -997,9 +1045,12 @@ impl MemoryStore {
         // Set valid_until for each expired entity
         for id in &expired_ids {
             let soft_delete = format!(
-                "MATCH (e:{ENTITY_TABLE} {{id: '{id}'}}) SET e.valid_until = {now}"
+                "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.valid_until = $now"
             );
-            if let Err(e) = conn.execute(&soft_delete, None) {
+            let mut params = HashMap::new();
+            params.insert("id".to_string(), Value::String(id.to_string()));
+            params.insert("now".to_string(), Value::Number(now as f64));
+            if let Err(e) = conn.execute(&soft_delete, Some(params)) {
                 tracing::warn!("MemoryStore: failed to soft-delete expired entity {}: {}", id, e);
             }
         }
