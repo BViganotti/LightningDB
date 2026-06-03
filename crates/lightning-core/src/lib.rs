@@ -18,7 +18,9 @@ use lightning_types::LogicalType;
 use parking_lot::RwLock;
 pub use processor::Value;
 use serde::{Deserialize, Serialize};
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -228,7 +230,7 @@ pub struct Database {
     pub catalog: Arc<LazyCatalog>,
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
-    pub plan_cache: Arc<RwLock<HashMap<String, crate::planner::binder::BoundStatement>>>,
+    pub plan_cache: Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>,
     pub metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
@@ -415,7 +417,7 @@ impl Database {
             catalog,
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
-            plan_cache: Arc::new(RwLock::new(HashMap::new())),
+            plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
             metrics: DatabaseMetrics::new(),
 
             vacuum_handle: Some(vacuum_handle),
@@ -776,15 +778,21 @@ impl Connection {
         ));
         arrays.push(Arc::new(id_values) as ArrayRef);
 
+        // Pre-build per-row HashMap<&str, &Value> for O(1) column lookups
+        let row_maps: Vec<HashMap<&str, &Value>> = rows
+            .iter()
+            .map(|r| r.iter().map(|(n, v)| (n.as_str(), v)).collect())
+            .collect();
+
         // Data columns
         for col in columns.iter().skip(1) {
             let arr: ArrayRef = match col.data_type {
                 lightning_types::LogicalType::String => {
                     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::String(s))) => builder.append_value(s),
+                            Some(Value::String(s)) => builder.append_value(s),
                             _ => builder.append_null(),
                         }
                     }
@@ -792,10 +800,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Int64 => {
                     let mut builder = Int64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Number(n))) => builder.append_value(*n as i64),
+                            Some(Value::Number(n)) => builder.append_value(*n as i64),
                             _ => builder.append_null(),
                         }
                     }
@@ -803,10 +811,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Double => {
                     let mut builder = Float64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Number(n))) => builder.append_value(*n),
+                            Some(Value::Number(n)) => builder.append_value(*n),
                             _ => builder.append_null(),
                         }
                     }
@@ -814,10 +822,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Bool => {
                     let mut builder = BooleanBuilder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Boolean(b))) => builder.append_value(*b),
+                            Some(Value::Boolean(b)) => builder.append_value(*b),
                             _ => builder.append_null(),
                         }
                     }
@@ -825,10 +833,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Node(_) => {
                     let mut builder = UInt64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Node(id))) => builder.append_value(*id),
+                            Some(Value::Node(id)) => builder.append_value(*id),
                             _ => builder.append_null(),
                         }
                     }
@@ -836,10 +844,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Date => {
                     let mut builder = Date32Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Date(d))) => builder.append_value(*d),
+                            Some(Value::Date(d)) => builder.append_value(*d),
                             _ => builder.append_null(),
                         }
                     }
@@ -847,10 +855,10 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Timestamp => {
                     let mut builder = TimestampMicrosecondBuilder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, Value::Timestamp(t))) => builder.append_value(*t),
+                            Some(Value::Timestamp(t)) => builder.append_value(*t),
                             _ => builder.append_null(),
                         }
                     }
@@ -858,10 +866,10 @@ impl Connection {
                 }
                 _ => {
                     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row in &rows {
-                        let val = row.iter().find(|(n, _)| *n == col.name);
+                    for row_idx in 0..num_rows {
+                        let val = row_maps[row_idx].get(col.name.as_str());
                         match val {
-                            Some((_, v)) => builder.append_value(v.to_string()),
+                            Some(v) => builder.append_value(v.to_string()),
                             _ => builder.append_null(),
                         }
                     }
@@ -970,7 +978,7 @@ impl Connection {
     )> {
         let cache_key = normalize_query(query_str);
         let cached_stmt = {
-            let cache = self.client_context.database.plan_cache.read();
+            let mut cache = self.client_context.database.plan_cache.lock();
             cache.get(&cache_key).cloned()
         };
         let tx = match (snapshot_ts, explicit_tx) {
@@ -992,7 +1000,7 @@ impl Connection {
         let db: &Database = &self.client_context.database;
         db.storage_manager.read().flush_all_pending(bm, &tx)?;
         let bound_stmt = if let Some(stmt) = cached_stmt {
-            stmt
+            (*stmt).clone()
         } else {
             let query = parse(query_str)
                 .map_err(|e| LightningError::Query(e.to_string()))?;
@@ -1007,8 +1015,8 @@ impl Connection {
                 self.client_context
                     .database
                     .plan_cache
-                    .write()
-                    .insert(cache_key, bound_union.statement.clone());
+                    .lock()
+                    .put(cache_key, Arc::new(bound_union.statement.clone()));
             }
             let bound_union = bound_query
                 .union_queries
@@ -1263,9 +1271,10 @@ impl Connection {
 
             if !string_cols.is_empty() {
                 let mut batch_docs: Vec<(u64, Vec<&str>)> = Vec::with_capacity(num_rows);
+                let mut fields = Vec::new();
                 for i in 0..num_rows {
                     let node_id = start_id + i as u64;
-                    let mut fields = Vec::new();
+                    fields.clear();
                     for &col_idx in &string_cols {
                         let array = final_batch.column(col_idx);
                         if let Some(str_arr) =
@@ -1277,7 +1286,7 @@ impl Connection {
                         }
                     }
                     if !fields.is_empty() {
-                        batch_docs.push((node_id, fields));
+                        batch_docs.push((node_id, std::mem::take(&mut fields)));
                     }
                 }
                 if !batch_docs.is_empty() {
@@ -1341,17 +1350,17 @@ impl Connection {
             db.catalog.mark_dirty();
         }
 
-        // Sync catalog stats from storage manager to persist cardinality
+        // Sync catalog stats from storage manager for the inserted table only
         {
             let storage = db.storage_manager.read();
             let mut cat = db.catalog.write();
-            for (name, table) in storage.rel_tables.iter() {
-                if let Some(entry) = cat.get_rel_table_mut(name) {
+            if let Some(table) = storage.rel_tables.get(table_name) {
+                if let Some(entry) = cat.get_rel_table_mut(table_name) {
                     entry.stats = table.stats.read().clone();
                 }
             }
-            for (name, table) in storage.node_tables.iter() {
-                if let Some(entry) = cat.get_node_table_mut(name) {
+            if let Some(table) = storage.node_tables.get(table_name) {
+                if let Some(entry) = cat.get_node_table_mut(table_name) {
                     entry.stats = table.stats.read().clone();
                 }
             }

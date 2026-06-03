@@ -1,0 +1,44 @@
+project: "lightning"
+cost_cap: 5.00
+
+model:
+  provider: "opencode"
+  base_url: "http://localhost:4096"
+  name: "opencode-go/deepseek-v4-pro"
+  input_price_per_m: 1.00
+  output_price_per_m: 2.00
+
+opencode:
+  serve_port: 4096
+  timeout_secs: 600
+  auto_start: false
+
+agents:
+  surface: true
+  deep: true
+
+parallelism: 3
+
+chunk:
+  max_files: 5
+  max_lines_per_file: 500
+  smart:
+    enabled: false
+    max_chunks: 30
+    min_files_per_chunk: 3
+    max_files_per_chunk: 8
+    fallback_on_error: true
+    include_deps_in_manifest: true
+    manifest_detail: "structural"
+
+turns:
+  surface: 15
+  deep: 20
+
+exclude:
+  - "**/target/**"
+  - "**/.git/**"
+  - "**/*.generated.*"
+
+exclude_defaults: true
+min_severity: "low"

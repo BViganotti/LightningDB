@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -38,6 +39,14 @@ tantivy = "0.26.0"
 lru = "0.12.0"
 fixedbitset = "0.5.7"
 wat = "1.248.0"
+# wasmi 2.0.0-beta.2 is pinned intentionally: the code uses the wasmi 2.x API
+# (Engine, Store, Module::new(&engine, ...)), which is incompatible with the
+# stable 1.x line. Upgrade to wasmi 2.0.0 stable once released. wasmi is chosen
+# over lighter alternatives (e.g., wasm3, microruntime) because full wasmi
+# provides the best balance of spec compliance, embeddability (pure-Rust), and
+# performance for scalar-function evaluation within graph queries. A lighter
+# trampoline could be considered if the WASM surface shrinks in the future.
+# Risk: if 2.0.0 final ships breaking changes, the beta pin may lag behind.
 wasmi = "2.0.0-beta.2"
 
 [dev-dependencies]

@@ -1,0 +1,67 @@
+[2m2026-06-02T09:06:09.120592Z[0m [32m INFO[0m [2mfusion_core::db[0m[2m:[0m Opening existing database at "/Users/bviga/.fusion/databases/.fusion_mcp.db"
+[2m2026-06-02T09:06:09.163781Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163804Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163808Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163810Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163813Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163815Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163819Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163821Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163823Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163827Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163829Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163831Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163835Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163837Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163839Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163842Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163845Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163847Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163850Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163852Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163853Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163857Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163858Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163860Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163864Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163866Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163868Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163872Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163874Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163900Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163905Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163909Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163911Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163915Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163917Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163920Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163923Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163925Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163927Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163931Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163932Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163935Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163938Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163941Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163943Z[0m [33m WARN[0m [2mlightning_core::storage::wal[0m[2m:[0m Skipping unknown WAL record type: 0
+[2m2026-06-02T09:06:09.163949Z[0m [32m INFO[0m [2mlightning_core[0m[2m:[0m WAL replay: 14 records processed
+[2m2026-06-02T09:06:11.537042Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Settings (key STRING, value STRING, updated_at TIMESTAMP, PRIMARY KEY (key))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.554344Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Telemetry (id STRING, tool_name STRING, arguments STRING, result STRING, duration_ms INT64, timestamp STRING, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.584700Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Log (id INT64, level STRING, target STRING, message STRING, fields STRING, timestamp TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.604621Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Conversation (id STRING, title STRING, workspace_id STRING, created_at TIMESTAMP, updated_at TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.624068Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Message (id INT64, conversation_id STRING, role STRING, content STRING, tool_calls STRING, tool_call_id STRING, timestamp TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.637422Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE REL TABLE HasMessage (FROM Conversation TO Message)"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.646774Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE LspCache (file_path STRING, file_hash STRING, updated_at TIMESTAMP, PRIMARY KEY (file_path))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.648156Z[0m [32m INFO[0m [2mlightning_core[0m[2m:[0m Repaired cardinality for Telemetry: -> 512
+[2m2026-06-02T09:06:11.648176Z[0m [32m INFO[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.648873Z[0m [32m INFO[0m [2mlightning_core[0m[2m:[0m Catalog saved after cardinality repair
+[2m2026-06-02T09:06:11.657367Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Settings (key STRING, value STRING, updated_at TIMESTAMP, PRIMARY KEY (key))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.676440Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Telemetry (id STRING, tool_name STRING, arguments STRING, result STRING, duration_ms INT64, timestamp STRING, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.693586Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Log (id INT64, level STRING, target STRING, message STRING, fields STRING, timestamp TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.712001Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Conversation (id STRING, title STRING, workspace_id STRING, created_at TIMESTAMP, updated_at TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.722716Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE Message (id INT64, conversation_id STRING, role STRING, content STRING, tool_calls STRING, tool_call_id STRING, timestamp TIMESTAMP, PRIMARY KEY (id))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.740548Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE REL TABLE HasMessage (FROM Conversation TO Message)"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.757261Z[0m [32m INFO[0m [1mexecute[0m[1m{[0m[3mquery_str[0m[2m=[0m"CREATE NODE TABLE LspCache (file_path STRING, file_hash STRING, updated_at TIMESTAMP, PRIMARY KEY (file_path))"[1m}[0m[2m:[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.758068Z[0m [32m INFO[0m [2mlightning_core[0m[2m:[0m Repaired cardinality for Telemetry: -> 512
+[2m2026-06-02T09:06:11.758078Z[0m [32m INFO[0m [2mlightning_core::catalog::lazy_catalog[0m[2m:[0m Saving catalog to disk: /Users/bviga/.fusion/databases/.fusion_mcp.db/catalog.lbug
+[2m2026-06-02T09:06:11.758573Z[0m [32m INFO[0m [2mlightning_core[0m[2m:[0m Catalog saved after cardinality repair

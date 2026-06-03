@@ -39,10 +39,15 @@ impl BitPacker {
         let word_idx = bit_offset / 64;
         let bit_in_word = bit_offset % 64;
 
-        if bit_in_word + bit_width as usize <= 64 {
-            let word_ptr = unsafe { &mut *(data[word_idx * 8..].as_mut_ptr() as *mut u64) };
+        if bit_in_word + bit_width as usize <= 64 && word_idx * 8 + 8 <= data.len() {
+            let mut word = u64::from_le_bytes(
+                data[word_idx * 8..word_idx * 8 + 8]
+                    .try_into()
+                    .unwrap(),
+            );
             let mask = ((1u64 << bit_width) - 1) << bit_in_word;
-            *word_ptr = (*word_ptr & !mask) | ((val << bit_in_word) & mask);
+            word = (word & !mask) | ((val << bit_in_word) & mask);
+            data[word_idx * 8..word_idx * 8 + 8].copy_from_slice(&word.to_le_bytes());
             return;
         }
 
@@ -69,10 +74,14 @@ impl BitPacker {
         let word_idx = bit_offset / 64;
         let bit_in_word = bit_offset % 64;
 
-        if bit_in_word + bit_width as usize <= 64 {
-            let word_ptr = unsafe { &*(data[word_idx * 8..].as_ptr() as *const u64) };
+        if bit_in_word + bit_width as usize <= 64 && word_idx * 8 + 8 <= data.len() {
+            let word = u64::from_le_bytes(
+                data[word_idx * 8..word_idx * 8 + 8]
+                    .try_into()
+                    .unwrap(),
+            );
             let mask = (1u64 << bit_width) - 1;
-            return (word_ptr >> bit_in_word) & mask;
+            return (word >> bit_in_word) & mask;
         }
 
         let mut val = 0u64;
