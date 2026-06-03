@@ -75,11 +75,29 @@ impl WAL {
     }
 
     /// Enable WAL archiving to the specified directory.
-    /// Before truncation, the current WAL content is copied to a timestamped
+    /// Before truncation, the current WAL content is copied to a sequenced
     /// archive file in this directory, enabling point-in-time recovery.
     pub fn enable_archive<P: AsRef<std::path::Path>>(&mut self, archive_dir: P) -> Result<()> {
         let dir = archive_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
+        let max_seq = std::fs::read_dir(&dir)?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("wal_") && name.ends_with(".lbug") {
+                    name.trim_start_matches("wal_")
+                        .trim_end_matches(".lbug")
+                        .parse::<u64>()
+                        .ok()
+                } else {
+                    None
+                }
+            })
+            .max()
+            .map(|s| s + 1)
+            .unwrap_or(0);
+        self.archive_seq.store(max_seq, Ordering::Relaxed);
         self.archive_path = Some(dir);
         Ok(())
     }
@@ -98,8 +116,8 @@ impl WAL {
 
         if magic != WAL_MAGIC {
             return Err(crate::LightningError::Internal(format!(
-                "WAL file has invalid magic: expected LNIW, got {:?}",
-                std::str::from_utf8(&magic).unwrap_or("?")
+                "WAL file has invalid magic: expected LNIW, got {}",
+                String::from_utf8_lossy(&magic)
             )));
         }
         if version[0] != WAL_VERSION {
