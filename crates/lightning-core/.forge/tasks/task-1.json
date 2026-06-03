@@ -1,0 +1,89 @@
+{
+  "completed_at": null,
+  "content": "Fix 3 issues in /Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+  "contract": {
+    "allowed_paths": [
+      "/Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs"
+    ],
+    "architecture_rules": [],
+    "constraints": [
+      {
+        "description": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+        "severity": "hard_gate",
+        "type": "analyst_security"
+      },
+      {
+        "description": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+        "severity": "hard_gate",
+        "type": "analyst_security"
+      },
+      {
+        "description": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+        "severity": "hard_gate",
+        "type": "analyst_security"
+      }
+    ],
+    "context": {
+      "analyst_run_id": "run-20260601-132658",
+      "findings": [
+        {
+          "agent": "security",
+          "category": "security",
+          "end_line": 967,
+          "file_path": "/Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+          "finding_id": "a37ce0c9-45d2-4fe8-9b61-403e12eeffe6",
+          "fingerprint": "3da706a7d3923a72a10d33003b26189f80047f8db6a42600f0ed6f197d9ad36b",
+          "severity": "critical",
+          "start_line": 960,
+          "suggested_fix": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+          "title": "Cypher injection in forget() via unsanitized entity_id"
+        },
+        {
+          "agent": "security",
+          "category": "security",
+          "end_line": 967,
+          "file_path": "/Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+          "finding_id": "a37ce0c9-45d2-4fe8-9b61-403e12eeffe6",
+          "fingerprint": "3da706a7d3923a72a10d33003b26189f80047f8db6a42600f0ed6f197d9ad36b",
+          "severity": "critical",
+          "start_line": 960,
+          "suggested_fix": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+          "title": "Cypher injection in forget() via unsanitized entity_id"
+        },
+        {
+          "agent": "security",
+          "category": "security",
+          "end_line": 967,
+          "file_path": "/Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+          "finding_id": "a37ce0c9-45d2-4fe8-9b61-403e12eeffe6",
+          "fingerprint": "3da706a7d3923a72a10d33003b26189f80047f8db6a42600f0ed6f197d9ad36b",
+          "severity": "critical",
+          "start_line": 960,
+          "suggested_fix": "Use parameterized queries: replace direct interpolation with $id parameter and pass Value::String(entity_id) in the params HashMap. Set now via parameterization as well: MATCH (e:Entity {id: $id}) SET e.valid_until = $now",
+          "title": "Cypher injection in forget() via unsanitized entity_id"
+        }
+      ],
+      "source": "analyst"
+    },
+    "description": "Analyst found 3 issues in /Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+    "forbidden_paths": [],
+    "goal": "Fix 3 issues in /Users/bviga/Developement/research/lightning/crates/lightning-core/src/memory.rs",
+    "max_retries": 3,
+    "priority": 1,
+    "source_issue_id": "",
+    "source_issue_url": "",
+    "subsystem": "unknown",
+    "task_id": 1,
+    "verification": [
+      "lint",
+      "typecheck",
+      "unit_tests"
+    ]
+  },
+  "retry_count": 0,
+  "started_at": null,
+  "status": "pending",
+  "subsystem": "unknown",
+  "task_id": 1,
+  "worker_id": null
+}

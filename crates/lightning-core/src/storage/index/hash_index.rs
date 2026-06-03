@@ -147,12 +147,11 @@ impl HashIndex {
         Ok(())
     }
 
-    /// Collect all non-deleted entries from every bucket and overflow chain.
     fn collect_all_entries(
         &self,
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<Vec<(u64, Value, u64)>> {
+    ) -> Result<Vec<(u64, Vec<u8>, u64)>> {
         let mut all = Vec::new();
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
@@ -171,10 +170,9 @@ impl HashIndex {
                     if stored_hash & DELETED_BIT != 0 {
                         continue;
                     }
-                    let val_bytes = &data[offset + 8..offset + 8 + MAX_VAL_SIZE];
+                    let val_bytes = data[offset + 8..offset + 8 + MAX_VAL_SIZE].to_vec();
                     let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
-                    let key = Self::deserialize_value(val_bytes)?;
-                    all.push((stored_hash, key, row_id));
+                    all.push((stored_hash, val_bytes, row_id));
                 }
                 bm.unpin_page(self.fh(), current, frame);
                 if next_page == 0 {
@@ -186,13 +184,11 @@ impl HashIndex {
         Ok(all)
     }
 
-    /// Insert using a pre-computed hash, bypassing header reads and
-    /// using the updated bucket count already written to `num_buckets`.
     fn insert_internal(
         &self,
         bm: &BufferManager,
         hash: u64,
-        key: &Value,
+        key_bytes: &[u8],
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
@@ -213,7 +209,7 @@ impl HashIndex {
             let num_entries = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 8)?;
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
-                Self::write_entry_to_page(data_ptr, num_entries, hash, key, row_id)?;
+                Self::write_entry_to_page(data_ptr, num_entries, hash, key_bytes, row_id)?;
                 bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, frame.as_slice())?;
                 bm.unpin_page(self.fh(), current_page, frame);
                 return Ok(());
@@ -330,8 +326,8 @@ impl HashIndex {
                 continue;
             }
             if stored_hash == hash {
-                    let stored_val =
-                        Self::deserialize_value(&data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
+                let stored_val =
+                    Self::deserialize_value(&data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
                 if stored_val == *key {
                     results.push(read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?);
                 }
@@ -348,13 +344,11 @@ impl HashIndex {
         let new_idx = self.file_handle.get_num_pages();
         let frame = bm.create_new_version(Arc::clone(&self.file_handle), new_idx, tx)?;
         let ptr = frame.as_ptr();
-        // SAFETY: SAFETY: Writing entry data into a pinned bucket page. The page is pinned via pin_page and held for the duration of the write.
         unsafe {
             ptr.write_bytes(0, PAGE_SIZE);
             let zero8 = 0u64.to_le_bytes();
-            let one8 = 1u64.to_le_bytes();
             zero8.as_ptr().copy_to(ptr, 8);
-            one8.as_ptr().copy_to(ptr.add(8), 8);
+            zero8.as_ptr().copy_to(ptr.add(8), 8);
         }
         bm.log_page_update(self.file_handle.file_id, new_idx, frame.as_slice())?;
         bm.unpin_page(&self.file_handle, new_idx, frame);
@@ -365,20 +359,19 @@ impl HashIndex {
         data_ptr: *mut u8,
         num_entries: u64,
         hash: u64,
-        key: &Value,
+        key_bytes: &[u8],
         row_id: u64,
     ) -> Result<()> {
         let offset = 16 + (num_entries as usize) * ENTRY_SIZE;
-        // SAFETY: SAFETY: Same bucket page write — entry serialization.
         unsafe {
             std::ptr::copy_nonoverlapping(hash.to_le_bytes().as_ptr(), data_ptr.add(offset), 8);
         }
-        let mut val_bytes = vec![0u8; MAX_VAL_SIZE];
-        Self::serialize_value(key, &mut val_bytes)?;
-        // SAFETY: SAFETY: Writing updated num_entries count to bucket page header.
+        if key_bytes.len() != MAX_VAL_SIZE {
+            return Err(LightningError::Internal("key_bytes length must match MAX_VAL_SIZE".into()));
+        }
         unsafe {
             std::ptr::copy_nonoverlapping(
-                val_bytes.as_ptr(),
+                key_bytes.as_ptr(),
                 data_ptr.add(offset + 8),
                 MAX_VAL_SIZE,
             );
@@ -418,7 +411,9 @@ impl HashIndex {
             let num_entries = read_u64_at(unsafe { &*data_ptr.cast::<[u8; PAGE_SIZE]>() }, 8)?;
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
-                Self::write_entry_to_page(data_ptr, num_entries, hash, key, row_id)?;
+                let mut key_buf = vec![0u8; MAX_VAL_SIZE];
+                Self::serialize_value(key, &mut key_buf)?;
+                Self::write_entry_to_page(data_ptr, num_entries, hash, &key_buf, row_id)?;
                 bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, frame.as_slice())?;
                 bm.unpin_page(self.fh(), current_page, frame);
                 break;
