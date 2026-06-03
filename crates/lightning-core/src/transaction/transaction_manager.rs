@@ -50,6 +50,7 @@ pub struct TransactionManager {
     wal: Arc<WAL>,
     self_weak: Mutex<Option<Weak<Self>>>,
     bm_weak: Mutex<Option<Weak<BufferManager>>>,
+    page_merge_locks: Mutex<HashMap<(u64, u64), Arc<Mutex<()>>>>,
 }
 
 impl TransactionManager {
@@ -63,6 +64,7 @@ impl TransactionManager {
             wal,
             self_weak: Mutex::new(None),
             bm_weak: Mutex::new(None),
+            page_merge_locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -178,27 +180,40 @@ impl TransactionManager {
                         drop(storage_guard);
 
                         if let Some(fh) = fh_opt {
-                            // Pin the latest committed version
+                            let merge_lock = self.get_page_merge_lock(*file_id, *page_idx);
+                            let _merge_guard = merge_lock.lock();
+
+                            // Pin the latest committed version INSIDE the lock
                             let latest_frame = bm.pin_latest_committed(
                                 std::sync::Arc::clone(&fh),
                                 *page_idx,
                             )?;
 
-                            // Apply all our row modifications to the latest page
+                            // Copy-on-write: clone frame data into local buffer
+                            let mut merged_data = [0u8; 4096];
+                            merged_data.copy_from_slice(latest_frame.as_slice());
+
+                            // Apply all our row modifications to the local buffer
                             for row_mod in mods {
                                 let es = row_mod.element_size;
                                 let vpp = 4096 / es as u64;
                                 let offset_in_page = (row_mod.row_id % vpp) as usize * es;
                                 if offset_in_page + es <= 4096 {
-                                    // SAFETY: SAFETY: `latest_frame` is pinned via pin_latest_committed which returns an Arc<Frame>. The raw pointer write is within the pin-unpin lifecycle. No concurrent writes to this page because merge-on-commit serializes per page.
+                                    // SAFETY: Writing to local buffer with checked bounds
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(
                                             row_mod.row_data.as_ptr(),
-                                            latest_frame.as_ptr(),
+                                            merged_data.as_mut_ptr().add(offset_in_page),
                                             es,
                                         );
                                     }
                                 }
+                            }
+
+                            // Write merged data back to frame under the per-page lock
+                            // SAFETY: Under per-page merge lock, exclusive write access
+                            unsafe {
+                                *latest_frame.data.get() = merged_data;
                             }
 
                             // Log the merged page to WAL
@@ -277,6 +292,14 @@ impl TransactionManager {
 
     pub fn get_current_ts(&self) -> u64 {
         self.current_ts.load(Ordering::Acquire)
+    }
+
+    fn get_page_merge_lock(&self, file_id: u64, page_idx: u64) -> Arc<Mutex<()>> {
+        let mut locks = self.page_merge_locks.lock();
+        locks
+            .entry((file_id, page_idx))
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 }
 

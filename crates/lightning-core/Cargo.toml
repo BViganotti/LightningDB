@@ -35,6 +35,7 @@ md-5 = { workspace = true }
 levenshtein = { workspace = true }
 crc32fast = { workspace = true }
 tantivy = "0.26.0"
+lru = "0.12.0"
 fixedbitset = "0.5.7"
 wat = "1.248.0"
 wasmi = "2.0.0-beta.2"
