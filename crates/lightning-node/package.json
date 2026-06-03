@@ -13,9 +13,7 @@
   "scripts": {
     "build": "napi build --release --platform --js index.js --dts index.d.ts",
     "build:debug": "napi build --platform --js index.js --dts index.d.ts",
-    "test": "vitest run",
-    "artifacts": "napi artifacts",
-    "prepublish": "napi prepublish -t npm"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0",

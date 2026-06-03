@@ -697,8 +697,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 | **1.2** | Agent features | 2 weeks | None |
 | **1.3** | Documentation | 2-3 weeks | None |
 | **1.4** | Polish | 1 week | None |
-| **1.5** | CI/CD | 1 week | None |
-| **1.6** | Language expansion | 4-6 weeks | 0.7 |
+| **1.5** | Language expansion | 4-6 weeks | 0.7 |
 | **2.1** | Serializable isolation | 4-6 weeks | 0.3 |
 | **2.2** | ARIES WAL | 4-6 weeks | 0.1, 0.2 |
 | **2.7** | Storage engine v2 | 4-6 weeks | 0.8 |
@@ -768,7 +767,6 @@ The path to production-grade Beta with SSI, ARIES WAL, full ANN, and multi-langu
 - [ ] **1.7.5d** Create `tests/test_langchain.py` — test `add_texts`, `similarity_search`, `delete` with real embeddings
 - [ ] **1.7.5e** Create `tests/test_llama_index.py` — test `add`, `query`, `delete`
 - [ ] **1.7.5f** Create `tests/test_rag.py` — test end-to-end RAG pipeline from Python
-- [ ] **1.7.5g** Add Python CI job to GitHub Actions that runs pytest across Python 3.9–3.12
 
 ---
 
