@@ -232,6 +232,12 @@ impl Catalog {
         old_name: &str,
         new_name: &str,
     ) -> Result<(), crate::LightningError> {
+        if self.node_tables.contains_key(new_name) || self.rel_tables.contains_key(new_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Table '{}' already exists",
+                new_name
+            )));
+        }
         if let Some(mut entry) = self.node_tables.remove(old_name) {
             entry.name = new_name.to_string();
             self.node_tables.insert(new_name.to_string(), entry);
@@ -253,7 +259,13 @@ impl Catalog {
         name: String,
         mut properties: Vec<PropertyDefinition>,
         primary_key: Option<String>,
-    ) {
+    ) -> Result<(), crate::LightningError> {
+        if self.node_tables.contains_key(&name) || self.rel_tables.contains_key(&name) {
+            return Err(crate::LightningError::Database(format!(
+                "Table '{}' already exists",
+                name
+            )));
+        }
         properties.insert(
             0,
             PropertyDefinition {
@@ -263,24 +275,18 @@ impl Catalog {
         );
         let num_props = properties.len();
 
-        // Preserve existing num_rows and stats if table already exists
-        let (num_rows, stats) = if let Some(existing) = self.node_tables.get(&name) {
-            (existing.num_rows, existing.stats.clone())
-        } else {
-            (0, TableStats::new(num_props))
-        };
-
         self.node_tables.insert(
             name.clone(),
             NodeTableCatalogEntry {
                 name,
                 properties,
-                num_rows,
+                num_rows: 0,
                 primary_key,
                 constraints: Vec::new(),
-                stats,
+                stats: TableStats::new(num_props),
             },
         );
+        Ok(())
     }
 
     pub fn add_rel_table(
@@ -289,7 +295,13 @@ impl Catalog {
         from: String,
         to: String,
         mut properties: Vec<PropertyDefinition>,
-    ) {
+    ) -> Result<(), crate::LightningError> {
+        if self.node_tables.contains_key(&name) || self.rel_tables.contains_key(&name) {
+            return Err(crate::LightningError::Database(format!(
+                "Table '{}' already exists",
+                name
+            )));
+        }
         properties.insert(
             0,
             PropertyDefinition {
@@ -306,13 +318,6 @@ impl Catalog {
         );
         let num_props = properties.len();
 
-        // Preserve existing num_rows and stats if table already exists
-        let (num_rows, stats) = if let Some(existing) = self.rel_tables.get(&name) {
-            (existing.num_rows, existing.stats.clone())
-        } else {
-            (0, TableStats::new(num_props))
-        };
-
         self.rel_tables.insert(
             name.clone(),
             RelTableCatalogEntry {
@@ -320,10 +325,11 @@ impl Catalog {
                 from_table: from,
                 to_table: to,
                 properties,
-                num_rows,
-                stats,
+                num_rows: 0,
+                stats: TableStats::new(num_props),
             },
         );
+        Ok(())
     }
 
     pub fn remove_table(&mut self, name: &str) {
@@ -367,7 +373,13 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn add_sequence(&mut self, name: String, start_val: u64, increment: i64) {
+    pub fn add_sequence(&mut self, name: String, start_val: u64, increment: i64) -> Result<(), crate::LightningError> {
+        if self.sequences.contains_key(&name) {
+            return Err(crate::LightningError::Database(format!(
+                "Sequence '{}' already exists",
+                name
+            )));
+        }
         self.sequences.insert(
             name.clone(),
             SequenceCatalogEntry {
@@ -376,6 +388,7 @@ impl Catalog {
                 increment,
             },
         );
+        Ok(())
     }
 
     pub fn next_val(&mut self, name: &str) -> Option<u64> {
@@ -393,9 +406,16 @@ impl Catalog {
         name: String,
         params: Vec<String>,
         body: crate::parser::ast::Expression,
-    ) {
+    ) -> Result<(), crate::LightningError> {
+        if self.macros.contains_key(&name) {
+            return Err(crate::LightningError::Database(format!(
+                "Macro '{}' already exists",
+                name
+            )));
+        }
         self.macros
             .insert(name.clone(), MacroCatalogEntry { name, params, body });
+        Ok(())
     }
 
     pub fn get_macro(&self, name: &str) -> Option<&MacroCatalogEntry> {
