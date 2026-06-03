@@ -26,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const WAL_MAGIC: [u8; 4] = *b"LNIW";
 const WAL_VERSION: u8 = 0x01;
@@ -42,6 +43,7 @@ pub struct WAL {
     committed_txs: Mutex<HashSet<u64>>,
     sync_mode: SyncMode,
     archive_path: Option<std::path::PathBuf>,
+    archive_seq: AtomicU64,
 }
 
 impl WAL {
@@ -68,6 +70,7 @@ impl WAL {
             committed_txs: Mutex::new(HashSet::new()),
             sync_mode,
             archive_path: None,
+            archive_seq: AtomicU64::new(0),
         })
     }
 
@@ -320,12 +323,8 @@ impl WAL {
         if let Some(ref archive_dir) = self.archive_path {
             let current_len = file.metadata()?.len();
             if current_len > WAL_HEADER_SIZE as u64 {
-                use std::io::Read;
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros();
-                let archive_name = format!("wal_{}.lbug", timestamp);
+                let seq = self.archive_seq.fetch_add(1, Ordering::Relaxed);
+                let archive_name = format!("wal_{seq}.lbug");
                 let archive_path = archive_dir.join(&archive_name);
                 file.seek(SeekFrom::Start(0))?;
                 let mut archive_file = File::create(&archive_path)?;
