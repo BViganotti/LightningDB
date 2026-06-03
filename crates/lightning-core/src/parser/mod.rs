@@ -75,13 +75,12 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
     let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
-        let after = &result[after_return..];
-        let after_upper = after.to_uppercase();
+        let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find("ORDER BY ") {
             let order_by_pos = after_return + pos;
             let order_expr_start = order_by_pos + 9; // after "ORDER BY "
             let order_rest = &result[order_expr_start..];
-            let order_upper = order_rest.to_uppercase();
+            let order_upper = &upper[order_expr_start..];
             // Find end of ORDER BY expression
             // SKIP and LIMIT may follow; use whichever comes FIRST so we
             // don't swallow the other into the ORDER BY expression.
@@ -109,13 +108,12 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
     let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
-        let after = &result[after_return..];
-        let after_upper = after.to_uppercase();
+        let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find(" SKIP ") {
             let skip_pos = after_return + pos;
             let skip_val_start = skip_pos + 6; // after "SKIP "
             let skip_rest = &result[skip_val_start..];
-            let skip_upper = skip_rest.to_uppercase();
+            let skip_upper = &upper[skip_val_start..];
             // Find end of SKIP value
             let end = skip_upper.find(" LIMIT ").unwrap_or(skip_rest.len());
             if let Ok(v) = skip_rest[..end].trim().parse::<f64>() {
@@ -130,8 +128,7 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
     let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
-        let after = &result[after_return..];
-        let after_upper = after.to_uppercase();
+        let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find(" LIMIT ") {
             let limit_pos = after_return + pos;
             let limit_val_start = limit_pos + 7; // after "LIMIT "
@@ -251,7 +248,6 @@ fn parse_union_query(p: pest::iterators::Pair<Rule>) -> Result<UnionQuery, Parse
 }
 
 fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserError> {
-    let _inner: Vec<_> = p.clone().into_inner().collect();
     let mut match_clause_opt = None;
     let mut where_clause_opt = None;
     let mut clauses = Vec::new();
