@@ -40,9 +40,16 @@ impl BitPacker {
         let bit_in_word = bit_offset % 64;
 
         if bit_in_word + bit_width as usize <= 64 {
-            let word_ptr = unsafe { &mut *(data[word_idx * 8..].as_mut_ptr() as *mut u64) };
+            let start = word_idx * 8;
+            let end = std::cmp::min(start + 8, data.len());
+            let len = end - start;
+            let mut bytes = [0u8; 8];
+            bytes[..len].copy_from_slice(&data[start..end]);
+            let mut word = u64::from_le_bytes(bytes);
             let mask = ((1u64 << bit_width) - 1) << bit_in_word;
-            *word_ptr = (*word_ptr & !mask) | ((val << bit_in_word) & mask);
+            word = (word & !mask) | ((val << bit_in_word) & mask);
+            let bytes = word.to_le_bytes();
+            data[start..end].copy_from_slice(&bytes[..len]);
             return;
         }
 
@@ -70,9 +77,14 @@ impl BitPacker {
         let bit_in_word = bit_offset % 64;
 
         if bit_in_word + bit_width as usize <= 64 {
-            let word_ptr = unsafe { &*(data[word_idx * 8..].as_ptr() as *const u64) };
+            let start = word_idx * 8;
+            let end = std::cmp::min(start + 8, data.len());
+            let len = end - start;
+            let mut bytes = [0u8; 8];
+            bytes[..len].copy_from_slice(&data[start..end]);
+            let word = u64::from_le_bytes(bytes);
             let mask = (1u64 << bit_width) - 1;
-            return (word_ptr >> bit_in_word) & mask;
+            return (word >> bit_in_word) & mask;
         }
 
         let mut val = 0u64;
