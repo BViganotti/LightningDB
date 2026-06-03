@@ -32,7 +32,7 @@ fn test_flatten_operator() -> Result<()> {
                     type_: lightning_types::LogicalType::String,
                 }],
                 Some("name".to_string()),
-            );
+            ).unwrap();
             cat.node_tables.get_mut("User").unwrap().num_rows = 3;
         }
 

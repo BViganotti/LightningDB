@@ -16,9 +16,9 @@ fn test_optimizer_filter_pushdown_e2e() {
             PropertyDefinition { name: "id".into(), type_: LogicalType::Int64 },
             PropertyDefinition { name: "age".into(), type_: LogicalType::Int64 },
             PropertyDefinition { name: "name".into(), type_: LogicalType::String },
-        ], None);
+        ], None).unwrap();
         
-        catalog.add_rel_table("Knows".into(), "Person".into(), "Person".into(), vec![]);
+        catalog.add_rel_table("Knows".into(), "Person".into(), "Person".into(), vec![]).unwrap();
 
         let mut storage = db.storage_manager.write();
         storage.create_table("Person".into(), vec![

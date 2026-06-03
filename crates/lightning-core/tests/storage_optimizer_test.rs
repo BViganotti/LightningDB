@@ -29,7 +29,7 @@ fn test_storage_compression_rewrite_roundtrip() {
                 },
             ],
             None,
-        );
+        ).unwrap();
 
         let mut storage = db.storage_manager.write();
         storage

@@ -305,7 +305,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 }
                 // 1. Update Catalog
                 let mut catalog = database.catalog.write();
-                catalog.add_node_table(name.clone(), columns.clone(), Some(primary_key.clone()));
+                catalog.add_node_table(name.clone(), columns.clone(), Some(primary_key.clone()))?;
 
                 // 2. Update Storage
                 let mut storage = database.storage_manager.write();
@@ -346,7 +346,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     from_table.clone(),
                     to_table.clone(),
                     columns.clone(),
-                );
+                )?;
 
                 // 2. Update Storage
                 let mut storage = database.storage_manager.write();
@@ -402,14 +402,14 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 increment_by,
             } => {
                 let mut catalog = database.catalog.write();
-                catalog.add_sequence(name.clone(), *start_with, *increment_by);
+                catalog.add_sequence(name.clone(), *start_with, *increment_by)?;
                 database.catalog.mark_dirty();
                 self.undo_buffer
                     .push(UndoRecord::CreateSequence(name.clone()));
             }
             DDLAction::CreateMacro { name, params, body } => {
                 let mut catalog = database.catalog.write();
-                catalog.add_macro(name.clone(), params.clone(), body.clone());
+                catalog.add_macro(name.clone(), params.clone(), body.clone())?;
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::CreateMacro(name.clone()));
             }
