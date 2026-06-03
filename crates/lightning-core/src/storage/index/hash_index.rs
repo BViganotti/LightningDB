@@ -173,7 +173,7 @@ impl HashIndex {
                     }
                     let val_bytes = &data[offset + 8..offset + 8 + MAX_VAL_SIZE];
                     let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
-                    let key = Self::deserialize_value(&Value::Number(0.0), val_bytes)?;
+                    let key = Self::deserialize_value(val_bytes)?;
                     all.push((stored_hash, key, row_id));
                 }
                 bm.unpin_page(self.fh(), current, frame);
@@ -253,25 +253,29 @@ impl HashIndex {
     fn serialize_value(val: &Value, buf: &mut [u8]) -> Result<()> {
         match val {
             Value::Number(n) => {
-                buf[0..8].copy_from_slice(&n.to_le_bytes());
+                buf[0] = 0;
+                buf[1..9].copy_from_slice(&n.to_le_bytes());
                 Ok(())
             }
             Value::String(s) => {
+                buf[0] = 1;
                 let bytes = s.as_bytes();
-                if bytes.len() > MAX_VAL_SIZE - 4 {
+                if bytes.len() > MAX_VAL_SIZE - 5 {
                     return Err(LightningError::Internal("String too long".into()));
                 }
                 let len = bytes.len() as u32;
-                buf[0..4].copy_from_slice(&len.to_le_bytes());
-                buf[4..4 + bytes.len()].copy_from_slice(bytes);
+                buf[1..5].copy_from_slice(&len.to_le_bytes());
+                buf[5..5 + bytes.len()].copy_from_slice(bytes);
                 Ok(())
             }
             Value::Boolean(b) => {
-                buf[0] = if *b { 1 } else { 0 };
+                buf[0] = 2;
+                buf[1] = if *b { 1 } else { 0 };
                 Ok(())
             }
             Value::Node(id) => {
-                buf[0..8].copy_from_slice(&id.to_le_bytes());
+                buf[0] = 3;
+                buf[1..9].copy_from_slice(&id.to_le_bytes());
                 Ok(())
             }
             _ => Err(LightningError::Internal(
@@ -279,25 +283,25 @@ impl HashIndex {
             )),
         }
     }
-    fn deserialize_value(val_template: &Value, buf: &[u8]) -> Result<Value> {
-        match val_template {
-            Value::Number(_) => {
+    fn deserialize_value(buf: &[u8]) -> Result<Value> {
+        match buf[0] {
+            0 => {
                 let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[0..8]);
+                bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Number(f64::from_le_bytes(bytes)))
             }
-            Value::String(_) => {
+            1 => {
                 let mut len_bytes = [0u8; 4];
-                len_bytes.copy_from_slice(&buf[0..4]);
+                len_bytes.copy_from_slice(&buf[1..5]);
                 let len = u32::from_le_bytes(len_bytes) as usize;
                 Ok(Value::String(
-                    String::from_utf8_lossy(&buf[4..4 + len]).into_owned(),
+                    String::from_utf8_lossy(&buf[5..5 + len]).into_owned(),
                 ))
             }
-            Value::Boolean(_) => Ok(Value::Boolean(buf[0] != 0)),
-            Value::Node(_) => {
+            2 => Ok(Value::Boolean(buf[1] != 0)),
+            3 => {
                 let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&buf[0..8]);
+                bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Node(u64::from_le_bytes(bytes)))
             }
             _ => Err(LightningError::Internal(
@@ -326,8 +330,8 @@ impl HashIndex {
                 continue;
             }
             if stored_hash == hash {
-                let stored_val =
-                    Self::deserialize_value(key, &data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
+                    let stored_val =
+                        Self::deserialize_value(&data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
                 if stored_val == *key {
                     results.push(read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?);
                 }
@@ -482,7 +486,6 @@ impl HashIndex {
                     }
                     if stored_hash == hash {
                         let stored_val = Self::deserialize_value(
-                            key,
                             &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
                         )?;
                         if stored_val == *key {
@@ -598,7 +601,6 @@ impl HashIndex {
                         continue;
                     }
                     let key = Self::deserialize_value(
-                        &Value::Number(0.0),
                         &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
                     )?;
                     let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
