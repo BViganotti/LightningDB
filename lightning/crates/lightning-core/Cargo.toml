@@ -1,0 +1,44 @@
+[package]
+name = "lightning-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lightning-types.workspace = true
+lightning-arrow.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+tempfile.workspace = true
+arrow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode = "1.3"
+pest = "2.7"
+pest_derive = "2.7"
+antlr4rust = "0.5"
+roaring.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+rayon.workspace = true
+crossbeam.workspace = true
+num_cpus.workspace = true
+regex = "1.10"
+uuid = { workspace = true }
+sha2 = { workspace = true }
+md-5 = { workspace = true }
+levenshtein = { workspace = true }
+crc32fast = { workspace = true }
+tantivy = "0.26.0"
+lru = "0.12.0"
+fixedbitset = "0.5.7"
+wat = "1.248.0"
+wasmi = "2.0.0-beta.2"
+
+[dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }

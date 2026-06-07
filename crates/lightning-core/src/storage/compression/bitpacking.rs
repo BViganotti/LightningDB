@@ -39,17 +39,13 @@ impl BitPacker {
         let word_idx = bit_offset / 64;
         let bit_in_word = bit_offset % 64;
 
-        if bit_in_word + bit_width as usize <= 64 {
-            let start = word_idx * 8;
-            let end = std::cmp::min(start + 8, data.len());
-            let len = end - start;
-            let mut bytes = [0u8; 8];
-            bytes[..len].copy_from_slice(&data[start..end]);
-            let mut word = u64::from_le_bytes(bytes);
+        if bit_in_word + bit_width as usize <= 64 && word_idx * 8 + 8 <= data.len() {
+            let mut word = u64::from_le_bytes(
+                data[word_idx * 8..word_idx * 8 + 8].try_into().unwrap(),
+            );
             let mask = ((1u64 << bit_width) - 1) << bit_in_word;
             word = (word & !mask) | ((val << bit_in_word) & mask);
-            let bytes = word.to_le_bytes();
-            data[start..end].copy_from_slice(&bytes[..len]);
+            data[word_idx * 8..word_idx * 8 + 8].copy_from_slice(&word.to_le_bytes());
             return;
         }
 
@@ -76,13 +72,10 @@ impl BitPacker {
         let word_idx = bit_offset / 64;
         let bit_in_word = bit_offset % 64;
 
-        if bit_in_word + bit_width as usize <= 64 {
-            let start = word_idx * 8;
-            let end = std::cmp::min(start + 8, data.len());
-            let len = end - start;
-            let mut bytes = [0u8; 8];
-            bytes[..len].copy_from_slice(&data[start..end]);
-            let word = u64::from_le_bytes(bytes);
+        if bit_in_word + bit_width as usize <= 64 && word_idx * 8 + 8 <= data.len() {
+            let word = u64::from_le_bytes(
+                data[word_idx * 8..word_idx * 8 + 8].try_into().unwrap(),
+            );
             let mask = (1u64 << bit_width) - 1;
             return (word >> bit_in_word) & mask;
         }
