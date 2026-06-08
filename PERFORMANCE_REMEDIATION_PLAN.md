@@ -502,7 +502,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Same pattern as 12.1 — ALL build rows are converted to `Vec<Value>` with per-cell heap allocation.
 
-- [ ] **14.3.1** `[P2]` Store only the intersect key columns in the hash table plus row IDs. Use `take()` on original build data during probe.
+- [X] **14.3.1** `[P2]` Store only the intersect key columns in the hash table plus row IDs. Use `take()` on original build data during probe.
 
 ---
 
