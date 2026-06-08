@@ -1328,7 +1328,13 @@ impl Connection {
                                     let emb = values.values()[start..end].to_vec();
                                     batch_vecs.push((start_id + i as u64, emb));
                                 }
-                                let _ = vec_idx.insert_batch(&batch_vecs, &bm, &tx);
+                                if let Err(e) = vec_idx.insert_batch(&batch_vecs, &bm, &tx) {
+                                    tracing::warn!(
+                                        "vector index insert_batch failed for table {}: {}",
+                                        table_name,
+                                        e,
+                                    );
+                                }
                             }
                         }
                     }
