@@ -43,7 +43,7 @@ pub struct Transaction {
     pub uncommitted_cache: RwLock<HashMap<(String, u64), Value>>,
     pub buffered_tables: RwLock<Vec<Arc<()>>>,
     pub modified_page_rows: Mutex<Vec<PageRowMod>>,
-    finalized: AtomicBool,
+    pub finalized: AtomicBool,
     tx_mgr: Option<Weak<TransactionManager>>,
     bm: Option<Weak<BufferManager>>,
 }

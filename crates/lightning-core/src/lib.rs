@@ -1223,6 +1223,18 @@ impl Connection {
         let active_tx_guard = self.transaction.lock();
         let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
         let is_autocommit = explicit_tx.is_none();
+
+        // Prevent use-after-commit: if this is an explicit transaction, check
+        // that it hasn't been finalized by another thread between our lock
+        // acquisition and the plan build.
+        if let Some(ref tx) = explicit_tx {
+            if tx.finalized.load(std::sync::atomic::Ordering::Acquire) {
+                drop(active_tx_guard);
+                return Err(LightningError::Internal(
+                    "Transaction has already been committed or rolled back".into()
+                ));
+            }
+        }
         drop(active_tx_guard);
 
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, explicit_tx)?;
