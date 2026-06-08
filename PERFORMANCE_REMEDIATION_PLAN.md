@@ -311,7 +311,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Every `append_plain_value` call acquires `self.stats.write()`, calls `stats.update(val)` and `stats.update_page_bounds(...)`. Under concurrent writers, this lock serializes appends.
 
-- [ ] **8.2.1** `[P2]` Use atomic counters for `num_values` and `null_count`. Defer `min`/`max`/`page_bounds` computation to `optimize()` or checkpoint time.
+- [X] **8.2.1** `[P2]` Use atomic counters for `num_values` and `null_count`. Defer `min`/`max`/`page_bounds` computation to `optimize()` or checkpoint time.
 
 **Impact**: 3-10× throughput collapse under concurrent writers.
 
@@ -366,7 +366,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: For every query: `s.replace('\n', " ")` → new String, `result.to_uppercase()` 3 times → 3 more Strings, then up to 3 `format!` calls. For a 1KB query: ~10KB of temporary allocations.
 
-- [ ] **10.1.1** `[P2]` Rewrite using `find`/`split` on `&str` slices. Replace `format!` with `write!` into a pre-allocated buffer.
+- [X] **10.1.1** `[P2]` Rewrite using `find`/`split` on `&str` slices. Replace `format!` with `write!` into a pre-allocated buffer.
 
 ### 10.2 Regex Normalization on Every Query
 
@@ -474,7 +474,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: For each group in a batch, a `take()` kernel extracts its rows. For 500 groups × 5 columns: 2500 `take` calls, each allocating a new array.
 
-- [ ] **13.2.1** `[P2]` Use `filter()` with a bitmap segment for each group instead of per-group `take()`.
+- [X] **13.2.1** `[P2]` Use `filter()` with a bitmap segment for each group instead of per-group `take()`.
 
 ---
 
@@ -522,7 +522,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: For sequential scanning with per-row `is_null` checks, the same null page is pinned/unpinned for every row.
 
-- [ ] **15.2.1** `[P2]` Cache a reference to the current null frame during sequential scan.
+- [X] **15.2.1** `[P2]` Cache a reference to the current null frame during sequential scan.
 
 ### 15.3 `serialize_value_into` Clones LogicalType Per Call
 
@@ -538,7 +538,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `String::from_utf8_lossy(&data[...]).to_string()` always allocates a heap String. For scanning 10M strings: 10M heap allocations.
 
-- [ ] **15.4.1** `[P3]` Return `Cow<'_, str>` from parse_value. Only allocate when the value escapes the scan iteration.
+- [X] **15.4.1** `[P3]` Return `Cow<'_, str>` from parse_value. Only allocate when the value escapes the scan iteration.
 
 ---
 
