@@ -100,6 +100,7 @@ pub struct MemoryStore {
     conn: Connection,
     embedding_dim: usize,
     schema_initialized: std::sync::atomic::AtomicBool,
+    last_consolidation_ts: std::sync::atomic::AtomicI64,
     cdc_senders: parking_lot::Mutex<Vec<crossbeam::channel::Sender<ChangeEvent>>>,
 }
 
@@ -109,6 +110,7 @@ impl MemoryStore {
             conn,
             embedding_dim,
             schema_initialized: std::sync::atomic::AtomicBool::new(false),
+            last_consolidation_ts: std::sync::atomic::AtomicI64::new(0),
             cdc_senders: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -682,10 +684,16 @@ impl MemoryStore {
         let cfg = config.unwrap_or_default();
         let mut warnings: Vec<String> = Vec::new();
 
-        // Step 0: Load all active entities
+        // Step 0: Load all active entities, filter to new ones since last consolidation
         let all: Vec<MemoryEntity> = self.recall_recent(usize::MAX)?;
+        let last_ts = self.last_consolidation_ts.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Only process entities created after the last consolidation timestamp.
+        // New entities are compared against ALL existing entities (including old ones).
+        let new_entities: Vec<&MemoryEntity> = all.iter().filter(|e| e.created_at > last_ts).collect();
         let n = all.len();
-        if n < 2 {
+
+        if new_entities.is_empty() {
             return Ok(ConsolidationReport::default());
         }
 
@@ -702,10 +710,12 @@ impl MemoryStore {
                 .collect()
         }).collect();
 
-        for chunk_start in (0..n).step_by(200) {
-            let chunk_end = std::cmp::min(chunk_start + 200, n);
-            for i in chunk_start..chunk_end {
-                for j in (i + 1)..chunk_end {
+        // Compare each NEW entity against ALL existing entities (including other new ones).
+        // This is O(new * total) instead of O(total²) for full re-processing.
+        for &new_i in &new_entities {
+            let i = all.iter().position(|e| e.id == new_i.id).unwrap_or(0);
+            for j in 0..n {
+                if i == j { continue; }
                     let intersection: usize = word_sets[i].intersection(&word_sets[j]).count();
                     let union: usize = word_sets[i].union(&word_sets[j]).count();
                     if union == 0 { continue; }
@@ -745,7 +755,6 @@ impl MemoryStore {
                             }
                             contradictions_found += 1;
                         }
-                    }
                 }
             }
         }
@@ -815,6 +824,10 @@ impl MemoryStore {
                 }
             }
         }
+
+        // Update last consolidation timestamp for incremental processing
+        let now = Self::now_micros();
+        self.last_consolidation_ts.store(now, std::sync::atomic::Ordering::Relaxed);
 
         Ok(ConsolidationReport {
             links_created,
