@@ -66,6 +66,17 @@ pub enum BoundStatement {
         table_name: String,
         property: String,
     },
+    CreateVectorIndex {
+        table_name: String,
+        field: String,
+        index_type: String,
+        metric: String,
+        dimension: usize,
+    },
+    CreateFtsIndex {
+        table_name: String,
+        fields: Vec<String>,
+    },
     DropIndex(String),
     StandaloneCall(String, Vec<Literal>),
     CreateSequence {
@@ -522,6 +533,26 @@ impl<'a> Binder<'a> {
             Statement::DropIndex(name) => {
                 Ok(BoundStatement::DropIndex(name.clone()))
             }
+            Statement::CreateVectorIndex {
+                table_name,
+                field,
+                index_type,
+                metric,
+                dimension,
+            } => Ok(BoundStatement::CreateVectorIndex {
+                table_name: table_name.clone(),
+                field: field.clone(),
+                index_type: index_type.clone(),
+                metric: metric.clone(),
+                dimension: *dimension,
+            }),
+            Statement::CreateFtsIndex {
+                table_name,
+                fields,
+            } => Ok(BoundStatement::CreateFtsIndex {
+                table_name: table_name.clone(),
+                fields: fields.clone(),
+            }),
             Statement::AlterTable { name, operation } => {
                 Ok(BoundStatement::AlterTable {
                     name: name.clone(),

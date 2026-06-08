@@ -59,6 +59,14 @@ pub enum DDLAction {
         table_name: String,
         property: String,
     },
+    CreateVectorIndex {
+        table_name: String,
+        metric: String,
+        dimension: usize,
+    },
+    CreateFtsIndex {
+        table_name: String,
+    },
     DropIndex(String),
 }
 
@@ -207,6 +215,34 @@ impl PhysicalDDL {
     ) -> Self {
         Self {
             action: DDLAction::DropIndex(name),
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_create_vector_index(
+        table_name: String,
+        metric: String,
+        dimension: usize,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::CreateVectorIndex { table_name, metric, dimension },
+            db,
+            undo_buffer,
+            executed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn new_create_fts_index(
+        table_name: String,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
+        Self {
+            action: DDLAction::CreateFtsIndex { table_name },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
@@ -462,6 +498,20 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::DropIndex(name.clone()));
             }
+            DDLAction::CreateVectorIndex {
+                table_name,
+                metric: _,
+                dimension,
+            } => {
+                let mut storage = database.storage_manager.write();
+                storage.create_vector_index(table_name, *dimension)?;
+                database.catalog.mark_dirty();
+            }
+            DDLAction::CreateFtsIndex { table_name } => {
+                let mut storage = database.storage_manager.write();
+                storage.create_fts_index(table_name)?;
+                database.catalog.mark_dirty();
+            }
             DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
                 let mut storage = database.storage_manager.write();
                 storage.add_column_to_table(table_name, col_name, data_type.clone())?;
@@ -624,6 +674,18 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     property: property.clone(),
                 },
                 DDLAction::DropIndex(name) => DDLAction::DropIndex(name.clone()),
+                DDLAction::CreateVectorIndex {
+                    table_name,
+                    metric,
+                    dimension,
+                } => DDLAction::CreateVectorIndex {
+                    table_name: table_name.clone(),
+                    metric: metric.clone(),
+                    dimension: *dimension,
+                },
+                DDLAction::CreateFtsIndex { table_name } => DDLAction::CreateFtsIndex {
+                    table_name: table_name.clone(),
+                },
             },
             db: self.db.clone(),
             undo_buffer: self.undo_buffer.clone(),

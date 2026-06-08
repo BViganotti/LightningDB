@@ -100,6 +100,17 @@ pub enum Statement {
         table_label: String,
         property: String,
     },
+    CreateVectorIndex {
+        table_name: String,
+        field: String,
+        index_type: String,
+        metric: String,
+        dimension: usize,
+    },
+    CreateFtsIndex {
+        table_name: String,
+        fields: Vec<String>,
+    },
     DropIndex(String),
 }
 
