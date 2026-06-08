@@ -1694,16 +1694,12 @@ impl<'a> Binder<'a> {
             .get(variable)
             .ok_or_else(|| LightningError::Query(format!("Variable {variable} not found")))?;
 
-        if let Some(t) = self.catalog.get_node_table(&binding.table_name) {
-            Ok((&t.properties, 0, binding.table_name.clone()))
-        } else if let Some(t) = self.catalog.get_rel_table(&binding.table_name) {
-            Ok((&t.properties, 0, binding.table_name.clone()))
-        } else {
-            Err(LightningError::Query(format!(
+        let (props, _kind) = self.catalog.get_table_properties(&binding.table_name)
+            .ok_or_else(|| LightningError::Query(format!(
                 "Table {} not found for variable {}",
                 binding.table_name, variable
-            )))
-        }
+            )))?;
+        Ok((props, 0, binding.table_name.clone()))
     }
 
     fn bind_data_type(&self, data_type: &crate::parser::ast::DataType) -> LogicalType {
