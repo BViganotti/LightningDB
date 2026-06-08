@@ -91,7 +91,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: `self.bfs_visited.contains(&n)` on a `Vec<u64>` is O(visited_count) per check. For a graph with 500K visited nodes and a node with degree 10K, that's 10K × 500K = 5B comparisons for one node's expansion. Worst case: the BFS is O(V²).
 
-- [ ] **2.1.1** `[P1]` Replace `Vec<u64>` with `FixedBitSet` (as done correctly in `recursive_join.rs:70`). For sparse graphs, use `HashSet<u64>`.
+- [X] **2.1.1** `[P1]` Replace `Vec<u64>` with `FixedBitSet` (as done correctly in `recursive_join.rs:70`). For sparse graphs, use `HashSet<u64>`.
 
 **Impact**: BFS on any graph with 100K+ nodes becomes unusable.
 
