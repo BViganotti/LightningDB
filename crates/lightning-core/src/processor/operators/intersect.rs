@@ -13,7 +13,7 @@ pub struct PhysicalIntersect {
     build_operators: Vec<Box<dyn PhysicalOperator + Send + Sync>>,
     build_key_indices: Vec<usize>,
     build_intersect_indices: Vec<usize>,
-    build_hts: Vec<Arc<RwLock<HashMap<Value, Vec<Vec<Value>>>>>>,
+    build_hts: Vec<Arc<RwLock<HashMap<Value, Vec<Value>>>>>,
     intersect_var_name: String,
 
     // Internal state
@@ -73,14 +73,11 @@ impl PhysicalIntersect {
             while let Some(chunk) = self.build_operators[i].get_next(database, tx, params)? {
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
-                let num_cols = batch.num_columns();
+                let intersect_idx = self.build_intersect_indices[i];
                 for row_idx in 0..num_rows {
                     let key = Value::from_arrow(batch.column(key_idx), row_idx);
-                    let mut row = Vec::with_capacity(num_cols);
-                    for col_idx in 0..num_cols {
-                        row.push(Value::from_arrow(batch.column(col_idx), row_idx));
-                    }
-                    ht.entry(key).or_default().push(row);
+                    let intersect_val = Value::from_arrow(batch.column(intersect_idx), row_idx);
+                    ht.entry(key).or_default().push(intersect_val);
                 }
             }
         }
@@ -155,18 +152,15 @@ impl PhysicalOperator for PhysicalIntersect {
                             && !matches_per_ht.is_empty()
                         {
                             let base_matches = matches_per_ht[smallest_idx];
-                            let base_intersect_idx = self.build_intersect_indices[smallest_idx];
 
-                            for candidate_row in base_matches {
-                                let candidate_val = &candidate_row[base_intersect_idx];
+                            for candidate_val in base_matches {
 
                                 let mut in_all = true;
                                 for (i, matches) in matches_per_ht.iter().enumerate() {
                                     if i == smallest_idx {
                                         continue;
                                     }
-                                    let intersect_idx = self.build_intersect_indices[i];
-                                    if !matches.iter().any(|r| &r[intersect_idx] == candidate_val) {
+                                    if !matches.contains(candidate_val) {
                                         in_all = false;
                                         break;
                                     }
