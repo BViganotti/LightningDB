@@ -118,6 +118,39 @@ impl PhysicalPlanner {
                 }
                 Ok(Box::new(scan))
             }
+            LogicalOperator::IndexScan(table_name, var, pk_name, pk_value_expr, projected_idxs) => {
+                let table = {
+                    let storage = self.db.storage_manager.read();
+                    storage
+                        .get_table(&table_name)
+                        .ok_or_else(|| {
+                            LightningError::Internal(format!("Table {table_name} not found"))
+                        })?
+                        .clone()
+                };
+                let index = {
+                    let storage = self.db.storage_manager.read();
+                    storage
+                        .get_index(&table_name)
+                        .ok_or_else(|| {
+                            LightningError::Internal(format!(
+                                "No index found for table {table_name}"
+                            ))
+                        })?
+                };
+                let mut scan = crate::processor::operators::index_scan::PhysicalIndexScan::new(
+                    table_name,
+                    table,
+                    index,
+                    pk_value_expr,
+                    self.db.buffer_manager.clone(),
+                    self.read_ts,
+                );
+                if let Some(idxs) = projected_idxs {
+                    scan = scan.with_projected_idxs(idxs);
+                }
+                Ok(Box::new(scan))
+            }
             LogicalOperator::Filter(child, expr) => {
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(
@@ -678,7 +711,20 @@ impl PhysicalPlanner {
             LogicalOperator::SemiJoin(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
             }
-            LogicalOperator::IndexScan(..) => Ok(0),
+            LogicalOperator::IndexScan(table_name, _var, _pk_name, _pk_val, projected_idxs) => {
+                if let Some(idxs) = projected_idxs {
+                    Ok(idxs.len())
+                } else {
+                    let cat = self.db.catalog.read();
+                    if let Some(t) = cat.get_node_table(table_name) {
+                        Ok(t.properties.len())
+                    } else if let Some(t) = cat.get_rel_table(table_name) {
+                        Ok(t.properties.len())
+                    } else {
+                        Ok(0)
+                    }
+                }
+            }
             LogicalOperator::CreateRel(child_opt, _) => {
                 if let Some(child) = child_opt {
                     self.collect_variable_positions(child, start_col, positions)
