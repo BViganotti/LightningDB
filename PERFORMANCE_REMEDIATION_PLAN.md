@@ -430,7 +430,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `concat_batches` creates a new mega-batch copying all build-side data. Original chunks + concatenated batch exist simultaneously = 2× memory.
 
-- [ ] **12.1.1** `[P2]` Incrementally concatenate as chunks arrive, or use index-based probe across chunks with offsets.
+- [X] **12.1.1** `[P2]` Incrementally concatenate as chunks arrive, or use index-based probe across chunks with offsets.
 
 ### 12.2 Full Materialization Before Sort (No External Sort)
 
