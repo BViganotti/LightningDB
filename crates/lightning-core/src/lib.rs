@@ -245,6 +245,12 @@ impl std::fmt::Debug for Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
+        // Shutdown vacuum thread first so it doesn't interfere with checkpoint
+        if let Some(handle) = self.vacuum_handle.take() {
+            self.buffer_manager.shutdown();
+            let _ = handle.join();
+        }
+
         // Full Database::checkpoint persists dirty pages, catalog, free space map,
         // and header — ensuring num_rows and data files are consistent on restart.
         // This must happen BEFORE shutdown truncates the WAL.
@@ -511,6 +517,9 @@ impl Database {
         wasm_path: P,
         func_name: &str,
     ) -> Result<()> {
+        if self._config.read_only {
+            return Err(LightningError::Config("Database is opened as read-only".into()));
+        }
         let wasm_func = crate::wasm_function::WasmFunction::load(wasm_path, func_name)?;
         let scalar = wasm_func.to_scalar_function();
         self.function_registry.register_scalar(scalar);
@@ -523,6 +532,9 @@ impl Database {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
+        if self._config.read_only {
+            return Err(LightningError::Config("Cannot checkpoint a read-only database".into()));
+        }
         let start = std::time::Instant::now();
         // Flush all dirty pages to disk and sync data files
         self.buffer_manager.checkpoint()?;
@@ -798,11 +810,9 @@ impl Connection {
     }
 
     pub fn commit(&self) -> Result<()> {
-        let tx = {
-            let mut guard = self.transaction.lock();
-            guard.take()
-        }
-        .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
+        let mut guard = self.transaction.lock();
+        let tx = guard.take()
+            .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
         let bm = &self.client_context.database.buffer_manager;
         let db: &Database = &self.client_context.database;
@@ -813,13 +823,21 @@ impl Connection {
             .read()
             .flush_all_pending(bm, &tx)?;
 
-        self.client_context
+        // Hold the transaction lock during commit to prevent another thread
+        // from starting a new transaction or calling execute on a stale tx.
+        // Only release after the commit record is written to the WAL.
+        let result = self.client_context
             .database
             .transaction_manager
-            .commit(&tx, bm, db)
+            .commit(&tx, bm, db);
+        drop(guard);
+        result
     }
 
     pub fn fast_insert(&self, table_name: &str, rows: Vec<Vec<(String, Value)>>) -> Result<usize> {
+        if self.client_context.database._config.read_only {
+            return Err(LightningError::Config("Database is opened as read-only".into()));
+        }
         use arrow::array::*;
 
         let db = self.client_context.database.clone();
@@ -1020,17 +1038,17 @@ impl Connection {
     }
 
     pub fn rollback(&self) -> Result<()> {
-        let tx = {
-            let mut guard = self.transaction.lock();
-            guard.take()
-        }
-        .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
+        let mut guard = self.transaction.lock();
+        let tx = guard.take()
+            .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
         let db: &Database = &self.client_context.database;
-        self.client_context
+        let result = self.client_context
             .database
             .transaction_manager
-            .rollback(db, &tx)
+            .rollback(db, &tx);
+        drop(guard);
+        result
     }
 
     fn plan_and_optimize(
@@ -1279,6 +1297,9 @@ impl Connection {
     }
 
     pub fn bulk_insert_batch(&self, table_name: &str, batch: &RecordBatch) -> Result<usize> {
+        if self.client_context.database._config.read_only {
+            return Err(LightningError::Config("Database is opened as read-only".into()));
+        }
         let db = self.client_context.database.clone();
         let table = {
             let storage = db.storage_manager.read();
