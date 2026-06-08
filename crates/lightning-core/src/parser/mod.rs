@@ -1211,11 +1211,42 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             ))
         }
         Rule::parenthesized_expression => parse_expression(required_pair(i.into_inner().next(), "pair")?),
-        Rule::case_expression => Ok(Expression::Case {
-            expression: None,
-            when_then: Vec::new(),
-            else_expression: None,
-        }),
+        Rule::case_expression => {
+            let mut case_expr: Option<Box<Expression>> = None;
+            let mut when_then = Vec::new();
+            let mut else_expr: Option<Box<Expression>> = None;
+            for child in i.into_inner() {
+                match child.as_rule() {
+                    Rule::expression => {
+                        if case_expr.is_none() {
+                            case_expr = Some(Box::new(parse_expression(child)?));
+                        }
+                    }
+                    Rule::when_then_clause => {
+                        let mut inner = child.into_inner();
+                        let when = parse_expression(
+                            required_pair(inner.next(), "CASE WHEN")?
+                        )?;
+                        let then = parse_expression(
+                            required_pair(inner.next(), "CASE THEN")?
+                        )?;
+                        when_then.push((when, then));
+                    }
+                    Rule::else_clause => {
+                        let inner_expr = required_pair(
+                            child.into_inner().next(), "CASE ELSE"
+                        )?;
+                        else_expr = Some(Box::new(parse_expression(inner_expr)?));
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Expression::Case {
+                expression: case_expr,
+                when_then,
+                else_expression: else_expr,
+            })
+        }
         Rule::exists_subquery | Rule::count_subquery => {
             let is_count = i.as_rule() == Rule::count_subquery;
             let mut steps = Vec::new();
