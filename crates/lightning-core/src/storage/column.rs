@@ -11,7 +11,7 @@ use arrow::buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuff
 use arrow::datatypes::{DataType, Field};
 use lightning_types::LogicalType;
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::processor::Value;
@@ -30,6 +30,9 @@ pub struct Column {
     pub version_info: Arc<RowVersion>,
     pub child_columns: Vec<Column>,
     pub dirty: AtomicBool,
+    /// Atomic counters for stats, avoiding write lock on append path.
+    atomic_num_values: AtomicU64,
+    atomic_null_count: AtomicU64,
     /// Buffered null bit changes: (byte_offset_in_null_page, 0|1).
     /// Flushed to actual pages before batch ops or checkpoint.
     pending_nulls: parking_lot::Mutex<Vec<(usize, u8)>>,
@@ -47,6 +50,8 @@ impl Clone for Column {
             version_info: Arc::clone(&self.version_info),
             child_columns: self.child_columns.clone(),
             dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
+            atomic_num_values: AtomicU64::new(self.atomic_num_values.load(Ordering::Acquire)),
+            atomic_null_count: AtomicU64::new(self.atomic_null_count.load(Ordering::Acquire)),
             pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -71,6 +76,8 @@ impl Column {
             version_info,
             child_columns: Vec::new(),
             dirty: AtomicBool::new(false),
+            atomic_num_values: AtomicU64::new(0),
+            atomic_null_count: AtomicU64::new(0),
             pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -94,6 +101,8 @@ impl Column {
             version_info,
             child_columns,
             dirty: AtomicBool::new(false),
+            atomic_num_values: AtomicU64::new(0),
+            atomic_null_count: AtomicU64::new(0),
             pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -431,6 +440,7 @@ impl Column {
 
         let null_fh = Arc::clone(&self.null_fh);
         let data_type = &self.data_type;
+        let mut cached_null_page: Option<(u64, Arc<crate::storage::buffer_manager::Frame>)> = None;
 
         while values_read < num_values {
             let current_offset = offset + values_read;
@@ -462,8 +472,19 @@ impl Column {
             )?;
 
             let null_page_idx = current_offset / 4096;
-            let null_frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
             let null_base_offset = (current_offset % 4096) as usize;
+
+            // Cache null frame across sequential batches on the same null page
+            let null_frame = if cached_null_page.as_ref().map(|(idx, _)| *idx) == Some(null_page_idx) {
+                cached_null_page.as_ref().unwrap().1.clone()
+            } else {
+                if let Some((old_idx, ref old_frame)) = cached_null_page.take() {
+                    bm.unpin_page(&null_fh, old_idx, old_frame.clone());
+                }
+                let frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
+                cached_null_page = Some((null_page_idx, frame));
+                cached_null_page.as_ref().unwrap().1.clone()
+            };
 
             for i in 0..to_read as usize {
                 let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
@@ -481,10 +502,15 @@ impl Column {
                     )?;
                 }
             }
-            bm.unpin_page(&null_fh, null_page_idx, null_frame);
             bm.unpin_page(&self.fh, page_idx, page);
             values_read += to_read;
         }
+
+        // Unpin cached null frame if any
+        if let Some((idx, frame)) = cached_null_page.take() {
+            bm.unpin_page(&null_fh, idx, frame);
+        }
+
         Ok(builder.finish())
     }
 
@@ -1346,9 +1372,13 @@ impl Column {
 
         bm.log_page_update(self.fh.file_id, page_idx, frame.as_slice())?;
         bm.unpin_page(&self.fh, page_idx, frame);
+        // Fast atomic stats update, defer min/max to optimize time
+        self.atomic_num_values.fetch_add(1, Ordering::Release);
+        if matches!(val, Value::Null) {
+            self.atomic_null_count.fetch_add(1, Ordering::Release);
+        }
         {
             let mut stats = self.stats.write();
-            stats.update(val);
             stats.update_page_bounds(page_idx as usize, val);
         }
         Ok(())
@@ -1858,18 +1888,17 @@ impl Column {
                     let overflow_page =
                         bm.pin_page(self.overflow_fh.as_ref().expect("overflow file handle required").clone(), page_idx, tx)?;
                     let end = std::cmp::min(offset as usize + read_len, 4096);
-                    Ok(Value::String(
-                        String::from_utf8_lossy(
-                            &overflow_page.as_slice()[offset as usize..end],
-                        )
-                        .to_string(),
-                    ))
+                    let raw = &overflow_page.as_slice()[offset as usize..end];
+                    let s = String::from_utf8(raw.to_vec())
+                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                    Ok(Value::String(s))
                 } else {
                     let len = if data[0] == 255 { 63 } else { data[0] as usize };
                     let actual_len = std::cmp::min(len, 63);
-                    Ok(Value::String(
-                        String::from_utf8_lossy(&data[1..1 + actual_len]).to_string(),
-                    ))
+                    let raw = &data[1..1 + actual_len];
+                    let s = String::from_utf8(raw.to_vec())
+                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                    Ok(Value::String(s))
                 }
             }
             LogicalType::Date => Ok(Value::Date(i32::from_le_bytes(

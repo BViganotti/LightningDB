@@ -185,15 +185,14 @@ impl Aggregate {
                         *count += row_indices.len();
                         for (i, (_, col_idx)) in self.aggregates.iter().enumerate() {
                             let col = batch.column(*col_idx);
-                            // Gather the rows belonging to this group into a contiguous array
-                            let idx_array = arrow::array::UInt64Array::from(
-                                row_indices.iter().map(|&r| r as u64).collect::<Vec<_>>(),
-                            );
-                            let gathered = arrow::compute::take(
-                                col,
-                                &idx_array,
-                                None,
-                            )?;
+                            // Use filter with a boolean mask instead of per-group take
+                            let mut mask = vec![false; num_rows];
+                            for &r in &row_indices {
+                                mask[r] = true;
+                            }
+                            let mask_arr = arrow::array::BooleanArray::from(mask);
+                            let gathered = arrow::compute::filter(col, &mask_arr)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                             agg_funcs[i].update_vector(&gathered)?;
                         }
                     }
