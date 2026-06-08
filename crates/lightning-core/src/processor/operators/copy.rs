@@ -2,6 +2,7 @@ use crate::parser::ast::Literal;
 use crate::processor::arrow_utils::logical_type_to_arrow_type;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::storage_manager::Table;
+use crate::storage::undo_buffer::UndoRecord;
 use crate::LightningError;
 use crate::Database;
 use crate::Result;
@@ -251,6 +252,14 @@ impl PhysicalCopy {
                 table.bulk_append_batch(&database.buffer_manager, &new_batch, next_id, tx)?;
             } else {
                 table.bulk_append_batch(&database.buffer_manager, &batch, next_id, tx)?;
+            }
+
+            // Write undo records so a rollback can revert the imported rows
+            for i in 0..num_rows as u64 {
+                tx.undo_buffer.push(UndoRecord::DeleteNode(
+                    self.table_name.clone(),
+                    next_id + i,
+                ));
             }
 
             next_id += num_rows as u64;

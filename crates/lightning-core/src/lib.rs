@@ -565,9 +565,9 @@ impl Database {
                 }
             }
             drop(cat); // Explicitly drop lock before saving
-            if let Err(e) = self.catalog.force_save() {
-                tracing::warn!("Failed to save catalog during checkpoint: {}", e);
-            }
+            self.catalog.force_save().map_err(|e| {
+                LightningError::Internal(format!("Failed to save catalog during checkpoint: {e}"))
+            })?;
         }
 
         // Update the last checkpoint timestamp so recovery can skip these entries
