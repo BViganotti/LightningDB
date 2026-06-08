@@ -217,8 +217,14 @@ impl LogicalOperator {
             | LogicalOperator::Accumulate(c)
             | LogicalOperator::Distinct(c, _)
             | LogicalOperator::SemiJoin(c, ..) => *c = Box::new(new_child),
-            LogicalOperator::Join(l, _, _) | LogicalOperator::Union(l, _, _) => {
-                *l = Box::new(new_child)
+            LogicalOperator::Join(..) | LogicalOperator::Union(..) => {
+                // Multi-child operators: set_child is ambiguous (which child?).
+                // Log a warning instead of silently replacing only the left child
+                // and dropping the right child (which caused silent data loss).
+                tracing::warn!(
+                    "set_child called on multi-child operator {:?} — call ignored to preserve both children",
+                    std::mem::discriminant(self)
+                );
             }
             LogicalOperator::RecursiveJoin { child, .. } => *child = Box::new(new_child),
             LogicalOperator::Merge { child, .. } => *child = Box::new(new_child),
