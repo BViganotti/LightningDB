@@ -1,6 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
-use arrow::array::{Array, Int64Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, Int64Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::{Condvar, Mutex, RwLock};
@@ -11,6 +11,7 @@ pub struct SharedBuildSide {
     pub hash_table: HashMap<Value, Vec<usize>>,
     pub u64_hash_table: HashMap<u64, Vec<usize>>,
     pub build_chunks: Vec<RecordBatch>,
+    pub chunk_offsets: Vec<usize>,
     pub build_row_count: usize,
     pub build_done: bool,
     pub right_schema: Option<Arc<Schema>>,
@@ -62,6 +63,7 @@ impl HashJoin {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
+                chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
                 right_schema: None,
@@ -90,6 +92,7 @@ impl HashJoin {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
+                chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
                 right_schema: None,
@@ -121,6 +124,7 @@ impl HashJoin {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
+                chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
                 right_schema: None,
@@ -210,14 +214,15 @@ impl HashJoin {
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
         if shared.num_active_builders == 0 {
-            // Finalize build: Concatenate into single batch for faster 'take'
-            if !shared.build_chunks.is_empty() {
-                let schema = shared.right_schema.clone()
-                    .expect("right_schema should be set after build phase");
-                let table_batch = arrow::compute::concat_batches(&schema, &shared.build_chunks)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                shared.build_chunks = vec![table_batch];
+            // Build cumulative row offsets for chunk-based take during probe.
+            // This avoids concatenating all chunks into one batch (2× memory).
+            let mut offset = 0usize;
+            let mut offsets = Vec::with_capacity(shared.build_chunks.len());
+            for chunk in &shared.build_chunks {
+                offsets.push(offset);
+                offset += chunk.num_rows();
             }
+            shared.chunk_offsets = offsets;
             shared.build_done = true;
             let mut done = self.build_mutex.lock();
             *done = true;
@@ -379,7 +384,7 @@ impl PhysicalOperator for HashJoin {
             }
 
             if !left_indices.is_empty() {
-                let left_indices_arr = UInt32Array::from(left_indices);
+                let left_indices_arr = UInt32Array::from(left_indices.clone());
 
                 let mut final_columns = Vec::new();
                 let mut final_fields = Vec::new();
@@ -396,8 +401,21 @@ impl PhysicalOperator for HashJoin {
                 }
 
                 if self.join_type != JoinType::LeftSemi && self.join_type != JoinType::LeftAnti {
-                    let right_indices_arr = UInt32Array::from(right_indices);
-                    if let Some(build_batch) = shared.build_chunks.first() {
+                    let total = left_indices_arr.len();
+                    if shared.build_chunks.is_empty() {
+                        if let Some(schema) = &shared.right_schema {
+                            for field in schema.fields() {
+                                final_columns.push(arrow::array::new_null_array(
+                                    field.data_type(),
+                                    total,
+                                ));
+                                final_fields.push(field.as_ref().clone());
+                            }
+                        }
+                    } else if shared.build_chunks.len() == 1 {
+                        // Single chunk: direct take (fast path)
+                        let right_indices_arr = UInt32Array::from(right_indices);
+                        let build_batch = &shared.build_chunks[0];
                         for i in 0..build_batch.num_columns() {
                             let col = build_batch.column(i);
                             final_columns.push(arrow::compute::take(
@@ -407,13 +425,50 @@ impl PhysicalOperator for HashJoin {
                             )?);
                             final_fields.push(build_batch.schema().field(i).clone());
                         }
-                    } else if let Some(schema) = &shared.right_schema {
-                        for field in schema.fields() {
-                            final_columns.push(arrow::array::new_null_array(
-                                field.data_type(),
-                                left_indices_arr.len(),
-                            ));
-                            final_fields.push(field.as_ref().clone());
+                    } else {
+                        // Multiple chunks: group by chunk, take per chunk, concatenate
+                        let chunks = shared.build_chunks.clone();
+                        let offsets = shared.chunk_offsets.clone();
+                        let right_schema = shared.right_schema.clone()
+                            .expect("right_schema should be set after build");
+                        let num_cols = chunks[0].num_columns();
+
+                        // Group (left_index, right_index) by chunk
+                        let mut chunk_rows: Vec<Vec<(u32, u32)>> =
+                            vec![Vec::new(); chunks.len()];
+                        for (i, g) in right_indices.iter().enumerate() {
+                            if let Some(global_idx) = g {
+                                let ci = match offsets.binary_search(
+                                    &(*global_idx as usize)
+                                ) {
+                                    Ok(pos) => pos,
+                                    Err(pos) => pos.saturating_sub(1),
+                                };
+                                let local = *global_idx - offsets[ci] as u32;
+                                chunk_rows[ci].push((left_indices[i], local));
+                            }
+                        }
+
+                        // For each column, take from relevant chunks and concatenate
+                        for col_idx in 0..num_cols {
+                            let mut partial: Vec<ArrayRef> = Vec::new();
+                            for (ci, rows) in chunk_rows.iter().enumerate() {
+                                if rows.is_empty() {
+                                    continue;
+                                }
+                                let local_indices: Vec<u32> = rows.iter().map(|(_, r)| *r).collect();
+                                let idx_arr = UInt32Array::from(local_indices);
+                                partial.push(arrow::compute::take(
+                                    chunks[ci].column(col_idx),
+                                    &idx_arr,
+                                    None,
+                                )?);
+                            }
+                            let refs: Vec<&dyn Array> = partial.iter().map(|a| a.as_ref()).collect();
+                            let concatenated = arrow::compute::concat(&refs)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                            final_columns.push(concatenated);
+                            final_fields.push(right_schema.field(col_idx).clone());
                         }
                     }
                 }
