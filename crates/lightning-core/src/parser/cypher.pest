@@ -85,7 +85,8 @@ property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 where_clause = { ^"WHERE" ~ expression }
 
-return_clause = { ^"RETURN" ~ ^"DISTINCT"? ~ projection_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+return_clause = { ^"RETURN" ~ distinct_literal? ~ projection_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+distinct_literal = { ^"DISTINCT" }
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ sort_item ~ ("," ~ sort_item)* }
 sort_item = { expression ~ (ASC | DESC)? }
 ASC = { ^"ASC" | ^"ASCENDING" }

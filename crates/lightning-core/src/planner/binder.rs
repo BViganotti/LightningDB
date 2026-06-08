@@ -1730,7 +1730,8 @@ impl<'a> Binder<'a> {
                 "Table {} not found for variable {}",
                 binding.table_name, variable
             )))?;
-        Ok((props, 0, binding.table_name.clone()))
+        let offset = self.column_offsets.get(variable).copied().unwrap_or(0);
+        Ok((props, offset, binding.table_name.clone()))
     }
 
     fn bind_data_type(&self, data_type: &crate::parser::ast::DataType) -> LogicalType {

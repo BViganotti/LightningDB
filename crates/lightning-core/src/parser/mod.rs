@@ -647,10 +647,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
 }
 
 fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, ParserError> {
-    // Check if RETURN contains DISTINCT by looking at string content
-    let return_str = p.as_str().to_uppercase();
-    let distinct = return_str.contains("DISTINCT");
-
+    let mut distinct = false;
     let mut items = Vec::new();
     let mut order_by = None;
     let mut skip = None;
@@ -658,6 +655,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
 
     for i in p.into_inner() {
         match i.as_rule() {
+            Rule::distinct_literal => distinct = true,
             Rule::projection_items => {
                 for j in i.into_inner() {
                     match j.as_rule() {
