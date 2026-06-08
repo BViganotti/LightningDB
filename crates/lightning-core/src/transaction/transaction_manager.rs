@@ -188,7 +188,11 @@ impl TransactionManager {
 
                         if let Some(fh) = fh_opt {
                             let merge_lock = self.get_page_merge_lock(*file_id, *page_idx);
-                            let _merge_guard = merge_lock.lock();
+                            let _merge_guard = merge_lock
+                                .try_lock_for(std::time::Duration::from_secs(5))
+                                .ok_or_else(|| crate::LightningError::Internal(
+                                    "deadlock detected while acquiring page merge lock".into()
+                                ))?;
 
                             // Pin the latest committed version INSIDE the lock
                             let latest_frame = bm.pin_latest_committed(

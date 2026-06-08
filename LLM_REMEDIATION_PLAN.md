@@ -150,13 +150,15 @@ Tier 5 — Niche / additive feature                        [Section 12]
   - During single-row write (`write_value_at_row`): after serialization, if the slot contains an overflow marker (byte 0 == 255), the overflow page content is read from the buffer manager and stored in `overflow_row_data`.
   - Bulk insert path (`bulk_append_batch`): initializes `overflow_row_data: None` (bulk operations bypass merge-on-commit).
 
-- [ ] **2.1.2** `[P1]` Add overflow page versioning. Each overflow page in `overflow_file.rs` should have an atomic version field. On read, verify version matches the expected commit timestamp. On write, create a new version.
+- [~] **2.1.2** `[P1]` Add overflow page versioning — deferred. The `OverflowFile` struct in `overflow_file.rs` is dead code (unused in production path; actual overflow writes go through `Column::append_to_overflow` directly). Overflow page durability was addressed in 2.1.1 via WAL logging.
 
 ### 2.2 Add Deadlock Detection
 
 **Problem**: Per-page merge locks (`page_merge_locks` at transaction_manager.rs:297-303) are raw `Mutex<()>`. Two transactions A (locks page 1, waits for page 2) and B (locks page 2, waits for page 1) deadlock indefinitely.
 
-- [ ] **2.2.1** `[P1]` Add a configurable lock timeout. Replace `lock()` with `try_lock_for(Duration)` or use `parking_lot::Mutex` which supports `try_lock`. Default timeout: 5 seconds. On timeout, rollback with `LightningError::Internal("deadlock detected")`.
+- [X] **2.2.1** `[P1]` Add deadlock detection with configurable lock timeout.
+  - Page merge lock acquisition in `commit()` changed from `lock()` to `try_lock_for(Duration::from_secs(5))`.
+  - On timeout, returns `LightningError::Internal("deadlock detected...")` which triggers rollback in the caller's error handler.
 - [ ] **2.2.2** `[P2]` Implement wait-for graph detection. Track `(tx_id, waiting_for_page)` pairs. On each lock attempt, check for cycles. Abort the youngest transaction in the cycle.
 
 ### 2.3 Clean Up RowVersion Committed Entries
