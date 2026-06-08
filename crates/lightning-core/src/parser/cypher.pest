@@ -104,17 +104,17 @@ and_expr = { not_expr ~ (and_op ~ not_expr)* }
 and_op = { ^"AND" }
 not_expr = { (not_op)* ~ comparison_expr }
 not_op = { ^"NOT" }
-comparison_expr = { arithmetic_expr ~ ( comparison_operator ~ arithmetic_expr | string_predicate | is_null_check | in_check )? }
+comparison_expr = { term ~ ( comparison_operator ~ term | string_predicate | is_null_check | in_check )? }
+term = { factor ~ (("+" | "-") ~ factor)* }
+factor = { atom ~ (("*" | "/" | "%") ~ atom)* }
 string_predicate = { contains_op | starts_with_op | ends_with_op }
 is_null_check = { ^"IS" ~ ^"NOT"? ~ ^"NULL" }
 in_check = { (^"NOT" ~ ^"IN" | ^"IN") ~ "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
-contains_op = { ^"CONTAINS" ~ arithmetic_expr }
-starts_with_op = { ^"STARTS" ~ ^"WITH" ~ arithmetic_expr }
-ends_with_op = { ^"ENDS" ~ ^"WITH" ~ arithmetic_expr }
-arithmetic_expr = { atom ~ ( arithmetic_operator ~ atom )* }
+contains_op = { ^"CONTAINS" ~ term }
+starts_with_op = { ^"STARTS" ~ ^"WITH" ~ term }
+ends_with_op = { ^"ENDS" ~ ^"WITH" ~ term }
 
 comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
-arithmetic_operator = { "+" | "-" | "*" | "/" | "%" }
 
 atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
 list_quantifier = { all_q | any_q | none_q | single_q }
