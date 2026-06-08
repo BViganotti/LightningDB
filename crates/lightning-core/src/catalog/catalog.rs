@@ -362,6 +362,21 @@ impl Catalog {
         self.rel_tables.get_mut(name)
     }
 
+    /// Look up a table (node or rel) and return its properties, a type tag,
+    /// and the entry version for cache invalidation.
+    pub fn get_table_properties(
+        &self,
+        name: &str,
+    ) -> Option<(&[super::PropertyDefinition], u8)> {
+        if let Some(t) = self.node_tables.get(name) {
+            Some((&t.properties, 0u8))
+        } else if let Some(t) = self.rel_tables.get(name) {
+            Some((&t.properties, 1u8))
+        } else {
+            None
+        }
+    }
+
     pub fn load_from_disk(path: &std::path::Path) -> crate::Result<Self> {
         if !path.exists() {
             return Ok(Self::new());
