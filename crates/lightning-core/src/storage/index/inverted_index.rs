@@ -12,11 +12,12 @@ pub struct InvertedIndex {
     writer: RwLock<IndexWriter>,
     reader: IndexReader,
     id_field: Field,
-    content_field: Field,
+    /// Map from column name to tantivy Field for multi-column FTS.
+    content_fields: std::collections::HashMap<String, Field>,
 }
 
 impl InvertedIndex {
-    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn new(path: impl AsRef<Path>, field_names: &[String]) -> Result<Self> {
         let p = path.as_ref();
         if !p.exists() {
             std::fs::create_dir_all(p)?;
@@ -24,7 +25,18 @@ impl InvertedIndex {
 
         let mut schema_builder = Schema::builder();
         let id_field = schema_builder.add_u64_field("node_id", FAST | STORED);
-        let content_field = schema_builder.add_text_field("content", TEXT);
+        let mut content_fields = std::collections::HashMap::new();
+
+        if field_names.is_empty() {
+            let f = schema_builder.add_text_field("content", TEXT);
+            content_fields.insert("content".to_string(), f);
+        } else {
+            for name in field_names {
+                let f = schema_builder.add_text_field(name, TEXT);
+                content_fields.insert(name.clone(), f);
+            }
+        }
+
         let schema = schema_builder.build();
 
         let dir = tantivy::directory::MmapDirectory::open(p)
@@ -48,7 +60,7 @@ impl InvertedIndex {
             writer: RwLock::new(writer),
             reader,
             id_field,
-            content_field,
+            content_fields,
         })
     }
 
@@ -62,7 +74,9 @@ impl InvertedIndex {
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
-            doc.add_text(self.content_field, text);
+            for (_name, field) in &self.content_fields {
+                doc.add_text(*field, text);
+            }
             writer
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -72,15 +86,17 @@ impl InvertedIndex {
 
     pub fn insert_multi_field_batch(
         &self,
-        docs: &[(u64, Vec<&str>)],
+        docs: &[(u64, Vec<(String, &str)>)],
     ) -> Result<()> {
         let writer = self.writer.read();
         for (node_id, fields) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
-            for text in fields {
+            for (field_name, text) in fields {
                 if !text.is_empty() {
-                    doc.add_text(self.content_field, text);
+                    if let Some(field) = self.content_fields.get(field_name) {
+                        doc.add_text(*field, text);
+                    }
                 }
             }
             writer
@@ -93,14 +109,16 @@ impl InvertedIndex {
     pub fn insert_multi_field(
         &self,
         node_id: u64,
-        fields: &[&str],
+        fields: &[(String, &str)],
     ) -> Result<()> {
         let writer = self.writer.read();
         let mut doc = TantivyDocument::default();
         doc.add_u64(self.id_field, node_id);
-        for text in fields {
+        for (field_name, text) in fields {
             if !text.is_empty() {
-                doc.add_text(self.content_field, text);
+                if let Some(field) = self.content_fields.get(field_name) {
+                    doc.add_text(*field, text);
+                }
             }
         }
         writer
@@ -142,9 +160,10 @@ impl InvertedIndex {
     ) -> Result<Vec<(u64, f32)>> {
         let _ = self.reader.reload();
         let searcher = self.reader.searcher();
+        let search_fields: Vec<Field> = self.content_fields.values().copied().collect();
         let query_parser = QueryParser::for_index(
             &self.index,
-            vec![self.content_field],
+            search_fields,
         );
 
         let query = query_parser

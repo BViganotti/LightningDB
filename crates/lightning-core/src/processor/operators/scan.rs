@@ -35,6 +35,8 @@ pub struct PhysicalScan {
     /// Each cloned PhysicalScan gets its own Arc<AtomicU64> via set_partition(),
     /// so workers do not contend on a shared counter.
     partition_position: Arc<AtomicU64>,
+    /// Cached morsel size, computed once from table metadata.
+    morsel_size: u64,
     /// Start of this partition's row range (inclusive). Equal to 0 when not partitioned.
     partition_start_row: u64,
     /// End of this partition's row range (exclusive). Equal to state.num_rows when not partitioned.
@@ -56,6 +58,11 @@ impl PhysicalScan {
             )));
         }
         let has_modifications = table.columns[0].version_info.has_modifications();
+        let avg_element_size = table.columns.iter().map(|c| c.element_size()).max().unwrap_or(8);
+        let num_columns = table.columns.len() as u64;
+        let target_bytes: u64 = 8 * 1024 * 1024;
+        let per_row = avg_element_size as u64 * num_columns;
+        let morsel_size = (target_bytes / per_row.max(1)).clamp(4096, 262_144);
         Ok(Self {
             table,
             variable,
@@ -77,6 +84,7 @@ impl PhysicalScan {
             partition_position: Arc::new(AtomicU64::new(0)),
             partition_start_row: 0,
             partition_end_row: num_rows,
+            morsel_size,
         })
     }
 
@@ -247,23 +255,6 @@ impl PhysicalScan {
     }
 }
 
-impl PhysicalScan {
-    fn compute_morsel_size(&self) -> u64 {
-        let avg_element_size = self
-            .table
-            .columns
-            .iter()
-            .map(|c| c.element_size())
-            .max()
-            .unwrap_or(8);
-        let num_columns = self.table.columns.len() as u64;
-        let target_bytes: u64 = 8 * 1024 * 1024;
-        let per_row = avg_element_size as u64 * num_columns;
-        let morsel = target_bytes / per_row.max(1);
-        morsel.clamp(4096, 262_144)
-    }
-}
-
 impl PhysicalOperator for PhysicalScan {
     fn get_next(
         &mut self,
@@ -271,7 +262,7 @@ impl PhysicalOperator for PhysicalScan {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&std::collections::HashMap<String, crate::processor::Value>>,
     ) -> Result<Option<DataChunk>> {
-        let morsel = self.compute_morsel_size();
+        let morsel = self.morsel_size;
         let end_bound = self.partition_end_row;
         loop {
             let start_row = self

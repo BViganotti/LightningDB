@@ -1288,18 +1288,21 @@ impl Connection {
                 .collect();
 
             if !string_cols.is_empty() {
-                let mut batch_docs: Vec<(u64, Vec<&str>)> = Vec::with_capacity(num_rows);
-                let mut fields = Vec::new();
+                let col_names: Vec<String> = string_cols.iter()
+                    .map(|&i| table.columns[i].name.clone())
+                    .collect();
+                let mut batch_docs: Vec<(u64, Vec<(String, &str)>)> = Vec::with_capacity(num_rows);
+                let mut fields: Vec<(String, &str)> = Vec::new();
                 for i in 0..num_rows {
                     let node_id = start_id + i as u64;
                     fields.clear();
-                    for &col_idx in &string_cols {
+                    for (j, &col_idx) in string_cols.iter().enumerate() {
                         let array = final_batch.column(col_idx);
                         if let Some(str_arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
                         {
                             if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
-                                fields.push(str_arr.value(i));
+                                fields.push((col_names[j].clone(), str_arr.value(i)));
                             }
                         }
                     }
