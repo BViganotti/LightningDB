@@ -341,7 +341,7 @@ impl BufferManager {
         self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
 
         // Speculative prefetch: predict which pages will be accessed next
-        // and read them into the OS page cache to reduce disk I/O latency.
+        // and load them into the buffer pool for zero-latency access.
         if self.prefetch_enabled {
             let predicted = self.prefetch_tracker.predict_next(
                 fh_arc.file_id,
@@ -351,11 +351,25 @@ impl BufferManager {
             );
             for (pf_id, pf_pg) in predicted {
                 let pf_key = (pf_id, pf_pg);
-                if !pool.page_to_slots.contains_key(&pf_key) {
-                    if let Some(pf_fh) = pool.file_handles.get(&pf_id) {
+                let already_cached = pool.page_to_slots.contains_key(&pf_key);
+                let pf_fh_opt = pool.file_handles.get(&pf_id).map(|f| Arc::clone(f));
+                if !already_cached {
+                    if let Some(pf_fh) = pf_fh_opt {
                         if (pf_pg as usize) < pf_fh.get_num_pages() as usize {
+                            let pf_slot = self.evict_with_clock(&mut pool)?;
                             let mut pf_data = [0u8; PAGE_SIZE];
                             let _ = pf_fh.read_page(pf_pg, &mut pf_data);
+                            let pf_frame = Arc::new(Frame::new(pf_data, 0));
+                            if let Some(old_key) = pool.slots[pf_slot].key {
+                                if let Some(slots) = pool.page_to_slots.get_mut(&old_key) {
+                                    slots.retain(|&idx| idx != pf_slot);
+                                }
+                            }
+                            pool.slots[pf_slot].key = Some(pf_key);
+                            pool.slots[pf_slot].frame = pf_frame;
+                            pool.slots[pf_slot].dirty = false;
+                            pool.slots[pf_slot].referenced = true;
+                            pool.page_to_slots.entry(pf_key).or_default().push(pf_slot);
                         }
                     }
                 }
@@ -437,11 +451,31 @@ impl BufferManager {
     pub fn reclaim_expired_versions(&self, min_active_ts: u64) -> Result<usize> {
         let mut total_reclaimed = 0;
         for shard in &self.shards {
+            // Phase 1: scan under READ lock to find candidates
+            let candidates: Vec<usize> = {
+                let pool = shard.read();
+                let mut cand = Vec::new();
+                for i in 0..pool.slots.len() {
+                    let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if pin_count == 0 && version != 0 && version < min_active_ts
+                        && version & UNCOMMITTED_BIT == 0
+                    {
+                        cand.push(i);
+                    }
+                }
+                cand
+            };
+
+            // Phase 2: acquire WRITE lock only to mutate candidates
+            if candidates.is_empty() {
+                continue;
+            }
             let mut pool = shard.write();
-            for i in 0..pool.slots.len() {
+            for &i in &candidates {
+                // Re-check conditions under write lock (slot may have changed)
                 let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                 let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-
                 if pin_count == 0 && version != 0 && version < min_active_ts
                     && version & UNCOMMITTED_BIT == 0
                 {
