@@ -465,6 +465,32 @@ impl PhysicalOperator for PhysicalScan {
                 }
             }
 
+            // Filter out rows with null _id (deleted via DELETE or soft-delete)
+            if batch.num_rows() > 0 && batch.num_columns() > 0 {
+                let id_col = batch.column(0);
+                if id_col.data_type() == &arrow::datatypes::DataType::UInt64
+                    || id_col.data_type() == &arrow::datatypes::DataType::Int64
+                {
+                    let mut keep = Vec::with_capacity(batch.num_rows());
+                    let mut any_null = false;
+                    for i in 0..batch.num_rows() {
+                        let is_valid = id_col.is_valid(i);
+                        keep.push(is_valid);
+                        if !is_valid {
+                            any_null = true;
+                        }
+                    }
+                    if any_null {
+                        let all_valid = keep.iter().all(|&v| v);
+                        if !all_valid {
+                            let keep_arr = BooleanArray::from(keep);
+                            batch = arrow::compute::filter_record_batch(&batch, &keep_arr)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                        }
+                    }
+                }
+            }
+
             if batch.num_rows() == 0 {
                 continue;
             }
