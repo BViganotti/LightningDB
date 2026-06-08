@@ -133,7 +133,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: N separate MATCH queries for N node IDs.
 
-- [ ] **3.2.1** `[P2]` Use a single `WHERE n.id IN [...]` batch query.
+- [X] **3.2.1** `[P2]` Use a single `WHERE n.id IN [...]` batch query.
 
 ### 3.3 `compute_architecture_cohesion` Issues 6 Full Graph Scans
 
@@ -141,7 +141,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Six separate Cypher queries, each scanning all edges.
 
-- [ ] **3.3.1** `[P2]` Combine into a single query: `MATCH (n)-[r]->(m) RETURN type(r), n.file_path, m.file_path`.
+- [X] **3.3.1** `[P2]` Combine into a single query: `MATCH (n)-[r]->(m) RETURN type(r), n.file_path, m.file_path`.
 
 ---
 
@@ -353,7 +353,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `LruCache<String, Arc<BoundStatement>>` uses the full normalized query text. Whitespace differences, comment changes, or alias variations create cache misses. Protected by a `Mutex`, creating serialization on every query lookup.
 
-- [ ] **9.3.1** `[P2]` Use a two-level cache: logical plan (cheap) + physical plan (expensive). Use a hash of a structurally-normalized AST as the key. Normalize aliases and strip whitespace more aggressively.
+- [X] **9.3.1** `[P2]` Use a two-level cache: logical plan (cheap) + physical plan (expensive). Use a hash of a structurally-normalized AST as the key. Normalize aliases and strip whitespace more aggressively.
 - [ ] **9.3.2** `[P2]` Use `RwLock` or sharded cache to reduce lock contention.
 
 ---
@@ -670,7 +670,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: ALP has 19 factor options for optimal float encoding, but `encode_value` always receives `fac_idx=0`. The factor search loop is entirely missing. ALP never achieves its advertised compression ratio — it stores 8 bytes per float when it could store 4-6.
 
-- [ ] **20.1.1** `[P2]` Implement factor search: for the first block, try all 19 factor indices, compute the max encoded absolute value, pick the one that minimizes encoded range. Store the best `fac_idx` alongside `exp_idx`.
+- [X] **20.1.1** `[P2]` Implement factor search: for the first block, try all 19 factor indices, compute the max encoded absolute value, pick the one that minimizes encoded range. Store the best `fac_idx` alongside `exp_idx`.
 
 **Impact**: 20-50% worse compression than optimal ALP for float columns.
 
@@ -688,7 +688,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: 4K-element HashSet per analysis call. For 100 columns: 100 × 4K = 400K entries of allocation.
 
-- [ ] **20.3.1** `[P3]` Use streaming cardinality estimation (HyperLogLog) with a fixed-size register array.
+- [X] **20.3.1** `[P3]` Use streaming cardinality estimation (HyperLogLog) with a fixed-size register array.
 
 ---
 
