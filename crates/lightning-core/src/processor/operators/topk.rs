@@ -2,8 +2,11 @@ use crate::planner::binder::BoundOrderByItem;
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
+use arrow::array::{ArrayRef, UInt64Array};
 use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn, SortOptions};
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 pub struct PhysicalTopK {
