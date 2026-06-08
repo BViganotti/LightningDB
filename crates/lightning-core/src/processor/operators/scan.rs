@@ -31,6 +31,8 @@ pub struct PhysicalScan {
     pub filter_column_idxs: Vec<usize>,
     /// Reusable buffer for column arrays to reduce per-morsel allocation.
     column_buffer: Vec<ArrayRef>,
+    /// Reusable scratch mask for filter/visibility/null-id passes.
+    scratch_mask: Vec<bool>,
     /// Per-worker position within the partition range for parallel execution.
     /// Each cloned PhysicalScan gets its own Arc<AtomicU64> via set_partition(),
     /// so workers do not contend on a shared counter.
@@ -81,6 +83,7 @@ impl PhysicalScan {
             pushdown_filter: None,
             filter_column_idxs: Vec::new(),
             column_buffer: Vec::new(),
+            scratch_mask: Vec::new(),
             partition_position: Arc::new(AtomicU64::new(0)),
             partition_start_row: 0,
             partition_end_row: num_rows,
@@ -276,6 +279,8 @@ impl PhysicalOperator for PhysicalScan {
             let has_pushdown =
                 self.pushdown_filter.is_some() && !self.filter_column_idxs.is_empty();
             let only_scan_filter_cols = has_pushdown && self.projected_idxs.is_none();
+            // Track if the early filter path already confirmed all rows pass.
+            let mut filter_all_pass = false;
 
             let zone_maps = self.pushdown_filter.as_ref()
                 .map(|expr| self.extract_zone_maps(expr))
@@ -334,6 +339,11 @@ impl PhysicalOperator for PhysicalScan {
                     // If all rows in this morsel are filtered out, skip to next morsel
                     if mask.false_count() == mask.len() {
                         continue;
+                    }
+
+                    // Track that filter was already checked — skip re-evaluation on full batch
+                    if mask.false_count() == 0 {
+                        filter_all_pass = true;
                     }
                 }
                 // Fall through to normal path — all columns will be scanned below.
@@ -420,7 +430,7 @@ impl PhysicalOperator for PhysicalScan {
             // Check has_modifications dynamically - it may change between plan creation and execution
             let has_modifications_now = self.table.columns[0].version_info.has_modifications();
             if has_modifications_now {
-                let mut visibility = Vec::with_capacity(batch.num_rows());
+                self.scratch_mask.clear();
 
                 if self.table.columns[0].name == "_id" {
                     let col = batch.column(0);
@@ -429,7 +439,7 @@ impl PhysicalOperator for PhysicalScan {
                             arr.values(),
                             tx.tx_id,
                             tx.read_ts,
-                            &mut visibility,
+                            &mut self.scratch_mask,
                         );
                     } else if let Some(arr) = col.as_any().downcast_ref::<Int64Array>() {
                         let row_ids: Vec<u64> = arr.values().iter().map(|&v| v as u64).collect();
@@ -437,7 +447,7 @@ impl PhysicalOperator for PhysicalScan {
                             &row_ids,
                             tx.tx_id,
                             tx.read_ts,
-                            &mut visibility,
+                            &mut self.scratch_mask,
                         );
                     }
                 } else {
@@ -448,12 +458,12 @@ impl PhysicalOperator for PhysicalScan {
                         &row_ids,
                         tx.tx_id,
                         tx.read_ts,
-                        &mut visibility,
+                        &mut self.scratch_mask,
                     );
                 }
 
-                let all_visible = visibility.iter().all(|&v| v);
-                let any_visible = visibility.iter().any(|&v| v);
+                let all_visible = self.scratch_mask.iter().all(|&v| v);
+                let any_visible = self.scratch_mask.iter().any(|&v| v);
 
                 if !all_visible {
                     if !any_visible {
@@ -461,7 +471,7 @@ impl PhysicalOperator for PhysicalScan {
                     }
                     batch = arrow::compute::filter_record_batch(
                         &batch,
-                        &BooleanArray::from(visibility),
+                        &BooleanArray::from(std::mem::take(&mut self.scratch_mask)),
                     )
                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                 }
@@ -544,36 +554,38 @@ impl PhysicalOperator for PhysicalScan {
                 continue;
             }
 
-            if let Some(ref filter_expr) = self.pushdown_filter {
-                let mask_result = crate::processor::evaluator::ExpressionEvaluator::evaluate(
-                    filter_expr,
-                    Some(&batch),
-                    params,
-                    batch.num_rows(),
-                    &database.function_registry,
-                    database,
-                );
-                match mask_result {
-                    Ok(mask_arr) => {
-                        let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "filter expression must evaluate to BooleanArray".into(),
-                            ))?;
+            if !filter_all_pass {
+                if let Some(ref filter_expr) = self.pushdown_filter {
+                    let mask_result = crate::processor::evaluator::ExpressionEvaluator::evaluate(
+                        filter_expr,
+                        Some(&batch),
+                        params,
+                        batch.num_rows(),
+                        &database.function_registry,
+                        database,
+                    );
+                    match mask_result {
+                        Ok(mask_arr) => {
+                            let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
+                                .ok_or_else(|| crate::LightningError::Internal(
+                                    "filter expression must evaluate to BooleanArray".into(),
+                                ))?;
 
-                        let set_bits = mask.values().count_set_bits();
-                        if set_bits == 0 {
-                            continue;
-                        }
+                            let set_bits = mask.values().count_set_bits();
+                            if set_bits == 0 {
+                                continue;
+                            }
 
-                        if mask.null_count() > 0 || set_bits != mask.len() {
-                            batch = arrow::compute::filter_record_batch(&batch, mask)
-                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                            if mask.null_count() > 0 || set_bits != mask.len() {
+                                batch = arrow::compute::filter_record_batch(&batch, mask)
+                                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                            }
                         }
-                    }
-                    Err(_) => {
-                        tracing::debug!(
-                            "Pushdown filter evaluation skipped (index mismatch — filter will be applied at join level)"
-                        );
+                        Err(_) => {
+                            tracing::debug!(
+                                "Pushdown filter evaluation skipped (index mismatch — filter will be applied at join level)"
+                            );
+                        }
                     }
                 }
             }
