@@ -208,7 +208,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
   - `DELETED_BIT = 1 << 63` masks the highest bit of adjacency values.
   - `delete_edge()` pushes to `pending_deletions: RwLock<Vec<(u64, u64)>>`.
   - `for_each_neighbor()` skips adjacency entries with `DELETED_BIT` set, and filters against `pending_deletions`.
-- [ ] **3.2.2** `[P1]` Wire into the Cypher DELETE path in `storage_manager.rs`: when a Relates row is deleted, call `CSRIndex::delete_edge()`.
+- [X] **3.2.2** `[P1]` Wire into the Cypher DELETE (detach) path in `dml.rs`: when a Relates row is deleted during DETACH DELETE, the forward and backward CSR indexes are notified via `delete_edge(from, to)` and `delete_edge(to, from)`.
 - [ ] **3.2.3** `[P1]` Add compaction that rebuilds the CSR when tombstone ratio exceeds a threshold (e.g., 25%).
 
 ### 3.3 Multi-Hop Expand CSR Usage in RAG
