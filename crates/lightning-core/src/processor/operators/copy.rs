@@ -17,19 +17,46 @@ use std::sync::Arc;
 
 fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
     let path = Path::new(file_path);
+
     if path.is_absolute() && base_dir.is_none() {
         return Err(LightningError::Config(
             "Absolute paths in COPY are disabled. Set copy_base_dir in SystemConfig to enable.".into()
         ));
     }
+
+    for component in path.components() {
+        if let Component::ParentDir = component {
+            return Err(LightningError::Config(format!(
+                "COPY path '{}' contains '..' traversal", file_path
+            )));
+        }
+    }
+
     let base = base_dir.unwrap_or(database_path);
     let resolved = base.join(path);
-    let canonical = resolved.canonicalize().map_err(|e| {
-        LightningError::Config(format!("Cannot resolve COPY path '{}': {}", file_path, e))
-    })?;
+
     let canonical_base = base.canonicalize().map_err(|e| {
-        LightningError::Config(format!("Cannot resolve base directory: {}", e))
+        LightningError::Config(format!("Cannot resolve base directory '{}': {}", base.display(), e))
     })?;
+
+    let parent = resolved.parent().ok_or_else(|| {
+        LightningError::Config(format!(
+            "Cannot determine parent directory for COPY path '{}'", file_path
+        ))
+    })?;
+    let file_name = resolved.file_name().ok_or_else(|| {
+        LightningError::Config(format!(
+            "Cannot determine filename for COPY path '{}'", file_path
+        ))
+    })?;
+
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        LightningError::Config(format!(
+            "Cannot resolve COPY path directory '{}': {}", file_path, e
+        ))
+    })?;
+    let canonical = canonical_parent.join(file_name);
+
     if !canonical.starts_with(&canonical_base) {
         return Err(LightningError::Config(format!(
             "COPY path '{}' escapes base directory '{}'",
@@ -37,13 +64,7 @@ fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&P
             canonical_base.display()
         )));
     }
-    for component in canonical.components() {
-        if let Component::ParentDir = component {
-            return Err(LightningError::Config(
-                format!("COPY path '{}' contains '..' traversal", file_path)
-            ));
-        }
-    }
+
     Ok(canonical)
 }
 
