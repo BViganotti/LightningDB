@@ -113,7 +113,10 @@ impl PhysicalOperator for PhysicalTopK {
                     ))
                 }
             } else {
+<<<<<<< HEAD
                 // Small N: full Arrow sort (existing path)
+=======
+>>>>>>> 5f6cd427 (perf: TOP-K use select_nth_unstable partial sort instead of full lexsort (P1))
                 let mut sort_columns = Vec::new();
                 for (item, arr) in self.order_by.iter().zip(sort_arrays.iter()) {
                     sort_columns.push(SortColumn {
