@@ -1094,12 +1094,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
-name = "levenshtein"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db13adb97ab515a3691f56e4dbab09283d0b86cb45abd991d8634a9d6f501760"
-
-[[package]]
 name = "levenshtein_automata"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1229,7 +1223,6 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "fixedbitset",
- "levenshtein",
  "lightning-arrow",
  "lightning-types",
  "log",
@@ -1250,7 +1243,6 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
- "uuid",
  "wasmi",
  "wat",
 ]

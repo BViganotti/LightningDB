@@ -182,7 +182,7 @@ pub extern "C" fn lightning_query_result_get_error_message(
     }
     let res = unsafe { &*(*query_result).query_result };
     if let Some(msg) = res.error_message() {
-        CString::new(msg).unwrap_or_else(|_| CString::new("error").unwrap()).into_raw()
+        CString::new(msg).unwrap_or_else(|_| CString::new("error").expect("infallible: 'error' has no null bytes")).into_raw()
     } else {
         std::ptr::null_mut()
     }

@@ -30,10 +30,8 @@ rayon.workspace = true
 crossbeam.workspace = true
 num_cpus.workspace = true
 regex = "1.10"
-uuid = { workspace = true }
 sha2 = { workspace = true }
 md-5 = { workspace = true }
-levenshtein = { workspace = true }
 crc32fast = { workspace = true }
 tantivy = "0.26.0"
 lru = "0.12.0"

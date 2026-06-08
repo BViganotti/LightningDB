@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 
 fn normalize_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"'[^']*'"#).unwrap())
+    RE.get_or_init(|| Regex::new(r#"'[^']*'"#).expect("infallible: valid regex pattern"))
 }
 
 fn normalize_query(query: &str) -> String {
@@ -419,7 +419,7 @@ impl Database {
             catalog,
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
-            plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap()))),
+            plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).expect("infallible: 1024 > 0")))),
             metrics: DatabaseMetrics::new(),
 
             vacuum_handle: Some(vacuum_handle),
