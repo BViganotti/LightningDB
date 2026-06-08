@@ -4,11 +4,68 @@ use crate::Result;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::io::Write;
 
 /// Bitmask for the highest bit of a u64 adjacency value.
 /// When set, the adjacency entry is a tombstone (deleted edge).
 /// Node IDs are expected to be < 2^63, so this bit is safe to use.
 const DELETED_BIT: u64 = 1 << 63;
+
+/// Size of the CSR format safety header in bytes.
+const CSR_HEADER_SIZE: usize = 12;
+
+/// Magic bytes for the CSR offset file.
+const CSR_OFFSET_MAGIC: [u8; 4] = *b"CSRO";
+/// Magic bytes for the CSR adjacency file.
+const CSR_ADJ_MAGIC: [u8; 4] = *b"CSRA";
+/// Current CSR format version.
+const CSR_VERSION: u8 = 0x01;
+
+/// Write the CSR format header into a byte buffer at offset 0.
+/// Header layout: 4B magic, 1B version, 3B reserved, 4B CRC32.
+fn write_csr_header(buf: &mut [u8; PAGE_SIZE], magic: [u8; 4]) {
+    buf[..4].copy_from_slice(&magic);
+    buf[4] = CSR_VERSION;
+    // bytes 5-7: reserved (zeroed)
+    // bytes 8-11: CRC32 of bytes 0-7 (simple checksum for the header itself)
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(&buf[..8]);
+    let checksum = crc.finalize();
+    buf[8..12].copy_from_slice(&checksum.to_le_bytes());
+}
+
+/// Validate the CSR format header from a byte buffer.
+/// Returns Ok(()) if valid, Err with description if invalid.
+fn validate_csr_header(buf: &[u8; PAGE_SIZE], expected_magic: [u8; 4]) -> Result<()> {
+    if buf[..4] != expected_magic {
+        let got = &buf[..4];
+        return Err(crate::LightningError::Internal(format!(
+            "CSR file has invalid magic: expected {:?}, got {:?}",
+            std::str::from_utf8(&expected_magic).unwrap_or("??"),
+            std::str::from_utf8(got).unwrap_or("??"),
+        )));
+    }
+    if buf[4] != CSR_VERSION {
+        return Err(crate::LightningError::Internal(format!(
+            "CSR file has unsupported version {}. Expected {}",
+            buf[4], CSR_VERSION
+        )));
+    }
+    let stored_crc = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(&buf[..8]);
+    if crc.finalize() != stored_crc {
+        return Err(crate::LightningError::Internal(
+            "CSR header checksum mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Compute the byte offset for a node_id's offset entry, accounting for the header.
+fn csr_offset_byte(node_id: u64) -> u64 {
+    (CSR_HEADER_SIZE as u64) + node_id * 8
+}
 
 pub struct CSRIndex {
     pub(crate) offset_fh: Arc<FileHandle>,
@@ -115,15 +172,33 @@ impl CSRIndex {
             return Ok(Vec::new());
         }
 
-        // Read all offsets
-        let max_nodes = (num_offset_pages * PAGE_SIZE as u64) / 8;
+        // Validate offset file header
+        let header_frame = bm.pin_page(self.offset_fh.clone(), 0, tx)?;
+        let mut header_buf = [0u8; PAGE_SIZE];
+        header_buf.copy_from_slice(header_frame.as_slice());
+        validate_csr_header(&header_buf, CSR_OFFSET_MAGIC)?;
+
+        // Validate adjacency file header if it has pages
+        if self.adj_node_fh.get_num_pages() > 0 {
+            let adj_header = bm.pin_page(self.adj_node_fh.clone(), 0, tx)?;
+            let mut adj_buf = [0u8; PAGE_SIZE];
+            adj_buf.copy_from_slice(adj_header.as_slice());
+            validate_csr_header(&adj_buf, CSR_ADJ_MAGIC)?;
+        }
+
+        // Read all offsets using header-aware positions
+        let data_bytes_per_page = PAGE_SIZE as u64;
+        let max_nodes = ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
         let mut offsets = vec![0u64; (max_nodes + 1) as usize];
         for i in 0..=max_nodes as usize {
-            let page_idx = (i as u64 * 8) / PAGE_SIZE as u64;
+            let byte_pos = csr_offset_byte(i as u64);
+            let page_idx = byte_pos / data_bytes_per_page;
             if page_idx >= self.offset_fh.get_num_pages() {
                 break;
             }
-            let offset_in_page = (i as u64 * 8) % PAGE_SIZE as u64;
+            let offset_in_page = byte_pos % data_bytes_per_page;
+            // Need to pin the page. We can't borrow self.offset_fh in the loop
+            // because we'd re-borrow. Let's read the frame data directly.
             let frame = bm.pin_page(self.offset_fh.clone(), page_idx, tx)?;
             offsets[i] = u64::from_le_bytes(
                 frame.as_slice()[offset_in_page as usize..offset_in_page as usize + 8]
@@ -145,18 +220,19 @@ impl CSRIndex {
             return Ok(Vec::new());
         }
 
-        // Read all adjacency values and pair with src nodes via offsets
+        // Read all adjacency values using header-aware positions
         let mut adj_values = Vec::with_capacity(total_adj as usize);
         let mut adj_idx = 0u64;
         while adj_idx < total_adj {
-            let page_idx = (adj_idx * 8) / PAGE_SIZE as u64;
-            let offset_in_page = (adj_idx * 8) % PAGE_SIZE as u64;
+            let adj_byte = (CSR_HEADER_SIZE as u64) + adj_idx * 8;
+            let page_idx = adj_byte / PAGE_SIZE as u64;
+            let offset_in_page = adj_byte % PAGE_SIZE as u64;
             if page_idx >= self.adj_node_fh.get_num_pages() {
                 break;
             }
             let frame = bm.pin_page(self.adj_node_fh.clone(), page_idx, tx)?;
-            let remaining = (PAGE_SIZE as u64 - offset_in_page) / 8;
-            let to_read = std::cmp::min(total_adj - adj_idx, remaining) as usize;
+            let remaining_in_page = (PAGE_SIZE as u64 - offset_in_page) / 8;
+            let to_read = std::cmp::min(total_adj - adj_idx, remaining_in_page) as usize;
 
             for j in 0..to_read {
                 let off = (offset_in_page as usize) + (j * 8);
@@ -213,15 +289,17 @@ impl CSRIndex {
     where
         F: FnMut(u64),
     {
-        let start_page = (node_id * 8) / PAGE_SIZE as u64;
-        let start_offset_in_page = (node_id * 8) % PAGE_SIZE as u64;
+        let byte_pos = csr_offset_byte(node_id);
+        let start_page = byte_pos / PAGE_SIZE as u64;
+        let start_offset_in_page = byte_pos % PAGE_SIZE as u64;
         if start_page >= self.offset_fh.get_num_pages() {
             return Ok(());
         }
 
         let end_node_id = node_id + 1;
-        let end_page = (end_node_id * 8) / PAGE_SIZE as u64;
-        let end_offset_in_page = (end_node_id * 8) % PAGE_SIZE as u64;
+        let end_byte_pos = csr_offset_byte(end_node_id);
+        let end_page = end_byte_pos / PAGE_SIZE as u64;
+        let end_offset_in_page = end_byte_pos % PAGE_SIZE as u64;
 
         let (start, end) = {
             let start_frame = bm.pin_page(self.offset_fh.clone(), start_page, tx)?;
@@ -260,8 +338,9 @@ impl CSRIndex {
 
         let mut i = start;
         while i < end {
-            let adj_page = (i * 8) / PAGE_SIZE as u64;
-            let adj_offset_in_page = (i * 8) % PAGE_SIZE as u64;
+            let adj_byte = (CSR_HEADER_SIZE as u64) + i * 8;
+            let adj_page = adj_byte / PAGE_SIZE as u64;
+            let adj_offset_in_page = adj_byte % PAGE_SIZE as u64;
             let adj_frame = bm.pin_page(self.adj_node_fh.clone(), adj_page, tx)?;
 
             let remaining_in_page = (PAGE_SIZE as u64 - adj_offset_in_page) / 8;
@@ -341,9 +420,28 @@ impl CSRIndex {
             offsets[i] += offsets[i - 1];
         }
 
+        // Write offset file header + data
+        // Ensure page 0 exists for the header
+        while offset_fh.get_num_pages() == 0 {
+            offset_fh.add_new_page()?;
+        }
+        let header_frame = bm.create_new_version(offset_fh.clone(), 0, tx)?;
+        let mut header_buf = [0u8; PAGE_SIZE];
+        // Preserve existing data on page 0 beyond the header
+        header_buf.copy_from_slice(header_frame.as_slice());
+        write_csr_header(&mut header_buf, CSR_OFFSET_MAGIC);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                header_buf.as_ptr(),
+                header_frame.as_ptr(),
+                PAGE_SIZE,
+            );
+        }
+
         for (i, &val) in offsets.iter().enumerate() {
-            let page_idx = (i as u64 * 8) / PAGE_SIZE as u64;
-            let offset_in_page = (i as u64 * 8) % PAGE_SIZE as u64;
+            let byte_pos = csr_offset_byte(i as u64);
+            let page_idx = byte_pos / PAGE_SIZE as u64;
+            let offset_in_page = byte_pos % PAGE_SIZE as u64;
             while offset_fh.get_num_pages() <= page_idx {
                 offset_fh.add_new_page()?;
             }
@@ -358,9 +456,26 @@ impl CSRIndex {
             }
         }
 
+        // Write adjacency file header + data
+        while adj_node_fh.get_num_pages() == 0 {
+            adj_node_fh.add_new_page()?;
+        }
+        let adj_header_frame = bm.create_new_version(adj_node_fh.clone(), 0, tx)?;
+        let mut adj_header_buf = [0u8; PAGE_SIZE];
+        adj_header_buf.copy_from_slice(adj_header_frame.as_slice());
+        write_csr_header(&mut adj_header_buf, CSR_ADJ_MAGIC);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                adj_header_buf.as_ptr(),
+                adj_header_frame.as_ptr(),
+                PAGE_SIZE,
+            );
+        }
+
         for (i, &(_, dst)) in sorted_edges.iter().enumerate() {
-            let page_idx = (i as u64 * 8) / PAGE_SIZE as u64;
-            let offset_in_page = (i as u64 * 8) % PAGE_SIZE as u64;
+            let adj_byte = (CSR_HEADER_SIZE as u64) + (i as u64 * 8);
+            let page_idx = adj_byte / PAGE_SIZE as u64;
+            let offset_in_page = adj_byte % PAGE_SIZE as u64;
             while adj_node_fh.get_num_pages() <= page_idx {
                 adj_node_fh.add_new_page()?;
             }
