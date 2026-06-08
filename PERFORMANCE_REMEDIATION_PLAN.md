@@ -235,7 +235,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `Float64Array::from_value(*n, num_rows)` allocates a full array of N identical values for every literal in a filter. For `WHERE age > 25` on 1M rows: a 1M-element array of `25.0` is allocated. With 5 literals: 5 arrays = ~40MB.
 
-- [ ] **6.2.1** `[P1]` Use Arrow scalar comparison kernels that accept a literal value directly. `arrow::compute::kernels::cmp::gt(l, Scalar::from(25.0))` avoids the expansion.
+- [X] **6.2.1** `[P1]` Use Arrow scalar comparison kernels that accept a literal value directly. `arrow::compute::kernels::cmp::gt(l, Scalar::from(25.0))` avoids the expansion.
 
 **Impact**: Each filter literal causes O(num_rows) memory allocation and copying.
 
@@ -289,7 +289,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: O(total_slots) work for a simple counter.
 
-- [ ] **7.5.1** `[P3]` Maintain an `AtomicU64 dirty_count`. Increment on dirty set, decrement on dirty clear.
+- [X] **7.5.1** `[P3]` Maintain an `AtomicU64 dirty_count`. Increment on dirty set, decrement on dirty clear.
 
 ---
 
@@ -335,7 +335,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Each optimizer rule runs exactly once in order. If filter pushdown enables new projection pushdown opportunities (or vice versa), they're missed. No fixed-point iteration.
 
-- [ ] **9.1.1** `[P2]` Run optimizer rules to a fixed point (max 3-5 iterations). Track plan changes by comparing node counts before/after each pass.
+- [X] **9.1.1** `[P2]` Run optimizer rules to a fixed point (max 3-5 iterations). Track plan changes by comparing node counts before/after each pass.
 
 **Impact**: Suboptimal query plans for complex queries. Could be 2-10× slower than optimal.
 
@@ -374,7 +374,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `normalize_query()` is called on every query even for cache misses, allocating a new String.
 
-- [ ] **10.2.1** `[P3]` Only normalize when inserting into the plan cache. Use a hash-based lookup for the fast path.
+- [X] **10.2.1** `[P3]` Only normalize when inserting into the plan cache. Use a hash-based lookup for the fast path.
 
 ### 10.3 Binder Creates Fresh HashMap Lookups Per Property Access
 
@@ -566,7 +566,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Called per FTS/vector result (line 276) and per neighbor in rag_query (lines 458-464). Each call traverses the full parse→bind→plan→execute pipeline.
 
-- [ ] **16.3.1** `[P2]` Batch lookups in a single `WHERE e._id IN [...]` query. Or maintain a temporary HashMap from `_id` to entity for the duration of the recall.
+- [X] **16.3.1** `[P2]` Batch lookups in a single `WHERE e._id IN [...]` query. Or maintain a temporary HashMap from `_id` to entity for the duration of the recall.
 
 ### 16.4 rag_query Scans Entire Relates Table for Expansion
 
