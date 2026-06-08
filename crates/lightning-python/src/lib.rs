@@ -374,8 +374,8 @@ impl PyMemoryStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as i64)
             .unwrap_or(0);
-        let rust_entities: Vec<MemoryEntity> = entities.into_iter().map(|py_entity| {
-            Python::with_gil(|py| {
+        let rust_entities: Vec<MemoryEntity> = Python::with_gil(|py| {
+            entities.into_iter().map(|py_entity| {
                 let dict = py_entity.downcast_bound::<PyDict>(py)
                     .map_err(|_| PyRuntimeError::new_err("store_batch: each item must be a dict"))?;
                 let meta = extract_str(&dict, "metadata");
@@ -392,8 +392,8 @@ impl PyMemoryStore {
                     valid_until: extract_i64(&dict, "valid_until", 0),
                     embedding: extract_embedding(&dict, "embedding"),
                 })
-            })
-        }).collect::<PyResult<Vec<MemoryEntity>>>()?;
+            }).collect::<PyResult<Vec<MemoryEntity>>>()
+        })?;
         self.inner.store_batch(rust_entities).map_err(to_py_err)
     }
 }
