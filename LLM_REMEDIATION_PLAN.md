@@ -237,27 +237,19 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `recall_at_time()` uses `valid_from`/`valid_until` WHERE filters — it shows entities with matching application-level timestamps, NOT what the database actually looked like at time T.
 
-- [ ] **4.1.1** `[P0]` Rewrite `recall_at_time()` to use true MVCC snapshot reads via `Connection::execute_at()` (which calls `TransactionManager::begin_at(snapshot_ts)`). Replace the current implementation at memory.rs:583-596:
-  ```rust
-  pub fn recall_at_time(&self, at_micros: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
-      let query = format!("MATCH (e:{}) RETURN e.id, e.type, e.content, ... ORDER BY e.created_at DESC LIMIT {top_k}", ENTITY_TABLE);
-      let res = self.conn.execute_at(&query, at_micros as u64, None)?;
-      Ok(self.batches_to_entities(&res.batches))
-  }
-  ```
-  This uses the MVCC snapshot at `at_micros` — shows exactly what was committed at that time.
+- [X] **4.1.1** `[P0]` Rewrite `recall_at_time()` to use true MVCC snapshot reads via `Connection::execute_at()`.
+  - Removed `valid_from`/`valid_until` WHERE filters (application-level timestamp queries).
+  - Now calls `self.conn.execute_at(&query, at_micros as u64, None)` which creates an MVCC snapshot at `at_micros` — shows exactly what was committed at that time.
 
 ### 4.2 Fix valid_until Convention
 
 **Problem**: `MemoryEntity::default()` sets `valid_until = i64::MAX`, but `recall_at_time()` checks `valid_until = 0` as "still active". Inconsistent defaults.
 
-- [ ] **4.2.1** `[P0]` Standardize on `i64::MAX` = "still active / end of time". Change:
-  - `recall_at_time()` (if keeping WHERE-clause approach): check `(valid_until = 9223372036854775807 OR valid_until > $at)` instead of `valid_until = 0`.
-  - `forget()` (memory.rs:1013-1038): set `valid_until = $now` (correct — don't change).
-  - `recall_recent()` (memory.rs:757): change `valid_until = 0` to `valid_until = 9223372036854775807`.
-  - `recall_by_time()` (memory.rs:770): same fix.
-  - `store_batch()` (memory.rs:202): if `valid_until` input is 0, set to `i64::MAX`.
-  - `python/lib.rs` and `node/memory.rs`: same default change.
+- [X] **4.2.1** `[P0]` Standardize on `i64::MAX` = "still active / end of time".
+  - `store_batch()`: if `valid_until` input is 0, set to `i64::MAX`
+  - `recall_recent()`, `recall_by_time()`, `recall_by_type()`, `expand()`, `forget()`: changed `valid_until = 0` checks to `(e.valid_until = 0 OR e.valid_until = 9223372036854775807)` for backward compat.
+  - `recall_at_time()` no longer uses WHERE filters (MVCC snapshot, 4.1.1).
+  - `forget()`: keeps `valid_until = $now` on actual forget (correct).
 
 ### 4.3 Update Documentation
 

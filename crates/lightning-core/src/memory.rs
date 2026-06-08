@@ -199,7 +199,7 @@ impl MemoryStore {
             ttl_seconds.push(e.ttl_seconds);
             metadatas.push(e.metadata.clone());
             valid_from.push(e.valid_from.max(now));
-            valid_until.push(if e.valid_until == 0 { 0i64 } else { e.valid_until });
+            valid_until.push(if e.valid_until == 0 { i64::MAX } else { e.valid_until });
         }
 
         let emb_dim = self.embedding_dim;
@@ -521,7 +521,7 @@ impl MemoryStore {
     pub fn recall_by_type(&self, entity_type: &str, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.type = $type AND e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.type = $type AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
@@ -542,15 +542,13 @@ impl MemoryStore {
     pub fn recall_at_time(&self, at_micros: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_from <= $at AND (e.valid_until = 0 OR e.valid_until > $at) \
+            "MATCH (e:{ENTITY_TABLE}) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
              ORDER BY e.last_accessed DESC LIMIT {top_k}"
         );
-        let mut params = HashMap::new();
-        params.insert("at".to_string(), Value::Number(at_micros as f64));
-        let res = self.conn.execute(&query, Some(params))?;
+        let res = self.conn.execute_at(&query, at_micros as u64, None)?;
         Ok(self.batches_to_entities(&res.batches))
     }
 
@@ -716,7 +714,7 @@ impl MemoryStore {
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
@@ -729,7 +727,7 @@ impl MemoryStore {
     pub fn recall_by_time(&self, start: i64, end: i64, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_from >= $start AND e.valid_from <= $end AND e.valid_until = 0 \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.valid_from >= $start AND e.valid_from <= $end AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
@@ -895,7 +893,7 @@ impl MemoryStore {
             .map(|id| format!("e._id = {id}"))
             .collect();
         let query = format!(
-            "MATCH (e:{}) WHERE {} AND e.valid_until = 0 \
+            "MATCH (e:{}) WHERE {} AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until LIMIT {}",
@@ -1006,7 +1004,7 @@ impl MemoryStore {
 
         // First find expired entities
         let find = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.ttl_seconds > 0 AND e.valid_until = 0 AND \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.ttl_seconds > 0 AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) AND \
              (e.created_at / 1000000 + e.ttl_seconds) <= $now \
              RETURN e.id"
         );
