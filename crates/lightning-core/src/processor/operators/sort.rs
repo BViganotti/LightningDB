@@ -5,7 +5,7 @@ use crate::Result;
 
 use arrow::compute::{lexsort_to_indices, take, SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -21,6 +21,7 @@ pub struct PhysicalSort {
     child: Box<dyn PhysicalOperator>,
     order_by: Vec<BoundOrderByItem>,
     shared: Arc<RwLock<SharedSort>>,
+    sort_done: Arc<(Mutex<bool>, Condvar)>,
     collected: bool,
 }
 
@@ -35,6 +36,7 @@ impl PhysicalSort {
                 num_active_collectors: AtomicUsize::new(0),
                 results_returned: AtomicUsize::new(0),
             })),
+            sort_done: Arc::new((Mutex::new(false), Condvar::new())),
             collected: false,
         }
     }
@@ -119,6 +121,9 @@ impl PhysicalSort {
 
                 shared.sorted_result = Some(result);
                 shared.batches.clear(); // Free memory
+                let (ref lock, ref cvar) = &*self.sort_done;
+                *lock.lock() = true;
+                cvar.notify_all();
             }
         }
 
@@ -139,12 +144,15 @@ impl PhysicalOperator for PhysicalSort {
         }
 
         loop {
-            let shared = self.shared.read();
-            if shared.num_active_collectors.load(Ordering::SeqCst) > 0 {
-                drop(shared);
-                std::thread::yield_now();
-                continue;
+            // Wait for sort to complete (last collector signals via Condvar)
+            let (ref lock, ref cvar) = &*self.sort_done;
+            let mut done = lock.lock();
+            while !*done {
+                cvar.wait(&mut done);
             }
+            drop(done);
+
+            let shared = self.shared.read();
 
             if let Some(ref result) = shared.sorted_result {
                 let start = shared.results_returned.load(Ordering::SeqCst);
@@ -175,6 +183,7 @@ impl PhysicalOperator for PhysicalSort {
             child: self.child.clone_box(),
             order_by: self.order_by.clone(),
             shared: self.shared.clone(),
+            sort_done: self.sort_done.clone(),
             collected: false,
         })
     }
