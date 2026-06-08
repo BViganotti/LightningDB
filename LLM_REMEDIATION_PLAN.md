@@ -372,12 +372,12 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 8.3 Better Context Assembly
 
-- [ ] **8.3.1** `[P1]` Add deduplication of near-duplicate sources, relevance highlighting, token-count awareness with `max_context_tokens` config.
-- [ ] **8.3.2** `[P1]` Return structured source info alongside context: each source's score, type, and excerpt.
+- [X] **8.3.1** `[P1]` Add deduplication (content hash), token-count awareness with `max_context_tokens` config, and context truncation.
+- [X] **8.3.2** `[P1]` Return structured `source_details: Vec<SourceDetail>` with score, type, and excerpt alongside context.
 
 ### 8.4 Error Propagation
 
-- [ ] **8.4.1** `[P1]` Collect warnings and return alongside result (same pattern as 7.5.1).
+- [X] **8.4.1** `[P1]` Collect warnings during context assembly (e.g., context truncation) and return in `RagResult.warnings`.
 
 ---
 

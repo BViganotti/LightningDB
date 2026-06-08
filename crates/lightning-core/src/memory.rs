@@ -26,6 +26,9 @@ pub struct RagConfig {
     pub degree_weight: f64,
     /// Name of a WASM function to use as a cross-encoder reranker.
     pub cross_encoder_wasm: String,
+    /// Maximum tokens (approximate) for the assembled context.
+    /// Context is truncated to this limit to fit LLM windows.
+    pub max_context_tokens: usize,
 }
 
 impl Default for RagConfig {
@@ -36,6 +39,7 @@ impl Default for RagConfig {
             recency_weight: 0.3,
             degree_weight: 0.0,
             cross_encoder_wasm: String::new(),
+            max_context_tokens: 4096,
         }
     }
 }
@@ -481,25 +485,72 @@ impl MemoryStore {
             ranked = re_ranked;
         }
 
-        // Phase 6: Assemble context
+        // Phase 6: Assemble context with deduplication and token-aware truncation
         let top_n = std::cmp::min(top_k * 2, ranked.len());
-        let used = &ranked[..top_n];
-        let sources: Vec<String> = used.iter().map(|(e, _)| e.id.clone()).collect();
+        let mut sources: Vec<String> = Vec::new();
+        let mut source_details: Vec<SourceDetail> = Vec::new();
         let mut context = String::new();
         context.push_str(&format!("Query: {query_text}\n\nRelevant context:\n"));
-        for (i, (entity, score)) in used.iter().enumerate() {
-            context.push_str(&format!(
+
+        let mut seen_content: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let max_chars = config.max_context_tokens * 4;
+        let prefix_len = context.len();
+        let suffix_overhead = 50;
+        let available = max_chars.saturating_sub(prefix_len + suffix_overhead);
+
+        let mut char_count = 0usize;
+        let mut warnings: Vec<String> = Vec::new();
+
+        for (i, (entity, score)) in ranked.iter().enumerate().take(top_n) {
+            use std::hash::Hash;
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            entity.content.hash(&mut h);
+            let content_hash = h.finish();
+            if !seen_content.insert(content_hash) {
+                continue;
+            }
+
+            let entry = format!(
                 "[{}] (score={:.3}, type={}) {}\n",
-                i + 1, score, entity.entity_type, entity.content
-            ));
+                sources.len() + 1, score, entity.entity_type, entity.content
+            );
+
+            if available > 0 && char_count + entry.len() > available {
+                warnings.push(format!(
+                    "Context truncated at {}/{} sources (token budget: {})",
+                    sources.len(), top_n, config.max_context_tokens
+                ));
+                break;
+            }
+
+            context.push_str(&entry);
+            char_count += entry.len();
+            sources.push(entity.id.clone());
+            source_details.push(SourceDetail {
+                id: entity.id.clone(),
+                score: *score,
+                entity_type: entity.entity_type.clone(),
+                excerpt: entity.content.chars().take(120).collect(),
+            });
         }
-        context.push_str(&format!("\n---\nTotal sources: {top_n}"));
+
+        if sources.is_empty() {
+            context.push_str("(no relevant sources found)");
+        }
+
+        let total_sources = sources.len();
+        context.push_str(&format!(
+            "\n---\nTotal sources: {total_sources}",
+        ));
 
         Ok(RagResult {
             context,
             sources,
-            total_sources: top_n,
+            total_sources,
             query: query_text.to_string(),
+            source_details,
+            warnings,
         })
     }
 
@@ -1195,4 +1246,16 @@ pub struct RagResult {
     pub sources: Vec<String>,
     pub total_sources: usize,
     pub query: String,
+    /// Structured source info: each entry has score, entity_type, and excerpt.
+    pub source_details: Vec<SourceDetail>,
+    /// Non-fatal warnings collected during RAG query execution.
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceDetail {
+    pub id: String,
+    pub score: f64,
+    pub entity_type: String,
+    pub excerpt: String,
 }
