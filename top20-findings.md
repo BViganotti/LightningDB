@@ -5,7 +5,7 @@
 
 ---
 
-## FIXED (4 items)
+## FIXED (10 items)
 
 | # | Issue | File(s) | Commit |
 |---|-------|---------|--------|
@@ -13,10 +13,16 @@
 | 2 | VectorIndex delete swap-to-same-page data loss (two `create_new_version` calls on same page) | `vector_index.rs` | `bedc984` |
 | 3 | HashIndex serialization missing Relationship, Date, Timestamp types | `hash_index.rs` | `27823de` |
 | 4 | Python bindings: embeddings computed but never stored (LangChain, LlamaIndex, `__init__`) | `python/` | `a4ec796` |
+| 5 | IndexScan logical operator not handled by physical planner (C2) | `physical_plan.rs` | `55d865e` |
+| 6 | DELETE operator never processes rows (C1) — null `_id` filter in scan | `scan.rs`, `dml.rs` | `55d865e` |
+| 7 | Swallowed error in vector index `insert_batch` (H6 partial) | `lib.rs` | `9bd3272` |
+| 8 | RAG degree metric counts set size instead of graph edges (H3) | `memory.rs` | `63cc082` / `450c6a3` |
+| 9 | Python `recall()` hardcodes `&[]` embedding (M3) | `lightning-python/src/lib.rs` | `450c6a3` |
+| 10 | Python `expand()` hardcodes `&["Relates"]` edge types (M4) | `lightning-python/src/lib.rs` | `450c6a3` |
 
 ---
 
-## REMAINING (16 items)
+## REMAINING (9 items)
 
 ### CRITICAL
 
@@ -128,7 +134,7 @@
 
 | Severity | Fixed | Remaining |
 |----------|-------|-----------|
-| CRITICAL | 3 | 4 |
-| HIGH | 1 | 6 |
-| MEDIUM | 0 | 5 |
-| **Total** | **4** | **15** |
+| CRITICAL | 3 | 2 |
+| HIGH | 4 | 4 |
+| MEDIUM | 3 | 3 |
+| **Total** | **10** | **9** |
