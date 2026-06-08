@@ -1209,14 +1209,20 @@ impl Connection {
         self.client_context.database.metrics.record_query();
 
         let active_tx_guard = self.transaction.lock();
-        let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
-        let is_autocommit = explicit_tx.is_none();
+        if active_tx_guard.is_some() {
+            drop(active_tx_guard);
+            return Err(LightningError::Query(
+                "execute_at cannot be used inside an explicit transaction; \
+                 the snapshot timestamp would conflict with the transaction's read timestamp".into()
+            ));
+        }
+        let is_autocommit = true;
         drop(active_tx_guard);
 
         let (physical_plan, tx) = self.build_physical_plan(
             query_str,
             Some(snapshot_ts),
-            explicit_tx,
+            None,
         )?;
         let mut processor = Processor::new(physical_plan);
         let chunks = processor.execute(
