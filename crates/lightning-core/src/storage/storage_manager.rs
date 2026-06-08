@@ -22,7 +22,8 @@ use std::sync::Arc;
 const DEFAULT_WRITE_BUFFER_THRESHOLD: usize = 200;
 
 struct WriteBuffer {
-    rows: Vec<Vec<Value>>,
+    /// Column-oriented buffer: columns[col_idx] = Vec of values for that column.
+    columns: Vec<Vec<Value>>,
     row_ids: Vec<u64>,
     size_bytes: usize,
 }
@@ -71,8 +72,13 @@ impl Table {
     fn ensure_buffer(&self) {
         let mut guard = self.write_buffer.write();
         if guard.is_none() {
+            let num_cols = self.columns.len();
+            let mut columns = Vec::with_capacity(num_cols);
+            for _ in 0..num_cols {
+                columns.push(Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD));
+            }
             *guard = Some(WriteBuffer {
-                rows: Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD),
+                columns,
                 row_ids: Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD),
                 size_bytes: 0,
             });
@@ -80,45 +86,46 @@ impl Table {
     }
 
     fn flush_buffer(&self, bm: &BufferManager, tx: &Transaction) -> Result<()> {
-        let (rows, row_ids) = {
+        let (columns, row_ids) = {
             let mut guard = self.write_buffer.write();
             if let Some(ref mut wb) = *guard {
-                if wb.rows.is_empty() {
+                if wb.columns.is_empty() || wb.columns[0].is_empty() {
                     return Ok(());
                 }
                 let row_ids = wb.row_ids.clone();
-                let rows = std::mem::take(&mut wb.rows);
+                let columns = std::mem::take(&mut wb.columns);
                 let _ = std::mem::take(&mut wb.row_ids);
                 wb.size_bytes = 0;
-                (rows, row_ids)
+                // Re-initialize column vecs for next batch
+                let num_cols = self.columns.len();
+                for _ in 0..num_cols {
+                    wb.columns.push(Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD));
+                }
+                (columns, row_ids)
             } else {
                 return Ok(());
             }
         };
 
-        if rows.is_empty() {
+        if columns.is_empty() || columns[0].is_empty() {
             return Ok(());
         }
 
-        let num_rows = rows.len();
+        let num_rows = columns[0].len();
         let start_id = row_ids[0];
 
-        // Phase 1.1: Convert Vec<Vec<Value>> to Arrow arrays
+        // Phase 1.1: Convert column-oriented buffer to Arrow arrays
         let num_cols = self.columns.len();
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(num_cols);
 
         for col_idx in 0..num_cols {
             let col = &self.columns[col_idx];
+            let col_values = &columns[col_idx];
             let arr: ArrayRef = match col.data_type {
                 LogicalType::String => {
                     let mut builder =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::String(s) => builder.append_value(s),
                             _ => builder.append_null(),
@@ -131,12 +138,7 @@ impl Table {
                 | LogicalType::Int16
                 | LogicalType::Int8 => {
                     let mut builder = arrow::array::Int64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Number(n) => builder.append_value(*n as i64),
                             _ => builder.append_null(),
@@ -146,12 +148,7 @@ impl Table {
                 }
                 LogicalType::Double | LogicalType::Float => {
                     let mut builder = arrow::array::Float64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Number(n) => builder.append_value(*n),
                             _ => builder.append_null(),
@@ -161,12 +158,7 @@ impl Table {
                 }
                 LogicalType::Bool => {
                     let mut builder = arrow::array::BooleanBuilder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Boolean(b) => builder.append_value(*b),
                             _ => builder.append_null(),
@@ -176,12 +168,7 @@ impl Table {
                 }
                 LogicalType::Node(_) => {
                     let mut builder = arrow::array::UInt64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Node(id) => builder.append_value(*id),
                             _ => builder.append_null(),
@@ -191,12 +178,7 @@ impl Table {
                 }
                 LogicalType::Rel(_) => {
                     let mut builder = arrow::array::UInt64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Relationship(id) => builder.append_value(*id),
                             _ => builder.append_null(),
@@ -209,12 +191,7 @@ impl Table {
                 | LogicalType::Uint16
                 | LogicalType::Uint8 => {
                     let mut builder = arrow::array::UInt64Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Node(id) => builder.append_value(*id),
                             Value::Number(n) => builder.append_value(*n as u64),
@@ -225,12 +202,7 @@ impl Table {
                 }
                 LogicalType::Date => {
                     let mut builder = arrow::array::Date32Builder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Date(d) => builder.append_value(*d),
                             _ => builder.append_null(),
@@ -241,12 +213,7 @@ impl Table {
                 LogicalType::Timestamp => {
                     let mut builder =
                         arrow::array::TimestampMicrosecondBuilder::with_capacity(num_rows);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         match val {
                             Value::Timestamp(t) => builder.append_value(*t),
                             _ => builder.append_null(),
@@ -257,12 +224,7 @@ impl Table {
                 _ => {
                     let mut builder =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row in &rows {
-                        let val = if col_idx < row.len() {
-                            &row[col_idx]
-                        } else {
-                            &Value::Null
-                        };
+                    for val in col_values {
                         builder.append_value(val.to_string());
                     }
                     Arc::new(builder.finish())
@@ -323,15 +285,16 @@ impl Table {
         let should_flush = {
             let mut guard = self.write_buffer.write();
             if let Some(ref mut wb) = *guard {
-                let row_copy = values.to_vec();
-                for val in &row_copy {
-                    if let Value::String(ref s) = val {
-                        wb.size_bytes += s.len();
+                for (col_idx, val) in values.iter().enumerate() {
+                    if col_idx < wb.columns.len() {
+                        if let Value::String(ref s) = val {
+                            wb.size_bytes += s.len();
+                        }
+                        wb.columns[col_idx].push(val.clone());
                     }
                 }
-                wb.rows.push(row_copy);
                 wb.row_ids.push(next_id);
-                wb.rows.len() >= DEFAULT_WRITE_BUFFER_THRESHOLD
+                wb.columns.first().map(|c| c.len()).unwrap_or(0) >= DEFAULT_WRITE_BUFFER_THRESHOLD
             } else {
                 false
             }
@@ -949,7 +912,7 @@ impl StorageManager {
             .chain(self.rel_tables.values())
             .any(|table| {
                 let guard = table.write_buffer.read();
-                matches!(&*guard, Some(ref wb) if !wb.rows.is_empty())
+                matches!(&*guard, Some(ref wb) if wb.columns.first().map(|c| !c.is_empty()).unwrap_or(false))
             });
 
         if any_pending {
