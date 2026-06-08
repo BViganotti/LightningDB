@@ -340,7 +340,7 @@ impl JsMemoryStore {
     pub async fn consolidate(&self) -> napi::Result<JsConsolidationReport> {
         let inner = self.inner.clone();
 
-        tokio::task::spawn_blocking(move || inner.consolidate())
+        tokio::task::spawn_blocking(move || inner.consolidate(None))
             .await
             .map_err(|e| napi::Error::from_reason(format!("Task failed: {}", e)))?
             .map(JsConsolidationReport::from)

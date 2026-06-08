@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. MEMORY CONSOLIDATION: auto-link, contradictions, PageRank
     // ================================================================
     println!("▶ CONSOLIDATION: auto-link related memories");
-    let report = memory.consolidate()?;
+    let report = memory.consolidate(None)?;
     println!("  Links created: {}", report.links_created);
     println!("  Contradictions found: {}", report.contradictions_found);
     println!("  Total entities processed: {}", report.total_entities);

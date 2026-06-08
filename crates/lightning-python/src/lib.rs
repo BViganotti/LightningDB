@@ -317,7 +317,7 @@ impl PyMemoryStore {
     }
 
     fn consolidate(&self) -> PyResult<PyObject> {
-        let report = self.inner.consolidate().map_err(to_py_err)?;
+        let report = self.inner.consolidate(None).map_err(to_py_err)?;
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
             dict.set_item("links_created", report.links_created)?;
