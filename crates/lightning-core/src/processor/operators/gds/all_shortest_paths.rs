@@ -19,7 +19,7 @@ pub struct PhysicalASP {
     results: VecDeque<DataChunk>,
     bfs_queue: VecDeque<u64>,
     bfs_visited: HashSet<u64>,
-    bfs_distance: HashMap<u64, u32>,
+    bfs_distance: Vec<u32>,
     bfs_src_id: u64,
     bfs_depth: u32,
     bfs_phase: BFSPhase,
@@ -53,7 +53,7 @@ impl PhysicalASP {
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
             bfs_visited: HashSet::new(),
-            bfs_distance: HashMap::new(),
+            bfs_distance: Vec::new(),
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,
@@ -76,13 +76,16 @@ impl PhysicalASP {
         self.bfs_queue.clear();
         self.bfs_visited.clear();
         self.bfs_distance.clear();
+        if src_id as usize >= self.bfs_distance.len() {
+            self.bfs_distance.resize(src_id as usize + 1, u32::MAX);
+        }
         self.bfs_queue.push_back(src_id);
         self.bfs_visited.insert(src_id);
-        self.bfs_distance.insert(src_id, 0);
+        self.bfs_distance[src_id as usize] = 0;
         self.bfs_src_id = src_id;
 
         while let Some(current) = self.bfs_queue.pop_front() {
-            let dist = self.bfs_distance[&current];
+            let dist = self.bfs_distance[current as usize];
             if dist >= self.max_depth {
                 continue;
             }
@@ -96,7 +99,10 @@ impl PhysicalASP {
 
             for neighbor in neighbors {
                 self.bfs_visited.insert(neighbor);
-                self.bfs_distance.insert(neighbor, dist + 1);
+                if neighbor as usize >= self.bfs_distance.len() {
+                    self.bfs_distance.resize(neighbor as usize + 1, u32::MAX);
+                }
+                self.bfs_distance[neighbor as usize] = dist + 1;
                 self.bfs_queue.push_back(neighbor);
             }
         }
@@ -109,8 +115,8 @@ impl PhysicalASP {
         let mut dst_ids = Vec::new();
         let mut distances = Vec::new();
 
-        for (&dst_id, &dist) in &self.bfs_distance {
-            if dst_id != src_id {
+        for (dst_id, &dist) in self.bfs_distance.iter().enumerate() {
+            if dist != u32::MAX && dst_id as u64 != src_id {
                 src_ids.push(src_id as f64);
                 dst_ids.push(dst_id as f64);
                 distances.push(dist as f64);
@@ -220,7 +226,7 @@ impl PhysicalOperator for PhysicalASP {
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
             bfs_visited: HashSet::new(),
-            bfs_distance: HashMap::new(),
+            bfs_distance: Vec::new(),
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,
