@@ -335,24 +335,24 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 7.1 Configurable Similarity
 
-- [ ] **7.1.1** `[P1]` Add `ConsolidationConfig` struct: `similarity_threshold: f64` (default 0.35), `contradiction_jaccard_max: f64` (0.15), `contradiction_length_sim_min: f64` (0.8). Thread through `consolidate()`.
+- [X] **7.1.1** `[P1]` Add `ConsolidationConfig` struct with `similarity_threshold`, `contradiction_jaccard_max`, `contradiction_cosine_min`, `contradiction_length_sim_min`. Threaded through `consolidate()`.
 
 ### 7.2 Incremental Consolidation
 
-- [ ] **7.2.1** `[P1]` Store `last_consolidation_ts` in metadata. Only process entities with `created_at > last_consolidation_ts`. Compare each new entity against all existing entities.
-- [ ] **7.2.2** `[P1]` Persist consolidation state so it survives restarts.
+- [~] **7.2.1** `[P1]` Incremental consolidation — deferred. Requires `last_consolidation_ts` metadata persistence.
+- [~] **7.2.2** Same — deferred along with 7.2.1.
 
 ### 7.3 Fix Contradiction Detection
 
-- [ ] **7.3.1** `[P1]` Replace the current heuristic with: compute embedding cosine similarity between entity pairs. If embeddings are similar (cosine > 0.7) but n-gram Jaccard is low (< 0.2), flag as contradiction. This catches "User likes Python" vs "User dislikes Python" which have similar embeddings but different words.
+- [X] **7.3.1** `[P1]` Replace contradiction heuristic with embedding cosine similarity + Jaccard. When Jaccard < `contradiction_jaccard_max` and cosine > `contradiction_cosine_min`, flag as Contradicts. Catches "likes Python" vs "dislikes Python".
 
 ### 7.4 Batch PageRank Metadata Writes
 
-- [ ] **7.4.1** `[P1]` Replace individual `MATCH ... SET e.metadata = $meta` queries (memory.rs:713-721) with a single bulk update. Use `UNWIND` or `store_batch()`.
+- [X] **7.4.1** `[P1]` Replace individual `MATCH ... SET` queries with a single `UNWIND` batch update for PageRank metadata.
 
 ### 7.5 Return Warnings
 
-- [ ] **7.5.1** `[P1]` Add `warnings: Vec<String>` to `ConsolidationReport`. Collect all warn-logged errors so the caller can inspect what was skipped.
+- [X] **7.5.1** `[P1]` Add `warnings: Vec<String>` to `ConsolidationReport`. All warn-logged errors during consolidation are collected and returned.
 
 ---
 

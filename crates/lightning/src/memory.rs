@@ -203,7 +203,7 @@ impl MemoryStore {
     /// 3. Detect contradictions (semantically close but lexically divergent)
     /// 4. Run PageRank to identify important entities
     pub fn consolidate(&self) -> Result<ConsolidationReport> {
-        self.inner.consolidate()
+        self.inner.consolidate(None)
     }
 
     // ── Streaming Queries ────────────────────────────────────────────
