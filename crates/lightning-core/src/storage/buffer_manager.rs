@@ -61,6 +61,7 @@ struct BufferPool {
     wal: Option<Arc<crate::storage::WAL>>,
     page_locks: HashMap<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
+    dirty_count: AtomicU64,
 }
 
 pub struct BufferManager {
@@ -98,6 +99,7 @@ impl BufferManager {
             }
             shards.push(RwLock::new(BufferPool {
                 shutdown: AtomicBool::new(false),
+                dirty_count: AtomicU64::new(0),
                 page_to_slots: HashMap::new(),
                 file_handles: HashMap::new(),
                 slots,
@@ -322,6 +324,7 @@ impl BufferManager {
         pool.slots[slot_idx].key = Some(key);
         pool.slots[slot_idx].frame = new_frame.clone();
         pool.slots[slot_idx].dirty = true;
+        pool.dirty_count.fetch_add(1, Ordering::Release);
         pool.slots[slot_idx].referenced = true;
         pool.page_to_slots.entry(key).or_default().push(slot_idx);
 
@@ -447,6 +450,9 @@ impl BufferManager {
                     }
                     pool.slots[i].key = None;
                     pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                    if pool.slots[i].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
                     pool.slots[i].dirty = false;
                     pool.slots[i].referenced = false;
                     total_reclaimed += 1;
@@ -482,6 +488,9 @@ impl BufferManager {
                     }
                     pool.slots[idx].key = None;
                     pool.slots[idx].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                    if pool.slots[idx].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
                     pool.slots[idx].dirty = false;
                     pool.slots[idx].referenced = false;
                 }
@@ -532,6 +541,9 @@ impl BufferManager {
                         }
                     }
                     pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                    if pool.slots[i].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
                     pool.slots[i].dirty = false;
                     pool.slots[i].referenced = false;
                 }
@@ -557,7 +569,10 @@ impl BufferManager {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
                             synced_fids.lock().insert(fid);
-                            pool.slots[i].dirty = false;
+                            if pool.slots[i].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
+                    pool.slots[i].dirty = false;
                         }
                     }
                 }
@@ -644,16 +659,9 @@ impl BufferManager {
     }
 
     pub fn dirty_page_count(&self) -> usize {
-        let mut count = 0;
-        for shard in &self.shards {
-            let pool = shard.read();
-            for slot in &pool.slots {
-                if slot.dirty {
-                    count += 1;
-                }
-            }
-        }
-        count
+        self.shards.iter().map(|shard| {
+            shard.read().dirty_count.load(Ordering::Acquire) as usize
+        }).sum()
     }
 
     pub fn shutdown(&self) {
@@ -680,7 +688,10 @@ impl BufferManager {
                             if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
                                 tracing::error!("flush_all: write error on page {} file {}: {}", pid, fid, e);
                             } else {
-                                pool.slots[i].dirty = false;
+                                if pool.slots[i].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
+                    pool.slots[i].dirty = false;
                             }
                         }
                     }
@@ -721,7 +732,10 @@ impl BufferManager {
                             if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
                                 tracing::error!("flush_all_with_handles: write error on page {} file {}: {}", pid, fid, e);
                             } else {
-                                pool.slots[i].dirty = false;
+                                if pool.slots[i].dirty {
+                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                    }
+                    pool.slots[i].dirty = false;
                             }
                         }
                     }

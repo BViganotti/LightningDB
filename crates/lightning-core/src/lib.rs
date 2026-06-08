@@ -1064,7 +1064,23 @@ impl Connection {
         Box<dyn crate::processor::PhysicalOperator + Send + Sync>,
         Arc<crate::transaction::transaction_manager::Transaction>,
     )> {
-        let cache_key = normalize_query(query_str);
+        // Fast path: cache lookup with raw query (no regex normalization).
+        // On miss, retry with normalized key.
+        let mut cache_key = String::new();
+        let cached_stmt = {
+            let mut cache = self.client_context.database.plan_cache.lock();
+            let hit = cache.get(query_str).cloned();
+            if hit.is_some() {
+                hit
+            } else {
+                cache_key = normalize_query(query_str);
+                if cache_key != query_str {
+                    cache.get(&cache_key).cloned()
+                } else {
+                    None
+                }
+            }
+        };
         let cached_stmt = {
             let mut cache = self.client_context.database.plan_cache.lock();
             cache.get(&cache_key).cloned()
