@@ -187,6 +187,12 @@ impl ExpressionEvaluator {
                     return Self::evaluate_arith_int64(&left_arr, &right_arr, op);
                 }
 
+                if left_arr.data_type() == &DataType::UInt64
+                    && right_arr.data_type() == &DataType::UInt64
+                {
+                    return Self::evaluate_arith_uint64(&left_arr, &right_arr, op);
+                }
+
                 let l = cast(&left_arr, &DataType::Float64)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
                 let r = cast(&right_arr, &DataType::Float64)
@@ -624,6 +630,109 @@ impl ExpressionEvaluator {
             }
             Modulo => {
                 let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                    match (a, b) {
+                        (Some(_), Some(0)) => None,
+                        (Some(a), Some(b)) => Some(a % b),
+                        _ => None,
+                    }
+                }).collect();
+                Arc::new(result)
+            }
+        };
+        Ok(res)
+    }
+
+    fn evaluate_arith_uint64(
+        left: &ArrayRef,
+        right: &ArrayRef,
+        op: &crate::parser::ast::ArithmeticOperator,
+    ) -> Result<ArrayRef> {
+        let l = left
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .ok_or_else(|| LightningError::Internal("Expected UInt64Array for left operand".into()))?;
+        let r = right
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .ok_or_else(|| LightningError::Internal("Expected UInt64Array for right operand".into()))?;
+
+        use crate::parser::ast::ArithmeticOperator::*;
+        let res: ArrayRef = match op {
+            Add => {
+                let raw = arrow::compute::kernels::numeric::add(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => a.overflowing_add(b).1,
+                        _ => false,
+                    }
+                });
+                if has_overflow {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 + b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    Arc::new(raw)
+                }
+            }
+            Subtract => {
+                let has_neg = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => b > a,
+                        _ => false,
+                    }
+                });
+                if has_neg {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 - b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    let raw = arrow::compute::kernels::numeric::sub(l, r)
+                        .map_err(|e| LightningError::Internal(e.to_string()))?;
+                    Arc::new(raw)
+                }
+            }
+            Multiply => {
+                let raw = arrow::compute::kernels::numeric::mul(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => a.overflowing_mul(b).1,
+                        _ => false,
+                    }
+                });
+                if has_overflow {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 * b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    Arc::new(raw)
+                }
+            }
+            Divide => {
+                let result: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                    match (a, b) {
+                        (Some(_), Some(0)) => None,
+                        (Some(a), Some(b)) => Some(a as f64 / b as f64),
+                        _ => None,
+                    }
+                }).collect();
+                Arc::new(result)
+            }
+            Modulo => {
+                let result: arrow::array::UInt64Array = l.iter().zip(r.iter()).map(|(a, b)| {
                     match (a, b) {
                         (Some(_), Some(0)) => None,
                         (Some(a), Some(b)) => Some(a % b),
