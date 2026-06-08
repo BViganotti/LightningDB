@@ -417,7 +417,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 ### 10.3 Custom Analyzers
 
 - [ ] **10.3.1** `[P2]` Add `TextAnalyzer` configuration in `InvertedIndex::new()`. Expose via `WITH (analyzer = 'english_stem')`.
-- [ ] **10.3.2** `[P2]` Remove dead `path` field from `InvertedIndex` struct.
+- [X] **10.3.2** `[P2]` Remove dead `path` field from `InvertedIndex` struct.
 
 ---
 

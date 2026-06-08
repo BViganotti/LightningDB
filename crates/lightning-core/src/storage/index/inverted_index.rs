@@ -1,14 +1,13 @@
 use crate::storage::buffer_manager::BufferManager;
 use crate::Result;
 use parking_lot::RwLock;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
 pub struct InvertedIndex {
-    path: PathBuf,
     index: Index,
     writer: RwLock<IndexWriter>,
     reader: IndexReader,
@@ -18,9 +17,9 @@ pub struct InvertedIndex {
 
 impl InvertedIndex {
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
-        if !path.exists() {
-            std::fs::create_dir_all(&path)?;
+        let p = path.as_ref();
+        if !p.exists() {
+            std::fs::create_dir_all(p)?;
         }
 
         let mut schema_builder = Schema::builder();
@@ -28,7 +27,7 @@ impl InvertedIndex {
         let content_field = schema_builder.add_text_field("content", TEXT);
         let schema = schema_builder.build();
 
-        let dir = tantivy::directory::MmapDirectory::open(&path)
+        let dir = tantivy::directory::MmapDirectory::open(p)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let index = Index::open_or_create(dir, schema.clone())
@@ -45,7 +44,6 @@ impl InvertedIndex {
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         Ok(Self {
-            path,
             index,
             writer: RwLock::new(writer),
             reader,
