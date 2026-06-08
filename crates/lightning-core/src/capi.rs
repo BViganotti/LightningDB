@@ -30,7 +30,10 @@ pub extern "C" fn kuzu_database_init(
     path: *const c_char,
     config: kuzu_system_config,
 ) -> *mut kuzu_database {
-    // SAFETY: SAFETY: `path` is a valid C string pointer provided by the C caller.
+    if path.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: SAFETY: `path` is a valid C string pointer provided by the C caller (null-checked above).
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
     let sys_config = SystemConfig {
         buffer_pool_size: config.buffer_pool_size,

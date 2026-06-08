@@ -44,11 +44,9 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `lightning_query()` doesn't null-check `conn_ptr` before dereferencing. Segmentation fault on NULL input.
 
-- [ ] **0.2.1** `[P0]` In `api.rs:45`, add before dereferencing:
-  ```rust
-  if conn_ptr.is_null() { return std::ptr::null_mut(); }
-  ```
-  The same pattern already exists in `capi.rs:90-94` — verify that all other C FFI entry points (`lightning_open`, `lightning_close`, etc.) also null-check.
+- [X] **0.2.1** `[P0]` Verify that all C FFI entry points null-check their pointer parameters.
+  - `api.rs`: all 4 entry points (`lightning_open`, `lightning_query`, `lightning_close`, `lightning_free_string`) already null-checked.
+  - `capi.rs`: `kuzu_database_init` was missing a null check on `path` — **fixed**. All other 8 entry points were already null-checked.
 
 ### 0.3 Eliminate 355 unwrap()/expect() Calls
 
