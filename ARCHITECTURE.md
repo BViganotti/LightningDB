@@ -44,6 +44,7 @@ Compression is activated: `column.rs:optimize()` analyzes column data and applie
 
 ### MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation: each transaction sees a consistent snapshot at its `read_ts`
+- **Note**: Lightning provides **Snapshot Isolation**, not Serializable. Write skew is possible (e.g., two transactions reading each other's pre-image and writing to disjoint rows). For Serializable isolation, see the roadmap SSI implementation.
 - Page-level versioning: each page frame stores an atomic `version` field
 - Uncommitted bit (bit 63): marks uncommitted versions
 - `commit_ts` = current_ts + 1, stored in page version on commit
@@ -155,10 +156,10 @@ High-level Rust/Python API for agent memory:
 - `forget()` — soft-delete by setting `valid_until`
 - `decay()` — prune expired TTL memories
 
-### Temporal Queries
-- `recall_at_time(micros)` — snapshot query: show memories as they existed at time T
+### Temporal Queries (True MVCC Time-Travel)
+- `recall_at_time(micros)` — true MVCC snapshot: uses `execute_at(snapshot_micros)` which creates a read transaction at `micros`. Shows exactly what was committed at that time, powered by the MVCC engine's existing version tracking. No application-level timestamp filtering.
 - `entity_history(id)` — full version history of a memory
-- Uses MVVM timestamps — no extra storage
+- Uses MVCC commit timestamps — no extra storage needed
 
 ### Built-in RAG Pipeline
 `rag_query(text, embedding, k)` does:
