@@ -1421,7 +1421,12 @@ impl<'a> Binder<'a> {
                     }
                 }
 
-                // CHECK FOR NEXTVAL
+                // Generic argument binding for all functions
+                for arg in args {
+                    bound_args.push(self.bind_expression(arg)?);
+                }
+
+                // CHECK FOR NEXTVAL (after bound_args is populated)
                 if actual_name == "NEXTVAL" {
                     if let [BoundExpression::Literal(Literal::String(seq_name))] =
                         bound_args.as_slice()
@@ -1430,7 +1435,7 @@ impl<'a> Binder<'a> {
                     }
                 }
 
-                // CHECK FOR MACRO
+                // CHECK FOR MACRO (after bound_args is populated)
                 if let Some(macro_entry) = self.catalog.get_macro(&actual_name) {
                     if macro_entry.params.len() != bound_args.len() {
                         return Err(LightningError::Query(format!(
@@ -1465,11 +1470,6 @@ impl<'a> Binder<'a> {
                     return self.substitute_macro_body(&bound_body, &substitution);
                 }
 
-                // Generic argument binding for non-lambda functions
-                for arg in args {
-                    bound_args.push(self.bind_expression(arg)?);
-                }
-
                 let arg_types: Vec<_> = bound_args.iter().map(|a| a.get_type()).collect();
                 let ret_type =
                     if let Some(func) = self.function_registry.get_scalar_function(&actual_name) {
@@ -1491,57 +1491,6 @@ impl<'a> Binder<'a> {
                             _ => LogicalType::Any,
                         }
                     };
-
-                // Special handling for high-order functions to bind lambda variables correctly
-                if let (
-                    Some("LIST_FILTER")
-                    | Some("LIST_TRANSFORM")
-                    | Some("LIST_ANY")
-                    | Some("LIST_ALL")
-                    | Some("LIST_SINGLE")
-                    | Some("LIST_NONE"),
-                    [list_expr, lambda_expr],
-                ) = (Some(actual_name.as_str()), args.as_slice())
-                {
-                    let bound_list = self.bind_expression(list_expr)?;
-                    let element_type = if let LogicalType::List(el) = bound_list.get_type() {
-                        *el
-                    } else {
-                        LogicalType::Any
-                    };
-
-                    if let Expression::Lambda(var, body) = lambda_expr {
-                        let mut inner_binder = Binder {
-                            catalog: self.catalog,
-                            function_registry: self.function_registry,
-                            variables: self.variables.clone(),
-                            column_offsets: self.column_offsets.clone(),
-                        };
-                        inner_binder.variables.insert(
-                            var.clone(),
-                            BoundVariable {
-                                table_name: "".into(),
-                                type_: element_type,
-                            },
-                        );
-                        let bound_body = inner_binder.bind_expression(body)?;
-                        let bound_lambda =
-                            BoundExpression::Lambda(var.clone(), Box::new(bound_body));
-
-                        let ret_type = match name.to_uppercase().as_str() {
-                            "LIST_FILTER" => bound_list.get_type(),
-                            "LIST_TRANSFORM" => {
-                                LogicalType::List(Box::new(bound_lambda.get_type()))
-                            }
-                            _ => LogicalType::Bool,
-                        };
-                        return Ok(BoundExpression::Function(
-                            actual_name.clone(),
-                            vec![bound_list, bound_lambda],
-                            ret_type,
-                        ));
-                    }
-                }
 
                 Ok(BoundExpression::Function(
                     actual_name.clone(),
