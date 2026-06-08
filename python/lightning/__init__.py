@@ -17,9 +17,8 @@ class MemoryStore:
     def store_batch(self, entities: list[dict]) -> int:
         return self._store.store_batch(entities)
 
-    def recall(self, query: str, top_k: int = 10):
-        results = self._store.recall(query, top_k)
-        return results
+    def recall(self, query: str, top_k: int = 10, embedding: list[float] | None = None):
+        return self._store.recall(query, top_k, embedding)
 
     def recall_with_embedding(self, query: str, embedding: list[float], top_k: int = 10):
         return self._store.recall_with_embedding(query, embedding, top_k)
@@ -33,8 +32,8 @@ class MemoryStore:
     def associate(self, src_id: str, dst_id: str, rel_type: str, weight: float = 1.0):
         self._store.associate(src_id, dst_id, rel_type, weight)
 
-    def expand(self, entity_id: str, hops: int = 1):
-        return self._store.expand(entity_id, hops)
+    def expand(self, entity_id: str, hops: int = 1, edge_types: list[str] | None = None):
+        return self._store.expand(entity_id, hops, edge_types)
 
     def forget(self, entity_id: str) -> bool:
         return self._store.forget(entity_id)
