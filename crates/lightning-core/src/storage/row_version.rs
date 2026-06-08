@@ -195,4 +195,19 @@ impl RowVersion {
         }
         false
     }
+
+    /// Remove committed entries with `commit_ts < min_active_ts`.
+    /// These entries are no longer needed because no active transaction
+    /// can reference a state older than `min_active_ts`.
+    /// Returns the number of removed entries for metrics.
+    pub fn vacuum(&self, min_active_ts: u64) -> usize {
+        let mut total_removed = 0;
+        for shard in &self.shards {
+            let mut committed = shard.committed.write();
+            let before = committed.len();
+            committed.retain(|_, &mut commit_ts| commit_ts >= min_active_ts);
+            total_removed += before - committed.len();
+        }
+        total_removed
+    }
 }

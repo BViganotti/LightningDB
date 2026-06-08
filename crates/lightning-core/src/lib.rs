@@ -508,6 +508,21 @@ impl Database {
             header.save(&header_path)?;
         }
 
+        // Vacuum RowVersion committed entries that are older than
+        // the minimum active read timestamp. These entries accumulate
+        // unboundedly and are no longer needed for snapshot visibility.
+        let min_active = self.transaction_manager.get_min_active_read_ts();
+        let mut total_evicted = 0usize;
+        for table in self.storage_manager.read().node_tables.values() {
+            total_evicted += table.version_info.vacuum(min_active);
+        }
+        for table in self.storage_manager.read().rel_tables.values() {
+            total_evicted += table.version_info.vacuum(min_active);
+        }
+        if total_evicted > 0 {
+            tracing::debug!("Vacuumed {total_evicted} RowVersion committed entries");
+        }
+
         self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
         Ok(())
     }

@@ -165,7 +165,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `RowVersion::committed` HashMap (row_version.rs:5) grows unbounded — entries for every committed row that was ever modified accumulate forever.
 
-- [ ] **2.3.1** `[P1]` Add `RowVersion::vacuum(min_active_ts: u64) -> usize`. Remove entries with `commit_ts < min_active_ts`. Call this after checkpoint. Returns number of removed entries for metrics.
+- [X] **2.3.1** `[P1]` Add `RowVersion::vacuum(min_active_ts: u64) -> usize`. Removes entries with `commit_ts < min_active_ts`. Called after checkpoint in `Database::checkpoint()` using `get_min_active_read_ts()`. Returns removed count for debug logging.
 
 ### 2.4 Fix TOCTOU Window in Merge
 
