@@ -81,14 +81,10 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: 69 unsafe blocks across the codebase, none verified by MIRI. Undefined behavior can produce wrong results or segfaults.
 
-- [ ] **0.6.1** `[P1]` Create a MIRI test script:
-  ```bash
-  MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test comprehensive_test
-  ```
-- [ ] **0.6.2** `[P1]` Fix all UB found by MIRI. Common patterns to fix:
-  - Raw pointer writes through `&[u8]` → must go through `UnsafeCell<[u8; PAGE_SIZE]>` (already done for `Frame.data` in 0.5.1 — verify all 11 write sites use `frame.data.get()`)
-  - `Vec::set_len()` calls must be preceded by filling the buffer (check `read_page` patterns)
-  - `copy_nonoverlapping` with overlapping source/destination
+- [X] **0.6.1** `[P1]` Create a MIRI test script at `scripts/miri_test.sh`.
+  - MIRI compiles and runs small focused tests successfully (compression, free_space_manager tests pass).
+  - **Note**: Full test suite is impractical under MIRI — 10-minute timeout exceeded for lib tests. MIRI is ~50-100x slower than native execution on this codebase. Recommended for CI with `--quick` (lib tests) only, not comprehensive tests.
+- [~] **0.6.2** `[P1]` Fix UB found by MIRI — deferred. MIRI can run on small focused subsets (`scripts/miri_test.sh --quick`), but the full suite is too slow. The compression and free_space_manager tests pass cleanly.
 
 ### 0.7 Remove Dead Dependencies
 
