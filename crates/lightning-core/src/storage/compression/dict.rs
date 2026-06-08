@@ -35,7 +35,7 @@ impl CompressionAlg for DictCompression {
                 dict_map.insert(val, dict.len() as u64);
                 dict.push(val);
             }
-            indices[i] = *dict_map.get(val).unwrap();
+            indices[i] = *dict_map.get(val).expect("internal invariant violated");
         }
 
         // Write dict count (4 bytes)

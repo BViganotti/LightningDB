@@ -560,7 +560,7 @@ mod tests {
         idx.insert(1, "parser_module");
         idx.insert(2, "decompressor");
 
-        let candidates = idx.query("compress").unwrap();
+        let candidates = idx.query("compress").expect("internal invariant violated");
         assert_eq!(candidates, vec![0, 2]);
     }
 
@@ -570,7 +570,7 @@ mod tests {
         idx.insert(0, "hello");
         idx.insert(1, "world");
 
-        let candidates = idx.query("xyz").unwrap();
+        let candidates = idx.query("xyz").expect("internal invariant violated");
         assert!(candidates.is_empty());
     }
 
@@ -580,7 +580,7 @@ mod tests {
         idx.insert(0, "hello");
         idx.insert(1, "world");
 
-        let candidates = idx.query("o").unwrap();
+        let candidates = idx.query("o").expect("internal invariant violated");
         assert_eq!(candidates, vec![0, 1]); // both contain 'o'
     }
 
@@ -591,7 +591,7 @@ mod tests {
         idx.insert(1, "world");
         idx.insert(2, "help");
 
-        let candidates = idx.query("he").unwrap();
+        let candidates = idx.query("he").expect("internal invariant violated");
         assert_eq!(candidates, vec![0, 2]); // "hello" and "help"
     }
 
@@ -614,7 +614,7 @@ mod tests {
             (3, "compression_engine"),
         ]);
 
-        let candidates = idx.query("compress").unwrap();
+        let candidates = idx.query("compress").expect("internal invariant violated");
         assert_eq!(candidates, vec![0, 2, 3]);
     }
 
@@ -625,11 +625,11 @@ mod tests {
         idx.insert(1, "noemail");
 
         // Single char query for '@'
-        let candidates = idx.query("@").unwrap();
+        let candidates = idx.query("@").expect("internal invariant violated");
         assert_eq!(candidates, vec![0]);
 
         // Trigram query
-        let candidates = idx.query("@ex").unwrap();
+        let candidates = idx.query("@ex").expect("internal invariant violated");
         assert_eq!(candidates, vec![0]);
     }
 
@@ -639,7 +639,7 @@ mod tests {
         idx.insert(0, "HelloWorld");
         idx.insert(1, "helloworld");
 
-        let candidates = idx.query("Hello").unwrap();
+        let candidates = idx.query("Hello").expect("internal invariant violated");
         assert_eq!(candidates, vec![0]); // Only uppercase match
     }
 
@@ -650,11 +650,11 @@ mod tests {
             idx.insert(i, &format!("function_{}", i));
         }
         // All 10K contain "function"
-        let candidates = idx.query("function").unwrap();
+        let candidates = idx.query("function").expect("internal invariant violated");
         assert_eq!(candidates.len(), 10_000);
 
         // Query for a unique suffix - "xyz_99999" doesn't exist, so should return empty
-        let candidates = idx.query("xyz_99999").unwrap();
+        let candidates = idx.query("xyz_99999").expect("internal invariant violated");
         assert!(
             candidates.is_empty(),
             "Non-existent pattern should return empty"
@@ -662,7 +662,7 @@ mod tests {
 
         // Query for "abc" - not a trigram that exists in "function_N" patterns
         // since "abc" doesn't appear in any indexed strings
-        let candidates = idx.query("abc").unwrap();
+        let candidates = idx.query("abc").expect("internal invariant violated");
         assert!(
             candidates.is_empty(),
             "Pattern not in any string should return empty"

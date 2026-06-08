@@ -41,6 +41,23 @@ pub trait PhysicalOperator: Send + Sync {
     fn is_single_row(&self) -> bool {
         false
     }
+
+    /// Whether this operator is safe to execute in parallel.
+    /// Parallel-safe operators are stateless: different workers can process
+    /// disjoint row ranges independently. Returns `true` for Scan, Filter,
+    /// Projection, Map, Expression evaluation. Returns `false` for operators
+    /// that must see all data (Sort, Aggregate, Join, Limit, DML, DDL).
+    fn is_parallel_safe(&self) -> bool {
+        false
+    }
+
+    /// When executing in parallel, informs this operator (and its children)
+    /// which partition of the data it should process. `index` is the partition
+    /// number (0-based) and `total` is the total number of partitions.
+    /// Only meaningful for operators that wrap a PhysicalScan leaf.
+    /// Default implementation is a no-op — operators that wrap a child
+    /// should forward the call.
+    fn set_partition(&mut self, _index: usize, _total: usize) {}
 }
 
 pub struct Processor {
@@ -386,7 +403,7 @@ impl Value {
             Value::Null => serde_json::Value::Null,
             Value::Boolean(b) => serde_json::Value::Bool(*b),
             Value::Number(n) => {
-                serde_json::Value::Number(serde_json::Number::from_f64(*n).unwrap())
+                serde_json::Value::Number(serde_json::Number::from_f64(*n).expect("internal invariant violated"))
             }
             Value::String(s) => serde_json::Value::String(s.clone()),
             Value::Node(id) | Value::Relationship(id) => serde_json::Value::Number((*id).into()),

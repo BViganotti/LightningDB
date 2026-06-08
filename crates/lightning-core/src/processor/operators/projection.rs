@@ -57,4 +57,12 @@ impl PhysicalOperator for PhysicalProjection {
             items: self.items.clone(),
         })
     }
+
+    fn is_parallel_safe(&self) -> bool {
+        true
+    }
+
+    fn set_partition(&mut self, index: usize, total: usize) {
+        self.child.set_partition(index, total);
+    }
 }

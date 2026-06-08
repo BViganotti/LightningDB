@@ -17,6 +17,10 @@ pub enum ParserError {
     Internal(String),
 }
 
+fn required_pair<'i>(pair: Option<pest::iterators::Pair<'i, Rule>>, context: &str) -> Result<pest::iterators::Pair<'i, Rule>, ParserError> {
+    pair.ok_or_else(|| ParserError::Internal(format!("missing expected parser pair: {context}")))
+}
+
 pub fn parse(query_str: &str) -> Result<Query, ParserError> {
     let preprocessed = preprocess_distinct_functions(query_str);
 
@@ -163,7 +167,7 @@ fn inject_modifiers(
 ) -> Result<(), ParserError> {
     if let Some(ref e) = ord {
         if let Ok(p) = CypherParser::parse(Rule::expression, e) {
-            let expr = parse_expression(p.into_iter().next().unwrap())?;
+            let expr = parse_expression(p.into_iter().next().expect("expected next element"))?;
             let desc = e.to_uppercase().contains("DESC");
             for u in &mut q.union_queries {
                 if let Statement::Match(_, _, cs) = &mut u.statement {
@@ -242,7 +246,7 @@ fn parse_union_query(p: pest::iterators::Pair<Rule>) -> Result<UnionQuery, Parse
         }
     }
     Ok(UnionQuery {
-        statement: stmt.unwrap(),
+        statement: stmt.expect("internal invariant violated"),
         next_union: nu,
     })
 }
@@ -256,7 +260,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
         match i.as_rule() {
             Rule::transaction_statement => {
                 return Ok(Statement::Transaction(
-                    match i.into_inner().next().unwrap().as_rule() {
+                    match required_pair(i.into_inner().next(), "pair")?.as_rule() {
                         Rule::begin_tx => TransactionAction::Begin,
                         Rule::commit_tx => TransactionAction::Commit,
                         _ => TransactionAction::Rollback,
@@ -269,7 +273,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut it = i.into_inner();
                 let mut if_not_exists = false;
                 let name = loop {
-                    let next = it.next().unwrap();
+                    let next = required_pair(it.next(), "pair")?;
                     match next.as_rule() {
                         Rule::if_not_exists => {
                             if_not_exists = true;
@@ -286,12 +290,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                         Rule::column_def => {
                             let mut c = j.into_inner();
                             cols.push(ColumnDefinition {
-                                name: c.next().unwrap().as_str().to_string(),
-                                data_type: parse_data_type(c.next().unwrap())?,
+                                name: required_pair(c.next(), "pair")?.as_str().to_string(),
+                                data_type: parse_data_type(required_pair(c.next(), "pair")?)?,
                             });
                         }
                         Rule::primary_key_def => {
-                            pk = j.into_inner().next().unwrap().as_str().to_string()
+                            pk = required_pair(j.into_inner().next(), "pair")?.as_str().to_string()
                         }
                         _ => {}
                     }
@@ -323,8 +327,8 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                         Rule::column_def => {
                             let mut c = j.into_inner();
                             cols.push(ColumnDefinition {
-                                name: c.next().unwrap().as_str().to_string(),
-                                data_type: parse_data_type(c.next().unwrap())?,
+                                name: required_pair(c.next(), "pair")?.as_str().to_string(),
+                                data_type: parse_data_type(required_pair(c.next(), "pair")?)?,
                             });
                         }
                         _ => {}
@@ -342,7 +346,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut it = i.into_inner();
                 let mut if_exists = false;
                 let name = loop {
-                    let next = it.next().unwrap();
+                    let next = required_pair(it.next(), "pair")?;
                     match next.as_rule() {
                         Rule::if_exists => {
                             if_exists = true;
@@ -356,33 +360,33 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::alter_table => {
                 let mut it = i.into_inner();
-                let name = it.next().unwrap().as_str().to_string();
-                let op_pair = it.next().unwrap();
-                let op_inner = op_pair.into_inner().next().unwrap();
+                let name = required_pair(it.next(), "pair")?.as_str().to_string();
+                let op_pair = required_pair(it.next(), "pair")?;
+                let op_inner = required_pair(op_pair.into_inner().next(), "pair")?;
                 let operation = match op_inner.as_rule() {
                     Rule::add_column => {
-                        let col_def = op_inner.into_inner().next().unwrap();
+                        let col_def = required_pair(op_inner.into_inner().next(), "pair")?;
                         let mut cd = col_def.into_inner();
                         AlterOperation::AddColumn {
-                            name: cd.next().unwrap().as_str().to_string(),
-                            data_type: parse_data_type(cd.next().unwrap())?,
+                            name: required_pair(cd.next(), "pair")?.as_str().to_string(),
+                            data_type: parse_data_type(required_pair(cd.next(), "pair")?)?,
                         }
                     }
                     Rule::drop_column => {
                         AlterOperation::DropColumn {
-                            name: op_inner.into_inner().next().unwrap().as_str().to_string(),
+                            name: required_pair(op_inner.into_inner().next(), "pair")?.as_str().to_string(),
                         }
                     }
                     Rule::rename_table => {
                         AlterOperation::RenameTable {
-                            new_name: op_inner.into_inner().next().unwrap().as_str().to_string(),
+                            new_name: required_pair(op_inner.into_inner().next(), "pair")?.as_str().to_string(),
                         }
                     }
                     Rule::rename_column => {
                         let mut c = op_inner.into_inner();
                         AlterOperation::RenameColumn {
-                            old_name: c.next().unwrap().as_str().to_string(),
-                            new_name: c.next().unwrap().as_str().to_string(),
+                            old_name: required_pair(c.next(), "pair")?.as_str().to_string(),
+                            new_name: required_pair(c.next(), "pair")?.as_str().to_string(),
                         }
                     }
                     _ => return Err(ParserError::Internal(format!("Unknown alter operation: {:?}", op_inner.as_rule()))),
@@ -391,11 +395,11 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::create_constraint => {
                 let mut it = i.into_inner();
-                let name = it.next().unwrap().as_str().to_string();
+                let name = required_pair(it.next(), "pair")?.as_str().to_string();
                 it.next(); // skip node variable (e.g. n)
-                let table_label = it.next().unwrap().as_str().to_string();
+                let table_label = required_pair(it.next(), "pair")?.as_str().to_string();
                 it.next(); // skip property variable (e.g. n)
-                let property = it.next().unwrap().as_str().to_string();
+                let property = required_pair(it.next(), "pair")?.as_str().to_string();
                 return Ok(Statement::CreateConstraint {
                     name,
                     table_label,
@@ -404,16 +408,16 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::drop_constraint => {
                 return Ok(Statement::DropConstraint(
-                    i.into_inner().next().unwrap().as_str().to_string(),
+                    required_pair(i.into_inner().next(), "pair")?.as_str().to_string(),
                 ));
             }
             Rule::create_index => {
                 let mut it = i.into_inner();
-                let name = it.next().unwrap().as_str().to_string();
+                let name = required_pair(it.next(), "pair")?.as_str().to_string();
                 it.next(); // skip node variable (e.g. n)
-                let table_label = it.next().unwrap().as_str().to_string();
+                let table_label = required_pair(it.next(), "pair")?.as_str().to_string();
                 it.next(); // skip property variable (e.g. n)
-                let property = it.next().unwrap().as_str().to_string();
+                let property = required_pair(it.next(), "pair")?.as_str().to_string();
                 return Ok(Statement::CreateIndex {
                     name,
                     table_label,
@@ -422,7 +426,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::drop_index => {
                 return Ok(Statement::DropIndex(
-                    i.into_inner().next().unwrap().as_str().to_string(),
+                    required_pair(i.into_inner().next(), "pair")?.as_str().to_string(),
                 ));
             }
             Rule::match_clause => {
@@ -435,15 +439,15 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::unwind_clause => {
                 let mut it = i.into_inner();
-                let expr = parse_expression(it.next().unwrap())?;
-                let alias = it.next().unwrap().as_str().to_string();
+                let expr = parse_expression(required_pair(it.next(), "pair")?)?;
+                let alias = required_pair(it.next(), "pair")?.as_str().to_string();
                 clauses.push(Clause::Unwind(UnwindClause {
                     expression: expr,
                     alias,
                 }));
             }
             Rule::where_clause => {
-                let expr = parse_expression(i.into_inner().next().unwrap())?;
+                let expr = parse_expression(required_pair(i.into_inner().next(), "pair")?)?;
                 where_clause_opt = Some(WhereClause { expression: expr });
             }
             Rule::return_clause => {
@@ -474,7 +478,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             Rule::call_clause => {
                 let mut it = i.into_inner();
                 return Ok(Statement::StandaloneCall(
-                    it.next().unwrap().as_str().to_string(),
+                    required_pair(it.next(), "pair")?.as_str().to_string(),
                     Vec::new(),
                 ));
             }
@@ -487,12 +491,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             match child.as_rule() {
                                 Rule::property_assignment => {
                                     let mut parts = child.into_inner();
-                                    let prop_lookup = parts.next().unwrap();
-                                    let value = parts.next().unwrap();
+                                    let prop_lookup = required_pair(parts.next(), "pair")?;
+                                    let value = required_pair(parts.next(), "pair")?;
 
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = prop_parts.next().unwrap().as_str().to_string();
-                                    let property_key = prop_parts.next().unwrap().as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
+                                    let property_key = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
 
                                     assignments.push(PropertyAssignment {
                                         variable,
@@ -502,13 +506,13 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                 }
                                 Rule::map_assignment => {
                                     let mut parts = child.into_inner();
-                                    let variable = parts.next().unwrap().as_str().to_string();
-                                    let _op = parts.next().unwrap().as_str().to_string();
+                                    let variable = required_pair(parts.next(), "pair")?.as_str().to_string();
+                                    let _op = required_pair(parts.next(), "pair")?.as_str().to_string();
                                     for item in parts {
                                         if item.as_rule() == Rule::property_item {
                                             let mut item_parts = item.into_inner();
-                                            let key = item_parts.next().unwrap().as_str().to_string();
-                                            let val_expr = item_parts.next().unwrap();
+                                            let key = required_pair(item_parts.next(), "pair")?.as_str().to_string();
+                                            let val_expr = required_pair(item_parts.next(), "pair")?;
                                             assignments.push(PropertyAssignment {
                                                 variable: variable.clone(),
                                                 property_key: key,
@@ -531,8 +535,8 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 for j in i.into_inner() {
                     if j.as_rule() == Rule::property_lookup {
                         let mut parts = j.into_inner();
-                        let variable = parts.next().unwrap().as_str().to_string();
-                        let property_key = parts.next().unwrap().as_str().to_string();
+                        let variable = required_pair(parts.next(), "pair")?.as_str().to_string();
+                        let property_key = required_pair(parts.next(), "pair")?.as_str().to_string();
                         properties.push((variable, property_key));
                     }
                 }
@@ -568,12 +572,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             for prop_assign in j.into_inner() {
                                 if prop_assign.as_rule() == Rule::property_assignment {
                                     let mut parts = prop_assign.into_inner();
-                                    let prop_lookup = parts.next().unwrap();
-                                    let value = parts.next().unwrap();
+                                    let prop_lookup = required_pair(parts.next(), "pair")?;
+                                    let value = required_pair(parts.next(), "pair")?;
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = prop_parts.next().unwrap().as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
                                     let property_key =
-                                        prop_parts.next().unwrap().as_str().to_string();
+                                        required_pair(prop_parts.next(), "pair")?.as_str().to_string();
                                     on_match.push(PropertyAssignment {
                                         variable,
                                         property_key,
@@ -586,12 +590,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             for prop_assign in j.into_inner() {
                                 if prop_assign.as_rule() == Rule::property_assignment {
                                     let mut parts = prop_assign.into_inner();
-                                    let prop_lookup = parts.next().unwrap();
-                                    let value = parts.next().unwrap();
+                                    let prop_lookup = required_pair(parts.next(), "pair")?;
+                                    let value = required_pair(parts.next(), "pair")?;
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = prop_parts.next().unwrap().as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
                                     let property_key =
-                                        prop_parts.next().unwrap().as_str().to_string();
+                                        required_pair(prop_parts.next(), "pair")?.as_str().to_string();
                                     on_create.push(PropertyAssignment {
                                         variable,
                                         property_key,
@@ -660,7 +664,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                         Rule::star => items.push(ProjectionItem::Star),
                         Rule::projection_item => {
                             let mut it = j.into_inner();
-                            let expr = parse_expression(it.next().unwrap())?;
+                            let expr = parse_expression(required_pair(it.next(), "pair")?)?;
                             let alias = it.next().map(|a| a.as_str().to_string());
                             items.push(ProjectionItem::Expression(expr, alias));
                         }
@@ -673,7 +677,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                 for j in i.into_inner() {
                     if j.as_rule() == Rule::sort_item {
                         let mut sit = j.into_inner();
-                        let expr = parse_expression(sit.next().unwrap())?;
+                        let expr = parse_expression(required_pair(sit.next(), "pair")?)?;
                         let desc = sit
                             .next()
                             .map(|d| d.as_str().to_uppercase().contains("DESC"))
@@ -690,7 +694,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                 let val = i
                     .into_inner()
                     .next()
-                    .unwrap()
+                    .expect("internal invariant violated")
                     .as_str()
                     .parse::<f64>()
                     .unwrap_or(0.0);
@@ -700,7 +704,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                 let val = i
                     .into_inner()
                     .next()
-                    .unwrap()
+                    .expect("internal invariant violated")
                     .as_str()
                     .parse::<f64>()
                     .unwrap_or(0.0);
@@ -821,8 +825,8 @@ fn parse_relationship_chain(
         }
     }
     Ok(RelationshipChain {
-        relationship_pattern: rp.unwrap(),
-        node_pattern: np.unwrap(),
+        relationship_pattern: rp.expect("internal invariant violated"),
+        node_pattern: np.expect("internal invariant violated"),
     })
 }
 
@@ -896,7 +900,7 @@ fn parse_property_item(p: pest::iterators::Pair<Rule>) -> Result<PropertyItem, P
     }
     Ok(PropertyItem {
         key: k,
-        value: v.unwrap(),
+        value: v.expect("internal invariant violated"),
     })
 }
 
@@ -968,7 +972,7 @@ fn parse_not(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> 
         }
     }
 
-    let mut expr = parse_comparison(comparison_pair.unwrap())?;
+    let mut expr = parse_comparison(comparison_pair.expect("internal invariant violated"))?;
 
     // Apply NOT operators (each NOT inverts the expression)
     for _ in 0..not_count {
@@ -991,8 +995,8 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
             Box::new(parse_arithmetic(ps[2].clone())?),
         ));
     } else if ps[1].as_rule() == Rule::string_predicate {
-        let op_pair = ps[1].clone().into_inner().next().unwrap();
-        let right_expr = op_pair.clone().into_inner().next().unwrap();
+        let op_pair = ps[1].clone().into_inner().next().expect("expected next element");
+        let right_expr = op_pair.clone().into_inner().next().expect("expected next element");
 
         let func_name = match op_pair.as_rule() {
             Rule::contains_op => "CONTAINS",
@@ -1084,7 +1088,7 @@ fn parse_arithmetic(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
 }
 
 fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
-    let i = p.into_inner().next().unwrap();
+    let i = required_pair(p.into_inner().next(), "pair")?;
     match i.as_rule() {
         Rule::literal => Ok(Expression::Literal(parse_literal(i)?)),
         Rule::variable => Ok(Expression::Variable(i.as_str().to_string())),
@@ -1094,7 +1098,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         }
         Rule::function_call => {
             let mut it = i.into_inner();
-            let n = it.next().unwrap().as_str().to_string();
+            let n = required_pair(it.next(), "pair")?.as_str().to_string();
             let distinct = n.to_uppercase().contains("_DISTINCT");
             let clean_name = if distinct {
                 n.to_uppercase().replace("_DISTINCT", "")
@@ -1129,8 +1133,8 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         Rule::property_lookup => {
             let mut it = i.into_inner();
             Ok(Expression::PropertyLookup(
-                it.next().unwrap().as_str().to_string(),
-                it.next().unwrap().as_str().to_string(),
+                required_pair(it.next(), "pair")?.as_str().to_string(),
+                required_pair(it.next(), "pair")?.as_str().to_string(),
             ))
         }
         Rule::list_literal => {
@@ -1149,7 +1153,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             Ok(Expression::Map(entries))
         }
         Rule::list_quantifier => {
-            let inner = i.into_inner().next().unwrap();
+            let inner = required_pair(i.into_inner().next(), "pair")?;
             let func_name = match inner.as_rule() {
                 Rule::all_q => "LIST_ALL",
                 Rule::any_q => "LIST_ANY",
@@ -1158,9 +1162,9 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                 _ => return Err(ParserError::Internal(format!("Unknown quantifier: {:?}", inner.as_rule()))),
             };
             let mut parts = inner.into_inner();
-            let var = parts.next().unwrap().as_str().to_string();
-            let list_expr = parse_expression(parts.next().unwrap())?;
-            let pred_expr = parse_expression(parts.next().unwrap())?;
+            let var = required_pair(parts.next(), "pair")?.as_str().to_string();
+            let list_expr = parse_expression(required_pair(parts.next(), "pair")?)?;
+            let pred_expr = parse_expression(required_pair(parts.next(), "pair")?)?;
             Ok(Expression::Function(
                 func_name.to_string(),
                 vec![
@@ -1170,7 +1174,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                 false,
             ))
         }
-        Rule::parenthesized_expression => parse_expression(i.into_inner().next().unwrap()),
+        Rule::parenthesized_expression => parse_expression(required_pair(i.into_inner().next(), "pair")?),
         Rule::case_expression => Ok(Expression::Case {
             expression: None,
             when_then: Vec::new(),
@@ -1187,7 +1191,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                     }
                     Rule::where_clause => {
                         if let Some(last) = steps.last_mut() {
-                            let expr = parse_expression(inner.into_inner().next().unwrap())?;
+                            let expr = parse_expression(required_pair(inner.into_inner().next(), "pair")?)?;
                             *last = (last.0.clone(), Some(WhereClause { expression: expr }));
                         }
                     }
@@ -1202,8 +1206,8 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         }
         Rule::cast_expression => {
             let mut inner = i.into_inner();
-            let expr = parse_expression(inner.next().unwrap())?;
-            let type_literal = inner.last().unwrap().as_str().to_uppercase();
+            let expr = parse_expression(required_pair(inner.next(), "pair")?)?;
+            let type_literal = inner.last().expect("expected last element").as_str().to_uppercase();
             Ok(Expression::Function(
                 "CAST".to_string(),
                 vec![expr, Expression::Literal(Literal::String(type_literal))],
@@ -1212,10 +1216,10 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         }
         Rule::extract_expression => {
             let mut inner = i.into_inner();
-            let field_token = inner.next().unwrap();
+            let field_token = required_pair(inner.next(), "pair")?;
             let field = field_token.as_str().to_uppercase();
             let _from = inner.next(); // skip FROM
-            let source = parse_expression(inner.next().unwrap())?;
+            let source = parse_expression(required_pair(inner.next(), "pair")?)?;
             Ok(Expression::Function(
                 "DATE_PART".to_string(),
                 vec![
@@ -1265,7 +1269,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
 }
 
 fn parse_literal(p: pest::iterators::Pair<Rule>) -> Result<Literal, ParserError> {
-    let i = p.into_inner().next().unwrap();
+    let i = required_pair(p.into_inner().next(), "pair")?;
     match i.as_rule() {
         Rule::string_literal => {
             let s = i.as_str();

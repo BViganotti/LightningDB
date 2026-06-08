@@ -31,6 +31,14 @@ pub struct PhysicalScan {
     pub filter_column_idxs: Vec<usize>,
     /// Reusable buffer for column arrays to reduce per-morsel allocation.
     column_buffer: Vec<ArrayRef>,
+    /// Per-worker position within the partition range for parallel execution.
+    /// Each cloned PhysicalScan gets its own Arc<AtomicU64> via set_partition(),
+    /// so workers do not contend on a shared counter.
+    partition_position: Arc<AtomicU64>,
+    /// Start of this partition's row range (inclusive). Equal to 0 when not partitioned.
+    partition_start_row: u64,
+    /// End of this partition's row range (exclusive). Equal to state.num_rows when not partitioned.
+    partition_end_row: u64,
 }
 
 impl PhysicalScan {
@@ -66,6 +74,9 @@ impl PhysicalScan {
             pushdown_filter: None,
             filter_column_idxs: Vec::new(),
             column_buffer: Vec::new(),
+            partition_position: Arc::new(AtomicU64::new(0)),
+            partition_start_row: 0,
+            partition_end_row: num_rows,
         })
     }
 
@@ -261,15 +272,15 @@ impl PhysicalOperator for PhysicalScan {
         params: Option<&std::collections::HashMap<String, crate::processor::Value>>,
     ) -> Result<Option<DataChunk>> {
         let morsel = self.compute_morsel_size();
+        let end_bound = self.partition_end_row;
         loop {
             let start_row = self
-                .state
-                .current_row
+                .partition_position
                 .fetch_add(morsel, Ordering::Relaxed);
-            if start_row >= self.state.num_rows {
+            if start_row >= end_bound {
                 return Ok(None);
             }
-            let num_rows_to_read = std::cmp::min(morsel, self.state.num_rows - start_row);
+            let num_rows_to_read = std::cmp::min(morsel, end_bound - start_row);
 
             let has_pushdown =
                 self.pushdown_filter.is_some() && !self.filter_column_idxs.is_empty();
@@ -586,6 +597,21 @@ impl PhysicalOperator for PhysicalScan {
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(self.clone())
+    }
+
+    fn is_parallel_safe(&self) -> bool {
+        true
+    }
+
+    fn set_partition(&mut self, index: usize, total: usize) {
+        let num_rows = self.state.num_rows;
+        let rows_per = num_rows / total as u64;
+        let rem = num_rows % total as u64;
+        let start = rows_per * index as u64 + std::cmp::min(index as u64, rem);
+        let end = start + rows_per + if (index as u64) < rem { 1 } else { 0 };
+        self.partition_start_row = start;
+        self.partition_end_row = end;
+        self.partition_position = Arc::new(AtomicU64::new(start));
     }
 }
 

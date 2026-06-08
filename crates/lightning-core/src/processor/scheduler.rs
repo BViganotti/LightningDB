@@ -28,7 +28,7 @@ impl Scheduler {
         let (ch_tx, rx) = unbounded();
         let params_arc = params.map(Arc::new);
 
-        if self.num_threads == 1 {
+        if self.num_threads == 1 || !operator.is_parallel_safe() {
             let mut op = operator;
             loop {
                 match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
@@ -43,8 +43,9 @@ impl Scheduler {
                 }
             }
         } else {
-            for _ in 0..self.num_threads {
+            for i in 0..self.num_threads {
                 let mut op = operator.clone_box();
+                op.set_partition(i, self.num_threads);
                 let ch_tx = ch_tx.clone();
                 let db = Arc::clone(&database);
                 let tx_clone = Arc::clone(&tx);

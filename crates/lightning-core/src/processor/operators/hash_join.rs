@@ -279,7 +279,7 @@ impl PhysicalOperator for HashJoin {
                 }
             }
 
-            let left_batch = &self.current_left_chunk.as_ref().unwrap().batch;
+            let left_batch = &self.current_left_chunk.as_ref().expect("required handle not present").batch;
             let left_num_rows = left_batch.num_rows();
 
             let mut left_indices = Vec::with_capacity(1024);

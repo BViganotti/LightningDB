@@ -566,7 +566,7 @@ impl Column {
             let null_frame = &null_frames
                 .iter()
                 .find(|(idx, _)| *idx == null_page_idx)
-                .unwrap()
+                .expect("internal invariant")
                 .1;
             let null_base_offset = (current_offset % 4096) as usize;
 
@@ -703,7 +703,7 @@ impl Column {
 
         // Pre-read overflow file if needed — we need it for overflow strings
         let overflow_data: Vec<u8> = if self.overflow_fh.is_some() {
-            let ofh = self.overflow_fh.as_ref().unwrap();
+            let ofh = self.overflow_fh.as_ref().expect("overflow file handle required");
             let num_of_pages = ofh.get_num_pages() as usize;
             if num_of_pages > 0 {
                 let mut buf = vec![0u8; num_of_pages * 4096];
@@ -733,14 +733,14 @@ impl Column {
             let marker = data_buf[slot_offset];
             let s_bytes = if marker == 255 && !overflow_data.is_empty() {
                 let of_page = u64::from_le_bytes(
-                    data_buf[slot_offset + 1..slot_offset + 9].try_into().unwrap(),
+                    data_buf[slot_offset + 1..slot_offset + 9].try_into().expect("infallible: fixed-size array conversion"),
                 ) as usize;
                 let of_offset = u64::from_le_bytes(
-                    data_buf[slot_offset + 9..slot_offset + 17].try_into().unwrap(),
+                    data_buf[slot_offset + 9..slot_offset + 17].try_into().expect("infallible: fixed-size array conversion"),
                 ) as usize;
                 let of_len = std::cmp::min(
                     u32::from_le_bytes(
-                        data_buf[slot_offset + 17..slot_offset + 21].try_into().unwrap(),
+                        data_buf[slot_offset + 17..slot_offset + 21].try_into().expect("infallible: fixed-size array conversion"),
                     ) as usize,
                     4096,
                 );
@@ -884,7 +884,7 @@ impl Column {
                 let null_src = &null_frame.as_slice()[null_base_offset..null_base_offset + to_read];
                 let mut j = 0;
                 while j + 8 <= to_read {
-                    let val = u64::from_le_bytes(null_src[j..j + 8].try_into().unwrap());
+                    let val = u64::from_le_bytes(null_src[j..j + 8].try_into().expect("infallible: fixed-size array conversion"));
                     if val != 0 {
                         for k in 0..8 {
                             if null_src[j + k] != 0 {
@@ -1781,26 +1781,26 @@ impl Column {
     ) -> Result<Value> {
         match self.data_type {
             LogicalType::Int64 => Ok(Value::Number(i64::from_le_bytes(
-                data[0..8].try_into().unwrap(),
+                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ) as f64)),
             LogicalType::Int32 => Ok(Value::Number(i32::from_le_bytes(
-                data[0..4].try_into().unwrap(),
+                data[0..4].try_into().expect("infallible: fixed-size array conversion"),
             ) as f64)),
             LogicalType::Uint64 | LogicalType::Node(_) => Ok(Value::Node(u64::from_le_bytes(
-                data[0..8].try_into().unwrap(),
+                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Double => Ok(Value::Number(f64::from_le_bytes(
-                data[0..8].try_into().unwrap(),
+                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Bool => Ok(Value::Boolean(data[0] != 0)),
             LogicalType::String => {
                 if data[0] == 255 && self.overflow_fh.is_some() {
-                    let page_idx = u64::from_le_bytes(data[1..9].try_into().unwrap());
-                    let offset = u64::from_le_bytes(data[9..17].try_into().unwrap());
-                    let len = u32::from_le_bytes(data[17..21].try_into().unwrap()) as usize;
+                    let page_idx = u64::from_le_bytes(data[1..9].try_into().expect("infallible: fixed-size array conversion"));
+                    let offset = u64::from_le_bytes(data[9..17].try_into().expect("infallible: fixed-size array conversion"));
+                    let len = u32::from_le_bytes(data[17..21].try_into().expect("infallible: fixed-size array conversion")) as usize;
                     let read_len = std::cmp::min(len, 4096 - offset as usize);
                     let overflow_page =
-                        bm.pin_page(self.overflow_fh.as_ref().unwrap().clone(), page_idx, tx)?;
+                        bm.pin_page(self.overflow_fh.as_ref().expect("overflow file handle required").clone(), page_idx, tx)?;
                     let end = std::cmp::min(offset as usize + read_len, 4096);
                     Ok(Value::String(
                         String::from_utf8_lossy(
@@ -1817,10 +1817,10 @@ impl Column {
                 }
             }
             LogicalType::Date => Ok(Value::Date(i32::from_le_bytes(
-                data[0..4].try_into().unwrap(),
+                data[0..4].try_into().expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Timestamp => Ok(Value::Timestamp(i64::from_le_bytes(
-                data[0..8].try_into().unwrap(),
+                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
             _ => Ok(Value::Null),
         }
