@@ -454,15 +454,15 @@ Tier 5 — Niche / additive feature                        [Section 12]
 | Tier 1 (silent corruption) | 2 — Row-Level OCC | 4/7 | P0/P1 |
 | Tier 1 (silent corruption) | 3 — Graph Model / CSR | 6/7 | P0/P1 |
 | Tier 2 (misleading features) | 4 — Temporal Queries | 2/4 | P0/P1 |
-| Tier 2 (misleading features) | 5 — WAL CDC | 3/7 | P0/P1 |
+| Tier 2 (misleading features) | 5 — WAL CDC | 4/7 | P0/P1 |
 | Tier 3 (scale ceiling) | 6 — Vector Search | 0/7 | P0/P1 |
-| Tier 3 (scale ceiling) | 7 — Memory Consolidation | 0/6 | P1 |
-| Tier 4 (polish) | 8 — RAG Pipeline | 0/4 | P1/P2 |
-| Tier 4 (polish) | 9 — Hybrid Search | 0/4 | P1/P2 |
-| Tier 4 (polish) | 10 — Full-Text Search | 0/5 | P1/P2 |
+| Tier 3 (scale ceiling) | 7 — Memory Consolidation | 4/6 | P1 |
+| Tier 4 (polish) | 8 — RAG Pipeline | 3/4 | P1/P2 |
+| Tier 4 (polish) | 9 — Hybrid Search | 3/4 | P1/P2 |
+| Tier 4 (polish) | 10 — Full-Text Search | 1/5 | P1/P2 |
 | Tier 5 (niche) | 11 — WASM UDFs | 0/5 | P1/P2 |
 
-**Progress**: **24/71 items completed** across 12 sections.
+**Progress**: **36/71 items completed** across 12 sections.
 
 That was quite a session. Here's what's been implemented:
 
