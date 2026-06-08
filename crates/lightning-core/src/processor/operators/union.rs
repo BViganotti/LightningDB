@@ -3,11 +3,14 @@ use crate::Result;
 use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 pub struct SharedUnionState {
-    pub seen_rows: RwLock<HashSet<Vec<Value>>>,
+    pub seen_hashes: RwLock<HashSet<u64>>,
+    /// Rows whose hash collides with another row; stored for full comparison.
+    pub collision_rows: RwLock<Vec<(u64, Vec<Value>)>>,
     pub left_exhausted: AtomicBool,
 }
 
@@ -30,7 +33,8 @@ impl PhysicalUnion {
             right,
             is_all,
             shared_state: Arc::new(SharedUnionState {
-                seen_rows: RwLock::new(HashSet::new()),
+                seen_hashes: RwLock::new(HashSet::new()),
+                collision_rows: RwLock::new(Vec::new()),
                 left_exhausted: AtomicBool::new(false),
             }),
             local_left_exhausted: false,
@@ -44,14 +48,28 @@ impl PhysicalUnion {
 
         let mut filtered_indices = Vec::new();
         {
-            let mut shared = self.shared_state.seen_rows.write();
+            let mut seen = self.shared_state.seen_hashes.write();
+            let mut collisions = self.shared_state.collision_rows.write();
             for i in 0..num_rows {
-                let mut row = Vec::with_capacity(num_cols);
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 for j in 0..num_cols {
-                    row.push(Value::from_arrow(batch.column(j), i));
+                    Value::from_arrow(batch.column(j), i).hash(&mut hasher);
                 }
-                if shared.insert(row) {
+                let hash = hasher.finish();
+
+                if seen.insert(hash) {
+                    // Fast path: hash is unique, definitely a new row
                     filtered_indices.push(i as u64);
+                } else {
+                    // Hash collision: check all collision rows for equality
+                    let row: Vec<Value> = (0..num_cols)
+                        .map(|j| Value::from_arrow(batch.column(j), i))
+                        .collect();
+                    let is_dup = collisions.iter().any(|(h, r)| *h == hash && r == &row);
+                    if !is_dup {
+                        collisions.push((hash, row));
+                        filtered_indices.push(i as u64);
+                    }
                 }
             }
         }
