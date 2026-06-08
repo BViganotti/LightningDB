@@ -171,19 +171,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `commit()` at line 183-187 acquires the page merge lock AFTER calling `pin_latest_committed()`. Between pin and lock, another committer could install a newer version.
 
-- [ ] **2.4.1** `[P2]` Reorder: acquire merge lock FIRST, then pin. Change lines 183-187 in `transaction_manager.rs` from:
-  ```rust
-  let merge_lock = self.get_page_merge_lock(*file_id, *page_idx);
-  let _merge_guard = merge_lock.lock();
-  let latest_frame = bm.pin_latest_committed(...);
-  ```
-  to:
-  ```rust
-  let merge_lock = self.get_page_merge_lock(*file_id, *page_idx);
-  let _merge_guard = merge_lock.lock();
-  let latest_frame = bm.pin_latest_committed(...);
-  ```
-  (Already correct — verify it's not regressed.)
+- [X] **2.4.1** `[P2]` Verified: lock is acquired before `pin_latest_committed()`. No regression.
 
 ### 2.5 Document Snapshot Isolation
 
