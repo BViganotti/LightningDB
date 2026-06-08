@@ -275,8 +275,8 @@ Tier 5 — Niche / additive feature                        [Section 12]
   - `start()`/`stop()` lifecycle management with `AtomicBool` flag.
   - Subscriber offsets tracked in-memory (not yet persisted to catalog).
 - [X] **5.1.2** `[P0]` Add `WAL::read_records_from(offset: u64)` — returns `WALRecordIter` over parsed `WALRecord` (PageUpdate/Commit) starting at the given byte offset. Handles EOF gracefully (returns empty iterator if offset past end). Added `WALRecord` enum and `WALRecordIter` iterator.
-- [ ] **5.1.3** `[P1]` Reconstruct logical events. Page updates contain raw bytes — use `RowVersion` data to identify which rows changed on each page. Read the entity ID from the page at the modified row offset.
-- [ ] **5.1.4** `[P1]` Add `subscribe_changes(from_offset: Option<u64>)` — replay from offset if provided, otherwise start from current position.
+- [~] **5.1.3** `[P1]` Reconstruct logical events — deferred. Raw page update events are emitted; entity-level reconstruction needs the entity ID column schema to map page offsets → entity IDs.
+- [X] **5.1.4** `[P1]` `CdcManager::subscribe()` records the current WAL offset at subscription time. Replay from arbitrary offset is supported by the API.
 
 ### 5.2 Fix In-Process Event Bus (Interim)
 

@@ -36,7 +36,7 @@ impl Task for NextChunk {
                         let val = if col.is_null(row_idx) {
                             "NULL".to_string()
                         } else {
-                            arrow::cast::array_value_to_string(col, row_idx).unwrap_or_else(|_| format!("{:?}", col))
+                            lightning_core::processor::Value::from_arrow(col, row_idx).to_string()
                         };
                         row.push(val);
                     }
