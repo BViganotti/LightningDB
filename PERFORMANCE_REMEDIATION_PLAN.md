@@ -301,7 +301,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `Vec<Vec<Value>>` → Arrow array conversion uses per-cell `builder.append_value()` calls. For 100 columns × 200 rows: 20,000 individual builder method calls with type dispatch, bounds checking, null handling, Vec growth.
 
-- [ ] **8.1.1** `[P1]` Store the write buffer in column-oriented format (one `Vec<Value>` per column). Use Arrow's bulk builders (`append_values`, `append_slice`) for primitive columns.
+- [X] **8.1.1** `[P1]` Store the write buffer in column-oriented format (one `Vec<Value>` per column). Use Arrow's bulk builders (`append_values`, `append_slice`) for primitive columns.
 
 **Impact**: 3-5× slower batch insert than direct column extraction.
 
