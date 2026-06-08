@@ -849,7 +849,11 @@ fn parse_relationship_pattern(
                     ps.push(parse_property_item(j)?);
                 }
             }
-            Rule::var_len_bounds => b = parse_var_len(i).ok(),
+            Rule::var_len_bounds => {
+                if let Err(e) = parse_var_len(i) {
+                    tracing::warn!("Failed to parse variable-length bounds: {e}");
+                }
+            }
             _ => {}
         }
     }

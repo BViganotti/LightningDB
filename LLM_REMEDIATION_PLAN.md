@@ -61,10 +61,13 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `.ok()`, `.unwrap_or_default()`, `.unwrap_or(false)` throughout the codebase silently discard errors, leaving state inconsistent.
 
-- [ ] **0.4.1** `[P1]` Audit every `.ok()` call:
-  - If the error is meaningful → propagate with `?`
-  - If the error should be logged → add `tracing::warn!("context: {e}")` before the `.ok()`
-  - Key areas: `memory.rs` (dozens of warn! + continue — most should remain warnings, but some should propagate), `column.rs`, `hash_index.rs`
+- [X] **0.4.1** `[P1]` Audit every `.ok()` call:
+  - `lib.rs:250` — `checkpoint().ok()` in `Drop`: changed to `if let Err(e) = ... { tracing::warn!(...) }`
+  - `wal.rs:85` — `filter_map(|e| e.ok())`: changed to log warnings on directory read failures and bad archive filenames
+  - `parser/mod.rs:852` — `parse_var_len(i).ok()`: changed to `tracing::warn!` on parse failure
+  - `fusion.rs:289` — `serde_json::to_string(&graph).unwrap_or_default()`: changed to propagate with `?`
+  - `fusion.rs:304` — `i64_col(b, 0).ok()`: changed to propagate with `?`
+  - All other `.ok()` and `.unwrap_or_default()` calls reviewed: `memory.rs` Array defaults, `column.rs` null bitmap defaults, `registry.rs` REGEXP_EXTRACT, `scan.rs` zone maps, `binder.rs` optionals, `projection_pushdown.rs` — all legitimate defaulting, not error swallowing.
 
 ### 0.5 KuzuDB C API Naming
 

@@ -82,15 +82,29 @@ impl WAL {
         let dir = archive_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
         let max_seq = std::fs::read_dir(&dir)?
-            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                match e {
+                    Ok(entry) => Some(entry),
+                    Err(err) => {
+                        tracing::warn!("Cannot read directory entry in archive: {err}");
+                        None
+                    }
+                }
+            })
             .filter_map(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
                 if name.starts_with("wal_") && name.ends_with(".lbug") {
-                    name.trim_start_matches("wal_")
+                    match name.trim_start_matches("wal_")
                         .trim_end_matches(".lbug")
                         .parse::<u64>()
-                        .ok()
+                    {
+                        Ok(seq) => Some(seq),
+                        Err(_) => {
+                            tracing::warn!("Archive file '{}' does not have a valid sequence number", name);
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
