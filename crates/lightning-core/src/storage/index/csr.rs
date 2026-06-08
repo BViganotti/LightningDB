@@ -105,6 +105,20 @@ impl CSRIndex {
         self.pending_edges.write().extend_from_slice(edges);
     }
 
+    /// Check if compaction is needed and compact if so.
+    /// Must be called from a context with access to BufferManager and Transaction.
+    pub fn compact_if_needed(
+        &self,
+        bm: &crate::storage::buffer_manager::BufferManager,
+        num_nodes: u64,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        if self.needs_compaction() {
+            self.compact(bm, num_nodes, tx)?;
+        }
+        Ok(())
+    }
+
     /// Mark an edge as deleted. On next `for_each_neighbor` the deletion
     /// is applied by skipping the matching (src, dst) pair.
     pub fn delete_edge(&self, src: u64, dst: u64) {

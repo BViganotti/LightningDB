@@ -33,6 +33,7 @@ regex = "1.10"
 sha2 = { workspace = true }
 md-5 = { workspace = true }
 crc32fast = { workspace = true }
+crc = { workspace = true }
 tantivy = "0.26.0"
 lru = "0.12.0"
 fixedbitset = "0.5.7"
