@@ -448,29 +448,40 @@ impl VectorIndex {
             let dst_page = VI_DATA_START_PAGE + (found_idx / eps) as u64;
             let dst_slot = found_idx % eps;
 
-            let src_frame = bm.pin_page(Arc::clone(&self.file_handle), src_page, tx)?;
             let src_offset = src_slot * entry_bytes;
+            let dst_offset = dst_slot * entry_bytes;
+            let src_frame = bm.pin_page(Arc::clone(&self.file_handle), src_page, tx)?;
             let entry_data = &src_frame.as_slice()[src_offset..src_offset + entry_bytes];
             let entry_vec = entry_data.to_vec();
             bm.unpin_page(&self.file_handle, src_page, src_frame);
 
-            let dst_frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
-            let dst_ptr = dst_frame.as_ptr();
-            let dst_offset = dst_slot * entry_bytes;
-            // SAFETY: SAFETY: Reading from pinned frame in delete path.
-            unsafe {
-                std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), dst_ptr.add(dst_offset), entry_bytes);
-            }
-            bm.log_page_update(self.file_handle.file_id, dst_page, dst_frame.as_slice())?;
-            bm.unpin_page(&self.file_handle, dst_page, dst_frame);
+            if src_page == dst_page {
+                let frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
+                let ptr = frame.as_ptr();
+                unsafe {
+                    std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), ptr.add(dst_slot * entry_bytes), entry_bytes);
+                    std::ptr::write_bytes(ptr.add(src_slot * entry_bytes), 0, entry_bytes);
+                }
+                bm.log_page_update(self.file_handle.file_id, dst_page, frame.as_slice())?;
+                bm.unpin_page(&self.file_handle, dst_page, frame);
+            } else {
+                let dst_frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
+                let dst_ptr = dst_frame.as_ptr();
+                // SAFETY: SAFETY: Copying last entry to deleted slot in newly created version.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), dst_ptr.add(dst_offset), entry_bytes);
+                }
+                bm.log_page_update(self.file_handle.file_id, dst_page, dst_frame.as_slice())?;
+                bm.unpin_page(&self.file_handle, dst_page, dst_frame);
 
-            let last_frame = bm.create_new_version(Arc::clone(&self.file_handle), src_page, tx)?;
-            // SAFETY: SAFETY: Reading node_id from pinned frame in update search.
-            unsafe {
-                std::ptr::write_bytes(last_frame.as_ptr().add(src_slot * entry_bytes), 0, entry_bytes);
+                let last_frame = bm.create_new_version(Arc::clone(&self.file_handle), src_page, tx)?;
+                // SAFETY: SAFETY: Zeroing out the old last slot in newly created version.
+                unsafe {
+                    std::ptr::write_bytes(last_frame.as_ptr().add(src_slot * entry_bytes), 0, entry_bytes);
+                }
+                bm.log_page_update(self.file_handle.file_id, src_page, last_frame.as_slice())?;
+                bm.unpin_page(&self.file_handle, src_page, last_frame);
             }
-            bm.log_page_update(self.file_handle.file_id, src_page, last_frame.as_slice())?;
-            bm.unpin_page(&self.file_handle, src_page, last_frame);
         }
 
         let header_frame = bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
