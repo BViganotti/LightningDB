@@ -466,7 +466,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: When sort-based aggregation kicks in (>100K groups), every cell becomes a heap `Value` enum. For 10 columns × 200K rows: 2M Value allocations at ~32-256 bytes each = ~200MB+.
 
-- [ ] **13.1.1** `[P2]` Keep data in Arrow format. Use columnar sort-based aggregation operating on original arrays.
+- [X] **13.1.1** `[P2]` Keep data in Arrow format. Use columnar sort-based aggregation operating on original arrays.
 
 ### 13.2 take() Kernel Per Group Per Column Per Batch
 
