@@ -81,14 +81,15 @@ impl LazyCatalog {
             return Ok(());
         }
 
-        self.save_internal()
+        self.save_internal(current_tx_count)
     }
 
     pub fn force_save(&self) -> Result<()> {
-        self.save_internal()
+        let current = self.last_saved_tx_count.load(Ordering::Acquire);
+        self.save_internal(current + 1)
     }
 
-    fn save_internal(&self) -> Result<()> {
+    fn save_internal(&self, current_tx_count: u64) -> Result<()> {
         let path = match self.get_path() {
             Some(p) => p,
             None => {
@@ -103,12 +104,11 @@ impl LazyCatalog {
         catalog_guard.save_to_disk(&path)?;
 
         self.dirty.store(false, Ordering::Release);
-        let new_count = self.last_saved_tx_count.load(Ordering::Acquire) + 1;
-        self.last_saved_tx_count.store(new_count, Ordering::Release);
+        self.last_saved_tx_count.store(current_tx_count, Ordering::Release);
 
         debug!(
             "Catalog saved successfully, dirty=false, last_saved_tx_count={}",
-            new_count
+            current_tx_count
         );
         Ok(())
     }
