@@ -144,10 +144,11 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `PageRowMod.row_data` is 64 bytes. Strings >63 chars are stored in overflow pages. The slot data is a 21-byte pointer `(page_idx + offset + length)` which fits in 64 bytes, but the **overflow page content** is not versioned. If TxA sets `content = "long..."` and TxB sets `content = "different..."`, TxB's merge writes its 21-byte pointer over TxA's pointer, but TxA's overflow page content is still on disk.
 
-- [ ] **2.1.1** `[P0]` Fix overflow string merging. Options:
-  - **Option A (recommended)**: Increase `row_data` to capture overflow page content inline. When a string exceeds inline capacity, read its overflow content into an `OverflowData` extension buffer.
-  - **Option B**: Version the overflow pages. Each overflow page gets an MVCC version counter. During merge, re-read the latest overflow page version and apply modifications on top.
-  - Implementation: `transaction_manager.rs:19-24` — add `overflow_row_data: Option<Vec<u8>>` to `PageRowMod`. When `element_size > 64` (or the data contains an overflow pointer), capture the full overflow content.
+- [X] **2.1.1** `[P0]` Fix overflow string merging.
+  - Added `overflow_row_data: Option<Vec<u8>>` to `PageRowMod` — captures the full overflow page content at write time.
+  - **Bug fix**: `append_to_overflow()` in `column.rs` was **not WAL-logging** overflow page updates (`log_page_update` was missing). Added `bm.log_page_update()` + `bm.unpin_page()` — overflow pages are now durable.
+  - During single-row write (`write_value_at_row`): after serialization, if the slot contains an overflow marker (byte 0 == 255), the overflow page content is read from the buffer manager and stored in `overflow_row_data`.
+  - Bulk insert path (`bulk_append_batch`): initializes `overflow_row_data: None` (bulk operations bypass merge-on-commit).
 
 - [ ] **2.1.2** `[P1]` Add overflow page versioning. Each overflow page in `overflow_file.rs` should have an atomic version field. On read, verify version matches the expected commit timestamp. On write, create a new version.
 
