@@ -26,14 +26,13 @@ pub struct kuzu_system_config {
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_database_init(
+pub extern "C" fn lightning_database_init(
     path: *const c_char,
     config: kuzu_system_config,
 ) -> *mut kuzu_database {
     if path.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: SAFETY: `path` is a valid C string pointer provided by the C caller (null-checked above).
     let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
     let sys_config = SystemConfig {
         buffer_pool_size: config.buffer_pool_size,
@@ -58,21 +57,33 @@ pub extern "C" fn kuzu_database_init(
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_database_destroy(database: *mut kuzu_database) {
+#[deprecated(note = "renamed to lightning_database_init")]
+pub extern "C" fn kuzu_database_init(
+    path: *const c_char,
+    config: kuzu_system_config,
+) -> *mut kuzu_database {
+    lightning_database_init(path, config)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_database_destroy(database: *mut kuzu_database) {
     if !database.is_null() {
-        // SAFETY: SAFETY: `database` is a valid pointer to a Box<Database> returned by a prior C API call. Taking ownership back into Rust.
         let db = unsafe { Box::from_raw(database) };
-        // SAFETY: SAFETY: Same ownership transfer for inner `db.database` field.
         let _ = unsafe { Box::from_raw(db.database) };
     }
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuzu_connection {
+#[deprecated(note = "renamed to lightning_database_destroy")]
+pub extern "C" fn kuzu_database_destroy(database: *mut kuzu_database) {
+    lightning_database_destroy(database)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_connection_init(database: *mut kuzu_database) -> *mut kuzu_connection {
     if database.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: SAFETY: `database` is a valid pointer; we only read through it, never take ownership.
     let db = unsafe { &*(*database).database };
     let conn = Box::new(Connection::new(Arc::clone(db)));
     Box::into_raw(Box::new(kuzu_connection {
@@ -81,26 +92,34 @@ pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuz
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_connection_destroy(connection: *mut kuzu_connection) {
+#[deprecated(note = "renamed to lightning_connection_init")]
+pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuzu_connection {
+    lightning_connection_init(database)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_connection_destroy(connection: *mut kuzu_connection) {
     if !connection.is_null() {
-        // SAFETY: SAFETY: Taking ownership of Connection Box from C caller.
         let conn = unsafe { Box::from_raw(connection) };
-        // SAFETY: SAFETY: Same ownership transfer.
         let _ = unsafe { Box::from_raw(conn.connection) };
     }
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_connection_query(
+#[deprecated(note = "renamed to lightning_connection_destroy")]
+pub extern "C" fn kuzu_connection_destroy(connection: *mut kuzu_connection) {
+    lightning_connection_destroy(connection)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_connection_query(
     connection: *mut kuzu_connection,
     query: *const c_char,
 ) -> *mut kuzu_query_result {
     if connection.is_null() || query.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: SAFETY: Borrowing Connection through pointer — C caller retains ownership.
     let conn = unsafe { &*(*connection).connection };
-    // SAFETY: SAFETY: `query` is a valid C string from the caller.
     let query_str = unsafe { CStr::from_ptr(query).to_string_lossy() };
 
     match conn.query(&query_str) {
@@ -117,33 +136,50 @@ pub extern "C" fn kuzu_connection_query(
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_query_result_destroy(query_result: *mut kuzu_query_result) {
+#[deprecated(note = "renamed to lightning_connection_query")]
+pub extern "C" fn kuzu_connection_query(
+    connection: *mut kuzu_connection,
+    query: *const c_char,
+) -> *mut kuzu_query_result {
+    lightning_connection_query(connection, query)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_query_result_destroy(query_result: *mut kuzu_query_result) {
     if !query_result.is_null() {
-        // SAFETY: SAFETY: Taking ownership of QueryResult Box.
         let res = unsafe { Box::from_raw(query_result) };
-        // SAFETY: SAFETY: Same ownership transfer.
         let _ = unsafe { Box::from_raw(res.query_result) };
     }
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_query_result_is_success(query_result: *mut kuzu_query_result) -> bool {
+#[deprecated(note = "renamed to lightning_query_result_destroy")]
+pub extern "C" fn kuzu_query_result_destroy(query_result: *mut kuzu_query_result) {
+    lightning_query_result_destroy(query_result)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_query_result_is_success(query_result: *mut kuzu_query_result) -> bool {
     if query_result.is_null() {
         return false;
     }
-    // SAFETY: SAFETY: Borrowing QueryResult — C retains ownership.
     let res = unsafe { &*(*query_result).query_result };
     res.is_success()
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_query_result_get_error_message(
+#[deprecated(note = "renamed to lightning_query_result_is_success")]
+pub extern "C" fn kuzu_query_result_is_success(query_result: *mut kuzu_query_result) -> bool {
+    lightning_query_result_is_success(query_result)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_query_result_get_error_message(
     query_result: *mut kuzu_query_result,
 ) -> *mut c_char {
     if query_result.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: SAFETY: Same borrow pattern.
     let res = unsafe { &*(*query_result).query_result };
     if let Some(msg) = res.error_message() {
         CString::new(msg).unwrap_or_else(|_| CString::new("error").unwrap()).into_raw()
@@ -153,9 +189,22 @@ pub extern "C" fn kuzu_query_result_get_error_message(
 }
 
 #[no_mangle]
-pub extern "C" fn kuzu_destroy_string(s: *mut c_char) {
+#[deprecated(note = "renamed to lightning_query_result_get_error_message")]
+pub extern "C" fn kuzu_query_result_get_error_message(
+    query_result: *mut kuzu_query_result,
+) -> *mut c_char {
+    lightning_query_result_get_error_message(query_result)
+}
+
+#[no_mangle]
+pub extern "C" fn lightning_destroy_string(s: *mut c_char) {
     if !s.is_null() {
-        // SAFETY: SAFETY: String ownership transfer — Rust allocated it, C is giving it back to free.
         let _ = unsafe { CString::from_raw(s) };
     }
+}
+
+#[no_mangle]
+#[deprecated(note = "renamed to lightning_destroy_string")]
+pub extern "C" fn kuzu_destroy_string(s: *mut c_char) {
+    lightning_destroy_string(s)
 }
