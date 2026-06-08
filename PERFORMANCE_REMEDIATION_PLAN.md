@@ -402,7 +402,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Recomputes morsel size every batch, but it's a pure function of static table metadata.
 
-- [ ] **11.2.1** `[P2]` Compute once in `new()` and store as `morsel_size: u64`.
+- [X] **11.2.1** `[P2]` Compute once in `new()` and store as `morsel_size: u64`.
 
 ### 11.3 `has_modifications()` Acquires 32 Read Locks Per Scan Check
 
@@ -410,7 +410,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Called from the scan hot path (`scan.rs:515,802`). Acquires `versions.read()` + `committed.read()` on all 16 shards = 32 lock ops.
 
-- [ ] **11.3.1** `[P2]` Maintain a global `AtomicBool dirty_flag`. Set on any `mark_row` call. `has_modifications()` returns the atomic. Clear it only when vacuum reclaims all entries.
+- [X] **11.3.1** `[P2]` Maintain a global `AtomicBool dirty_flag`. Set on any `mark_row` call. `has_modifications()` returns the atomic. Clear it only when vacuum reclaims all entries.
 
 ### 11.4 Pushdown Filter Evaluated Twice When All Rows Pass
 
@@ -454,7 +454,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Collects ALL rows, concatenates, full-sorts via `lexsort_to_indices`, then slices to K. For K=10, N=1M: O(N log N) time and O(N) memory for what should be O(N log K) time and O(K) memory.
 
-- [ ] **12.4.1** `[P1]` Replace with a bounded binary heap (min-heap for descending, max-heap for ascending). Process rows in streaming fashion. O(N log K) time, O(K) memory.
+- [X] **12.4.1** `[P1]` Replace with a bounded binary heap (min-heap for descending, max-heap for ascending). Process rows in streaming fashion. O(N log K) time, O(K) memory.
 
 ---
 
