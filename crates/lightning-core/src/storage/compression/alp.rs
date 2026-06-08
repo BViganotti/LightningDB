@@ -107,30 +107,35 @@ impl CompressionAlg for AlpAlg {
         }
 
         let mut best_shared_exp = 0u8;
+        let mut best_shared_fac = 0u8;
         let mut best_cost = u64::MAX;
 
         for exp_idx in 0..=10u8 {
-            let mut cost: u64 = 0;
-            for i in 0..num_values as usize {
-                let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
-                let encoded = Alp::encode_value(val, 0, exp_idx);
-                cost = cost.saturating_add(encoded.unsigned_abs());
-            }
-            if cost < best_cost {
-                best_cost = cost;
-                best_shared_exp = exp_idx;
+            for fac_idx in 0..19u8 {
+                let mut cost: u64 = 0;
+                for i in 0..num_values as usize {
+                    let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
+                    let encoded = Alp::encode_value(val, fac_idx, exp_idx);
+                    cost = cost.saturating_add(encoded.unsigned_abs());
+                }
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_shared_exp = exp_idx;
+                    best_shared_fac = fac_idx;
+                }
             }
         }
 
         dst[0] = best_shared_exp;
+        dst[1] = best_shared_fac;
         for i in 0..num_values as usize {
             let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
-            let encoded = Alp::encode_value(val, 0, best_shared_exp);
-            let dst_start = 1 + i * 8;
+            let encoded = Alp::encode_value(val, best_shared_fac, best_shared_exp);
+            let dst_start = 2 + i * 8;
             dst[dst_start..dst_start + 8].copy_from_slice(&encoded.to_le_bytes());
         }
 
-        Ok(((1 + num_values * 8) as u64, num_values))
+        Ok(((2 + num_values * 8) as u64, num_values))
     }
 
     fn decompress_from_page(
@@ -143,8 +148,9 @@ impl CompressionAlg for AlpAlg {
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
         let exp_idx = src[0];
+        let fac_idx = src[1];
         for i in 0..num_values as usize {
-            let start = 1 + (src_offset as usize + i) * 8;
+            let start = 2 + (src_offset as usize + i) * 8;
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&src[start..start + 8]);
             let encoded = i64::from_le_bytes(bytes);
