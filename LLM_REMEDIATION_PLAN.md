@@ -130,7 +130,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 1.3 Add Backpressure
 
-- [ ] **1.3.1** `[P2]` Use `crossbeam::channel::bounded(capacity)` instead of `unbounded` for streaming queries. When channel is full (slow consumer), block the producer. Prevents OOM.
+- [X] **1.3.1** `[P2]` Use `crossbeam::channel::bounded(64)` instead of `unbounded` for streaming queries. When channel is full (slow consumer), the producer blocks on `send()`. Prevents OOM on large result sets with slow consumers.
 
 ---
 

@@ -1,6 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator};
 use crate::Result;
-use crossbeam::channel::{unbounded, Receiver};
+use crossbeam::channel::{bounded, Receiver};
 use rayon::ThreadPoolBuilder;
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ impl Scheduler {
         tx: Arc<crate::transaction::transaction_manager::Transaction>,
         params: Option<std::collections::HashMap<String, crate::processor::Value>>,
     ) -> Result<Receiver<Result<DataChunk>>> {
-        let (ch_tx, rx) = unbounded();
+        let (ch_tx, rx) = bounded(64);
         let params_arc = params.map(Arc::new);
 
         if self.num_threads == 1 || !operator.is_parallel_safe() {
