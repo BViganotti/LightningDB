@@ -59,7 +59,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Every cell of the cross product is allocated as a heap `Value` via `Value::from_arrow()`. For L=1000, R=100K, C=10: that's 1B heap-allocated Value objects. Each Value for a string column also heap-allocates the string. This single line is the most egregious memory issue in the engine.
 
-- [ ] **1.4.1** `[P0]` Rewrite cross join to output using Arrow `take()` with index arrays instead of materializing Value objects. Build index arrays: left indices = `[0...0, 1...1, ...]` (each repeated R times), right indices = `[0,1,...,R-1, 0,1,...]` (repeated L times), then call `take()` per column. This avoids all per-cell Value allocation.
+- [X] **1.4.1** `[P0]` Rewrite cross join to output using Arrow `take()` with index arrays instead of materializing Value objects. Build index arrays: left indices = `[0...0, 1...1, ...]` (each repeated R times), right indices = `[0,1,...,R-1, 0,1,...]` (repeated L times), then call `take()` per column. This avoids all per-cell Value allocation.
 
 **Impact**: Any cross join between moderately sized tables (L=100, R=100K) will OOM the process.
 
@@ -79,7 +79,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Data is converted from Arrow → Value (lines 149-157), then back from Value → Arrow (lines 182, 189). This round-trip doubles the conversion cost on top of the O(N²) materialization.
 
-- [ ] **1.6.1** `[P1]` Remove the round-trip. Use `arrow::compute::take` with index arrays directly from the original Arrow arrays. (Same fix as 1.4.1.)
+- [X] **1.6.1** `[P1]` Remove the round-trip. Use `arrow::compute::take` with index arrays directly from the original Arrow arrays. (Same fix as 1.4.1.)
 
 ---
 
@@ -586,7 +586,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `Python::with_gil(|py| { ... })` is called inside the per-entity `.map()` closure. For N entities: N GIL acquire/release cycles at ~1-5µs each.
 
-- [ ] **17.1.1** `[P1]` Acquire GIL ONCE before the entity loop. Convert all entities while holding GIL, then release.
+- [X] **17.1.1** `[P1]` Acquire GIL ONCE before the entity loop. Convert all entities while holding GIL, then release.
 
 ### 17.2 recall_stream / query_stream Collect All Results Into Vec
 
