@@ -289,7 +289,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 5.3 Python CDC Generator
 
-- [ ] **5.3.1** `[P1]` Python binding: return a proper generator instead of buffering 100 events with timeout. Use `crossbeam::channel::Receiver` and yield one event at a time.
+- [X] **5.3.1** `[P1]` Python `subscribe_changes()` now returns a `ChangeStreamIter` generator (pyclass with `__iter__`/`__next__`) instead of buffering 100 events. Each `__next__` blocks on `rx.recv()` and yields one event dict.
 
 ---
 

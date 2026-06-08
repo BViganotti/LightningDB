@@ -6,11 +6,38 @@ use pyo3::types::{PyDict, PyList};
 use std::sync::Arc;
 
 /// Iterator that yields query result chunks one at a time as a Python generator.
-/// Each call to `__next__` blocks on the channel until the next chunk is available
-/// or the stream is exhausted.
 #[pyclass]
 struct QueryStreamIter {
     rx: crossbeam::channel::Receiver<lightning_core::Result<lightning_core::processor::DataChunk>>,
+}
+
+/// Iterator that yields CDC change events one at a time as a Python generator.
+/// Each call to `__next__` blocks on the channel until the next event is available.
+#[pyclass]
+struct ChangeStreamIter {
+    rx: crossbeam::channel::Receiver<lightning_core::memory::ChangeEvent>,
+}
+
+#[pymethods]
+impl ChangeStreamIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        match slf.rx.recv() {
+            Ok(event) => {
+                let dict = PyDict::new(py);
+                dict.set_item("timestamp", event.timestamp)?;
+                dict.set_item("bytes_written", event.bytes_written)?;
+                dict.set_item("total_wal_bytes", event.total_wal_bytes)?;
+                dict.set_item("entity_id", event.entity_id.clone())?;
+                dict.set_item("operation_type", event.operation_type.clone())?;
+                Ok(Some(dict.into()))
+            }
+            Err(_) => Ok(None),
+        }
+    }
 }
 
 #[pymethods]
@@ -346,27 +373,9 @@ impl PyMemoryStore {
         Ok(QueryStreamIter { rx })
     }
 
-    fn subscribe_changes(&self) -> PyResult<Vec<PyObject>> {
+    fn subscribe_changes(&self) -> PyResult<ChangeStreamIter> {
         let rx = self.inner.subscribe_changes().map_err(to_py_err)?;
-        Python::with_gil(|py| {
-            let mut events = Vec::new();
-            loop {
-                match rx.recv_timeout(std::time::Duration::from_millis(500)) {
-                    Ok(event) => {
-                        let dict = PyDict::new(py);
-                        dict.set_item("timestamp", event.timestamp)?;
-                        dict.set_item("bytes_written", event.bytes_written)?;
-                        dict.set_item("total_wal_bytes", event.total_wal_bytes)?;
-                        dict.set_item("entity_id", event.entity_id.clone())?;
-                        dict.set_item("operation_type", event.operation_type.clone())?;
-                        events.push(dict.into());
-                        if events.len() >= 100 { break; }
-                    }
-                    Err(_) => break,
-                }
-            }
-            Ok(events)
-        })
+        Ok(ChangeStreamIter { rx })
     }
 
     fn store_batch(&self, entities: Vec<PyObject>) -> PyResult<usize> {
