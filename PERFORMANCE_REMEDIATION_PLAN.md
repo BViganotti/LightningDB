@@ -273,7 +273,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: WRITE lock acquired on a shard, then EVERY slot is scanned. During this, no other thread can pin/unpin/create-versions in that shard.
 
-- [ ] **7.3.1** `[P2]` Phase 1: scan under READ lock to build candidate list. Phase 2: acquire WRITE lock only to mutate candidates.
+- [X] **7.3.1** `[P2]` Phase 1: scan under READ lock to build candidate list. Phase 2: acquire WRITE lock only to mutate candidates.
 
 ### 7.4 Prefetch Reads Pages Into Discarded Buffers
 
@@ -281,7 +281,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Speculative prefetch reads pages into a local `[u8; PAGE_SIZE]` that is immediately dropped. The data is NOT inserted into the buffer pool. The only hope is the OS page cache, which `pread` doesn't always populate.
 
-- [ ] **7.4.1** `[P2]` Either (a) insert prefetched pages into the buffer pool (find/allocate a slot, mark clean), or (b) disable prefetch entirely. Measure hit rate before enabling.
+- [X] **7.4.1** `[P2]` Either (a) insert prefetched pages into the buffer pool (find/allocate a slot, mark clean), or (b) disable prefetch entirely. Measure hit rate before enabling.
 
 ### 7.5 `dirty_page_count` Acquires 16 Shard Locks, Scans All Slots
 
