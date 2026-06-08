@@ -453,19 +453,45 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ## Progress Summary
 
-| Tier | Section | Items | Priority |
-|------|---------|-------|----------|
-| Cross-cutting | 0 — Security, unwrap, MIRI, dead deps | ~10 | P0/P1 |
-| Tier 1 (silent corruption) | 1 — Streaming Queries | 5 | P0/P1 |
-| Tier 1 (silent corruption) | 2 — Row-Level OCC | 7 | P0/P1 |
-| Tier 1 (silent corruption) | 3 — Graph Model / CSR | 7 | P0/P1 |
-| Tier 2 (misleading features) | 4 — Temporal Queries | 4 | P0/P1 |
-| Tier 2 (misleading features) | 5 — WAL CDC | 7 | P0/P1 |
-| Tier 3 (scale ceiling) | 6 — Vector Search | 7 | P0/P1 |
-| Tier 3 (scale ceiling) | 7 — Memory Consolidation | 6 | P1 |
-| Tier 4 (polish) | 8 — RAG Pipeline | 4 | P1/P2 |
-| Tier 4 (polish) | 9 — Hybrid Search | 4 | P1/P2 |
-| Tier 4 (polish) | 10 — Full-Text Search | 5 | P1/P2 |
-| Tier 5 (niche) | 11 — WASM UDFs | 5 | P1/P2 |
+| Tier | Section | Done | Priority |
+|------|---------|------|----------|
+| Cross-cutting | 0 — Security, unwrap, MIRI, dead deps | 5/7 | P0/P1 |
+| Tier 1 (silent corruption) | 1 — Streaming Queries | 4/5 | P0/P1 |
+| Tier 1 (silent corruption) | 2 — Row-Level OCC | 4/7 | P0/P1 |
+| Tier 1 (silent corruption) | 3 — Graph Model / CSR | 6/7 | P0/P1 |
+| Tier 2 (misleading features) | 4 — Temporal Queries | 2/4 | P0/P1 |
+| Tier 2 (misleading features) | 5 — WAL CDC | 3/7 | P0/P1 |
+| Tier 3 (scale ceiling) | 6 — Vector Search | 0/7 | P0/P1 |
+| Tier 3 (scale ceiling) | 7 — Memory Consolidation | 0/6 | P1 |
+| Tier 4 (polish) | 8 — RAG Pipeline | 0/4 | P1/P2 |
+| Tier 4 (polish) | 9 — Hybrid Search | 0/4 | P1/P2 |
+| Tier 4 (polish) | 10 — Full-Text Search | 0/5 | P1/P2 |
+| Tier 5 (niche) | 11 — WASM UDFs | 0/5 | P1/P2 |
 
-**Total**: ~71 items across 12 sections, ordered by importance to a trustworthy, usable codebase.
+**Progress**: **24/71 items completed** across 12 sections.
+
+That was quite a session. Here's what's been implemented:
+
+| # | Item | Change |
+|---|------|--------|
+| 0.1.1 | Path traversal in COPY | Parent-dir canonicalization for COPY TO |
+| 0.2.1 | Null pointer in C FFI | Added null check in `kuzu_database_init` |
+| 0.4.1 | Silently swallowed errors | Audited all `.ok()` calls |
+| 0.5.1 | KuzuDB C API naming | Renamed to `lightning_*` with deprecated aliases |
+| 0.6.1 | MIRI test script | Created `scripts/miri_test.sh` |
+| 0.7.1 | Dead dependencies | Removed `uuid`, `levenshtein` |
+| 1.1.1-2 | Parallel execution model | `is_parallel_safe()`, partitioned scans, `set_partition()` |
+| 1.2.1 | Python generator streaming | `QueryStreamIter` pyclass |
+| 1.3.1 | Backpressure | Bounded channel (capacity 64) |
+| 2.1.1 | Overflow string merge | WAL-logging for overflow pages, `overflow_row_data` capture |
+| 2.2.1 | Deadlock detection | 5s timeout on merge locks with `try_lock_for` |
+| 2.3.1 | RowVersion vacuum | `vacuum()` on checkpoint |
+| 2.4.1 | TOCTOU verified | Already correct |
+| 3.1.1-2 | Two-tier CSR | Pending buffer + `insert_edge`/`insert_batch` |
+| 3.2.1 | CSR delete_edge | `DELETED_BIT` tombstone |
+| 3.2.2 | Wire DELETE path | CSR notified on DETACH DELETE |
+| 3.2.3 | CSR compaction | `compact()` implementation |
+| 3.3.1 | RAG full scan fix | Replaced with CSR-based `expand()` |
+| 4.1.1 | MVCC time-travel | `recall_at_time` uses `execute_at` |
+| 4.2.1 | valid_until convention | Standardized on `i64::MAX` |
+| 5.2.1-3 | CDC fixes | Crossbeam channel, entity_id, backpressure |
