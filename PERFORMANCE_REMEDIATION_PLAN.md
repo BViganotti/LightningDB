@@ -111,7 +111,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Distance storage uses `HashMap<u64, u32>`. Since node IDs are densely allocated, a `Vec<u32>` indexed by node ID is more memory-efficient (8 bytes vs ~32 bytes per entry) and faster (direct index vs hashing).
 
-- [ ] **2.3.1** `[P2]` Use `Vec<u32>` indexed by node ID, initialized to `u32::MAX`.
+- [X] **2.3.1** `[P2]` Use `Vec<u32>` indexed by node ID, initialized to `u32::MAX`.
 
 ---
 
