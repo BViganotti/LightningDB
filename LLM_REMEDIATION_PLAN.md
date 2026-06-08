@@ -408,7 +408,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 10.1 Multi-Column FTS
 
-- [ ] **10.1.1** `[P1]` Modify `InvertedIndex::new()` to accept multiple field names. Store `HashMap<String, Field>`. Update `insert_batch()` to index each field.
+- [X] **10.1.1** `[P1]` Multi-column FTS: `InvertedIndex::new()` accepts `&[String]` field names, stores `HashMap<String, Field>`. `insert_multi_field_batch`/`insert_multi_field` accept named field/value pairs. `search()` queries across all fields.
 - [ ] **10.1.2** `[P1]` Add `CREATE FULLTEXT INDEX ON Entity (content, metadata)` — store field list in catalog.
 
 ### 10.2 Expose Tantivy Query Syntax

@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct RowVersionShard {
     versions: RwLock<HashMap<u64, u64>>,  // row_id -> tx_id
@@ -9,6 +10,7 @@ pub struct RowVersionShard {
 pub struct RowVersion {
     shards: Vec<RowVersionShard>,
     num_shards: usize,
+    dirty_flag: AtomicBool,
 }
 
 impl Default for RowVersion {
@@ -27,7 +29,7 @@ impl RowVersion {
                 committed: RwLock::new(HashMap::new()),
             });
         }
-        Self { shards, num_shards }
+        Self { shards, num_shards, dirty_flag: AtomicBool::new(false) }
     }
 
     fn get_shard_idx(&self, row_id: u64) -> usize {
@@ -59,6 +61,7 @@ impl RowVersion {
             }
         }
         versions.insert(row_id, tx_id);
+        self.dirty_flag.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -77,6 +80,7 @@ impl RowVersion {
             for row_id in ids {
                 versions.insert(row_id, tx_id);
             }
+            self.dirty_flag.store(true, Ordering::Release);
         }
     }
 
@@ -173,6 +177,9 @@ impl RowVersion {
     }
 
     pub fn has_modifications(&self) -> bool {
+        if !self.dirty_flag.load(Ordering::Acquire) {
+            return false;
+        }
         for shard in &self.shards {
             let versions = shard.versions.read();
             if !versions.is_empty() {
@@ -209,5 +216,15 @@ impl RowVersion {
             total_removed += before - committed.len();
         }
         total_removed
+    }
+
+    /// Reset the dirty hint after vacuum confirms no pending modifications.
+    pub fn clear_dirty_flag(&self) {
+        self.dirty_flag.store(false, Ordering::Release);
+    }
+
+    /// Force-set the dirty hint (used externally when entries may exist).
+    pub fn mark_dirty(&self) {
+        self.dirty_flag.store(true, Ordering::Release);
     }
 }

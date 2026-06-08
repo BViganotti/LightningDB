@@ -831,10 +831,13 @@ impl PhysicalOperator for PhysicalMerge {
 
                 // 2. Full-Text Search Index — index all string columns
                 if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
-                    let text_fields: Vec<&str> = row_data.iter()
-                        .filter_map(|v| match v {
-                            Value::String(s) => Some(s.as_str()),
-                            _ => None,
+                    let text_fields: Vec<(String, &str)> = self.table.columns.iter()
+                        .filter_map(|col| {
+                            let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                            row_data.get(idx).and_then(|v| match v {
+                                Value::String(s) => Some((col.name.clone(), s.as_str())),
+                                _ => None,
+                            })
                         })
                         .collect();
                     if !text_fields.is_empty() {

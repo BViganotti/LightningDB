@@ -590,6 +590,7 @@ impl StorageManager {
         let index_path = self.db_path.join(format!("{table_name}_fts"));
         let index = Arc::new(crate::storage::index::inverted_index::InvertedIndex::new(
             &index_path,
+            &[],
         )?);
         self.fts_indexes.insert(table_name.to_string(), index);
         Ok(())
