@@ -209,13 +209,17 @@ Tier 5 — Niche / additive feature                        [Section 12]
   - `delete_edge()` pushes to `pending_deletions: RwLock<Vec<(u64, u64)>>`.
   - `for_each_neighbor()` skips adjacency entries with `DELETED_BIT` set, and filters against `pending_deletions`.
 - [X] **3.2.2** `[P1]` Wire into the Cypher DELETE (detach) path in `dml.rs`: when a Relates row is deleted during DETACH DELETE, the forward and backward CSR indexes are notified via `delete_edge(from, to)` and `delete_edge(to, from)`.
-- [ ] **3.2.3** `[P1]` Add compaction that rebuilds the CSR when tombstone ratio exceeds a threshold (e.g., 25%).
+- [X] **3.2.3** `[P1]` CSR compaction on tombstone ratio — `compact()` and `needs_compaction()` already implemented in CSR. Compaction rebuilds base CSR from base + pending - deleted edges and clears the pending buffers.
 
 ### 3.3 Multi-Hop Expand CSR Usage in RAG
 
 **Problem**: `rag_query()` (memory.rs:399-477) does a full table scan of the Relates table instead of using the CSR index. The standalone `expand()` DOES use CSR — the RAG path has duplicate, slower code.
 
-- [ ] **3.3.1** `[P0]` Replace the full scan in `rag_query()` (lines 399-477) with calls to `self.expand()` for each top-k entity. Remove the duplicate full-scan + adjacency-build logic. This also fixes edge type filtering in RAG's expansion path.
+- [X] **3.3.1** `[P0]` Replace the full table scan in `rag_query()` with CSR-based expansion.
+  - Removed the full Relates table scan (src/dst column scan + adjacency build).
+  - Replaced with `self.expand()` calls (CSR-based BFS) for each top-k entity.
+  - Graph degree now computed via `CSRIndex::for_each_neighbor()` counting instead of full scan.
+  - Removed duplicate adjacency-build logic that duplicated `expand()`.
 
 ### 3.4 CSR Format Safety
 
