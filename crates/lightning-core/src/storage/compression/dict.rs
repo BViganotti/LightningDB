@@ -96,7 +96,7 @@ impl CompressionAlg for DictCompression {
         let dict_end = dict_start + dict_count * element_size;
         let packed_start = dict_end;
 
-        let bit_width = std::cmp::max(64 - (dict_count as u32).leading_zeros(), 1) as u8;
+        let bit_width = std::cmp::max(64 - (dict_count as u64).leading_zeros(), 1) as u8;
 
         let mut indices = [0u64; 32];
         BitPacker::unpack_32(&src[packed_start..], bit_width, &mut indices);

@@ -3,30 +3,44 @@ pub struct BitPacker;
 impl BitPacker {
     /// Pack 32 values into a byte buffer using bit_width bits per value.
     pub fn pack_32(values: &[u64], bit_width: u8, output: &mut [u8]) {
-        assert!(values.len() >= 32);
         if bit_width == 0 {
             return;
         }
-
-        let mut bit_offset = 0;
-        for &val in &values[0..32] {
+        // Special case: bit_width == 64 means store raw u64 values (no packing)
+        if bit_width == 64 {
+            for (i, &val) in values.iter().enumerate() {
+                let offset = i * 8;
+                if offset + 8 <= output.len() {
+                    output[offset..offset + 8].copy_from_slice(&val.to_le_bytes());
+                }
+            }
+            return;
+        }
+        let mut bit_offset = 0usize;
+        for &val in values.iter() {
             Self::write_bits(val, bit_width, bit_offset, output);
             bit_offset += bit_width as usize;
         }
     }
 
-    /// Unpack 32 values from a byte buffer.
     pub fn unpack_32(data: &[u8], bit_width: u8, output: &mut [u64]) {
-        assert!(output.len() >= 32);
         if bit_width == 0 {
-            for v in output.iter_mut().take(32) {
-                *v = 0;
+            return;
+        }
+        // Special case: bit_width == 64 means read raw u64 values
+        if bit_width == 64 {
+            for (i, v) in output.iter_mut().enumerate() {
+                let offset = i * 8;
+                if offset + 8 <= data.len() {
+                    let mut bytes = [0u8; 8];
+                    bytes.copy_from_slice(&data[offset..offset + 8]);
+                    *v = u64::from_le_bytes(bytes);
+                }
             }
             return;
         }
-
-        let mut bit_offset = 0;
-        for v in output.iter_mut().take(32) {
+        let mut bit_offset = 0usize;
+        for v in output.iter_mut() {
             *v = Self::read_bits(bit_width, bit_offset, data);
             bit_offset += bit_width as usize;
         }
