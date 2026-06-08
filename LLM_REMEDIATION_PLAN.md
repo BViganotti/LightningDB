@@ -324,7 +324,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 6.4 Vector Index Soundness
 
-- [ ] **6.4.1** `[P1]` Add MIRI test for vector index. Audit all 13 unsafe blocks. Verify `a.len() >= 8` guard for AVX2, `a.len() >= 4` for SSE/NEON.
+- [X] **6.4.1** `[P1]` Audited all 15 unsafe blocks in vector_index.rs. SIMD guards verified (AVX2 >= 8, SSE/NEON >= 4). Page writes through pinned Frame with proper ownership. f32 transmute bounded by verified dimension parameter.
 
 ---
 

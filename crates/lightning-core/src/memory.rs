@@ -26,6 +26,9 @@ pub struct RagConfig {
     pub degree_weight: f64,
     /// Name of a WASM function to use as a cross-encoder reranker.
     pub cross_encoder_wasm: String,
+    /// HTTP URL for a cross-encoder reranker service.
+    /// POST (query, content) pairs, returns relevance score.
+    pub cross_encoder_url: Option<String>,
     /// Maximum tokens (approximate) for the assembled context.
     /// Context is truncated to this limit to fit LLM windows.
     pub max_context_tokens: usize,
@@ -42,6 +45,7 @@ impl Default for RagConfig {
             recency_weight: 0.3,
             degree_weight: 0.0,
             cross_encoder_wasm: String::new(),
+            cross_encoder_url: None,
             max_context_tokens: 4096,
             hybrid_search_k: 60.0,
         }
