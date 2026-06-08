@@ -120,6 +120,17 @@ pub enum LogicalOperator {
         table_name: String,
         property: String,
     },
+    CreateVectorIndex {
+        table_name: String,
+        field: String,
+        index_type: String,
+        metric: String,
+        dimension: usize,
+    },
+    CreateFtsIndex {
+        table_name: String,
+        fields: Vec<String>,
+    },
     DropIndex(String),
     CountRelTable {
         rel_table: String,
@@ -358,6 +369,26 @@ impl LogicalPlanner {
             BoundStatement::DropIndex(name) => {
                 Ok(LogicalOperator::DropIndex(name))
             }
+            BoundStatement::CreateVectorIndex {
+                table_name,
+                field,
+                index_type,
+                metric,
+                dimension,
+            } => Ok(LogicalOperator::CreateVectorIndex {
+                table_name,
+                field,
+                index_type,
+                metric,
+                dimension,
+            }),
+            BoundStatement::CreateFtsIndex {
+                table_name,
+                fields,
+            } => Ok(LogicalOperator::CreateFtsIndex {
+                table_name,
+                fields,
+            }),
             BoundStatement::StandaloneCall(name, args) => Ok(LogicalOperator::Call(BoundCall {
                 procedure_name: name,
                 parameters: args

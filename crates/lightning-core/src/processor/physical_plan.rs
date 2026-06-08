@@ -400,6 +400,31 @@ impl PhysicalPlanner {
                     self.undo_buffer.clone(),
                 ),
             )),
+            LogicalOperator::CreateVectorIndex {
+                table_name,
+                field: _,
+                index_type: _,
+                metric,
+                dimension,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_vector_index(
+                    table_name,
+                    metric,
+                    dimension,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
+            LogicalOperator::CreateFtsIndex {
+                table_name,
+                fields: _,
+            } => Ok(Box::new(
+                crate::processor::operators::ddl::PhysicalDDL::new_create_fts_index(
+                    table_name,
+                    self.db.clone(),
+                    self.undo_buffer.clone(),
+                ),
+            )),
             LogicalOperator::AlterTable { name, operation } => {
                 match operation {
                     crate::parser::ast::AlterOperation::AddColumn { name: col_name, data_type } => {
@@ -738,8 +763,10 @@ impl PhysicalPlanner {
             | LogicalOperator::CreateMacro { .. }
             | LogicalOperator::CreateConstraint { .. }
              | LogicalOperator::DropConstraint(..)
-             | LogicalOperator::CreateIndex { .. }
-             | LogicalOperator::DropIndex(..)
+              | LogicalOperator::CreateIndex { .. }
+              | LogicalOperator::CreateVectorIndex { .. }
+              | LogicalOperator::CreateFtsIndex { .. }
+              | LogicalOperator::DropIndex(..)
              | LogicalOperator::CreateTableNode { .. }
             | LogicalOperator::CreateTableRel { .. }
             | LogicalOperator::DropTable(..)
