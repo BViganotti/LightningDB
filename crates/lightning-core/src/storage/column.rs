@@ -137,8 +137,11 @@ impl Column {
             LogicalType::List(_) => {
                 if let Some(elements) = val.as_list() {
                     let child = &self.child_columns[0];
+                    // Read num_values ONCE outside the append call to avoid holding
+                    // the child's stats read lock while append_value acquires the write lock.
+                    let num_vals = child.stats.read().num_values;
                     for el in elements {
-                        child.append_value(bm, el, child.stats.read().num_values, tx)?;
+                        child.append_value(bm, el, num_vals, tx)?;
                     }
                     let end_offset = child.stats.read().num_values;
                     self.append_plain_value(bm, &Value::Number(end_offset as f64), row_id, tx)?;
