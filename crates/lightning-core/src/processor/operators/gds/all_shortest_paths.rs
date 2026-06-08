@@ -2,7 +2,7 @@ use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::index::csr::CSRIndex;
 use crate::Database;
 use crate::Result;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 pub struct PhysicalASP {
@@ -18,7 +18,7 @@ pub struct PhysicalASP {
     chunk_row_idx: usize,
     results: VecDeque<DataChunk>,
     bfs_queue: VecDeque<u64>,
-    bfs_visited: Vec<u64>,
+    bfs_visited: HashSet<u64>,
     bfs_distance: HashMap<u64, u32>,
     bfs_src_id: u64,
     bfs_depth: u32,
@@ -52,7 +52,7 @@ impl PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_visited: Vec::new(),
+            bfs_visited: HashSet::new(),
             bfs_distance: HashMap::new(),
             bfs_src_id: 0,
             bfs_depth: 0,
@@ -77,7 +77,7 @@ impl PhysicalASP {
         self.bfs_visited.clear();
         self.bfs_distance.clear();
         self.bfs_queue.push_back(src_id);
-        self.bfs_visited.push(src_id);
+        self.bfs_visited.insert(src_id);
         self.bfs_distance.insert(src_id, 0);
         self.bfs_src_id = src_id;
 
@@ -95,7 +95,7 @@ impl PhysicalASP {
             })?;
 
             for neighbor in neighbors {
-                self.bfs_visited.push(neighbor);
+                self.bfs_visited.insert(neighbor);
                 self.bfs_distance.insert(neighbor, dist + 1);
                 self.bfs_queue.push_back(neighbor);
             }
@@ -219,7 +219,7 @@ impl PhysicalOperator for PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_visited: Vec::new(),
+            bfs_visited: HashSet::new(),
             bfs_distance: HashMap::new(),
             bfs_src_id: 0,
             bfs_depth: 0,

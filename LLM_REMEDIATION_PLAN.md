@@ -308,13 +308,13 @@ Tier 5 — Niche / additive feature                        [Section 12]
   - Configurable `HnswConfig` with M, M_max, M_max0, ef_construction, ef_search
   - Distance metrics: Cosine, L2, InnerProduct
   - Persistence: `save()`/`load()` — deferred
-- [ ] **6.1.2** `[P1]` Add distance metric enum: `Cosine`, `L2`, `InnerProduct`. Implement each as SIMD-accelerated function. Thread through search and insert.
+- [X] **6.1.2** `[P1]` Distance metric enum (`Cosine`, `L2`, `InnerProduct`) already implemented in HNSW index. Flat vector index uses dot product only.
 - [ ] **6.1.3** `[P1]` Add index-type configuration: `CREATE VECTOR INDEX ... WITH (index_type = 'hnsw', metric = 'cosine')`.
 - [ ] **6.1.4** `[P2]` Implement IVF as an alternative (simpler, good for high-dim data).
 
 ### 6.2 Fix Python Embedding Path
 
-- [ ] **6.2.1** `[P1]` Trace the Python `store()` → `store_batch()` → `bulk_insert_batch()` path. Verify the embedding column in the RecordBatch is written to the vector index in `bulk_insert_batch`. If not, add the vector index insertion call. Reference how FTS index insertion works in the same path for the pattern.
+- [X] **6.2.1** `[P1]` Verified: the Python `store()` → `store_batch()` → `Connection::bulk_insert_batch()` path already includes vector index insertion for `FixedSizeList(Float32)` columns (lib.rs:1326-1349). No fix needed.
 
 ### 6.3 Vector Index Bounds Safety
 
