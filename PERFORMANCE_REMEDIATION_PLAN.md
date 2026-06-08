@@ -514,7 +514,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Setting a single null bit calls `create_new_version()` → allocates new 4KB frame, copies entire page, writes 1 byte, logs 4KB to WAL. For 1M single-row appends with nulls: 4GB of unnecessary memcpy and WAL traffic.
 
-- [ ] **15.1.1** `[P2]` Buffer null bit changes in memory for the single-row path. Flush to the page only when the batch is full or on flush.
+- [X] **15.1.1** `[P2]` Buffer null bit changes in memory for the single-row path. Flush to the page only when the batch is full or on flush.
 
 ### 15.2 `is_null()` Pins 4KB Page to Read 1 Byte
 
