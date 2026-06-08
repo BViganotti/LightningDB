@@ -424,6 +424,14 @@ impl PhysicalOperator for PhysicalDelete {
                                                 for col in &rel_table.columns {
                                                     col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
                                                 }
+                                                // Notify CSR indexes of the deleted edge
+                                                let storage_guard = database.storage_manager.read();
+                                                if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
+                                                    fwd.delete_edge(from_val, to_val);
+                                                }
+                                                if let Some(bwd) = storage_guard.bwd_csr.get(rel_name) {
+                                                    bwd.delete_edge(to_val, from_val);
+                                                }
                                             }
                                         }
                                     }
