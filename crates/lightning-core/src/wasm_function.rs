@@ -236,7 +236,6 @@ impl WasmFunction {
                                 "WASM vector function requires exported 'memory'".into()
                             ))?;
 
-                        let results: Vec<f32> = (0..num_rows).map(|_| f32::NAN).collect();
                         let input_bytes: Vec<u8> = (0..num_rows)
                             .flat_map(|i| input.value(i).to_le_bytes().into_iter())
                             .collect();

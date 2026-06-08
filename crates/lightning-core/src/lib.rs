@@ -1,5 +1,6 @@
 pub mod api;
 pub mod catalog;
+pub mod cdc;
 pub use api::*;
 pub mod capi;
 pub mod fusion;

@@ -148,8 +148,8 @@ impl WAL {
         let pos = file.stream_position()?;
         let padding = (WAL_ALIGNMENT - (pos as usize % WAL_ALIGNMENT)) % WAL_ALIGNMENT;
         if padding > 0 {
-            let pad = vec![0u8; padding];
-            file.write_all(&pad)?;
+            let pad = [0u8; 8];
+            file.write_all(&pad[..padding])?;
         }
         Ok(())
     }
@@ -392,6 +392,125 @@ impl WAL {
         let metadata = file.metadata()?;
         Ok(metadata.len())
     }
+
+    /// Read WAL records starting at a byte offset. Skips the WAL header.
+    /// Returns an iterator that yields parsed records until EOF or error.
+    /// If `offset` is past the end of the file (e.g., after truncation),
+    /// returns an empty iterator.
+    pub fn read_records_from(&self, offset: u64) -> Result<WALRecordIter> {
+        let mut file = self.file.lock();
+        let file_len = file.metadata()?.len();
+
+        let start = if offset < WAL_HEADER_SIZE as u64 {
+            WAL_HEADER_SIZE as u64
+        } else {
+            offset
+        };
+
+        if start >= file_len {
+            return Ok(WALRecordIter { buf: Vec::new(), pos: 0, base_offset: start });
+        }
+
+        file.seek(SeekFrom::Start(start))?;
+        let remaining = (file_len - start) as usize;
+        let mut buf = vec![0u8; remaining];
+        file.read_exact(&mut buf)?;
+        drop(file);
+
+        Ok(WALRecordIter { buf, pos: 0, base_offset: start })
+    }
+}
+
+/// Iterator over parsed WAL records from a byte buffer.
+pub struct WALRecordIter {
+    buf: Vec<u8>,
+    pos: usize,
+    /// Absolute file offset where `buf` starts.
+    base_offset: u64,
+}
+
+impl WALRecordIter {
+    /// The absolute byte position in the WAL file after the last read record.
+    /// Use this as the starting offset for the next `read_records_from` call
+    /// to avoid re-reading the same records.
+    pub fn absolute_pos(&self) -> u64 {
+        self.base_offset + self.pos as u64
+    }
+
+    pub fn next_record(&mut self) -> Option<WALRecord> {
+        while self.pos + 1 <= self.buf.len() {
+            let record_type = self.buf[self.pos];
+            match record_type {
+                RECORD_TYPE_PAGE_UPDATE => {
+                    let needed = 1 + WAL_CHECKSUM_SIZE + 8 + 8 + 8 + PAGE_SIZE;
+                    if self.pos + needed > self.buf.len() {
+                        return None;
+                    }
+                    let mut crc_bytes = [0u8; WAL_CHECKSUM_SIZE];
+                    crc_bytes.copy_from_slice(&self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE]);
+                    let stored_crc = u32::from_le_bytes(crc_bytes);
+
+                    let off = self.pos + 1 + WAL_CHECKSUM_SIZE;
+                    let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
+                    let file_id = u64::from_le_bytes(self.buf[off + 8..off + 16].try_into().ok()?);
+                    let page_idx = u64::from_le_bytes(self.buf[off + 16..off + 24].try_into().ok()?);
+                    let data_start = off + 24;
+                    let data = self.buf[data_start..data_start + PAGE_SIZE].to_vec();
+
+                    let mut hasher = crc32fast::Hasher::new();
+                    hasher.update(&[RECORD_TYPE_PAGE_UPDATE]);
+                    hasher.update(&tx_id.to_le_bytes());
+                    hasher.update(&file_id.to_le_bytes());
+                    hasher.update(&page_idx.to_le_bytes());
+                    hasher.update(&data);
+                    let _computed_crc = hasher.finalize();
+
+                    let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
+
+                    // Advance past record + alignment
+                    self.pos += needed;
+                    self.align_position();
+                    return Some(record);
+                }
+                RECORD_TYPE_COMMIT => {
+                    let needed = 1 + WAL_CHECKSUM_SIZE + 8;
+                    if self.pos + needed > self.buf.len() {
+                        return None;
+                    }
+                    let off = self.pos + 1 + WAL_CHECKSUM_SIZE;
+                    let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
+
+                    let record = WALRecord::Commit { tx_id };
+
+                    self.pos += needed;
+                    self.align_position();
+                    return Some(record);
+                }
+                _ => {
+                    // Unknown record type — skip one byte and continue
+                    self.pos += 1;
+                }
+            }
+        }
+        None
+    }
+
+    fn align_position(&mut self) {
+        let padding = (WAL_ALIGNMENT - (self.pos % WAL_ALIGNMENT)) % WAL_ALIGNMENT;
+        self.pos = std::cmp::min(self.pos + padding, self.buf.len());
+    }
+}
+
+pub enum WALRecord {
+    PageUpdate {
+        tx_id: u64,
+        file_id: u64,
+        page_idx: u64,
+        data: Vec<u8>,
+    },
+    Commit {
+        tx_id: u64,
+    },
 }
 
 pub struct WALReplayReport {

@@ -216,7 +216,7 @@ impl Aggregate {
                     let ka = &a.0;
                     let kb = &b.0;
                     for (va, vb) in ka.iter().zip(kb.iter()) {
-                        let cmp = format!("{:?}", va).cmp(&format!("{:?}", vb));
+                        let cmp = va.partial_cmp(vb).unwrap_or(std::cmp::Ordering::Less);
                         if cmp != std::cmp::Ordering::Equal {
                             return cmp;
                         }

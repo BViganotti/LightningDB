@@ -36,7 +36,7 @@ impl Task for NextChunk {
                         let val = if col.is_null(row_idx) {
                             "NULL".to_string()
                         } else {
-                            format!("{:?}", col)
+                            arrow::cast::array_value_to_string(col, row_idx).unwrap_or_else(|_| format!("{:?}", col))
                         };
                         row.push(val);
                     }
@@ -111,6 +111,7 @@ impl Task for NextRecall {
                 r.entity.entity_type,
                 r.score,
                 r.entity.metadata,
+                r.entity.embedding.iter().map(|&v| v as f64).collect(),
             )
         }))
     }

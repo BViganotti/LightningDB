@@ -307,7 +307,7 @@ impl JsMemoryStore {
                     metadata: if e.metadata.is_empty() { "{}".to_string() } else { e.metadata },
                     valid_from: if e.valid_from == 0 { now } else { e.valid_from },
                     valid_until: e.valid_until,
-                    embedding: e.embedding,
+                    embedding: e.embedding.iter().map(|&v| v as f32).collect(),
                 }
             })
             .collect();
@@ -362,8 +362,7 @@ impl JsMemoryStore {
             .inner
             .subscribe_changes()
             .map_err(|e| napi::Error::from_reason(format!("Subscribe changes failed: {}", e)))?;
-        let crossbeam_rx = self.convert_mpsc_to_crossbeam(rx);
-        Ok(JsChangeStream::new(crossbeam_rx))
+        Ok(JsChangeStream::new(rx))
     }
 
     #[napi]
@@ -383,19 +382,4 @@ impl JsMemoryStore {
     }
 }
 
-impl JsMemoryStore {
-    fn convert_mpsc_to_crossbeam(
-        &self,
-        rx: std::sync::mpsc::Receiver<lightning_core::memory::ChangeEvent>,
-    ) -> crossbeam::channel::Receiver<lightning_core::memory::ChangeEvent> {
-        let (cb_tx, cb_rx) = crossbeam::channel::unbounded();
-        std::thread::spawn(move || {
-            while let Ok(event) = rx.recv() {
-                if cb_tx.send(event).is_err() {
-                    break;
-                }
-            }
-        });
-        cb_rx
-    }
-}
+

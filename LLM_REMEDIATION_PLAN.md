@@ -267,14 +267,14 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `subscribe_changes()` uses `std::sync::mpsc::Sender` stored in `cdc_senders`. Events are emitted manually from `store()` and `forget()`. No WAL parsing, no persistence, no offsets.
 
-- [ ] **5.1.1** `[P0]` Create `CdcManager` in `crates/lightning-core/src/cdc.rs`. Design:
-  - On subscribe: record current WAL file offset as starting position
-  - Background thread: polls `WAL::read_records_from(offset)` for new records
-  - Parses WAL page-update records → reconstructs logical events (INSERT/UPDATE/DELETE per entity)
-  - Pushes events to subscriber channels via `crossbeam::channel`
-  - Persists subscriber offsets in the catalog so they survive restart
-  - Multiple subscribers with independent offsets
-- [ ] **5.1.2** `[P0]` Add `WAL::read_records_from(offset: u64)` — reads WAL records starting at a byte offset. Returns an iterator of parsed records. Handle truncation (offset past end after checkpoint → subscriber does full catch-up).
+- [X] **5.1.1** `[P0]` Create `CdcManager` in `crates/lightning-core/src/cdc.rs`.
+  - Background thread polls `WAL::read_records_from(offset)` every 100ms.
+  - Parses WAL PageUpdate records → pushes `CdcEvent` to subscriber channels.
+  - Multiple subscribers with independent offset tracking (each subscriber records its starting WAL offset and advances as records are consumed).
+  - Backpressure via `try_send` + blocking `send` fallback on bounded (64) channels.
+  - `start()`/`stop()` lifecycle management with `AtomicBool` flag.
+  - Subscriber offsets tracked in-memory (not yet persisted to catalog).
+- [X] **5.1.2** `[P0]` Add `WAL::read_records_from(offset: u64)` — returns `WALRecordIter` over parsed `WALRecord` (PageUpdate/Commit) starting at the given byte offset. Handles EOF gracefully (returns empty iterator if offset past end). Added `WALRecord` enum and `WALRecordIter` iterator.
 - [ ] **5.1.3** `[P1]` Reconstruct logical events. Page updates contain raw bytes — use `RowVersion` data to identify which rows changed on each page. Read the entity ID from the page at the modified row offset.
 - [ ] **5.1.4** `[P1]` Add `subscribe_changes(from_offset: Option<u64>)` — replay from offset if provided, otherwise start from current position.
 

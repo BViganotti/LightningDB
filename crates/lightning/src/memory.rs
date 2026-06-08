@@ -227,7 +227,7 @@ impl MemoryStore {
 
     /// Subscribe to change events. Returns a receiver that yields
     /// [`ChangeEvent`] on every write operation.
-    pub fn subscribe_changes(&self) -> Result<std::sync::mpsc::Receiver<ChangeEvent>> {
+    pub fn subscribe_changes(&self) -> Result<Receiver<ChangeEvent>> {
         self.inner.subscribe_changes()
     }
 

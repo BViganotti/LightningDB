@@ -1852,7 +1852,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
         buf: &mut [u8],
     ) -> Result<()> {
-        match (val, self.data_type.clone()) {
+        match (val, &self.data_type) {
             (Value::Number(n), LogicalType::Int64) => {
                 buf[..8].copy_from_slice(&(*n as i64).to_le_bytes())
             }
