@@ -75,7 +75,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: The C API uses `kuzu_*` function names (copied from KuzuDB). This is confusing and potentially infringing.
 
-- [ ] **0.5.1** `[P1]` Rename all `kuzu_*` exports to `lightning_*`. Keep `kuzu_*` as deprecated aliases with a compile-time deprecation warning. Functions: `kuzu_database_init`, `kuzu_connection_init`, `kuzu_connection_query`, `kuzu_database_destroy`, `kuzu_connection_destroy`.
+- [X] **0.5.1** `[P1]` Rename all `kuzu_*` exports to `lightning_*`. Each old `kuzu_*` name is kept as a deprecated wrapper (`#[deprecated(note = "renamed to lightning_*")]`) that delegates to the new `lightning_*` function. All 9 functions renamed: `database_init`, `database_destroy`, `connection_init`, `connection_destroy`, `connection_query`, `query_result_destroy`, `query_result_is_success`, `query_result_get_error_message`, `destroy_string`. Struct type names (`kuzu_database`, `kuzu_connection`, `kuzu_query_result`, `kuzu_system_config`) kept as-is for ABI compatibility.
 
 ### 0.6 Add MIRI Verification
 
