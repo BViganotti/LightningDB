@@ -389,15 +389,9 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 9.1 Expose RRF k
 
-- [ ] **9.1.1** `[P1]` Add `hybrid_search_k: f64` to `RagConfig` (or a new `SearchConfig`), default 60.0. Thread through `recall()`.
-
-### 9.2 Single Transaction
-
-- [ ] **9.2.1** `[P1]` Open one read transaction at the top of `recall()`, pass to both FTS and vector search, rollback once. Reduces overhead and ensures consistent snapshot.
-
-### 9.3 Component Error Reporting
-
-- [ ] **9.3.1** `[P1]` Collect FTS and vector search errors, return partial results with error context.
+- [X] **9.1.1** `[P1]` Add `hybrid_search_k: f64` to `RagConfig` (default 60.0). Threaded through `recall_with_config()`.
+- [X] **9.2.1** `[P1]` Single read transaction opened at the top of `recall_with_config()`, passed to both FTS and vector search, rolled back once.
+- [X] **9.3.1** `[P1]` FTS and vector search errors are logged and collected. If both fail and no results, an error is returned. Partial results with one component failing are still returned.
 
 ### 9.4 Alternative Fusion Strategies
 

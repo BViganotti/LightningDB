@@ -574,13 +574,16 @@ impl BufferManager {
             }
         }
 
-        // Phase 2: Sync each file handle once
+        // Phase 2: Sync each file handle exactly once
         let fids: Vec<u64> = synced_fids.lock().iter().copied().collect();
+        let mut synced = std::collections::HashSet::new();
         for shard in &self.shards {
             let pool = shard.read();
             for fid in &fids {
-                if let Some(fh) = pool.file_handles.get(fid) {
-                    fh.sync()?;
+                if synced.insert(*fid) {
+                    if let Some(fh) = pool.file_handles.get(fid) {
+                        fh.sync()?;
+                    }
                 }
             }
         }
