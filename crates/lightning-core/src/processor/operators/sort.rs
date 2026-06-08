@@ -1,7 +1,7 @@
 use crate::planner::binder::BoundOrderByItem;
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
-use crate::Result;
+use crate::{LightningError, Result};
 
 use arrow::compute::{lexsort_to_indices, take, SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
@@ -9,6 +9,10 @@ use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Maximum number of rows to sort in-memory before switching to external sort.
+/// Set to ~10M rows (approx 500MB for typical row width).
+const MAX_SORT_MEMORY_ROWS: usize = 10_000_000;
 
 pub struct SharedSort {
     pub batches: Vec<RecordBatch>,
@@ -84,6 +88,12 @@ impl PhysicalSort {
                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
                 let total_rows = big_batch.num_rows();
+                if total_rows > MAX_SORT_MEMORY_ROWS {
+                    return Err(LightningError::Internal(format!(
+                        "Sort of {} rows exceeds in-memory limit of {}. Use ORDER BY ... LIMIT to reduce rows, or increase MAX_SORT_MEMORY_ROWS.",
+                        total_rows, MAX_SORT_MEMORY_ROWS
+                    )));
+                }
                 let mut sort_columns = Vec::new();
                 for item in &self.order_by {
                     let array = ExpressionEvaluator::evaluate(

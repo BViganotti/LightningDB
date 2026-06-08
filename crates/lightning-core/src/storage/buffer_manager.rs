@@ -3,6 +3,7 @@ use crate::{LightningError, Result};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rayon::prelude::*;
+use std::collections::VecDeque;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -62,6 +63,9 @@ struct BufferPool {
     page_locks: HashMap<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
     dirty_count: AtomicU64,
+    /// Free candidate queue: slot indices whose pin_count dropped to 0.
+    /// evict_with_clock pops from here first before scanning via CLOCK.
+    free_candidates: VecDeque<usize>,
 }
 
 pub struct BufferManager {
@@ -97,16 +101,18 @@ impl BufferManager {
                     referenced: false,
                 });
             }
+
             shards.push(RwLock::new(BufferPool {
-                shutdown: AtomicBool::new(false),
-                dirty_count: AtomicU64::new(0),
-                page_to_slots: HashMap::new(),
+                page_to_slots: HashMap::with_capacity(shard_capacity),
                 file_handles: HashMap::new(),
                 slots,
                 clock_ptr: 0,
                 capacity: shard_capacity,
-                wal: wal.clone(),
+                wal: wal.as_ref().map(|w| Arc::clone(w)),
                 page_locks: HashMap::new(),
+                shutdown: AtomicBool::new(false),
+                dirty_count: AtomicU64::new(0),
+                free_candidates: VecDeque::new(),
             }));
         }
 
@@ -407,15 +413,18 @@ impl BufferManager {
         let tx_id_marked = tx_id | UNCOMMITTED_BIT;
         let shard_idx = self.get_shard_idx(key);
 
-        let pool = self.shards[shard_idx].write();
+        let pool = self.shards[shard_idx].read();
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             for &idx in slot_indices {
                 let current_version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                 if current_version == tx_id_marked {
-                    pool.slots[idx]
-                        .frame
-                        .version
-                        .store(commit_ts, Ordering::Release);
+                    // Use compare_exchange to avoid needing a write lock for the store
+                    let _ = pool.slots[idx].frame.version.compare_exchange(
+                        current_version,
+                        commit_ts,
+                        Ordering::Release,
+                        Ordering::Acquire,
+                    );
                 }
             }
         }
@@ -455,6 +464,7 @@ impl BufferManager {
                     }
                     pool.slots[i].dirty = false;
                     pool.slots[i].referenced = false;
+                    pool.free_candidates.push_back(i);
                     total_reclaimed += 1;
                 }
             }
@@ -493,6 +503,7 @@ impl BufferManager {
                     }
                     pool.slots[idx].dirty = false;
                     pool.slots[idx].referenced = false;
+                    pool.free_candidates.push_back(idx);
                 }
                 pool.page_to_slots.remove(&key);
             }
@@ -614,6 +625,20 @@ impl BufferManager {
     }
 
     fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<usize> {
+        // Fast path: pop a free candidate if available
+        if let Some(idx) = pool.free_candidates.pop_front() {
+            if pool.slots[idx].key.is_none() && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0 {
+                // Check if the slot was dirtied since being queued
+                if pool.slots[idx].dirty {
+                    if let Some((fid, pid)) = pool.slots[idx].key {
+                        if let Some(fh) = pool.file_handles.get(&fid) {
+                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
+                        }
+                    }
+                }
+                return Ok(idx);
+            }
+        }
         let start_ptr = pool.clock_ptr;
         let mut all_uncommitted = true;
         loop {
