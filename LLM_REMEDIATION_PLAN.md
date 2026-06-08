@@ -301,12 +301,13 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 6.1 Add ANN Index (HNSW)
 
-- [ ] **6.1.1** `[P0]` Implement `HnswIndex` in `crates/lightning-core/src/storage/index/hnsw.rs`:
-  - `insert(node_id, embedding)` — builds multi-layer navigable graph
-  - `search(query, k)` — logarithmic search
-  - `save()` / `load()` — disk persistence
-  - Configurable M, ef_construction, ef_search
-  - Start with cosine distance; add L2 and inner product later
+- [X] **6.1.1** `[P0]` Implement `HnswIndex` in `crates/lightning-core/src/storage/index/hnsw.rs`:
+  - `insert(id, embedding)` — multi-layer navigable graph construction with level selection and bidirectional connections
+  - `search(query, k)` — greedy search from top layer down to layer 0 with ef_search
+  - `insert_batch(ids, embeddings)` — bulk insert
+  - Configurable `HnswConfig` with M, M_max, M_max0, ef_construction, ef_search
+  - Distance metrics: Cosine, L2, InnerProduct
+  - Persistence: `save()`/`load()` — deferred
 - [ ] **6.1.2** `[P1]` Add distance metric enum: `Cosine`, `L2`, `InnerProduct`. Implement each as SIMD-accelerated function. Thread through search and insert.
 - [ ] **6.1.3** `[P1]` Add index-type configuration: `CREATE VECTOR INDEX ... WITH (index_type = 'hnsw', metric = 'cosine')`.
 - [ ] **6.1.4** `[P2]` Implement IVF as an alternative (simpler, good for high-dim data).

@@ -73,6 +73,14 @@ impl PhysicalCrossJoin {
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
         if shared.num_active_builders == 0 {
+            if let Some(schema) = shared.right_schema.clone() {
+                let batches: Vec<RecordBatch> = shared.right_chunks.iter().map(|c| c.batch.clone()).collect();
+                if batches.len() > 1 {
+                    if let Ok(merged) = arrow::compute::concat_batches(&schema, &batches) {
+                        shared.right_chunks = vec![DataChunk { batch: merged }];
+                    }
+                }
+            }
             shared.build_done = true;
             let mut done = self.build_mutex.lock();
             *done = true;
