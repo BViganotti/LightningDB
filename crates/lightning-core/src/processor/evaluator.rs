@@ -503,15 +503,96 @@ impl ExpressionEvaluator {
             .ok_or_else(|| LightningError::Internal("Expected Int64Array for right operand".into()))?;
 
         use crate::parser::ast::ArithmeticOperator::*;
-        let res = match op {
-            Add => arrow::compute::kernels::numeric::add(l, r),
-            Subtract => arrow::compute::kernels::numeric::sub(l, r),
-            Multiply => arrow::compute::kernels::numeric::mul(l, r),
-            Divide => arrow::compute::kernels::numeric::div(l, r),
-            Modulo => arrow::compute::kernels::numeric::rem(l, r),
+        let res: ArrayRef = match op {
+            Add => {
+                let raw = arrow::compute::kernels::numeric::add(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                // Check for overflow: if any value wrapped, promote to Float64
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => a.overflowing_add(b).1,
+                        _ => false,
+                    }
+                });
+                if has_overflow {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 + b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    Arc::new(raw)
+                }
+            }
+            Subtract => {
+                let raw = arrow::compute::kernels::numeric::sub(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => a.overflowing_sub(b).1,
+                        _ => false,
+                    }
+                });
+                if has_overflow {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 - b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    Arc::new(raw)
+                }
+            }
+            Multiply => {
+                let raw = arrow::compute::kernels::numeric::mul(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
+                    match (a, b) {
+                        (Some(a), Some(b)) => a.overflowing_mul(b).1,
+                        _ => false,
+                    }
+                });
+                if has_overflow {
+                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                        match (a, b) {
+                            (Some(a), Some(b)) => Some(a as f64 * b as f64),
+                            _ => None,
+                        }
+                    }).collect();
+                    Arc::new(f)
+                } else {
+                    Arc::new(raw)
+                }
+            }
+            Divide => {
+                let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                    match (a, b) {
+                        (Some(_), Some(0)) => None,
+                        (Some(a), Some(b)) => match a.checked_div(b) {
+                            Some(val) => Some(val),
+                            None => None,
+                        }
+                        _ => None,
+                    }
+                }).collect();
+                Arc::new(result)
+            }
+            Modulo => {
+                let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
+                    match (a, b) {
+                        (Some(_), Some(0)) => None,
+                        (Some(a), Some(b)) => Some(a % b),
+                        _ => None,
+                    }
+                }).collect();
+                Arc::new(result)
+            }
         };
-        res.map(|a| Arc::new(a) as ArrayRef)
-            .map_err(|e| LightningError::Internal(e.to_string()))
+        Ok(res)
     }
 
     fn compare_column_literal(

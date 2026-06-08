@@ -985,14 +985,14 @@ fn parse_not(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> 
 fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
-        return parse_arithmetic(ps[0].clone());
+        return parse_term(ps[0].clone());
     }
 
     if ps[1].as_rule() == Rule::comparison_operator {
         return Ok(Expression::Comparison(
-            Box::new(parse_arithmetic(ps[0].clone())?),
+            Box::new(parse_term(ps[0].clone())?),
             parse_comparison_operator(ps[1].clone()),
-            Box::new(parse_arithmetic(ps[2].clone())?),
+            Box::new(parse_term(ps[2].clone())?),
         ));
     } else if ps[1].as_rule() == Rule::string_predicate {
         let op_pair = ps[1].clone().into_inner().next().expect("expected next element");
@@ -1013,8 +1013,8 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
         return Ok(Expression::Function(
             func_name.to_string(),
             vec![
-                parse_arithmetic(ps[0].clone())?,
-                parse_arithmetic(right_expr)?,
+                parse_term(ps[0].clone())?,
+                parse_term(right_expr)?,
             ],
             false,
         ));
@@ -1023,7 +1023,7 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
         let func_name = if is_not { "IS_NOT_NULL" } else { "IS_NULL" };
         return Ok(Expression::Function(
             func_name.to_string(),
-            vec![parse_arithmetic(ps[0].clone())?],
+            vec![parse_term(ps[0].clone())?],
             false,
         ));
     } else if ps[1].as_rule() == Rule::in_check {
@@ -1031,7 +1031,7 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
             let s = p.as_str().to_uppercase();
             s == "NOT"
         });
-        let lhs = parse_arithmetic(ps[0].clone())?;
+        let lhs = parse_term(ps[0].clone())?;
         // Collect all list items from the in_check
         let mut items = Vec::new();
         for child in ps[1].clone().into_inner() {
@@ -1071,6 +1071,42 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
     )))
 }
 
+/// Parse a `term` rule: factors joined by `+` and `-` (lower precedence).
+fn parse_term(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
+    let ps = p.into_inner().collect::<Vec<_>>();
+    if ps.len() == 1 {
+        return parse_factor(ps[0].clone());
+    }
+    let mut e = parse_factor(ps[0].clone())?;
+    for i in (1..ps.len()).step_by(2) {
+        e = Expression::Arithmetic(
+            Box::new(e),
+            parse_arithmetic_operator(ps[i].clone()),
+            Box::new(parse_factor(ps[i + 1].clone())?),
+        );
+    }
+    Ok(e)
+}
+
+/// Parse a `factor` rule: atoms joined by `*`, `/`, `%` (higher precedence).
+fn parse_factor(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
+    let ps = p.into_inner().collect::<Vec<_>>();
+    if ps.len() == 1 {
+        return parse_atom(ps[0].clone());
+    }
+    let mut e = parse_atom(ps[0].clone())?;
+    for i in (1..ps.len()).step_by(2) {
+        e = Expression::Arithmetic(
+            Box::new(e),
+            parse_arithmetic_operator(ps[i].clone()),
+            Box::new(parse_atom(ps[i + 1].clone())?),
+        );
+    }
+    Ok(e)
+}
+
+/// Legacy arithmetic parser for flat `arithmetic_expr` grammar.
+/// Kept for reference but no longer used with the new term/factor grammar.
 fn parse_arithmetic(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
