@@ -1889,15 +1889,21 @@ impl Column {
                         bm.pin_page(self.overflow_fh.as_ref().expect("overflow file handle required").clone(), page_idx, tx)?;
                     let end = std::cmp::min(offset as usize + read_len, 4096);
                     let raw = &overflow_page.as_slice()[offset as usize..end];
-                    let s = String::from_utf8(raw.to_vec())
-                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                    let s = if let Ok(s) = std::str::from_utf8(raw) {
+                        s.to_string()
+                    } else {
+                        String::from_utf8_lossy(raw).into_owned()
+                    };
                     Ok(Value::String(s))
                 } else {
                     let len = if data[0] == 255 { 63 } else { data[0] as usize };
                     let actual_len = std::cmp::min(len, 63);
                     let raw = &data[1..1 + actual_len];
-                    let s = String::from_utf8(raw.to_vec())
-                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                    let s = if let Ok(s) = std::str::from_utf8(raw) {
+                        s.to_string()
+                    } else {
+                        String::from_utf8_lossy(raw).into_owned()
+                    };
                     Ok(Value::String(s))
                 }
             }
