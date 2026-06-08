@@ -248,6 +248,39 @@ impl LogicalOperator {
             _ => None,
         }
     }
+    /// Count all nodes in the plan tree (for optimizer fixed-point detection).
+    pub fn node_count(&self) -> usize {
+        let mut count = 1;
+        match self {
+            LogicalOperator::Filter(child, _)
+            | LogicalOperator::Projection(child, _)
+            | LogicalOperator::SemiMasker(child, _, _)
+            | LogicalOperator::Unwind(child, _, _)
+            | LogicalOperator::Sort(child, _)
+            | LogicalOperator::Limit(child, _)
+            | LogicalOperator::TopK(child, _, _)
+            | LogicalOperator::Skip(child, _)
+            | LogicalOperator::Subquery(child) => {
+                count += child.node_count();
+            }
+            LogicalOperator::Join(left, right, _) => {
+                count += left.node_count() + right.node_count();
+            }
+            LogicalOperator::Aggregate { child, .. } => {
+                count += child.node_count();
+            }
+            LogicalOperator::CreateNode(Some(child), _) | LogicalOperator::CreateRel(Some(child), _) => {
+                count += child.node_count();
+            }
+            LogicalOperator::CreateNode(None, _) | LogicalOperator::CreateRel(None, _) => {}
+            LogicalOperator::Delete(child, _, _) | LogicalOperator::Set(child, _) => {
+                count += child.node_count();
+            }
+            LogicalOperator::RecursiveJoin { .. } | LogicalOperator::Intersect { .. } => {}
+            _ => {}
+        }
+        count
+    }
     pub fn get_variables(&self, vars: &mut std::collections::HashSet<String>) {
         match self {
             LogicalOperator::Scan(_, var, ..) | LogicalOperator::IndexScan(_, var, ..) => {

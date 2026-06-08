@@ -1230,19 +1230,26 @@ impl MemoryStore {
     }
 
     fn lookup_by_internal_id(&self, internal_id: u64) -> Option<MemoryEntity> {
+        self.lookup_by_internal_ids(&[internal_id]).into_iter().next()
+    }
+
+    /// Batch version: look up multiple internal IDs in a single Cypher query.
+    fn lookup_by_internal_ids(&self, internal_ids: &[u64]) -> Vec<MemoryEntity> {
+        if internal_ids.is_empty() {
+            return Vec::new();
+        }
+        let ids: Vec<String> = internal_ids.iter().map(|id| format!("{}", *id as f64)).collect();
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id = $id \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until LIMIT 1"
+             e.valid_from, e.valid_until",
+            ids.join(", ")
         );
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::Number(internal_id as f64));
-        if let Ok(res) = self.conn.execute(&query, Some(params)) {
-            let entities = self.batches_to_entities(&res.batches);
-            entities.into_iter().next()
+        if let Ok(res) = self.conn.execute(&query, None) {
+            self.batches_to_entities(&res.batches)
         } else {
-            None
+            Vec::new()
         }
     }
 

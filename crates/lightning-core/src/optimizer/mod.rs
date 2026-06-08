@@ -54,8 +54,15 @@ impl Optimizer {
     }
 
     pub fn optimize(&self, mut plan: LogicalOperator) -> Result<LogicalOperator> {
-        for rule in &self.rules {
-            plan = rule.apply(plan)?;
+        let max_iters = 5;
+        for _iter in 0..max_iters {
+            let before = plan.node_count();
+            for rule in &self.rules {
+                plan = rule.apply(plan)?;
+            }
+            if plan.node_count() == before {
+                break;
+            }
         }
         Ok(plan)
     }
