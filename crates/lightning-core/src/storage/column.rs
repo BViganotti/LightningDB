@@ -30,6 +30,9 @@ pub struct Column {
     pub version_info: Arc<RowVersion>,
     pub child_columns: Vec<Column>,
     pub dirty: AtomicBool,
+    /// Buffered null bit changes: (byte_offset_in_null_page, 0|1).
+    /// Flushed to actual pages before batch ops or checkpoint.
+    pending_nulls: parking_lot::Mutex<Vec<(usize, u8)>>,
 }
 
 impl Clone for Column {
@@ -44,6 +47,7 @@ impl Clone for Column {
             version_info: Arc::clone(&self.version_info),
             child_columns: self.child_columns.clone(),
             dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
+            pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
 }
@@ -67,6 +71,7 @@ impl Column {
             version_info,
             child_columns: Vec::new(),
             dirty: AtomicBool::new(false),
+            pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -89,6 +94,7 @@ impl Column {
             version_info,
             child_columns,
             dirty: AtomicBool::new(false),
+            pending_nulls: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -218,6 +224,13 @@ impl Column {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<bool> {
+        let offset = (row_id % 4096) as usize;
+        {
+            let pending = self.pending_nulls.lock();
+            if let Some(&(_off, val)) = pending.iter().rev().find(|(off, _)| *off == offset) {
+                return Ok(val != 0);
+            }
+        }
         let page_idx = row_id / 4096;
         let offset = (row_id % 4096) as usize;
         let frame = bm.pin_page(Arc::clone(&self.null_fh), page_idx, tx)?;
@@ -377,6 +390,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
         zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
+        self.flush_pending_nulls(bm, tx)?;
         let analyzer_meta = self.stats.read().compression_meta.clone();
         let element_size = self.element_size();
         let compression = analyzer_meta
@@ -1218,19 +1232,42 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.dirty.store(true, Ordering::Release);
-        let page_idx = row_id / 4096;
         let offset = (row_id % 4096) as usize;
-        while self.null_fh.get_num_pages() <= page_idx {
-            self.null_fh.add_new_page()?;
+        self.pending_nulls.lock().push((offset, if is_null { 1 } else { 0 }));
+        Ok(())
+    }
+
+    /// Flush buffered null bit changes to actual null pages.
+    /// Called before batch operations or checkpoint to ensure durability.
+    pub fn flush_pending_nulls(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        let pending = std::mem::take(&mut *self.pending_nulls.lock());
+        if pending.is_empty() {
+            return Ok(());
         }
-        let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
-        // SAFETY: SAFETY: Pinned frame with exclusive write access during append.
-        unsafe {
-            let ptr = frame.as_ptr();
-            *ptr.add(offset) = if is_null { 1 } else { 0 };
+        let mut by_page: std::collections::HashMap<u64, Vec<(usize, u8)>> =
+            std::collections::HashMap::new();
+        for (offset, val) in &pending {
+            let page_idx = *offset as u64 / 4096;
+            by_page.entry(page_idx).or_default().push((*offset, *val));
         }
-        bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
-        bm.unpin_page(&self.null_fh, page_idx, frame);
+        for (page_idx, entries) in &by_page {
+            while self.null_fh.get_num_pages() <= *page_idx {
+                self.null_fh.add_new_page()?;
+            }
+            let frame = bm.create_new_version(Arc::clone(&self.null_fh), *page_idx, tx)?;
+            unsafe {
+                let ptr = frame.as_ptr();
+                for (offset, val) in entries {
+                    *ptr.add(*offset % 4096) = *val;
+                }
+            }
+            bm.log_page_update(self.null_fh.file_id, *page_idx, frame.as_slice())?;
+            bm.unpin_page(&self.null_fh, *page_idx, frame);
+        }
         Ok(())
     }
 
@@ -2019,6 +2056,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
         is_indexed: bool,
     ) -> Result<()> {
+        self.flush_pending_nulls(bm, tx)?;
         if is_indexed {
             self.compute_page_bounds(bm, tx)?;
         }
