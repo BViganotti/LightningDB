@@ -297,8 +297,12 @@ impl PhysicalOperator for PhysicalSet {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
+            let mut modified_nodes: Vec<(u64, Vec<usize>)> = Vec::new();
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let num_rows = chunk.num_rows();
+                // Track which property indices were updated per node
+                let mut node_updates: std::collections::HashMap<u64, Vec<usize>> =
+                    std::collections::HashMap::new();
                 for assignment in &self.assignments {
                     let eval_res = ExpressionEvaluator::evaluate(
                         &assignment.expression,
@@ -309,6 +313,7 @@ impl PhysicalOperator for PhysicalSet {
                         database,
                     )?;
                     let col = &self.table.columns[assignment.property_idx];
+                    let prop_idx = assignment.property_idx;
                     for i in 0..num_rows {
                         let id = match Value::from_arrow(chunk.batch.column(0), i) {
                             Value::Node(id) => id,
@@ -326,11 +331,114 @@ impl PhysicalOperator for PhysicalSet {
                             id,
                             tx,
                         )?;
+                        node_updates.entry(id).or_default().push(prop_idx);
                     }
+                }
+                for (id, updated_props) in &node_updates {
+                    modified_nodes.push((*id, updated_props.clone()));
                 }
                 self.shared_state
                     .total_affected
                     .fetch_add(num_rows as u64, Ordering::SeqCst);
+            }
+
+            // Update indexes for modified nodes
+            let storage_guard = database.storage_manager.read();
+            let table_name = &self.table.name;
+
+            // PK hash index: check if primary key was updated
+            let pk_idx = database.catalog.read()
+                .get_node_table(table_name)
+                .and_then(|t| t.primary_key.as_ref())
+                .and_then(|pk| self.table.columns.iter().position(|c| c.name == pk.as_str()));
+
+            // FTS index: check if any string column was updated
+            let fts_opt = storage_guard.fts_indexes.get(table_name);
+            let vec_opt = storage_guard.vector_indexes.get(table_name);
+            let hash_index_opt = storage_guard.get_index(table_name);
+
+            for (node_id, updated_props) in &modified_nodes {
+                // Update PK hash index if PK column changed
+                if let (Some(pk_idx_val), Some(ref hash_idx)) = (pk_idx, &hash_index_opt) {
+                    if updated_props.contains(&pk_idx_val) {
+                        let new_pk_val = self.table.columns[pk_idx_val]
+                            .get_value(&self.buffer_manager, *node_id, tx)
+                            .unwrap_or(Value::Null);
+                        if let Value::String(ref pk_str) = new_pk_val {
+                            let _ = hash_idx.insert(
+                                &self.buffer_manager,
+                                &Value::String(pk_str.clone()),
+                                *node_id,
+                                tx,
+                            );
+                        }
+                    }
+                }
+
+                // Update FTS index: rebuild document for this node
+                if let Some(ref fts) = fts_opt {
+                    let string_fields: Vec<(String, String)> = self.table.columns.iter()
+                        .filter_map(|col| {
+                            let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                            if updated_props.contains(&idx) {
+                                let val = col.get_value(&self.buffer_manager, *node_id, tx)
+                                    .unwrap_or(Value::Null);
+                                match val {
+                                    Value::String(s) => Some((col.name.clone(), s)),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    if !string_fields.is_empty() {
+                        if let Err(e) = fts.delete(*node_id) {
+                            tracing::warn!("FTS delete error during SET: {e}");
+                        }
+                        let refs: Vec<(String, &str)> = string_fields.iter()
+                            .map(|(name, s)| (name.clone(), s.as_str()))
+                            .collect();
+                        if let Err(e) = fts.insert_multi_field(*node_id, &refs) {
+                            tracing::warn!("FTS insert error during SET: {e}");
+                        }
+                        if let Err(e) = fts.commit() {
+                            tracing::warn!("FTS commit error during SET: {e}");
+                        }
+                    }
+                }
+
+                // Vector index: check if embedding column was updated
+                if let Some(ref vec_idx) = vec_opt {
+                    let emb_col_idx = self.table.columns.iter().position(|c| {
+                        c.data_type == lightning_types::LogicalType::List(
+                            Box::new(lightning_types::LogicalType::Float)
+                        )
+                    });
+                    if let Some(emb_idx) = emb_col_idx {
+                        if updated_props.contains(&emb_idx) {
+                            if let Ok(val) = self.table.columns[emb_idx]
+                                .get_value(&self.buffer_manager, *node_id, tx)
+                            {
+                                if let Value::List(ref emb) = val {
+                                    if emb.len() == vec_idx.dimension() {
+                                        let emb_f32: Vec<f32> = emb.iter()
+                                            .filter_map(|v| {
+                                                if let Value::Number(n) = v { Some(*n as f32) } else { None }
+                                            })
+                                            .collect();
+                                        if emb_f32.len() == vec_idx.dimension() {
+                                            // VectorIndex::search doesn't have delete-by-id,
+                                            // but insert_batch is the flat-array variant.
+                                            // For simplicity, skip vector index update for SET
+                                            // since VectorIndex is a flat array without node_id lookup.
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         if self
