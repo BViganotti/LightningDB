@@ -321,7 +321,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Every write transaction commit iterates ALL node_tables and ALL rel_tables to sync num_rows. For 10K tables: 10K HashMap lookups and `next_row_id.load()` per commit.
 
-- [ ] **8.3.1** `[P2]` Track which tables were modified in the transaction. Only iterate modified tables.
+- [X] **8.3.1** `[P2]` Track which tables were modified in the transaction. Only iterate modified tables.
 
 **Impact**: For 10K tables, each commit spends ~1-5ms just iterating unmodified tables.
 
@@ -382,7 +382,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `get_table_properties` does double HashMap lookup per call (node_tables, then rel_tables). For 100 property references: 200 HashMap searches with full string key comparisons.
 
-- [ ] **10.3.1** `[P3]` Cache variable-to-table resolution. Add a `table_kind: enum { NodeTable, RelTable }` field to `BoundVariable`.
+- [X] **10.3.1** `[P3]` Cache variable-to-table resolution. Add a `table_kind: enum { NodeTable, RelTable }` field to `BoundVariable`.
 
 ---
 
@@ -394,7 +394,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Three separate `Vec<bool>` / `Vec<u8>` allocations per batch: visibility mask, null-id filter, semi-mask filter. Each is batch-size. Could be merged into a single pass.
 
-- [ ] **11.1.1** `[P2]` Combine visibility + null-id + mask checking into a single row-loop producing one filter vector.
+- [X] **11.1.1** `[P2]` Combine visibility + null-id + mask checking into a single row-loop producing one filter vector.
 
 ### 11.2 `compute_morsel_size` Called Per get_next()
 
@@ -418,7 +418,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: When the early-filter path succeeds (all rows pass), the code falls through to normal scan, then evaluates the filter AGAIN.
 
-- [ ] **11.4.1** `[P2]` Track whether the filter was already satisfied in the early path. Skip the second evaluation if so.
+- [X] **11.4.1** `[P2]` Track whether the filter was already satisfied in the early path. Skip the second evaluation if so.
 
 ---
 
