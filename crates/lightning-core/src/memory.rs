@@ -13,6 +13,10 @@ const ENTITY_TABLE: &str = "Entity";
 const RELATES_TABLE: &str = "Relates";
 pub const DEFAULT_EMBEDDING_DIM: usize = 768;
 const SIMILARITY_THRESHOLD: f64 = 0.82;
+/// Size of the MinHash signature for content-based similarity.
+/// Each entity's text is hashed into MINHASH_K hash values, replacing
+/// the full HashSet<String> word set (O(words) memory → O(K) memory).
+const MINHASH_K: usize = 128;
 
 /// Configuration for the RAG pipeline.
 pub struct RagConfig {
@@ -106,6 +110,43 @@ pub struct MemoryStore {
     schema_initialized: std::sync::atomic::AtomicBool,
     last_consolidation_ts: std::sync::atomic::AtomicI64,
     cdc_senders: parking_lot::Mutex<Vec<crossbeam::channel::Sender<ChangeEvent>>>,
+}
+
+/// Compute a MinHash signature for a text string.
+/// Returns the K smallest word hashes, used for approximate Jaccard similarity.
+fn minhash_signature(text: &str) -> Vec<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut hashes: Vec<u64> = text
+        .split_whitespace()
+        .map(|w| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            w.to_lowercase().hash(&mut h);
+            h.finish()
+        })
+        .collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    hashes.truncate(MINHASH_K);
+    hashes
+}
+
+/// Estimate Jaccard similarity between two MinHash signatures.
+fn minhash_similarity(a: &[u64], b: &[u64]) -> f64 {
+    let mut i = 0;
+    let mut j = 0;
+    let mut intersection = 0usize;
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Equal => {
+                intersection += 1;
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+        }
+    }
+    intersection as f64 / MINHASH_K as f64
 }
 
 impl MemoryStore {
@@ -705,14 +746,10 @@ impl MemoryStore {
         let mut contradictions_found = 0usize;
         let mut adjacency: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
-        // Step 1-2: Compute content-based similarity (n-gram Jaccard on word sets)
+        // Step 1-2: Compute content-based similarity (MinHash signature comparison)
         // and embedding-based cosine similarity for contradiction detection.
-        // Process in batches to avoid O(n^2) memory for very large datasets.
-        let word_sets: Vec<HashSet<String>> = all.iter().map(|e| {
-            e.content.split_whitespace()
-                .map(|w| w.to_lowercase())
-                .collect()
-        }).collect();
+        // MinHash reduces memory from O(n × words) to O(n × MINHASH_K).
+        let signatures: Vec<Vec<u64>> = all.iter().map(|e| minhash_signature(&e.content)).collect();
 
         // Compare each NEW entity against ALL existing entities (including other new ones).
         // This is O(new * total) instead of O(total²) for full re-processing.
@@ -720,10 +757,7 @@ impl MemoryStore {
             let i = all.iter().position(|e| e.id == new_i.id).unwrap_or(0);
             for j in 0..n {
                 if i == j { continue; }
-                    let intersection: usize = word_sets[i].intersection(&word_sets[j]).count();
-                    let union: usize = word_sets[i].union(&word_sets[j]).count();
-                    if union == 0 { continue; }
-                    let jaccard = intersection as f64 / union as f64;
+                    let jaccard = minhash_similarity(&signatures[i], &signatures[j]);
 
                     if jaccard > cfg.similarity_threshold {
                         if let Err(e) = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard) {
