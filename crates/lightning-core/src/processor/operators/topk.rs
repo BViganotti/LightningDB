@@ -8,6 +8,7 @@ use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct PhysicalTopK {
     child: Box<dyn PhysicalOperator>,
@@ -55,36 +56,87 @@ impl PhysicalOperator for PhysicalTopK {
                 return Ok(None);
             }
 
-            // Perform sort and truncate to limit
-            let mut sort_columns = Vec::new();
+            let n = full_batch.num_rows();
+            let k = self.limit as usize;
+
+            // Compute sort key arrays via ExpressionEvaluator
+            let mut sort_arrays = Vec::new();
             for item in &self.order_by {
                 let val = ExpressionEvaluator::evaluate(
                     &item.expression,
                     Some(&full_batch),
                     params,
-                    full_batch.num_rows(),
+                    n,
                     &database.function_registry,
                     database,
                 )?;
-                sort_columns.push(SortColumn {
-                    values: val,
-                    options: Some(SortOptions {
-                        descending: item.descending,
-                        nulls_first: true,
-                    }),
-                });
+                sort_arrays.push(val);
             }
 
-            let indices = lexsort_to_indices(&sort_columns, None)?;
-            let slice_indices = if indices.len() > self.limit as usize {
-                indices.slice(0, self.limit as usize)
+            let indices: ArrayRef = if n > k * 2 {
+                // Bounded top-K: extract sort values, use select_nth_unstable
+                // O(N) partition + O(K log K) final sort instead of O(N log N).
+                let mut rows: Vec<(Vec<Value>, u64)> = (0..n)
+                    .map(|i| {
+                        let keys: Vec<Value> = sort_arrays
+                            .iter()
+                            .map(|arr| Value::from_arrow(arr, i))
+                            .collect();
+                        (keys, i as u64)
+                    })
+                    .collect();
+
+                let kk = k.min(rows.len());
+                if kk == 0 {
+                    Arc::new(UInt64Array::from(Vec::<u64>::new()))
+                } else {
+                    rows.select_nth_unstable_by(kk - 1, |a, b| {
+                        for ((ak, bk), item) in a.0.iter().zip(b.0.iter()).zip(&self.order_by) {
+                            let cmp = ak.partial_cmp(bk).unwrap_or(Ordering::Equal);
+                            if cmp != Ordering::Equal {
+                                return if item.descending { cmp.reverse() } else { cmp };
+                            }
+                        }
+                        Ordering::Equal
+                    });
+                    rows[..kk].sort_unstable_by(|a, b| {
+                        for ((ak, bk), item) in a.0.iter().zip(b.0.iter()).zip(&self.order_by) {
+                            let cmp = ak.partial_cmp(bk).unwrap_or(Ordering::Equal);
+                            if cmp != Ordering::Equal {
+                                return if item.descending { cmp.reverse() } else { cmp };
+                            }
+                        }
+                        Ordering::Equal
+                    });
+                    Arc::new(UInt64Array::from(
+                        rows[..kk].iter().map(|(_, idx)| *idx).collect::<Vec<_>>(),
+                    ))
+                }
             } else {
-                indices
+                // Small N: full Arrow sort (existing path)
+                let mut sort_columns = Vec::new();
+                for (item, arr) in self.order_by.iter().zip(sort_arrays.iter()) {
+                    sort_columns.push(SortColumn {
+                        values: arr.clone(),
+                        options: Some(SortOptions {
+                            descending: item.descending,
+                            nulls_first: true,
+                        }),
+                    });
+                }
+                let all_indices = lexsort_to_indices(&sort_columns, None)?;
+                let sliced = if all_indices.len() > k {
+                    all_indices.slice(0, k)
+                } else {
+                    all_indices
+                };
+                arrow::compute::kernels::cast::cast(&sliced, &DataType::UInt64)
+                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?
             };
 
             let mut columns = Vec::new();
             for i in 0..full_batch.num_columns() {
-                columns.push(take(full_batch.column(i).as_ref(), &slice_indices, None)?);
+                columns.push(take(full_batch.column(i).as_ref(), &indices, None)?);
             }
             let top_k_batch = RecordBatch::try_new(full_batch.schema(), columns)?;
             self.result_batch = Some(top_k_batch);
