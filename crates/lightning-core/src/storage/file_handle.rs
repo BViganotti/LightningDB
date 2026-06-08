@@ -60,7 +60,7 @@ impl FileHandle {
 
     pub fn read_page(&self, page_idx: u64, buffer: &mut [u8]) -> Result<()> {
         let offset = page_idx * PAGE_SIZE as u64;
-        let file_len = self.file.metadata()?.len();
+        let file_len = self.get_file_size();
 
         if offset >= file_len {
             buffer.fill(0);
@@ -79,7 +79,7 @@ impl FileHandle {
     pub fn read_pages(&self, start_page: u64, num_pages: u64, buffer: &mut [u8]) -> Result<()> {
         let offset = start_page * PAGE_SIZE as u64;
         let expected_bytes = (num_pages as usize) * PAGE_SIZE;
-        let file_len = self.file.metadata()?.len();
+        let file_len = self.get_file_size();
 
         if offset >= file_len {
             buffer[..expected_bytes].fill(0);
@@ -139,7 +139,7 @@ impl FileHandle {
     }
 
     pub fn get_file_size(&self) -> u64 {
-        self.file.metadata().map(|m| m.len()).unwrap_or(0)
+        self.get_num_pages() * PAGE_SIZE as u64
     }
 
     pub fn get_page_state(&self, page_idx: u64) -> Option<u64> {
