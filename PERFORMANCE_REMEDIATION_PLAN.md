@@ -257,7 +257,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: The CLOCK hand scans from `clock_ptr` through every slot until it finds a victim. Worst case (all unpinned pages are dirty-uncommitted): the loop runs through the entire shard capacity. Each iteration does 2× AtomicU64::load. For a 4K-slot shard × 16 shards = 65K atomic loads per eviction.
 
-- [ ] **7.1.1** `[P2]` Maintain a "free candidate" MPSC queue. When a page's pin_count drops to 0 in `unpin_page`, push its slot index. `evict_with_clock` pops from the queue first, falls back to CLOCK scan only when empty. Makes eviction O(1) in the common case.
+- [X] **7.1.1** `[P2]` Maintain a "free candidate" MPSC queue. When a page's pin_count drops to 0 in `unpin_page`, push its slot index. `evict_with_clock` pops from the queue first, falls back to CLOCK scan only when empty. Makes eviction O(1) in the common case.
 
 ### 7.2 `update_timestamps` Acquires Write Lock for Read-Only Scan
 
@@ -265,7 +265,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Acquires a shard WRITE lock for the entire operation, even though the mutation is just a version `store` on a field that could be updated atomically.
 
-- [ ] **7.2.1** `[P2]` Use read lock for the HashMap lookup and slot scan. Use `AtomicU64::compare_exchange` for the version update without the shard lock.
+- [X] **7.2.1** `[P2]` Use read lock for the HashMap lookup and slot scan. Use `AtomicU64::compare_exchange` for the version update without the shard lock.
 
 ### 7.3 `reclaim_expired_versions` Holds Write Lock Across Full Scan
 
@@ -345,7 +345,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Limit pushdown runs before OrderBy pushdown. ORDER BY + LIMIT still sorts all rows. Filter pushdown runs before subquery unnesting — unnested subqueries may produce new filter opportunities.
 
-- [ ] **9.2.1** `[P2]` Reorder: SubqueryUnnesting → FilterPushDown → IndexPushDown → JoinReordering → TopKOptimizer → OrderByPushDown → LimitPushDown.
+- [X] **9.2.1** `[P2]` Reorder: SubqueryUnnesting → FilterPushDown → IndexPushDown → JoinReordering → TopKOptimizer → OrderByPushDown → LimitPushDown.
 
 ### 9.3 Plan Cache Key Is Full Normalized String
 
@@ -438,7 +438,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: ALL child rows are materialized in memory before sorting. No threshold to switch to external sort (sorted runs on disk).
 
-- [ ] **12.2.1** `[P2]` Add estimated row count check before materialization. If exceeding `max_sort_memory`, build sorted runs in temp files, merge externally.
+- [X] **12.2.1** `[P2]` Add estimated row count check before materialization. If exceeding `max_sort_memory`, build sorted runs in temp files, merge externally.
 
 ### 12.3 Sort Sort-Comparator Yield-Loop Busy Waits
 
