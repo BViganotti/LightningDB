@@ -446,7 +446,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Threads spin with `std::thread::yield_now()` waiting for other collectors. 3 of 4 cores spin at 100% CPU.
 
-- [ ] **12.3.1** `[P2]` Use a `Condvar` or `Barrier` to block until all collectors finish.
+- [X] **12.3.1** `[P2]` Use a `Condvar` or `Barrier` to block until all collectors finish.
 
 ### 12.4 TOP-K Materializes and Sorts ALL Rows
 
