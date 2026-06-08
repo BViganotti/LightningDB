@@ -184,7 +184,7 @@ impl FunctionRegistry {
                     let f64_arg = arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let result: arrow::array::Float64Array =
                         f64_arg.iter().map(|opt_n| opt_n.map(|n| n.abs())).collect();
                     Ok(Arc::new(result))
@@ -212,7 +212,7 @@ impl FunctionRegistry {
                         let f64_arg = arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let result: arrow::array::Float64Array = match *name {
                             "CEIL" => f64_arg
                                 .iter()
@@ -458,7 +458,7 @@ impl FunctionRegistry {
                         let s_array = string_array
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         for i in 0..args[0].len() {
                             if !s_array.is_null(i) {
                                 result_vec[i].push_str(s_array.value(i));
@@ -478,7 +478,7 @@ impl FunctionRegistry {
                 Arc::new(|args, num_rows| {
                     if args.is_empty() {
                         let now = chrono::Utc::now().date_naive();
-                        let days = (now - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                        let days = (now - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time"))
                             .num_days() as i32;
                         return Ok(Arc::new(arrow::array::Date32Array::from(vec![
                             days;
@@ -505,7 +505,7 @@ impl FunctionRegistry {
                             let s = string_array.value(i);
                             // Simple parse: YYYY-MM-DD
                             if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
                                 let days = d.signed_duration_since(epoch).num_days();
                                 builder.append_value(days as i32);
                             } else {
@@ -620,11 +620,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || start_arr.is_null(i) {
@@ -637,7 +637,7 @@ impl FunctionRegistry {
                             let l_arr = l
                                 .as_any()
                                 .downcast_ref::<arrow::array::Int64Array>()
-                                .unwrap();
+                                .expect("type mismatch in function");
                             if l_arr.is_null(i) {
                                 result.append_null();
                                 continue;
@@ -675,15 +675,15 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let from_arr = from_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let to_arr = to_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || from_arr.is_null(i) || to_arr.is_null(i) {
@@ -839,15 +839,15 @@ impl FunctionRegistry {
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let end_arr = end_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let step_arr = step_arg.as_ref().map(|a| {
                         a.as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap()
+                            .expect("type mismatch in function")
                     });
 
                     let mut list_builders = Vec::with_capacity(num_rows);
@@ -1062,11 +1062,11 @@ impl FunctionRegistry {
                         let base_arr = base
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let pattern_arr = pattern
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if base_arr.is_null(i) || pattern_arr.is_null(i) {
@@ -1114,11 +1114,11 @@ impl FunctionRegistry {
                         let s_arr = s_arg
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results =
                             arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 8);
                         for i in 0..num_rows {
@@ -1161,11 +1161,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1189,7 +1189,7 @@ impl FunctionRegistry {
                 "CURRENT_DATE".to_string(),
                 Arc::new(|_args, num_rows| {
                     let now = chrono::Utc::now().date_naive();
-                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
                     let days = now.signed_duration_since(epoch).num_days() as i32;
                     Ok(Arc::new(arrow::array::Date32Array::from(vec![
                         days;
@@ -1231,7 +1231,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -1275,7 +1275,7 @@ impl FunctionRegistry {
                             let val = crate::processor::Value::from_arrow(&args[0], i);
                             match val {
                                 crate::processor::Value::Date(days) => {
-                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                         + chrono::Duration::days(days as i64);
                                     use chrono::Datelike;
                                     let res = match *name {
@@ -1288,7 +1288,7 @@ impl FunctionRegistry {
                                 }
                                 crate::processor::Value::Timestamp(micros) => {
                                     let dt = chrono::DateTime::from_timestamp_micros(micros)
-                                        .unwrap()
+                                        .expect("type mismatch in function")
                                         .naive_utc();
                                     use chrono::{Datelike, Timelike};
                                     let res = match *name {
@@ -1331,11 +1331,11 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -1366,11 +1366,11 @@ impl FunctionRegistry {
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if n_arr.is_null(i) || d_arr.is_null(i) || d_arr.value(i) == 0 {
@@ -1402,11 +1402,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
 
                     let mut results = Vec::with_capacity(num_rows);
                     for i in 0..num_rows {
@@ -1733,7 +1733,7 @@ impl FunctionRegistry {
                                 crate::processor::Value::String(unit),
                             ) = (d_val, c_val, u_val)
                             {
-                                let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                                let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                     + chrono::Duration::days(days as i64);
                                 let count = if *name == "DATE_ADD" {
                                     count as i64
@@ -1750,7 +1750,7 @@ impl FunctionRegistry {
                                                 dt.checked_sub_months(chrono::Months::new(
                                                     count.unsigned_abs() as u32,
                                                 ))
-                                                .unwrap()
+                                                .expect("type mismatch in function")
                                             } else {
                                                 d
                                             }
@@ -1759,7 +1759,7 @@ impl FunctionRegistry {
                                 };
                                 if let Some(rdt) = res_dt {
                                     let epoch =
-                                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
                                     results.push(crate::processor::Value::Date(
                                         rdt.signed_duration_since(epoch).num_days() as i32,
                                     ));
@@ -1842,11 +1842,11 @@ impl FunctionRegistry {
                         let arr1 = a1
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let arr2 = a2
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr1.is_null(i) || arr2.is_null(i) {
@@ -1889,7 +1889,7 @@ impl FunctionRegistry {
                         let arr = a
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr.is_null(i) {
@@ -1926,7 +1926,7 @@ impl FunctionRegistry {
                     let sep_arr = sep_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1943,7 +1943,7 @@ impl FunctionRegistry {
                             let s_arr = s_arg
                                 .as_any()
                                 .downcast_ref::<arrow::array::StringArray>()
-                                .unwrap();
+                                .expect("type mismatch in function");
                             if !s_arr.is_null(i) {
                                 parts.push(s_arr.value(i).to_string());
                             }
@@ -2069,7 +2069,7 @@ impl FunctionRegistry {
                             crate::processor::Value::Date(days),
                         ) = (&u_val, &d_val)
                         {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                 + chrono::Duration::days(*days as i64);
                             use chrono::Datelike;
                             let res_dt = match unit.to_lowercase().as_str() {
@@ -2081,7 +2081,7 @@ impl FunctionRegistry {
                                 _ => None,
                             };
                             if let Some(rdt) = res_dt {
-                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
                                 results.push(crate::processor::Value::Date(
                                     rdt.signed_duration_since(epoch).num_days() as i32,
                                 ));
@@ -2115,7 +2115,7 @@ impl FunctionRegistry {
                     for i in 0..num_rows {
                         let d_val = crate::processor::Value::from_arrow(&args[0], i);
                         if let crate::processor::Value::Date(days) = d_val {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                 + chrono::Duration::days(days as i64);
                             let age = today.signed_duration_since(dt).num_days() / 365;
                             results.append_value(age);
@@ -2148,11 +2148,11 @@ impl FunctionRegistry {
                     let y_arr = y_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let x_arr = x_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if y_arr.is_null(i) || x_arr.is_null(i) {
@@ -2184,7 +2184,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -2249,7 +2249,7 @@ impl FunctionRegistry {
                             let v = crate::processor::Value::from_arrow(&args[0], i);
                             match v {
                                 crate::processor::Value::Date(days) => {
-                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                         + chrono::Duration::days(days as i64);
                                     let res = if *name == "MONTHNAME" {
                                         dt.format("%B").to_string()
@@ -2320,7 +2320,7 @@ impl FunctionRegistry {
                             crate::processor::Value::Date(days),
                         ) = (&unit_val, &d_val)
                         {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                 + chrono::Duration::days(*days as i64);
                             use chrono::Datelike;
                             let res = match unit.to_lowercase().as_str() {
@@ -2336,7 +2336,7 @@ impl FunctionRegistry {
                         ) = (&unit_val, &d_val)
                         {
                             let dt = chrono::DateTime::from_timestamp_micros(*micros)
-                                .unwrap()
+                                .expect("type mismatch in function")
                                 .naive_utc();
                             use chrono::{Datelike, Timelike};
                             let res = match unit.to_lowercase().as_str() {
@@ -2675,7 +2675,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -2917,7 +2917,7 @@ impl FunctionRegistry {
                     for i in 0..num_rows {
                         let d_val = crate::processor::Value::from_arrow(&args[0], i);
                         if let crate::processor::Value::Date(days) = d_val {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
                                 + chrono::Duration::days(days as i64);
                             use chrono::Datelike;
                             let y = dt.year();
@@ -3096,7 +3096,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -3134,7 +3134,7 @@ impl FunctionRegistry {
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if n_arr.is_null(i) {
@@ -3168,11 +3168,11 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .unwrap();
+                        .expect("type mismatch in function");
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -3229,7 +3229,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .unwrap();
+                            .expect("type mismatch in function");
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {

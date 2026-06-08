@@ -42,14 +42,14 @@ impl CSRIndex {
             let start = u64::from_le_bytes(
                 start_frame.as_slice()[start_offset_in_page as usize..start_offset_in_page as usize + 8]
                     .try_into()
-                    .unwrap(),
+                    .expect("internal invariant violated"),
             );
 
             let end = if start_page == end_page {
                 u64::from_le_bytes(
                     start_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
                         .try_into()
-                        .unwrap(),
+                        .expect("internal invariant violated"),
                 )
             } else {
                 if end_page >= self.offset_fh.get_num_pages() {
@@ -59,7 +59,7 @@ impl CSRIndex {
                 u64::from_le_bytes(
                     end_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
                         .try_into()
-                        .unwrap(),
+                        .expect("internal invariant violated"),
                 )
             };
             (start, end)
@@ -81,7 +81,7 @@ impl CSRIndex {
             for j in 0..to_read {
                 let offset = (adj_offset_in_page as usize) + (j * 8);
                 let neighbor =
-                    u64::from_le_bytes(adj_frame.as_slice()[offset..offset + 8].try_into().unwrap());
+                    u64::from_le_bytes(adj_frame.as_slice()[offset..offset + 8].try_into().expect("infallible: fixed-size array conversion"));
                 f(neighbor);
             }
             i += to_read as u64;

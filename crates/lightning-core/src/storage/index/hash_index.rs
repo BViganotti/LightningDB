@@ -657,102 +657,102 @@ mod tests {
 
     #[test]
     fn test_resize_bucket_count() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create(&path).unwrap();
+        let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
         // Initial header should show 64 buckets
-        let data = std::fs::read(&path).unwrap();
-        let header_buckets = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let data = std::fs::read(&path).expect("internal invariant violated");
+        let header_buckets = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
         assert_eq!(header_buckets, 64);
     }
 
     #[test]
     fn test_resize_updates_header() {
-        let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let dir = tempdir().expect("internal invariant violated");
+        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create(&path).unwrap();
+        let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
 
         // Resize to 128
-        index.resize(bm, &tx).unwrap();
+        index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 128);
 
         // Commit and checkpoint to flush to disk
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
-        db.checkpoint().unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.checkpoint().expect("internal invariant violated");
 
         // Verify header on disk
-        let data = std::fs::read(&path).unwrap();
-        let nb = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let data = std::fs::read(&path).expect("internal invariant violated");
+        let nb = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
         assert_eq!(nb, 128, "On-disk header should be 128");
 
         // Reopen and verify
-        let index2 = HashIndex::open_or_create(&path).unwrap();
+        let index2 = HashIndex::open_or_create(&path).expect("internal invariant violated");
         assert_eq!(index2.buckets(), 128);
     }
 
     #[test]
     fn test_double_resize() {
-        let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let dir = tempdir().expect("internal invariant violated");
+        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create(&path).unwrap();
+        let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
-        index.resize(bm, &tx).unwrap();
+        index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 128);
-        index.resize(bm, &tx).unwrap();
+        index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 256);
 
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
-        db.checkpoint().unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.checkpoint().expect("internal invariant violated");
 
-        let data = std::fs::read(&path).unwrap();
-        let nb = u64::from_le_bytes(data[0..8].try_into().unwrap());
+        let data = std::fs::read(&path).expect("internal invariant violated");
+        let nb = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
         assert_eq!(nb, 256, "Double resize: on-disk header should be 256");
     }
 
     #[test]
     fn test_resize_rejected_for_bucket_count_1() {
         // Edge case: resize when there's only 1 bucket
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create_with_buckets(&path, 1).unwrap();
+        let index = HashIndex::open_or_create_with_buckets(&path, 1).expect("internal invariant violated");
         assert_eq!(index.buckets(), 1);
 
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
-        index.resize(bm, &tx).unwrap();
+        index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 2);
 
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
     }
 
     #[test]
     fn test_entries_scan_all() {
-        let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let dir = tempdir().expect("internal invariant violated");
+        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create(&path).unwrap();
+        let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
         // Insert 5 entries
         for i in 0..5u64 {
-            index.insert(bm, &Value::Number(i as f64), 100 + i, &tx).unwrap();
+            index.insert(bm, &Value::Number(i as f64), 100 + i, &tx).expect("internal invariant violated");
         }
 
-        let entries = index.entries(bm, &tx).unwrap();
+        let entries = index.entries(bm, &tx).expect("internal invariant violated");
         assert_eq!(entries.len(), 5, "Should find all 5 entries");
 
         for (key, row_id) in &entries {
@@ -761,27 +761,27 @@ mod tests {
             }
         }
 
-        index.delete(bm, &Value::Number(2.0), 102, &tx).unwrap();
-        let after_delete = index.entries(bm, &tx).unwrap();
+        index.delete(bm, &Value::Number(2.0), 102, &tx).expect("internal invariant violated");
+        let after_delete = index.entries(bm, &tx).expect("internal invariant violated");
         assert_eq!(after_delete.len(), 4, "Should skip deleted entry");
         let still_present = after_delete.iter().any(|(_, id)| *id == 102);
         assert!(!still_present, "Deleted entry should not appear");
 
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
     }
 
     #[test]
     fn test_entries_empty_index() {
-        let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let dir = tempdir().expect("internal invariant violated");
+        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create(&path).unwrap();
+        let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
-        let entries = index.entries(bm, &tx).unwrap();
+        let entries = index.entries(bm, &tx).expect("internal invariant violated");
         assert_eq!(entries.len(), 0, "Empty index should have 0 entries");
 
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
     }
 }

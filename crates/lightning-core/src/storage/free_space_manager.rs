@@ -72,12 +72,12 @@ mod tests {
         fsm.record_free_page(1, 101);
         fsm.record_free_page(2, 200);
 
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("fsm.bin");
 
-        fsm.save(&path).unwrap();
+        fsm.save(&path).expect("internal invariant violated");
 
-        let loaded = FreeSpaceManager::load(&path).unwrap();
+        let loaded = FreeSpaceManager::load(&path).expect("internal invariant violated");
         assert_eq!(loaded.get_free_page(1), Some(100));
         assert_eq!(loaded.get_free_page(1), Some(101));
         assert_eq!(loaded.get_free_page(1), None);
@@ -88,22 +88,22 @@ mod tests {
     #[test]
     fn test_save_empty_then_load() {
         let fsm = FreeSpaceManager::new();
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("empty.bin");
 
-        fsm.save(&path).unwrap();
+        fsm.save(&path).expect("internal invariant violated");
         // Empty map skips writing; load should return fresh manager
         assert!(!path.exists());
 
-        let loaded = FreeSpaceManager::load(&path).unwrap();
+        let loaded = FreeSpaceManager::load(&path).expect("internal invariant violated");
         assert_eq!(loaded.get_free_page(1), None);
     }
 
     #[test]
     fn test_load_no_file() {
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("nonexistent.bin");
-        let fsm = FreeSpaceManager::load(&path).unwrap();
+        let fsm = FreeSpaceManager::load(&path).expect("internal invariant violated");
         assert_eq!(fsm.get_free_page(1), None);
     }
 

@@ -90,7 +90,7 @@ impl CompressionAlg for AlpAlg {
         for exp_idx in 0..=10u8 {
             let mut cost: u64 = 0;
             for i in 0..num_values as usize {
-                let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().unwrap());
+                let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
                 let encoded = Alp::encode_value(val, 0, exp_idx);
                 cost = cost.saturating_add(encoded.unsigned_abs());
             }
@@ -102,7 +102,7 @@ impl CompressionAlg for AlpAlg {
 
         dst[0] = best_shared_exp;
         for i in 0..num_values as usize {
-            let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().unwrap());
+            let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
             let encoded = Alp::encode_value(val, 0, best_shared_exp);
             let dst_start = 1 + i * 8;
             dst[dst_start..dst_start + 8].copy_from_slice(&encoded.to_le_bytes());

@@ -104,13 +104,18 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: The parallel scheduler (scheduler.rs:45-68) spawns N workers, each cloning the operator and calling `get_next()` independently. For scan operators, every worker scans the FULL table → duplicate results. For sort/aggregate/join, each worker produces a PARTIAL result → wrong final output.
 
-- [ ] **1.1.1** `[P0]` Rewrite the parallel execution model:
-  - Add `fn is_parallel_safe(&self) -> bool` to the `PhysicalOperator` trait. Returns `true` only for stateless operators: Scan, Filter, Projection, Map, Expression evaluation.
-  - For parallel-unsafe operators (Sort, Aggregate, Join, Union, Limit, TopK, DML, DDL), force single-threaded execution.
-  - For parallel-safe operators: partition the scan's row range into N non-overlapping ranges. Each worker processes one partition. Results are merged downstream by a serial operator.
-  - Reference `scheduler.rs:27-72` — the existing channel infrastructure is correct, only the partitioning is wrong.
+- [X] **1.1.1** `[P0]` Rewrite the parallel execution model:
+  - Added `fn is_parallel_safe(&self) -> bool` (default `false`) and `fn set_partition(&mut self, index, total)` (default no-op) to `PhysicalOperator` trait.
+  - `PhysicalScan`, `PhysicalFilter`, `PhysicalProjection` override `is_parallel_safe()` → `true`. All other operators (Sort, Aggregate, Join, Limit, DML, DDL) keep default `false`.
+  - Scheduler checks `operator.is_parallel_safe()`: if `false` or `num_threads == 1`, runs single-threaded. If `true`, clones the operator tree N times, calls `set_partition(i, N)` on each clone, and spawns one worker per partition. Each worker scans a disjoint row range.
+  
+- [X] **1.1.2** `[P0]` Implement partitioned scan via `set_partition()` on `PhysicalScan`:
+  - Added `partition_position: Arc<AtomicU64>`, `partition_start_row: u64`, `partition_end_row: u64` to `PhysicalScan`.
+  - `set_partition()` computes even row distribution across N partitions and initializes the per-clone `partition_position` to the partition's start row.
+  - `get_next()` uses `partition_position.fetch_add()` (per-clone, no contention) bounded by `partition_end_row` instead of the shared `state.current_row`.
+  - Filter and Projection forward `set_partition()` to their child operator, propagating the partition down to the scan leaf.
 
-- [ ] **1.1.2** `[P0]` Implement partitioned scan. Add `PhysicalScan::with_range(start_row: u64, end_row: u64)` that scans only rows in `[start_row, end_row)`. The scheduler creates N of these, each one disjoint.
+- [ ] **1.1.3** `[P2]` Merged operator support for parallel sort/aggregate/join — deferred to P2.
 
 - [ ] **1.1.3** `[P2]` Add a merge operator for parallel sort (`NWayMerge` that merges N sorted streams), parallel aggregate (merge hash tables), and parallel join (partition by hash key). Without these, parallel execution Drops back to single-threaded for most interesting queries.
 

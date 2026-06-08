@@ -43,7 +43,7 @@ impl BitPacker {
             let mut word = u64::from_le_bytes(
                 data[word_idx * 8..word_idx * 8 + 8]
                     .try_into()
-                    .unwrap(),
+                    .expect("internal invariant violated"),
             );
             let mask = ((1u64 << bit_width) - 1) << bit_in_word;
             word = (word & !mask) | ((val << bit_in_word) & mask);
@@ -78,7 +78,7 @@ impl BitPacker {
             let word = u64::from_le_bytes(
                 data[word_idx * 8..word_idx * 8 + 8]
                     .try_into()
-                    .unwrap(),
+                    .expect("internal invariant violated"),
             );
             let mask = (1u64 << bit_width) - 1;
             return (word >> bit_in_word) & mask;

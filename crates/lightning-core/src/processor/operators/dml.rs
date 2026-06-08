@@ -201,7 +201,7 @@ impl PhysicalOperator for PhysicalCreate {
                     )])),
                     vec![Arc::new(Float64Array::from(vec![total as f64]))],
                 )
-                .unwrap(),
+                .expect("internal invariant violated"),
             }));
         }
         Ok(None)
@@ -322,7 +322,7 @@ impl PhysicalOperator for PhysicalSet {
                     )])),
                     vec![Arc::new(Float64Array::from(vec![total as f64]))],
                 )
-                .unwrap(),
+                .expect("internal invariant violated"),
             }));
         }
         Ok(None)
@@ -469,7 +469,7 @@ impl PhysicalOperator for PhysicalDelete {
                     )])),
                     vec![Arc::new(Float64Array::from(vec![total as f64]))],
                 )
-                .unwrap(),
+                .expect("internal invariant violated"),
             }));
         }
         Ok(None)
@@ -632,7 +632,7 @@ impl PhysicalOperator for PhysicalCreateRel {
                     )])),
                     vec![Arc::new(Float64Array::from(vec![total as f64]))],
                 )
-                .unwrap(),
+                .expect("internal invariant violated"),
             }));
         }
         Ok(None)
@@ -868,7 +868,7 @@ impl PhysicalOperator for PhysicalMerge {
                     )])),
                     vec![Arc::new(Float64Array::from(vec![total as f64]))],
                 )
-                .unwrap(),
+                .expect("internal invariant violated"),
             }));
         }
         Ok(None)
