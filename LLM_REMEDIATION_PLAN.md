@@ -189,19 +189,25 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: `CSRIndex::build()` (csr.rs:104-163) sorts all edges and rewrites the entire offset + adjacency array from zero. O(n log n) per write.
 
-- [ ] **3.1.1** `[P0]` Add `CSRIndex::insert_edge(src: u64, dst: u64)`. The CSR is a prefix-sum offset array, so inserting an edge for node N requires incrementing all offsets from N+1 onward. Implement a two-tier CSR:
-  - **Base CSR**: the compact prefix-sum representation (existing `build()` output)
-  - **Pending buffer**: a `Vec<(u64, u64)>` of recently inserted edges
-  - `for_each_neighbor()` checks both tiers
-  - A background or write-time compaction threshold triggers `build()` when pending buffer exceeds ratio (e.g., pending > 10% of base)
-- [ ] **3.1.2** `[P0]` Add `CSRIndex::insert_batch(edges: &[(u64, u64)])` — same two-tier approach.
-- [ ] **3.1.3** `[P2]` Add auto-compaction on configurable threshold.
+- [X] **3.1.1** `[P0]` Add `CSRIndex::insert_edge(src: u64, dst: u64)` — two-tier CSR:
+  - Added `pending_edges: RwLock<Vec<(u64, u64)>>` to `CSRIndex`.
+  - `insert_edge()` pushes to pending buffer (O(1)).
+  - `for_each_neighbor()` checks both base CSR (file-based) and pending buffer.
+  - Added `needs_compaction()` — returns true when pending > 10% of base edge count.
+  - Added `compact()` — rebuilds full CSR from base + pending - deletions.
+  - Also added `DELETED_BIT` tombstone support (`u64::MAX` highest bit) for future delete_edge.
+
+- [X] **3.1.2** `[P0]` Add `CSRIndex::insert_batch(edges: &[(u64, u64)])` — extends the pending buffer with all edges.
+- [~] **3.1.3** `[P2]` Auto-compaction on configurable threshold — deferred. `needs_compaction()` exists but calling site not yet wired.
 
 ### 3.2 CSR Edge Deletion
 
 **Problem**: Deleting a relationship from the Relates table doesn't update the CSR index. Orphan adjacency entries persist.
 
-- [ ] **3.2.1** `[P0]` Add `CSRIndex::delete_edge(src: u64, dst: u64)`. Implement as tombstone: use a `DELETED_BIT` in the highest bit of the adjacency value (node IDs < 2⁶³). Update `for_each_neighbor()` to skip tombstones.
+- [X] **3.2.1** `[P0]` Add `CSRIndex::delete_edge(src: u64, dst: u64)` with tombstone support.
+  - `DELETED_BIT = 1 << 63` masks the highest bit of adjacency values.
+  - `delete_edge()` pushes to `pending_deletions: RwLock<Vec<(u64, u64)>>`.
+  - `for_each_neighbor()` skips adjacency entries with `DELETED_BIT` set, and filters against `pending_deletions`.
 - [ ] **3.2.2** `[P1]` Wire into the Cypher DELETE path in `storage_manager.rs`: when a Relates row is deleted, call `CSRIndex::delete_edge()`.
 - [ ] **3.2.3** `[P1]` Add compaction that rebuilds the CSR when tombstone ratio exceeds a threshold (e.g., 25%).
 
