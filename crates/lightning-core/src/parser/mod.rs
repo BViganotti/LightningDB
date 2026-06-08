@@ -67,27 +67,26 @@ fn preprocess_distinct_functions(s: &str) -> String {
 }
 
 fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>) {
-    // Normalize newlines to spaces so text-based search for " SKIP ", " LIMIT ", etc.
-    // works regardless of line breaks in the query. The actual parser (pest) handles
-    // whitespace between tokens natively.
     let mut result = s.replace('\n', " ").replace('\r', " ");
     let mut ord = None;
     let mut skp = None;
     let mut lmt = None;
 
-    // Extract ORDER BY
+    // Single uppercase computation, track how many chars we remove to adjust positions
     let upper = result.to_uppercase();
+
+    let mut remove_count = 0usize;
+    let adjust = |pos: usize, removed: usize| -> usize { pos - removed };
+
+    // Extract ORDER BY
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find("ORDER BY ") {
             let order_by_pos = after_return + pos;
-            let order_expr_start = order_by_pos + 9; // after "ORDER BY "
+            let order_expr_start = order_by_pos + 9;
             let order_rest = &result[order_expr_start..];
             let order_upper = &upper[order_expr_start..];
-            // Find end of ORDER BY expression
-            // SKIP and LIMIT may follow; use whichever comes FIRST so we
-            // don't swallow the other into the ORDER BY expression.
             let end = {
                 let l = order_upper.find(" LIMIT ");
                 let s = order_upper.find(" SKIP ");
@@ -99,37 +98,37 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
                 }
             };
             ord = Some(order_rest[..end].trim().to_string());
-            // Remove only "ORDER BY <expr>" part, not the RETURN items before it
-            result = format!(
-                "{}{}",
-                &result[..order_by_pos],
-                &result[order_expr_start + end..]
-            );
+            let removed_len = 9 + end; // "ORDER BY " + expression
+            result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
+            remove_count += removed_len;
         }
     }
 
-    // Extract SKIP
-    let upper = result.to_uppercase();
+    // Extract SKIP using same uppercase, adjusting RETURN position
+    let return_end = match upper.find("RETURN ") {
+        Some(p) => p + 7,
+        None => return (result.trim().to_string(), ord, skp, lmt),
+    };
+    let adj_return = adjust(return_end, remove_count);
+    let adj_upper = &upper[..upper.len().saturating_sub(remove_count)];
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find(" SKIP ") {
             let skip_pos = after_return + pos;
-            let skip_val_start = skip_pos + 6; // after "SKIP "
+            let skip_val_start = skip_pos + 6;
             let skip_rest = &result[skip_val_start..];
             let skip_upper = &upper[skip_val_start..];
-            // Find end of SKIP value
             let end = skip_upper.find(" LIMIT ").unwrap_or(skip_rest.len());
             if let Ok(v) = skip_rest[..end].trim().parse::<f64>() {
                 skp = Some(v);
             }
-            // Remove only "SKIP <val>" part
             result = format!("{}{}", &result[..skip_pos], &result[skip_val_start + end..]);
+            remove_count += 6 + end;
         }
     }
 
-    // Extract LIMIT
-    let upper = result.to_uppercase();
+    // Extract LIMIT using same uppercase
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
