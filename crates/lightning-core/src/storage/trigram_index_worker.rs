@@ -1,7 +1,7 @@
 use crate::storage::index::trigram_index::TrigramIndex;
+use crate::Result;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::thread;
 
 pub struct TrigramIndexWorker {
     task_tx: Sender<TrigramIndexTask>,
@@ -16,16 +16,13 @@ pub enum TrigramIndexTask {
 }
 
 impl TrigramIndexWorker {
-    pub fn new(index: Arc<TrigramIndex>) -> Self {
+    pub fn new(index: Arc<TrigramIndex>) -> Result<Self> {
         let (task_tx, task_rx) = channel();
-        thread::Builder::new()
-            .name("trigram-index-worker".to_string())
-            .spawn(move || {
-                Self::worker_loop(index, task_rx);
-            })
-            .expect("Failed to spawn trigram index worker thread");
+        rayon::spawn(move || {
+            Self::worker_loop(index, task_rx);
+        });
 
-        Self { task_tx }
+        Ok(Self { task_tx })
     }
 
     fn worker_loop(index: Arc<TrigramIndex>, task_rx: Receiver<TrigramIndexTask>) {

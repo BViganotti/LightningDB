@@ -746,7 +746,7 @@ impl StorageManager {
                         .trigram_indexes
                         .write()
                         .insert(col.name.clone(), Arc::clone(&idx));
-                    let worker = Arc::new(TrigramIndexWorker::new(idx));
+                    let worker = Arc::new(TrigramIndexWorker::new(idx)?);
                     workers.insert(col.name.clone(), worker);
                 }
             }
