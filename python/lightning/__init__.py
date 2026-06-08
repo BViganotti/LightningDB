@@ -1,11 +1,6 @@
 from ._native import PyMemoryStore, LightningDatabase
 
 class MemoryStore:
-    """High-level memory store for AI agents.
-    
-    Wraps the native PyMemoryStore with additional convenience.
-    """
-
     def __init__(self, path: str):
         self._store = PyMemoryStore.open(path)
 
@@ -15,11 +10,16 @@ class MemoryStore:
         content: str,
         entity_type: str = "memory",
         metadata: str = "{}",
+        embedding: list[float] | None = None,
     ):
-        self._store.store(id, content, entity_type, metadata)
+        self._store.store(id, content, entity_type, metadata, embedding)
+
+    def store_batch(self, entities: list[dict]) -> int:
+        return self._store.store_batch(entities)
 
     def recall(self, query: str, top_k: int = 10):
-        return self._store.recall(query, top_k)
+        results = self._store.recall(query, top_k)
+        return results
 
     def recall_with_embedding(self, query: str, embedding: list[float], top_k: int = 10):
         return self._store.recall_with_embedding(query, embedding, top_k)
@@ -42,8 +42,20 @@ class MemoryStore:
     def decay(self) -> int:
         return self._store.decay()
 
-    def store_batch(self, entities: list[dict]) -> int:
-        return self._store.store_batch(entities)
+    def rag_query(self, query: str, top_k: int = 10):
+        return self._store.rag_query(query, top_k)
+
+    def recall_at_time(self, at_micros: int, top_k: int = 10):
+        return self._store.recall_at_time(at_micros, top_k)
+
+    def consolidate(self):
+        return self._store.consolidate()
+
+    def entity_history(self, entity_id: str):
+        return self._store.entity_history(entity_id)
+
+    def subscribe_changes(self):
+        return self._store.subscribe_changes()
 
 
 __all__ = ["MemoryStore", "PyMemoryStore", "LightningDatabase"]

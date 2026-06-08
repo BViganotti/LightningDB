@@ -61,22 +61,13 @@ class LightningVectorStore(VectorStore):
             metadatas = [{} for _ in texts_list]
 
         embeddings = self._embedding.embed_documents(texts_list)
-        entities = []
         for i, text in enumerate(texts_list):
-            entities.append({
-                "id": ids[i],
-                "content": text,
-                "type": kwargs.get("entity_type", "document"),
-                "metadata": str(metadatas[i] if i < len(metadatas) else {}),
-            })
-            # Store embedding separately via recall_with_embedding path
-            # Since our store_batch doesn't accept embeddings directly,
-            # we store text first then rely on the index being populated
             self._memory.store(
                 id=ids[i],
                 content=text,
                 entity_type=kwargs.get("entity_type", "document"),
                 metadata=str(metadatas[i] if i < len(metadatas) else {}),
+                embedding=embeddings[i],
             )
 
         return ids
