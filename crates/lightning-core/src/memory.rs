@@ -29,6 +29,9 @@ pub struct RagConfig {
     /// Maximum tokens (approximate) for the assembled context.
     /// Context is truncated to this limit to fit LLM windows.
     pub max_context_tokens: usize,
+    /// RRF (Reciprocal Rank Fusion) constant for hybrid search.
+    /// Default 60.0 is standard. Higher values smooth rank disparities.
+    pub hybrid_search_k: f64,
 }
 
 impl Default for RagConfig {
@@ -40,6 +43,7 @@ impl Default for RagConfig {
             degree_weight: 0.0,
             cross_encoder_wasm: String::new(),
             max_context_tokens: 4096,
+            hybrid_search_k: 60.0,
         }
     }
 }
@@ -265,45 +269,87 @@ impl MemoryStore {
         self.conn.bulk_insert_batch(ENTITY_TABLE, &batch)
     }
 
-    pub fn recall(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<Vec<SearchResult>> {
+    pub fn recall(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.recall_with_config(query_text, embedding, top_k, &Default::default())
+    }
+
+    /// Hybrid search with configurable RRF k and single-transaction execution.
+    pub fn recall_with_config(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+        config: &RagConfig,
+    ) -> Result<Vec<SearchResult>> {
         self.ensure_schema()?;
 
         let db = self.conn.client_context.database.clone();
         let storage = db.storage_manager.read();
 
         let mut results: HashMap<String, (MemoryEntity, f64)> = HashMap::new();
-        let k = 60.0;
+        let k = config.hybrid_search_k;
+        let mut errors: Vec<String> = Vec::new();
+
+        // Single transaction for both FTS and vector search
+        let tx = db.transaction_manager.begin(true);
+        let tx = match tx {
+            Ok(t) => t,
+            Err(e) => {
+                return Err(crate::LightningError::Internal(format!(
+                    "MemoryStore: failed to begin read transaction: {e}"
+                )));
+            }
+        };
 
         if let Some(fts) = storage.fts_indexes.get(ENTITY_TABLE) {
-            let tx = db.transaction_manager.begin(true)?;
-            if let Ok(fts_results) = fts.search(query_text, top_k * 2, &db.buffer_manager, &tx) {
-                for (rank, (node_id, _)) in fts_results.iter().enumerate() {
-                    if let Some(entity) = self.lookup_by_internal_id(*node_id) {
-                        let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
-                        results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
-                    }
-                }
-            }
-            if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-                tracing::warn!("MemoryStore: FTS transaction rollback failed: {}", e);
-            }
-        }
-
-        if !embedding.is_empty() && embedding.len() == self.embedding_dim {
-            if let Some(vec_idx) = storage.vector_indexes.get(ENTITY_TABLE) {
-                let tx = db.transaction_manager.begin(true)?;
-                if let Ok(vec_results) = vec_idx.search(embedding, top_k * 2, &db.buffer_manager, &tx) {
-                    for (rank, (node_id, _)) in vec_results.iter().enumerate() {
+            match fts.search(query_text, top_k * 2, &db.buffer_manager, &tx) {
+                Ok(fts_results) => {
+                    for (rank, (node_id, _)) in fts_results.iter().enumerate() {
                         if let Some(entity) = self.lookup_by_internal_id(*node_id) {
                             let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
                             results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
                         }
                     }
                 }
-                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-                    tracing::warn!("MemoryStore: vector index transaction rollback failed: {}", e);
+                Err(e) => {
+                    errors.push(format!("FTS search failed: {e}"));
+                    tracing::warn!("MemoryStore: FTS search failed in recall: {e}");
                 }
             }
+        }
+
+        if !embedding.is_empty() && embedding.len() == self.embedding_dim {
+            if let Some(vec_idx) = storage.vector_indexes.get(ENTITY_TABLE) {
+                match vec_idx.search(embedding, top_k * 2, &db.buffer_manager, &tx) {
+                    Ok(vec_results) => {
+                        for (rank, (node_id, _)) in vec_results.iter().enumerate() {
+                            if let Some(entity) = self.lookup_by_internal_id(*node_id) {
+                                let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
+                                results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("Vector search failed: {e}"));
+                        tracing::warn!("MemoryStore: vector search failed in recall: {e}");
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+            tracing::warn!("MemoryStore: recall transaction rollback failed: {e}");
+        }
+
+        if !errors.is_empty() && results.is_empty() {
+            return Err(crate::LightningError::Internal(format!(
+                "Hybrid search returned no results (errors: {})", errors.join("; ")
+            )));
         }
 
         let mut sorted: Vec<SearchResult> = results
