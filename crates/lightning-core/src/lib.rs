@@ -1056,7 +1056,6 @@ impl Connection {
         Arc<crate::transaction::transaction_manager::Transaction>,
     )> {
         // Fast path: cache lookup with raw query (no regex normalization).
-        // On miss, retry with normalized key.
         let mut cache_key = String::new();
         let cached_stmt = {
             let mut cache = self.client_context.database.plan_cache.lock();
