@@ -413,7 +413,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 10.2 Expose Tantivy Query Syntax
 
-- [ ] **10.2.1** `[P1]` Add `SEARCH(column, query)` scalar function in `registry.rs` → delegates to `InvertedIndex::search()`. Returns BM25 score for `ORDER BY`.
+- [X] **10.2.1** `[P1]` Add `SEARCH(node_id, query)` scalar function in `Database::register_search_function()`. Uses `Weak<Database>` to access FTS indexes and delegates to `InvertedIndex::search()`. Returns BM25 score for ORDER BY.
 
 ### 10.3 Custom Analyzers
 

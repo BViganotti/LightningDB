@@ -409,7 +409,7 @@ impl Database {
             }
         });
 
-        Ok(Arc::new(Self {
+        let db = Arc::new(Self {
             _path: path,
             _config: config,
             storage_manager: Arc::new(RwLock::new(storage_manager)),
@@ -422,9 +422,79 @@ impl Database {
             header: RwLock::new(header),
             plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).expect("infallible: 1024 > 0")))),
             metrics: DatabaseMetrics::new(),
-
             vacuum_handle: Some(vacuum_handle),
-        }))
+        });
+
+        // Register the SEARCH scalar function for BM25 scoring
+        Self::register_search_function(&db)?;
+
+        Ok(db)
+    }
+
+    /// Register the SEARCH() scalar function for full-text search BM25 scores.
+    /// SEARCH(node_id_column, query_string) returns the BM25 score for each row.
+    /// Used in ORDER BY clauses: ORDER BY SEARCH(content, 'query') DESC
+    fn register_search_function(db: &Arc<Self>) -> Result<()> {
+        let db_weak = Arc::downgrade(db);
+        let search_func = crate::processor::functions::ScalarFunction::new(
+            "SEARCH".to_string(),
+            Arc::new(move |args, _num_rows| {
+                if args.len() != 2 {
+                    return Err(crate::LightningError::Internal(
+                        "SEARCH requires 2 arguments: (node_id, query)".into(),
+                    ));
+                }
+                let db = match db_weak.upgrade() {
+                    Some(d) => d,
+                    None => return Err(crate::LightningError::Internal(
+                        "Database dropped during SEARCH evaluation".into(),
+                    )),
+                };
+                let storage = db.storage_manager.read();
+                let fts_values: Vec<Option<f32>> = {
+                    let mut results = Vec::new();
+                    let node_arr = args[0].as_any()
+                        .downcast_ref::<arrow::array::UInt64Array>();
+                    let query_arr = args[1].as_any()
+                        .downcast_ref::<arrow::array::StringArray>();
+                    match (node_arr, query_arr) {
+                        (Some(ids), Some(queries)) => {
+                            for i in 0..ids.len() {
+                                let score = if ids.is_valid(i) && queries.is_valid(i) {
+                                    let node_id = ids.value(i);
+                                    let query_str = queries.value(i);
+                                    let mut best_score = 0.0f32;
+                                    for fts in storage.fts_indexes.values() {
+                                        if let Ok(res) = fts.search(query_str, 1, &db.buffer_manager, &db.transaction_manager.begin(true).unwrap()) {
+                                            if let Some(&(_, s)) = res.first() {
+                                                if s > best_score { best_score = s; }
+                                            }
+                                        }
+                                    }
+                                    best_score
+                                } else {
+                                    0.0
+                                };
+                                results.push(Some(score));
+                            }
+                        }
+                        _ => {
+                            for _ in 0..args[0].len() {
+                                results.push(Some(0.0f32));
+                            }
+                        }
+                    }
+                    results
+                };
+                Ok(Arc::new(arrow::array::Float32Array::from(fts_values)) as ArrayRef)
+            }),
+        );
+        let reg: *const crate::processor::functions::FunctionRegistry =
+            Arc::as_ptr(&db.function_registry);
+        let reg_mut = reg as *mut crate::processor::functions::FunctionRegistry;
+        unsafe { (*reg_mut).register_scalar(search_func); }
+        tracing::info!("Registered SEARCH scalar function");
+        Ok(())
     }
 
     pub fn connect(self: &Arc<Self>) -> Connection {
