@@ -141,19 +141,37 @@ impl TransactionManager {
             // subsequent connections see the correct row count even if the
             // catalog metadata wasn't explicitly dirtied by DML operators.
             {
+                // Only iterate tables that were actually modified in this txn
+                let modified_versions: std::collections::HashSet<*const RowVersion> = tx
+                    .modified_rows
+                    .lock()
+                    .iter()
+                    .map(|(rv, _)| Arc::as_ptr(rv))
+                    .collect();
+
                 let storage = db.storage_manager.read();
                 let mut cat = db.catalog.write();
-                for (name, table) in storage.node_tables.iter() {
-                    if let Some(entry) = cat.get_node_table_mut(name) {
-                        entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+
+                let has_modified = !modified_versions.is_empty();
+                if has_modified {
+                    for (name, table) in storage.node_tables.iter() {
+                        if !modified_versions.contains(&Arc::as_ptr(&table.version_info)) {
+                            continue;
+                        }
+                        if let Some(entry) = cat.get_node_table_mut(name) {
+                            entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                        }
                     }
-                }
-                for (name, table) in storage.rel_tables.iter() {
-                    if let Some(entry) = cat.get_rel_table_mut(name) {
-                        entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                    for (name, table) in storage.rel_tables.iter() {
+                        if !modified_versions.contains(&Arc::as_ptr(&table.version_info)) {
+                            continue;
+                        }
+                        if let Some(entry) = cat.get_rel_table_mut(name) {
+                            entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                        }
                     }
+                    db.catalog.mark_dirty();
                 }
-                db.catalog.mark_dirty();
             }
 
             let commit_ts = self.current_ts.fetch_add(1, Ordering::SeqCst) + 1;
