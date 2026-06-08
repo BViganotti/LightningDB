@@ -50,6 +50,28 @@ pub trait ExpressionVisitor {
             BoundExpression::Lambda(_, body) => {
                 self.visit(body);
             }
+            BoundExpression::Not(expr) => {
+                self.visit(expr);
+            }
+            BoundExpression::Map(entries, _) => {
+                for (_, expr) in entries {
+                    self.visit(expr);
+                }
+            }
+            BoundExpression::Exists(steps) | BoundExpression::CountSubquery(steps) => {
+                for (match_clause, where_clause) in steps {
+                    for element in &match_clause.elements {
+                        if let crate::planner::binder::BoundMatchElement::Node(_, _, props) = element {
+                            for (_, expr) in props {
+                                self.visit(expr);
+                            }
+                        }
+                    }
+                    if let Some(w) = where_clause {
+                        self.visit(&w.expression);
+                    }
+                }
+            }
             _ => self.visit_leaf(expr),
         }
     }
@@ -115,6 +137,22 @@ pub trait ExpressionRewriter {
             }
             BoundExpression::Lambda(var, body) => {
                 BoundExpression::Lambda(var, Box::new(self.rewrite(*body)))
+            }
+            BoundExpression::Not(expr) => {
+                BoundExpression::Not(Box::new(self.rewrite(*expr)))
+            }
+            BoundExpression::Map(entries, ty) => {
+                let mut rewritten = Vec::new();
+                for (key, expr) in entries {
+                    rewritten.push((key, self.rewrite(expr)));
+                }
+                BoundExpression::Map(rewritten, ty)
+            }
+            BoundExpression::Exists(steps) => {
+                BoundExpression::Exists(steps) // subqueries handled at planner level
+            }
+            BoundExpression::CountSubquery(steps) => {
+                BoundExpression::CountSubquery(steps)
             }
             _ => self.rewrite_leaf(expr),
         }
