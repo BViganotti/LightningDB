@@ -1,13 +1,16 @@
 use crate::processor::functions::ScalarFunction;
 use arrow::array::Array;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct FunctionRegistry {
-    pub scalar_functions: HashMap<String, ScalarFunction>,
-    pub aggregate_functions: HashMap<
-        String,
-        Box<dyn Fn() -> Box<dyn crate::processor::functions::AggregateFunction> + Send + Sync>,
+    pub scalar_functions: RwLock<HashMap<String, ScalarFunction>>,
+    pub aggregate_functions: RwLock<
+        HashMap<
+            String,
+            Box<dyn Fn() -> Box<dyn crate::processor::functions::AggregateFunction> + Send + Sync>,
+        >,
     >,
 }
 
@@ -3674,25 +3677,26 @@ impl FunctionRegistry {
         }
 
         Self {
-            scalar_functions,
-            aggregate_functions,
+            scalar_functions: RwLock::new(scalar_functions),
+            aggregate_functions: RwLock::new(aggregate_functions),
     }
 }
 
-pub fn register_scalar(&mut self, func: ScalarFunction) {
+pub fn register_scalar(&self, func: ScalarFunction) {
         let name = func.name.to_uppercase();
-        if self.scalar_functions.contains_key(&name) {
+        let mut map = self.scalar_functions.write();
+        if map.contains_key(&name) {
             tracing::warn!("Duplicate scalar function registration: '{}' — overwriting previous", name);
         }
-        self.scalar_functions.insert(name, func);
+        map.insert(name, func);
     }
 
     pub fn has_scalar(&self, name: &str) -> bool {
-        self.scalar_functions.contains_key(&name.to_uppercase())
+        self.scalar_functions.read().contains_key(&name.to_uppercase())
     }
 
-    pub fn get_scalar_function(&self, name: &str) -> Option<&ScalarFunction> {
-        self.scalar_functions.get(&name.to_uppercase())
+    pub fn get_scalar_function(&self, name: &str) -> Option<ScalarFunction> {
+        self.scalar_functions.read().get(&name.to_uppercase()).cloned()
     }
 
     pub fn get_aggregate_function(
@@ -3700,6 +3704,7 @@ pub fn register_scalar(&mut self, func: ScalarFunction) {
         name: &str,
     ) -> Option<Box<dyn crate::processor::functions::AggregateFunction>> {
         self.aggregate_functions
+            .read()
             .get(&name.to_uppercase())
             .map(|f| f())
     }

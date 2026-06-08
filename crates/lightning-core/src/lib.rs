@@ -489,10 +489,7 @@ impl Database {
                 Ok(Arc::new(arrow::array::Float32Array::from(fts_values)) as ArrayRef)
             }),
         );
-        let reg: *const crate::processor::functions::FunctionRegistry =
-            Arc::as_ptr(&db.function_registry);
-        let reg_mut = reg as *mut crate::processor::functions::FunctionRegistry;
-        unsafe { (*reg_mut).register_scalar(search_func); }
+        db.function_registry.register_scalar(search_func);
         tracing::info!("Registered SEARCH scalar function");
         Ok(())
     }
@@ -516,13 +513,7 @@ impl Database {
     ) -> Result<()> {
         let wasm_func = crate::wasm_function::WasmFunction::load(wasm_path, func_name)?;
         let scalar = wasm_func.to_scalar_function();
-        let reg: *const crate::processor::functions::FunctionRegistry =
-            Arc::as_ptr(&self.function_registry);
-        let reg_mut = reg as *mut crate::processor::functions::FunctionRegistry;
-        // SAFETY: register_wasm_function is called during single-threaded
-        // initialization before any concurrent access to the function registry.
-        // SAFETY: SAFETY: `register_wasm_function` is called during single-threaded initialization before any concurrent access to the function registry.
-        unsafe { (*reg_mut).register_scalar(scalar); }
+        self.function_registry.register_scalar(scalar);
         tracing::info!("Registered WASM function: {}", func_name);
         Ok(())
     }

@@ -2177,8 +2177,17 @@ impl Column {
         };
 
         if meta.compression != CompressionType::Uncompressed {
-            let mut stats = self.stats.write();
-            stats.compression_meta = Some(meta);
+            // Compression algorithms are defined but pages are never actually
+            // compressed during writes. Setting compression_meta without re-encoding
+            // would cause the decompression path to misinterpret uncompressed data.
+            // For safety, only set compression_meta when pages are re-encoded.
+            // TODO: wire compress_next_page into the bulk write path and re-encode
+            // existing pages here.
+            tracing::info!(
+                "Column {}: compression analysis selected {:?} but pages are not re-encoded \
+                 (compression will apply to newly written pages only when the write path is updated)",
+                self.name, meta.compression
+            );
         }
         Ok(())
     }
