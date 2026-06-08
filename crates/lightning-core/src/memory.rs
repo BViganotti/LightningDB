@@ -396,84 +396,43 @@ impl MemoryStore {
             degree.insert(id.clone(), 0);
         }
 
-        // Phase 2: Graph expansion — find neighbors for top results
+        // Phase 2: Graph expansion — find neighbors for top results using CSR index
         let top_for_expansion = std::cmp::min(config.expansion_depth, initial.len());
-        if top_for_expansion > 0 {
-            let db = self.conn.client_context.database.clone();
+        let db = self.conn.client_context.database.clone();
+        for i in 0..top_for_expansion {
+            if let Ok(neighbors) = self.expand(&initial[i].entity.id, 1, &[]) {
+                for neighbor in &neighbors {
+                    if !all_entities.contains_key(&neighbor.id) {
+                        all_entities.insert(neighbor.id.clone(), (neighbor.clone(), 0.0));
+                    }
+                }
+            }
+        }
+
+        // Compute graph degree for each entity using CSR index
+        if let Ok(tx) = db.transaction_manager.begin(true) {
             let storage = db.storage_manager.read();
-            let rel_table = storage.rel_tables.get(RELATES_TABLE).cloned();
-            drop(storage);
-
-            if let Some(ref rel_tab) = rel_table {
-                let tx = db.transaction_manager.begin(true)?;
-                let card = rel_tab.stats.read().cardinality;
-                if card > 0 {
-                    let mut srcs = Vec::new();
-                    let mut dsts = Vec::new();
-                    let bm = &db.buffer_manager;
-                    if let Err(e) = rel_tab.columns[0].scan(bm, 0, card, &tx, &mut srcs) {
-                        tracing::warn!("MemoryStore: failed to scan src column in rag_query: {}", e);
-                    }
-                    if let Err(e) = rel_tab.columns[1].scan(bm, 0, card, &tx, &mut dsts) {
-                        tracing::warn!("MemoryStore: failed to scan dst column in rag_query: {}", e);
-                    }
-
-                    let mut internal_ids: Vec<(u64, String)> = Vec::new();
-                    for i in 0..top_for_expansion {
-                        if i >= initial.len() { break; }
-                        let lookup = format!(
-                            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
-                        );
-                        let mut params = HashMap::new();
-                        params.insert("id".to_string(), Value::String(initial[i].entity.id.clone()));
-                        if let Ok(res) = self.conn.execute(&lookup, Some(params)) {
-                            if let Some(b) = res.batches.first() {
-                                let arr = b.column(0).as_any().downcast_ref::<UInt64Array>();
-                                if let Some(a) = arr {
-                                    internal_ids.push((a.value(0), initial[i].entity.id.clone()));
-                                }
-                            }
-                        }
-                    }
-
-                    // Phase 3: Compute actual graph degree from Relates edges
-                    let internal_to_eid: HashMap<u64, String> = internal_ids.iter().cloned().collect();
-                    for (s, d) in srcs.iter().zip(dsts.iter()) {
-                        let src_eid = internal_to_eid.get(&s.as_node());
-                        let dst_eid = internal_to_eid.get(&d.as_node());
-                        if let Some(eid) = src_eid {
-                            if let Some(count) = degree.get_mut(eid) {
-                                *count += 1;
-                            }
-                        }
-                        if let Some(eid) = dst_eid {
-                            if let Some(count) = degree.get_mut(eid) {
-                                *count += 1;
-                            }
-                        }
-                    }
-
-                    for (nid, _) in &internal_ids {
-                        for (s, d) in srcs.iter().zip(dsts.iter()) {
-                            let neighbor_eid = if s.as_node() == *nid {
-                                self.lookup_by_internal_id(d.as_node())
-                            } else if d.as_node() == *nid {
-                                self.lookup_by_internal_id(s.as_node())
-                            } else {
-                                continue;
-                            };
-                            if let Some(ne) = neighbor_eid {
-                                if !all_entities.contains_key(&ne.id) {
-                                    all_entities.insert(ne.id.clone(), (ne, 0.0));
-                                }
+            if let Some(fwd_csr) = storage.fwd_csr.get(RELATES_TABLE) {
+                let bm = &db.buffer_manager;
+                for (eid, _) in &all_entities {
+                    let lookup = format!(
+                        "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
+                    );
+                    let mut params = HashMap::new();
+                    params.insert("id".to_string(), Value::String(eid.clone()));
+                    if let Ok(res) = self.conn.execute(&lookup, Some(params)) {
+                        if let Some(b) = res.batches.first() {
+                            if let Some(arr) = b.column(0).as_any().downcast_ref::<UInt64Array>() {
+                                let internal_id = arr.value(0);
+                                let mut count = 0u64;
+                                let _ = fwd_csr.for_each_neighbor(bm, internal_id, &tx, |_| count += 1);
+                                *degree.get_mut(eid).unwrap_or(&mut 0) = count as usize;
                             }
                         }
                     }
                 }
-        if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-            tracing::warn!("MemoryStore: expand transaction rollback failed: {}", e);
-        }
             }
+            let _ = db.transaction_manager.rollback(&db, &tx);
         }
 
         // Phase 4: Rerank by configurable composite score
