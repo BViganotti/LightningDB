@@ -5,6 +5,33 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::sync::Arc;
 
+/// Iterator that yields query result chunks one at a time as a Python generator.
+/// Each call to `__next__` blocks on the channel until the next chunk is available
+/// or the stream is exhausted.
+#[pyclass]
+struct QueryStreamIter {
+    rx: crossbeam::channel::Receiver<lightning_core::Result<lightning_core::processor::DataChunk>>,
+}
+
+#[pymethods]
+impl QueryStreamIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        match slf.rx.recv() {
+            Ok(Ok(chunk)) => {
+                let dict = PyDict::new(py);
+                dict.set_item("num_rows", chunk.num_rows())?;
+                Ok(Some(dict.into()))
+            }
+            Ok(Err(e)) => Err(to_py_err(e)),
+            Err(_) => Ok(None),
+        }
+    }
+}
+
 fn to_py_err(e: LightningError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
@@ -314,17 +341,9 @@ impl PyMemoryStore {
         })
     }
 
-    fn query_stream(&self, query: &str) -> PyResult<Vec<PyObject>> {
+    fn query_stream(&self, query: &str) -> PyResult<QueryStreamIter> {
         let rx = self.inner.query_stream(query).map_err(to_py_err)?;
-        Python::with_gil(|py| {
-            let mut chunks = Vec::new();
-            while let Ok(Ok(chunk)) = rx.recv() {
-                let dict = PyDict::new(py);
-                dict.set_item("num_rows", chunk.num_rows())?;
-                chunks.push(dict.into());
-            }
-            Ok(chunks)
-        })
+        Ok(QueryStreamIter { rx })
     }
 
     fn subscribe_changes(&self) -> PyResult<Vec<PyObject>> {

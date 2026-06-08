@@ -123,7 +123,10 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 **Problem**: Python `query_stream()` collects all chunks into a `Vec<PyObject>` and returns them as a list — no streaming at all.
 
-- [ ] **1.2.1** `[P1]` Rewrite the Python binding (`crates/lightning-python/src/lib.rs:317-328`) to return a Python generator. Use `crossbeam::channel::Receiver` and yield each `DataChunk` as a Python dict as it arrives. The generator should block on `rx.recv()`.
+- [X] **1.2.1** `[P1]` Rewrite the Python binding to return a Python generator.
+  - Added `QueryStreamIter` pyclass with `__iter__`/`__next__` that wraps `crossbeam::channel::Receiver<Result<DataChunk>>`.
+  - `query_stream()` now returns `QueryStreamIter` instead of `Vec<PyObject>` — each `__next__` blocks on `rx.recv()` and yields one chunk as a dict.
+  - Added `crossbeam` dependency to `lightning-python/Cargo.toml`.
 
 ### 1.3 Add Backpressure
 
