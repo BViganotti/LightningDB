@@ -824,6 +824,10 @@ impl StorageManager {
         self.node_tables.remove(name);
         self.rel_tables.remove(name);
         self.indexes.remove(name);
+        self.fts_indexes.remove(name);
+        self.vector_indexes.remove(name);
+        self.fwd_csr.remove(name);
+        self.bwd_csr.remove(name);
     }
 
     pub fn add_column_to_table(

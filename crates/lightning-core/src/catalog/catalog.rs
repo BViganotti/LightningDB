@@ -343,6 +343,12 @@ impl Catalog {
             .map_err(|e| crate::LightningError::Database(e.to_string()))?;
         std::fs::write(&shadow_path, buf)?;
         std::fs::rename(shadow_path, path)?;
+        // Sync the parent directory to ensure the rename is durable
+        if let Some(parent) = path.parent() {
+            if let Ok(f) = std::fs::File::open(parent) {
+                f.sync_all().ok();
+            }
+        }
         Ok(())
     }
 
