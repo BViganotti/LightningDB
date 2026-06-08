@@ -52,13 +52,35 @@ impl Alp {
         1000000000000000000.0,
     ];
 
+    /// Sentinel for NaN encoding: uses i64::MIN (most negative value)
+    const NAN_SENTINEL: i64 = i64::MIN;
+    /// Sentinel for +Infinity encoding
+    const POS_INF_SENTINEL: i64 = i64::MIN + 1;
+    /// Sentinel for -Infinity encoding
+    const NEG_INF_SENTINEL: i64 = i64::MIN + 2;
+
     pub fn encode_value(val: f64, fac_idx: u8, exp_idx: u8) -> i64 {
+        if val.is_nan() {
+            return Self::NAN_SENTINEL;
+        }
+        if val.is_infinite() {
+            return if val.is_sign_positive() {
+                Self::POS_INF_SENTINEL
+            } else {
+                Self::NEG_INF_SENTINEL
+            };
+        }
         let tmp = val * Self::EXP_ARR[exp_idx as usize] / Self::FACTOR_ARR[fac_idx as usize];
         tmp.round() as i64
     }
 
     pub fn decode_value(encoded: i64, fac_idx: u8, exp_idx: u8) -> f64 {
-        (encoded as f64) * Self::FACTOR_ARR[fac_idx as usize] * Self::FRAC_ARR[exp_idx as usize]
+        match encoded {
+            Self::NAN_SENTINEL => f64::NAN,
+            Self::POS_INF_SENTINEL => f64::INFINITY,
+            Self::NEG_INF_SENTINEL => f64::NEG_INFINITY,
+            _ => (encoded as f64) * Self::FACTOR_ARR[fac_idx as usize] * Self::FRAC_ARR[exp_idx as usize],
+        }
     }
 }
 
