@@ -121,26 +121,28 @@ impl FusionApp {
         conn: &Connection,
         ids: &[String],
     ) -> Result<Vec<(String, String, String)>, crate::LightningError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let in_clause: String = ids.iter().map(|id| format!("'{}'", sq(id))).collect::<Vec<_>>().join(",");
+        let q = format!(
+            "MATCH (n:CodeNode) WHERE n.id IN [{}] RETURN n.id, n.name, n.node_type",
+            in_clause
+        );
         let mut results = Vec::new();
-        for node_id in ids {
-            let q = format!(
-                "MATCH (n:CodeNode {{id: '{}'}}) RETURN n.id, n.name, n.node_type",
-                sq(node_id)
-            );
-            if let Ok(result) = conn.query(&q) {
-                for batch in &result.batches {
-                    if let (Ok(id_col), Ok(name_col), Ok(typ_col)) = (
-                        arrow_utils::str_col(batch, 0),
-                        arrow_utils::str_col(batch, 1),
-                        arrow_utils::str_col(batch, 2),
-                    ) {
-                        for i in 0..batch.num_rows() {
-                            results.push((
-                                id_col.value(i).to_string(),
-                                name_col.value(i).to_string(),
-                                typ_col.value(i).to_string(),
-                            ));
-                        }
+        if let Ok(result) = conn.query(&q) {
+            for batch in &result.batches {
+                if let (Ok(id_col), Ok(name_col), Ok(typ_col)) = (
+                    arrow_utils::str_col(batch, 0),
+                    arrow_utils::str_col(batch, 1),
+                    arrow_utils::str_col(batch, 2),
+                ) {
+                    for i in 0..batch.num_rows() {
+                        results.push((
+                            id_col.value(i).to_string(),
+                            name_col.value(i).to_string(),
+                            typ_col.value(i).to_string(),
+                        ));
                     }
                 }
             }
@@ -192,36 +194,33 @@ impl FusionApp {
     pub fn compute_architecture_cohesion(
         conn: &Connection,
     ) -> Result<Vec<ModuleCohesion>, crate::LightningError> {
-        let relation_types = ["Calls", "Imports", "References", "Implements", "Contains", "Extends"];
+        let q = "\
+MATCH (n:CodeNode)-[r]-(m:CodeNode) \
+WITH n.file_path AS nf, m.file_path AS mf \
+WHERE nf IS NOT NULL AND mf IS NOT NULL \
+WITH split(nf, '/') AS np, split(mf, '/') AS mp \
+WITH np[0] AS n_mod, mp[0] AS m_mod \
+WHERE n_mod IS NOT NULL AND m_mod IS NOT NULL \
+RETURN n_mod, m_mod, count(*) AS edge_count \
+ORDER BY n_mod".to_string();
         let mut module_map: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
-        for rel_type in &relation_types {
-            let q = format!(
-                "MATCH (n:CodeNode)-[r:{rel_type}]-(m:CodeNode) \
-                 WITH n.file_path AS nf, m.file_path AS mf \
-                 WITH split(nf, '/') AS np, split(mf, '/') AS mp \
-                 WITH np[0] AS n_mod, mp[0] AS m_mod \
-                 WHERE n_mod IS NOT NULL AND m_mod IS NOT NULL \
-                 RETURN n_mod, m_mod, count(*) AS edge_count \
-                 ORDER BY n_mod"
-            );
-            if let Ok(rows) = conn.query(&q) {
-                for batch in &rows.batches {
-                    if let (Ok(src_col), Ok(dst_col), Ok(cnt_col)) = (
-                        arrow_utils::str_col(batch, 0),
-                        arrow_utils::str_col(batch, 1),
-                        arrow_utils::i64_col(batch, 2),
-                    ) {
-                        for i in 0..batch.num_rows() {
-                            let src_mod = src_col.value(i).to_string();
-                            let dst_mod = dst_col.value(i).to_string();
-                            let count = cnt_col.value(i) as u64;
-                            let same_module = src_mod == dst_mod;
-                            let (internal, external) = module_map.entry(src_mod).or_insert((0, 0));
-                            if same_module {
-                                *internal += count;
-                            } else {
-                                *external += count;
-                            }
+        if let Ok(rows) = conn.query(&q) {
+            for batch in &rows.batches {
+                if let (Ok(src_col), Ok(dst_col), Ok(cnt_col)) = (
+                    arrow_utils::str_col(batch, 0),
+                    arrow_utils::str_col(batch, 1),
+                    arrow_utils::i64_col(batch, 2),
+                ) {
+                    for i in 0..batch.num_rows() {
+                        let src_mod = src_col.value(i).to_string();
+                        let dst_mod = dst_col.value(i).to_string();
+                        let count = cnt_col.value(i) as u64;
+                        let same_module = src_mod == dst_mod;
+                        let (internal, external) = module_map.entry(src_mod).or_insert((0, 0));
+                        if same_module {
+                            *internal += count;
+                        } else {
+                            *external += count;
                         }
                     }
                 }

@@ -232,6 +232,7 @@ pub struct Database {
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
     pub plan_cache: Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>,
+    pub physical_plan_cache: Arc<parking_lot::Mutex<LruCache<String, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>,
     pub metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
@@ -427,6 +428,7 @@ impl Database {
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
             plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).expect("infallible: 1024 > 0")))),
+            physical_plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(256).expect("infallible: 256 > 0")))),
             metrics: DatabaseMetrics::new(),
             vacuum_handle: Some(vacuum_handle),
         });
@@ -1128,7 +1130,7 @@ impl Connection {
                     .database
                     .plan_cache
                     .lock()
-                    .put(cache_key, Arc::new(bound_union.statement.clone()));
+                    .put(cache_key.clone(), Arc::new(bound_union.statement.clone()));
             }
             let bound_union = bound_query
                 .union_queries
@@ -1144,6 +1146,15 @@ impl Connection {
             Arc::clone(&tx.undo_buffer),
         );
         let physical_plan = planner.plan(logical_plan)?;
+        // Cache the physical plan keyed by (cache_key, read_ts) for faster re-execution
+        if !cache_key.is_empty() {
+            let pp_key = format!("{}:{}", &cache_key, tx.read_ts);
+            self.client_context
+                .database
+                .physical_plan_cache
+                .lock()
+                .put(pp_key, Arc::from(physical_plan.clone_box()));
+        }
         Ok((physical_plan, tx))
     }
 

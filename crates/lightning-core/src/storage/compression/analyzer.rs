@@ -4,6 +4,39 @@ use crate::storage::compression::{
 };
 use crate::Result;
 use lightning_types::LogicalType;
+use std::hash::{Hash, Hasher};
+
+/// Simple HyperLogLog estimator with 256 registers (8-bit prefix, 6-bit count).
+/// Used for streaming cardinality estimation in compression analysis,
+/// replacing the full HashSet allocation.
+struct Hll {
+    registers: [u8; 256],
+}
+
+impl Hll {
+    fn new() -> Self {
+        Self { registers: [0u8; 256] }
+    }
+
+    fn insert(&mut self, val: &Value) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        val.hash(&mut hasher);
+        let h = hasher.finish();
+        let idx = (h & 0xFF) as usize; // low 8 bits → register index
+        let payload = h >> 8;
+        let zeros = payload.trailing_zeros() as u8 + 1;
+        if zeros > self.registers[idx] {
+            self.registers[idx] = zeros;
+        }
+    }
+
+    fn estimate(&self) -> usize {
+        let sum: f64 = self.registers.iter().map(|&r| 2.0f64.powi(-(r as i32))).sum();
+        if sum == 0.0 { return 0; }
+        let alpha = 0.7213 / (1.0 + 1.079 / 256.0);
+        (alpha * 256.0 * 256.0 / sum).round() as usize
+    }
+}
 
 pub struct CompressionAnalyzer;
 
@@ -48,13 +81,13 @@ impl CompressionAnalyzer {
             return CompressionMetadata::new(min, max, CompressionType::Rle, 0);
         }
 
-        // Count distinct values for Dictionary encoding
-        use std::collections::HashSet;
-        let mut distinct = HashSet::new();
+        // Estimate distinct count via HyperLogLog (fixed memory, no per-value allocation)
+        let mut hll = Hll::new();
         for val in values {
-            distinct.insert(val);
+            hll.insert(val);
         }
-        if distinct.len() < values.len() / 4 && values.len() > 64 {
+        let distinct = hll.estimate();
+        if distinct < values.len() / 4 && values.len() > 64 {
             // Low cardinality, Dictionary might be good
             return CompressionMetadata::new(min, max, CompressionType::Dict, 0);
         }
@@ -153,12 +186,12 @@ impl CompressionAnalyzer {
             return CompressionMetadata::new(p.clone(), p.clone(), CompressionType::Constant, 0);
         }
 
-        use std::collections::HashSet;
-        let mut distinct = HashSet::new();
+        let mut hll = Hll::new();
         for val in values {
-            distinct.insert(val);
+            hll.insert(val);
         }
-        if distinct.len() < values.len() / 8 && values.len() > 16 {
+        let distinct = hll.estimate();
+        if distinct < values.len() / 8 && values.len() > 16 {
             return CompressionMetadata::new(Value::Null, Value::Null, CompressionType::Dict, 0);
         }
 
