@@ -1,4 +1,4 @@
-use lightning_core::memory::{DEFAULT_EMBEDDING_DIM, MemoryEntity, MemoryStore as CoreMemoryStore};
+use lightning_core::memory::{DEFAULT_EMBEDDING_DIM, MemoryEntity, MemoryStore as CoreMemoryStore, SearchResult};
 use lightning_core::{Database, LightningError, SystemConfig, SyncMode};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -51,6 +51,37 @@ impl QueryStreamIter {
             Ok(Ok(chunk)) => {
                 let dict = PyDict::new(py);
                 dict.set_item("num_rows", chunk.num_rows())?;
+                Ok(Some(dict.into()))
+            }
+            Ok(Err(e)) => Err(to_py_err(e)),
+            Err(_) => Ok(None),
+        }
+    }
+}
+
+/// Iterator that yields search results from recall_stream as a Python generator.
+#[pyclass]
+struct RecallStreamIter {
+    rx: crossbeam::channel::Receiver<lightning_core::Result<SearchResult>>,
+}
+
+#[pymethods]
+impl RecallStreamIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        match slf.rx.recv() {
+            Ok(Ok(result)) => {
+                let dict = PyDict::new(py);
+                dict.set_item("id", result.entity.id.clone())?;
+                dict.set_item("content", result.entity.content.clone())?;
+                dict.set_item("entity_type", result.entity.entity_type.clone())?;
+                dict.set_item("score", result.score)?;
+                dict.set_item("metadata", result.entity.metadata.clone())?;
+                let emb: Vec<f64> = result.entity.embedding.iter().map(|&v| v as f64).collect();
+                dict.set_item("embedding", emb)?;
                 Ok(Some(dict.into()))
             }
             Ok(Err(e)) => Err(to_py_err(e)),
@@ -292,15 +323,9 @@ impl PyMemoryStore {
         Python::with_gil(|py| entities.iter().map(|e| entity_to_pydict(py, e)).collect::<PyResult<Vec<_>>>())
     }
 
-    fn recall_stream(&self, query: &str, embedding: Vec<f32>, top_k: usize) -> PyResult<Vec<PyObject>> {
+    fn recall_stream(&self, query: &str, embedding: Vec<f32>, top_k: usize) -> PyResult<RecallStreamIter> {
         let rx = self.inner.recall_stream(query, &embedding, top_k).map_err(to_py_err)?;
-        Python::with_gil(|py| {
-            let mut results = Vec::new();
-            while let Ok(Ok(r)) = rx.recv() {
-                results.push(search_result_to_pydict(py, &r)?);
-            }
-            Ok(results)
-        })
+        Ok(RecallStreamIter { rx })
     }
 
     #[pyo3(signature = (query, embedding, top_k=None))]
