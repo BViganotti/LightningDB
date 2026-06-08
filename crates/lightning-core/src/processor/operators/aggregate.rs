@@ -147,31 +147,21 @@ impl Aggregate {
         } else {
             // Adaptive aggregation: switch to sort-based when row count is large
             // to avoid HashMap memory pressure for high-cardinality group keys.
-            let mut all_rows: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
+            let mut all_batches: Vec<RecordBatch> = Vec::new();
             let mut use_sort_based = false;
 
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
 
-                if !use_sort_based && all_rows.len() + num_rows > SORT_AGGREGATION_THRESHOLD {
+                if !use_sort_based && all_batches.iter().map(|b| b.num_rows()).sum::<usize>() + num_rows > SORT_AGGREGATION_THRESHOLD {
                     // Switch to sort-based approach — flush existing hash map first
                     use_sort_based = true;
                 }
 
                 if use_sort_based {
-                    // Collect rows for sort-based aggregation
-                    for row_idx in 0..num_rows {
-                        let mut group_key = Vec::with_capacity(self.group_by_indices.len());
-                        for &idx in &self.group_by_indices {
-                            group_key.push(Value::from_arrow(batch.column(idx), row_idx));
-                        }
-                        let mut row_values = Vec::with_capacity(self.aggregates.len());
-                        for (_, col_idx) in &self.aggregates {
-                            row_values.push(Value::from_arrow(batch.column(*col_idx), row_idx));
-                        }
-                        all_rows.push((group_key, row_values));
-                    }
+                    // Collect batches for sort-based aggregation (columnar)
+                    all_batches.push(batch.clone());
                 } else {
                     // Vectorized hash-based aggregation:
                     // Build local group → row_indices map for this chunk,
@@ -210,38 +200,77 @@ impl Aggregate {
                 }
             }
 
-            // If sort-based was used, process the collected rows
-            if use_sort_based && !all_rows.is_empty() {
-                all_rows.sort_by(|a, b| {
-                    let ka = &a.0;
-                    let kb = &b.0;
-                    for (va, vb) in ka.iter().zip(kb.iter()) {
-                        let cmp = va.partial_cmp(vb).unwrap_or(std::cmp::Ordering::Less);
-                        if cmp != std::cmp::Ordering::Equal {
-                            return cmp;
-                        }
-                    }
-                    ka.len().cmp(&kb.len())
-                });
+            // If sort-based was used, process the collected batches (columnar)
+            if use_sort_based && !all_batches.is_empty() {
+                // Concatenate all collected batches into one
+                let schema = all_batches[0].schema();
+                let full_batch = arrow::compute::concat_batches(&schema, &all_batches)
+                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                let total = full_batch.num_rows();
 
-                let mut groups = self.shared_state.groups.write();
-                let mut i = 0;
-                while i < all_rows.len() {
-                    let key = all_rows[i].0.clone();
-                    let mut agg_funcs = self.create_agg_functions();
-                    let mut count = 0usize;
-                    while i < all_rows.len() && all_rows[i].0 == key {
-                        for (j, val) in all_rows[i].1.iter().enumerate() {
-                            let arr = crate::processor::arrow_utils::values_to_array(
-                                &[val.clone()],
-                                &arrow::datatypes::DataType::Float64,
-                            );
-                            agg_funcs[j].update(&[arr], &[0])?;
-                        }
-                        count += 1;
-                        i += 1;
+                // Compute sort key arrays for group-by columns
+                let mut sort_columns = Vec::with_capacity(self.group_by_indices.len());
+                for &idx in &self.group_by_indices {
+                    sort_columns.push(full_batch.column(idx).clone());
+                }
+
+                // Build SortColumn descriptors
+                let sort_cols: Vec<arrow::compute::SortColumn> = sort_columns.iter().map(|arr| {
+                    arrow::compute::SortColumn {
+                        values: arr.clone(),
+                        options: Some(arrow::compute::SortOptions {
+                            descending: false,
+                            nulls_first: true,
+                        }),
                     }
-                    groups.insert(key, (agg_funcs, count));
+                }).collect();
+
+                // O(N log N) lexsort on group keys
+                let indices = arrow::compute::lexsort_to_indices(&sort_cols, None)
+                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+
+                // Walk sorted indices, group contiguous equal keys
+                let mut groups = self.shared_state.groups.write();
+                let mut start = 0usize;
+                while start < total {
+                    let key_row = indices.value(start) as usize;
+                    let mut key = Vec::with_capacity(self.group_by_indices.len());
+                    for &idx in &self.group_by_indices {
+                        key.push(Value::from_arrow(full_batch.column(idx), key_row));
+                    }
+
+                    // Find end of this group
+                    let mut end = start + 1;
+                    while end < total {
+                        let cmp_row = indices.value(end) as usize;
+                        let mut same = true;
+                        for &idx in &self.group_by_indices {
+                            if Value::from_arrow(full_batch.column(idx), key_row)
+                                != Value::from_arrow(full_batch.column(idx), cmp_row)
+                            {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if !same { break; }
+                        end += 1;
+                    }
+
+                    let group_len = end - start;
+                    let mut group_indices: Vec<u64> = (start..end).map(|i| indices.value(i) as u64).collect();
+
+                    let mut agg_funcs = self.create_agg_functions();
+                    for (j, (_, col_idx)) in self.aggregates.iter().enumerate() {
+                        let idx_arr = arrow::array::UInt64Array::from(group_indices.clone());
+                        let gathered = arrow::compute::take(
+                            full_batch.column(*col_idx),
+                            &idx_arr,
+                            None,
+                        ).map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                        agg_funcs[j].update_vector(&gathered)?;
+                    }
+                    groups.insert(key, (agg_funcs, group_len));
+                    start = end;
                 }
             }
         }
