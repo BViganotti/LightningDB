@@ -195,10 +195,11 @@ impl PyMemoryStore {
         self.inner.store(entity).map_err(to_py_err)
     }
 
-    #[pyo3(signature = (query, top_k=None))]
-    fn recall(&self, query: &str, top_k: Option<usize>) -> PyResult<Vec<PyObject>> {
+    #[pyo3(signature = (query, top_k=None, embedding=None))]
+    fn recall(&self, query: &str, top_k: Option<usize>, embedding: Option<Vec<f32>>) -> PyResult<Vec<PyObject>> {
         let k = top_k.unwrap_or(10);
-        let results = self.inner.recall(query, &[], k).map_err(to_py_err)?;
+        let emb = embedding.as_deref().unwrap_or(&[]);
+        let results = self.inner.recall(query, emb, k).map_err(to_py_err)?;
         Python::with_gil(|py| results.iter().map(|r| search_result_to_pydict(py, r)).collect::<PyResult<Vec<_>>>())
     }
 
@@ -267,10 +268,11 @@ impl PyMemoryStore {
         self.inner.associate(src_id, dst_id, rel_type, weight.unwrap_or(1.0)).map_err(to_py_err)
     }
 
-    #[pyo3(signature = (entity_id, hops=None))]
-    fn expand(&self, entity_id: &str, hops: Option<u32>) -> PyResult<Vec<PyObject>> {
+    #[pyo3(signature = (entity_id, hops=None, edge_types=None))]
+    fn expand(&self, entity_id: &str, hops: Option<u32>, edge_types: Option<Vec<String>>) -> PyResult<Vec<PyObject>> {
         let h = hops.unwrap_or(1);
-        let entities = self.inner.expand(entity_id, h, &["Relates"]).map_err(to_py_err)?;
+        let types: Vec<&str> = edge_types.as_deref().unwrap_or(&["Relates"]);
+        let entities = self.inner.expand(entity_id, h, &types).map_err(to_py_err)?;
         Python::with_gil(|py| entities.iter().map(|e| entity_to_pydict(py, e)).collect::<PyResult<Vec<_>>>())
     }
 
