@@ -1475,18 +1475,25 @@ impl Connection {
             db.catalog.mark_dirty();
         }
 
-        // Sync catalog stats from storage manager for the inserted table only
-        {
+        // Sync catalog stats from storage manager for the inserted table only.
+        // Acquire catalog lock FIRST, then storage lock, to avoid deadlocks.
+        let stats_snapshot = {
             let storage = db.storage_manager.read();
+            (
+                storage.rel_tables.get(table_name).map(|t| t.stats.read().clone()),
+                storage.node_tables.get(table_name).map(|t| t.stats.read().clone()),
+            )
+        };
+        {
             let mut cat = db.catalog.write();
-            if let Some(table) = storage.rel_tables.get(table_name) {
-                if let Some(entry) = cat.get_rel_table_mut(table_name) {
-                    entry.stats = table.stats.read().clone();
+            if let Some(entry) = cat.get_rel_table_mut(table_name) {
+                if let Some(ref s) = stats_snapshot.0 {
+                    entry.stats = s.clone();
                 }
             }
-            if let Some(table) = storage.node_tables.get(table_name) {
-                if let Some(entry) = cat.get_node_table_mut(table_name) {
-                    entry.stats = table.stats.read().clone();
+            if let Some(entry) = cat.get_node_table_mut(table_name) {
+                if let Some(ref s) = stats_snapshot.1 {
+                    entry.stats = s.clone();
                 }
             }
             db.catalog.mark_dirty();
