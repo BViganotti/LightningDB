@@ -242,6 +242,11 @@ impl HashIndex {
         match val {
             Value::Number(n) => n.to_bits().hash(&mut hasher),
             Value::String(s) => s.hash(&mut hasher),
+            Value::Boolean(b) => b.hash(&mut hasher),
+            Value::Node(id) | Value::Relationship(id) => id.hash(&mut hasher),
+            Value::Date(d) => d.hash(&mut hasher),
+            Value::Timestamp(t) => t.hash(&mut hasher),
+            Value::Null => 0u64.hash(&mut hasher),
             _ => format!("{val:?}").hash(&mut hasher),
         };
         hasher.finish() & !DELETED_BIT
@@ -274,6 +279,21 @@ impl HashIndex {
                 buf[1..9].copy_from_slice(&id.to_le_bytes());
                 Ok(())
             }
+            Value::Relationship(id) => {
+                buf[0] = 4;
+                buf[1..9].copy_from_slice(&id.to_le_bytes());
+                Ok(())
+            }
+            Value::Date(d) => {
+                buf[0] = 5;
+                buf[1..5].copy_from_slice(&d.to_le_bytes());
+                Ok(())
+            }
+            Value::Timestamp(t) => {
+                buf[0] = 6;
+                buf[1..9].copy_from_slice(&t.to_le_bytes());
+                Ok(())
+            }
             _ => Err(LightningError::Internal(
                 "Unsupported index value type".into(),
             )),
@@ -299,6 +319,21 @@ impl HashIndex {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Node(u64::from_le_bytes(bytes)))
+            }
+            4 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[1..9]);
+                Ok(Value::Relationship(u64::from_le_bytes(bytes)))
+            }
+            5 => {
+                let mut bytes = [0u8; 4];
+                bytes.copy_from_slice(&buf[1..5]);
+                Ok(Value::Date(i32::from_le_bytes(bytes)))
+            }
+            6 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[1..9]);
+                Ok(Value::Timestamp(i64::from_le_bytes(bytes)))
             }
             _ => Err(LightningError::Internal(
                 "Unsupported index value type".into(),
