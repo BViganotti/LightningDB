@@ -390,6 +390,12 @@ impl MemoryStore {
             all_entities.insert(r.entity.id.clone(), (r.entity.clone(), r.score));
         }
 
+        // Phase 3 prep: initialize degree map for all entities
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (id, _) in &all_entities {
+            degree.insert(id.clone(), 0);
+        }
+
         // Phase 2: Graph expansion — find neighbors for top results
         let top_for_expansion = std::cmp::min(config.expansion_depth, initial.len());
         if top_for_expansion > 0 {
@@ -430,6 +436,23 @@ impl MemoryStore {
                         }
                     }
 
+                    // Phase 3: Compute actual graph degree from Relates edges
+                    let internal_to_eid: HashMap<u64, String> = internal_ids.iter().cloned().collect();
+                    for (s, d) in srcs.iter().zip(dsts.iter()) {
+                        let src_eid = internal_to_eid.get(&s.as_node());
+                        let dst_eid = internal_to_eid.get(&d.as_node());
+                        if let Some(eid) = src_eid {
+                            if let Some(count) = degree.get_mut(eid) {
+                                *count += 1;
+                            }
+                        }
+                        if let Some(eid) = dst_eid {
+                            if let Some(count) = degree.get_mut(eid) {
+                                *count += 1;
+                            }
+                        }
+                    }
+
                     for (nid, _) in &internal_ids {
                         for (s, d) in srcs.iter().zip(dsts.iter()) {
                             let neighbor_eid = if s.as_node() == *nid {
@@ -451,13 +474,6 @@ impl MemoryStore {
             tracing::warn!("MemoryStore: expand transaction rollback failed: {}", e);
         }
             }
-        }
-
-        // Phase 3: Compute graph degree for all entities
-        let mut degree: HashMap<String, usize> = HashMap::new();
-        for (id, _) in &all_entities {
-            let count = all_entities.keys().filter(|k| *k != id).count();
-            degree.insert(id.clone(), count);
         }
 
         // Phase 4: Rerank by configurable composite score
