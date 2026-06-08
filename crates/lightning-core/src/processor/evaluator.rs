@@ -441,6 +441,47 @@ impl ExpressionEvaluator {
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
                 Ok(Arc::new(struct_array))
             }
+            BoundExpression::Case {
+                expression,
+                when_then,
+                else_expression,
+                ..
+            } => {
+                let num_rows = batch.map(|b| b.num_rows()).unwrap_or(1);
+                let case_val = if let Some(ref expr) = expression {
+                    Some(Self::evaluate(expr, batch, params, num_rows, registry, database)?)
+                } else {
+                    None
+                };
+                let mut result: Option<ArrayRef> = None;
+                for (when, then) in when_then {
+                    let when_val = Self::evaluate(when, batch, params, num_rows, registry, database)?;
+                    let matched: ArrayRef = if let Some(ref cv) = case_val {
+                        Arc::new(arrow::compute::kernels::cmp::eq(cv, &when_val)
+                            .map_err(|e| LightningError::Internal(e.to_string()))?)
+                    } else {
+                        when_val
+                    };
+                    let bool_arr = matched.as_any()
+                        .downcast_ref::<arrow::array::BooleanArray>()
+                        .ok_or_else(|| LightningError::Internal("CASE WHEN must be boolean".into()))?;
+                    if bool_arr.true_count() > 0 {
+                        result = Some(Self::evaluate(then, batch, params, num_rows, registry, database)?);
+                        break;
+                    }
+                }
+                let final_result = match result {
+                    Some(val) => val,
+                    None => {
+                        if let Some(ref else_expr) = else_expression {
+                            Self::evaluate(else_expr, batch, params, num_rows, registry, database)?
+                        } else {
+                            arrow::array::new_null_array(&arrow::datatypes::DataType::Null, num_rows)
+                        }
+                    }
+                };
+                Ok(final_result)
+            }
             BoundExpression::Parameter(name) => {
                 let val = params.and_then(|p| p.get(name)).ok_or_else(|| {
                     LightningError::Query(format!("Parameter {name} not found"))
