@@ -1273,11 +1273,28 @@ impl Column {
             // This allows concurrent transactions modifying different rows
             // on the same page to merge their changes without conflict.
             let mut row_data = [0u8; 64];
-            // Copy the serialized value bytes (inline storage).
-            // For overflow strings (>63 chars), this copies the overflow
-            // pointer (page_idx + offset + length), which is correct:
-            // the overflow data is read via the pointer at read time.
             row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+
+            // For overflow strings, capture the full overflow page content
+            // so that the merge-on-commit path is not dependent on the
+            // external overflow file for the merging transaction's data.
+            let overflow_row_data = if stack_buf[0] == 255 {
+                self.overflow_fh.as_ref().and_then(|ofh| {
+                    let of_page_idx = u64::from_le_bytes(
+                        stack_buf[1..9].try_into().ok()?
+                    );
+                    let of_len = u32::from_le_bytes(
+                        stack_buf[17..21].try_into().ok()?
+                    ) as usize;
+                    let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
+                    let content = of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
+                    bm.unpin_page(ofh, of_page_idx, of_frame);
+                    Some(content)
+                })
+            } else {
+                None
+            };
+
             tx.modified_page_rows.lock().push(
                 crate::transaction::transaction_manager::PageRowMod {
                     file_id: self.fh.file_id,
@@ -1285,6 +1302,7 @@ impl Column {
                     row_id,
                     element_size,
                     row_data,
+                    overflow_row_data,
                 }
             );
         }
@@ -1490,6 +1508,7 @@ impl Column {
                                 row_id: current_row,
                                 element_size,
                                 row_data,
+                                overflow_row_data: None,
                             }
                         );
                     }
@@ -1897,6 +1916,8 @@ impl Column {
             let ptr = frame.as_ptr();
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
         }
+        bm.log_page_update(fh.file_id, page_idx, frame.as_slice())?;
+        bm.unpin_page(fh, page_idx, frame);
         Ok((page_idx, 0))
     }
 

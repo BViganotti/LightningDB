@@ -22,6 +22,13 @@ pub struct PageRowMod {
     pub row_id: u64,
     pub element_size: usize,
     pub row_data: [u8; 64],
+    /// For overflow strings (>63 chars), the full overflow page content
+    /// is captured here during write. This ensures the merge-on-commit
+    /// path can reconstruct the overflow data independently of the
+    /// external overflow file, preventing data loss when concurrent
+    /// transactions write overflow strings to different rows on the
+    /// same page.
+    pub overflow_row_data: Option<Vec<u8>>,
 }
 
 pub struct Transaction {
