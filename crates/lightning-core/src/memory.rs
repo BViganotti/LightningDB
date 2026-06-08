@@ -580,8 +580,10 @@ impl MemoryStore {
     /// 2. Auto-link similar entities with RelatedTo edges
     /// 3. Detect contradictions (semantically close but lexically divergent)
     /// 4. Run PageRank on the graph to identify important entities
-    pub fn consolidate(&self) -> Result<ConsolidationReport> {
+    pub fn consolidate(&self, config: Option<ConsolidationConfig>) -> Result<ConsolidationReport> {
         self.ensure_schema()?;
+        let cfg = config.unwrap_or_default();
+        let mut warnings: Vec<String> = Vec::new();
 
         // Step 0: Load all active entities
         let all: Vec<MemoryEntity> = self.recall_recent(usize::MAX)?;
@@ -595,7 +597,8 @@ impl MemoryStore {
         let mut adjacency: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
         // Step 1-2: Compute content-based similarity (n-gram Jaccard on word sets)
-        // Process in batches to avoid O(n^2) memory for very large datasets
+        // and embedding-based cosine similarity for contradiction detection.
+        // Process in batches to avoid O(n^2) memory for very large datasets.
         let word_sets: Vec<HashSet<String>> = all.iter().map(|e| {
             e.content.split_whitespace()
                 .map(|w| w.to_lowercase())
@@ -611,22 +614,37 @@ impl MemoryStore {
                     if union == 0 { continue; }
                     let jaccard = intersection as f64 / union as f64;
 
-                    if jaccard > 0.35 {
+                    if jaccard > cfg.similarity_threshold {
                         if let Err(e) = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard) {
-                            tracing::warn!("MemoryStore: failed to associate RelatedTo link: {}", e);
+                            let msg = format!("MemoryStore: failed to associate RelatedTo link: {e}");
+                            tracing::warn!("{msg}");
+                            warnings.push(msg);
                         }
                         adjacency[i].push((j, jaccard));
                         adjacency[j].push((i, jaccard));
                         links_created += 1;
                     }
 
-                    // Contradiction: low word overlap but similar content length
-                    if jaccard < 0.15 {
-                        let len_sim = 1.0 - (all[i].content.len() as f64 - all[j].content.len() as f64).abs()
-                            / all[i].content.len().max(all[j].content.len()).max(1) as f64;
-                        if len_sim > 0.8 {
+                    // Contradiction detection: embeddings are similar but word sets are different.
+                    // This catches cases like "User likes Python" vs "User dislikes Python"
+                    // where embeddings are similar (same topic) but words differ (opposite sentiment).
+                    if jaccard < cfg.contradiction_jaccard_max
+                        && all[i].embedding.len() >= cfg.contradiction_length_sim_min as usize
+                        && all[j].embedding.len() >= cfg.contradiction_length_sim_min as usize
+                    {
+                        let dot: f32 = all[i].embedding.iter()
+                            .zip(all[j].embedding.iter())
+                            .map(|(a, b)| a * b)
+                            .sum();
+                        let norm_i: f32 = all[i].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+                        let norm_j: f32 = all[j].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+                        let cosine = (dot / (norm_i * norm_j.max(f32::EPSILON))) as f64;
+
+                        if cosine > cfg.contradiction_cosine_min {
                             if let Err(e) = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard) {
-                                tracing::warn!("MemoryStore: failed to associate Contradicts link: {}", e);
+                                let msg = format!("MemoryStore: failed to associate Contradicts link: {e}");
+                                tracing::warn!("{msg}");
+                                warnings.push(msg);
                             }
                             contradictions_found += 1;
                         }
@@ -663,19 +681,40 @@ impl MemoryStore {
 
             let mut ranked: Vec<(usize, f64)> = rank.into_iter().enumerate().collect();
             ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).expect("infallible: scores are finite"));
-            for (idx, score) in ranked.iter().take(std::cmp::min(10, n)) {
-                let new_meta = format!(
-                    r#"{{"pagerank":{:.6},"id":"{}"}}"#,
-                    score, all[*idx].id
-                );
-                let query = format!(
-                    "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.metadata = $meta"
+            let top_n = std::cmp::min(10, n);
+            if top_n > 0 {
+                let mut unwind_parts: Vec<String> = Vec::with_capacity(top_n);
+                let mut id_params: Vec<String> = Vec::with_capacity(top_n);
+                let mut meta_params: Vec<String> = Vec::with_capacity(top_n);
+                for (idx, score) in ranked.iter().take(top_n) {
+                    let pid = format!("id_{}", idx);
+                    let pmid = format!("meta_{}", idx);
+                    unwind_parts.push(format!("{{id: ${pid}, meta: ${pmid}}}"));
+                    id_params.push(pid);
+                    meta_params.push(pmid);
+                    let new_meta = format!(
+                        r#"{{"pagerank":{:.6},"id":"{}"}}"#,
+                        score, all[*idx].id
+                    );
+                }
+                let unwind_expr = unwind_parts.join(", ");
+                let batch_query = format!(
+                    "UNWIND [{unwind_expr}] AS row MATCH (e:{ENTITY_TABLE} {{id: row.id}}) SET e.metadata = row.meta"
                 );
                 let mut params = HashMap::new();
-                params.insert("id".to_string(), Value::String(all[*idx].id.clone()));
-                params.insert("meta".to_string(), Value::String(new_meta));
-                if let Err(e) = self.conn.execute(&query, Some(params)) {
-                    tracing::warn!("MemoryStore: failed to update PageRank metadata: {}", e);
+                for ((idx, score), (pid, pmid)) in ranked.iter().take(top_n).zip(
+                    id_params.iter().zip(meta_params.iter())
+                ) {
+                    params.insert(pid.clone(), Value::String(all[*idx].id.clone()));
+                    params.insert(pmid.clone(), Value::String(format!(
+                        r#"{{"pagerank":{:.6},"id":"{}"}}"#,
+                        score, all[*idx].id
+                    )));
+                }
+                if let Err(e) = self.conn.execute(&batch_query, Some(params)) {
+                    let msg = format!("MemoryStore: failed to batch update PageRank metadata: {e}");
+                    tracing::warn!("{msg}");
+                    warnings.push(msg);
                 }
             }
         }
@@ -684,6 +723,7 @@ impl MemoryStore {
             links_created,
             contradictions_found,
             total_entities: n,
+            warnings,
         })
     }
 
@@ -1122,11 +1162,31 @@ pub struct ChangeEvent {
     pub operation_type: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConsolidationConfig {
+    pub similarity_threshold: f64,
+    pub contradiction_jaccard_max: f64,
+    pub contradiction_cosine_min: f64,
+    pub contradiction_length_sim_min: f64,
+}
+
+impl Default for ConsolidationConfig {
+    fn default() -> Self {
+        Self {
+            similarity_threshold: 0.35,
+            contradiction_jaccard_max: 0.15,
+            contradiction_cosine_min: 0.7,
+            contradiction_length_sim_min: 0.8,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConsolidationReport {
     pub links_created: usize,
     pub contradictions_found: usize,
     pub total_entities: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
