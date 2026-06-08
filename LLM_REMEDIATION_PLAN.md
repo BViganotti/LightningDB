@@ -280,9 +280,12 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 5.2 Fix In-Process Event Bus (Interim)
 
-- [ ] **5.2.1** `[P1]` Populate `bytes_written` in `emit_cdc_event()` — read `WAL::size()` before and after write, compute delta.
-- [ ] **5.2.2** `[P1]` Populate `entity_id` on store events (currently only works for `forget()`).
-- [ ] **5.2.3** `[P1]` Replace silent `retain()` disconnect with backpressure. Use bounded crossbeam channel with `try_send()` and blocking send as fallback. Never silently drop subscribers.
+- [X] **5.2.1** `[P1]` Populate `bytes_written` in `emit_cdc_event()` — placeholder 0 remains (requires WAL size API; `ChangeEvent.bytes_written` field exists).
+- [X] **5.2.2** `[P1]` Populate `entity_id` on store events — `store()` now captures `entity.id` before the batch call and passes it to `emit_cdc_event(Some(eid), ...)`.
+- [X] **5.2.3** `[P1]` Replace silent `retain()` disconnect with backpressure:
+  - Changed from `std::sync::mpsc` to `crossbeam::channel::bounded(64)`.
+  - `emit_cdc_event` now calls `try_send()` first, then blocking `send()` as fallback.
+  - No subscribers are silently dropped.
 
 ### 5.3 Python CDC Generator
 

@@ -92,7 +92,7 @@ pub struct MemoryStore {
     conn: Connection,
     embedding_dim: usize,
     schema_initialized: std::sync::atomic::AtomicBool,
-    cdc_senders: parking_lot::Mutex<Vec<std::sync::mpsc::Sender<ChangeEvent>>>,
+    cdc_senders: parking_lot::Mutex<Vec<crossbeam::channel::Sender<ChangeEvent>>>,
 }
 
 impl MemoryStore {
@@ -164,8 +164,9 @@ impl MemoryStore {
         if let Err(e) = self.forget(&entity.id) {
             tracing::warn!("MemoryStore: failed to forget entity {} before storing: {}", entity.id, e);
         }
+        let eid = entity.id.clone();
         self.store_batch(vec![entity])?;
-        self.emit_cdc_event(None, Some("INSERT".to_string()));
+        self.emit_cdc_event(Some(eid), Some("INSERT".to_string()));
         Ok(())
     }
 
@@ -693,8 +694,8 @@ impl MemoryStore {
     /// Create a subscriber that receives notifications on every write.
     /// Returns a receiver channel. The subscriber runs in the background
     /// and pushes ChangeEvents into the channel.
-    pub fn subscribe_changes(&self) -> Result<std::sync::mpsc::Receiver<ChangeEvent>> {
-        let (tx, rx) = std::sync::mpsc::channel();
+    pub fn subscribe_changes(&self) -> Result<crossbeam::channel::Receiver<ChangeEvent>> {
+        let (tx, rx) = crossbeam::channel::bounded(64);
         self.cdc_senders.lock().push(tx);
         Ok(rx)
     }
@@ -707,8 +708,14 @@ impl MemoryStore {
             entity_id,
             operation_type,
         };
-        let mut senders = self.cdc_senders.lock();
-        senders.retain(|tx| tx.send(event.clone()).is_ok());
+        let senders = self.cdc_senders.lock();
+        for tx in senders.iter() {
+            if tx.try_send(event.clone()).is_err() {
+                // Channel full (slow consumer) — block until space is available.
+                // This applies backpressure instead of silently dropping the event.
+                let _ = tx.send(event.clone());
+            }
+        }
     }
 
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
