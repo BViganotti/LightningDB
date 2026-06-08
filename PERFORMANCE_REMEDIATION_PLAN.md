@@ -494,7 +494,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `HashSet<Vec<Value>>` grows to the full UNION output size. For 1M unique rows with 10 columns each: 1M entries × (Vec: 24 bytes + 8 × 10 Values) × ~1.5× HashMap overhead = ~160MB+. For string columns, each Value heap-allocates the string separately.
 
-- [ ] **14.2.1** `[P2]` Use row-hash based dedup: compute a hash per row, store only `(hash, row_id)`. For collisions, fall back to full comparison. Or use a Bloom filter for a probabilistic first pass.
+- [X] **14.2.1** `[P2]` Use row-hash based dedup: compute a hash per row, store only `(hash, row_id)`. For collisions, fall back to full comparison. Or use a Bloom filter for a probabilistic first pass.
 
 ### 14.3 Intersect Stores All Rows as Vec<Value> in Hash Table
 
@@ -550,7 +550,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `Vec<HashSet<String>>` for ALL entities. For 100K entities × 500 words each: 50M heap-allocated Strings in 100K HashSets = ~2.8GB.
 
-- [ ] **16.1.1** `[P1]` Use word-level MinHash signatures (fixed-size sketches). Reduces memory from O(n × w) to O(n × sketch_size).
+- [X] **16.1.1** `[P1]` Use word-level MinHash signatures (fixed-size sketches). Reduces memory from O(n × w) to O(n × sketch_size).
 
 ### 16.2 recall() Issues Two Separate Transactions
 
@@ -594,7 +594,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Both streaming methods receive all results from the channel into a `Vec<PyObject>` before returning. Defeats the purpose of streaming. Memory grows linearly with result count.
 
-- [ ] **17.2.1** `[P1]` Return a Python generator that lazily pulls from the channel.
+- [X] **17.2.1** `[P1]` Return a Python generator that lazily pulls from the channel.
 
 ### 17.3 Full JSON Serialization for Query Results
 
@@ -658,7 +658,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `format!("{}", Value::from_arrow(&args[0], i))` allocates two heap objects per row (the Value and the formatted String).
 
-- [ ] **19.3.1** `[P2]` Downcast directly to `StringArray` and use `.value(i)` to get `&str` — avoids the intermediate Value allocation.
+- [X] **19.3.1** `[P2]` Downcast directly to `StringArray` and use `.value(i)` to get `&str` — avoids the intermediate Value allocation.
 
 ---
 
