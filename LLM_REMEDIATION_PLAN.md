@@ -223,7 +223,7 @@ Tier 5 — Niche / additive feature                        [Section 12]
 
 ### 3.4 CSR Format Safety
 
-- [ ] **3.4.1** `[P1]` Add 12-byte header to CSR offset/adjacency files: 4B magic (`CSRO`/`CSRA`), 4B version, 4B CRC32. Validate on open.
+- [X] **3.4.1** `[P1]` Add 12-byte header to CSR offset/adjacency files: 4B magic (`CSRO`/`CSRA`), 1B version, 3B reserved, 4B CRC32. Written during `build()`, validated on read (`scan_edges_from_csr`). All offset calculations use `csr_offset_byte()` which adds `CSR_HEADER_SIZE`.
 
 ---
 
