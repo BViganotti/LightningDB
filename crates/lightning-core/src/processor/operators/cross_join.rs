@@ -1,4 +1,3 @@
-use crate::processor::arrow_utils::values_to_array;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
 use arrow::datatypes::{FieldRef, Schema};
@@ -27,6 +26,7 @@ pub struct PhysicalCrossJoin {
     current_left_chunk: Option<DataChunk>,
     left_row_idx: usize,
     right_chunk_idx: usize,
+    right_row_idx: usize,
 }
 
 impl PhysicalCrossJoin {
@@ -45,6 +45,7 @@ impl PhysicalCrossJoin {
             current_left_chunk: None,
             left_row_idx: 0,
             right_chunk_idx: 0,
+            right_row_idx: 0,
         }
     }
 
@@ -120,6 +121,7 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 self.current_left_chunk = self.left.get_next(database, tx, params)?;
                 self.left_row_idx = 0;
                 self.right_chunk_idx = 0;
+                self.right_row_idx = 0;
                 if self.current_left_chunk.is_none() {
                     return Ok(None);
                 }
@@ -143,36 +145,32 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 continue;
             }
 
-            let mut left_rows: Vec<Vec<Value>> = vec![Vec::with_capacity(1024); left_num_cols];
-            let mut right_rows: Vec<Vec<Value>> =
-                vec![Vec::with_capacity(1024); right_column_count];
+            let mut left_indices = Vec::<u64>::with_capacity(1024);
+            let mut right_indices = Vec::<u64>::with_capacity(1024);
+            let right_total = shared.right_chunks.first()
+                .map(|c| c.batch.num_rows())
+                .unwrap_or(0);
 
-            while self.left_row_idx < left_num_rows {
-                let right_chunk = &shared.right_chunks[self.right_chunk_idx];
-                let right_batch = &right_chunk.batch;
+            while self.left_row_idx < left_num_rows
+                && left_indices.len() < 1024
+                && self.right_chunk_idx < shared.right_chunks.len()
+            {
+                let right_batch = &shared.right_chunks[self.right_chunk_idx].batch;
                 let right_num_rows = right_batch.num_rows();
 
-                for r_row in 0..right_num_rows {
-                    for col_idx in 0..left_num_cols {
-                        left_rows[col_idx].push(Value::from_arrow(
-                            left_batch.column(col_idx),
-                            self.left_row_idx,
-                        ));
+                for r_row in self.right_row_idx..right_num_rows {
+                    if left_indices.len() >= 1024 {
+                        break;
                     }
-                    for col_idx in 0..right_column_count {
-                        right_rows[col_idx]
-                            .push(Value::from_arrow(right_batch.column(col_idx), r_row));
-                    }
+                    left_indices.push(self.left_row_idx as u64);
+                    right_indices.push(r_row as u64);
                 }
-
+                self.right_row_idx = 0;
                 self.right_chunk_idx += 1;
+
                 if self.right_chunk_idx >= shared.right_chunks.len() {
                     self.right_chunk_idx = 0;
                     self.left_row_idx += 1;
-                }
-
-                if !left_rows.is_empty() && left_rows[0].len() >= 1024 {
-                    break;
                 }
             }
 
@@ -180,21 +178,32 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 self.current_left_chunk = None;
             }
 
-            if !left_rows.is_empty() && !left_rows[0].is_empty() {
+            if !left_indices.is_empty() {
+                let left_idx_arr = arrow::array::UInt64Array::from(left_indices);
+                let right_idx_arr = arrow::array::UInt64Array::from(right_indices);
                 let mut final_columns = Vec::new();
                 let mut final_fields: Vec<FieldRef> = Vec::new();
 
                 for i in 0..left_num_cols {
                     let field = left_schema.field(i);
                     final_fields.push(Arc::new((*field).clone()));
-                    final_columns.push(values_to_array(&left_rows[i], field.data_type()));
+                    final_columns.push(arrow::compute::take(
+                        left_batch.column(i),
+                        &left_idx_arr,
+                        None,
+                    ).map_err(|e| crate::LightningError::Internal(e.to_string()))?);
                 }
 
                 if let Some(right_schema) = &shared.right_schema {
+                    let right_batch = &shared.right_chunks[0].batch;
                     for i in 0..right_column_count {
                         let field = right_schema.field(i);
                         final_fields.push(Arc::new((*field).clone()));
-                        final_columns.push(values_to_array(&right_rows[i], field.data_type()));
+                        final_columns.push(arrow::compute::take(
+                            right_batch.column(i),
+                            &right_idx_arr,
+                            None,
+                        ).map_err(|e| crate::LightningError::Internal(e.to_string()))?);
                     }
                 }
 
@@ -216,6 +225,7 @@ impl PhysicalOperator for PhysicalCrossJoin {
             current_left_chunk: None,
             left_row_idx: 0,
             right_chunk_idx: 0,
+            right_row_idx: 0,
         })
     }
 }
