@@ -1449,6 +1449,7 @@ impl Column {
                     null_page_buf[offset] = if is_null { 1 } else { 0 };
                     page_i += 1;
                 }
+                bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
                 self.null_fh.write_page(page_idx, &null_page_buf)?;
                 i = page_i;
             }
@@ -1645,6 +1646,17 @@ impl Column {
         // Write the entire buffer in one syscall!
         let write_offset = start_row_id * element_size as u64;
         let bytes_to_write = num_rows * element_size;
+
+        // WAL-log each affected page before the direct write
+        let data_first_page = write_offset / PAGE_SIZE as u64;
+        let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
+        for page_offset in 0..data_num_pages {
+            let page_idx = data_first_page + page_offset;
+            let page_start = (page_offset * PAGE_SIZE as u64) as usize;
+            let page_end = std::cmp::min(page_start + PAGE_SIZE, bytes_to_write);
+            bm.log_page_update(self.fh.file_id, page_idx, &raw_bytes[page_start..page_end])?;
+        }
+
         self.fh
             .write_bytes_at(write_offset, &raw_bytes[..bytes_to_write])?;
 
@@ -1815,6 +1827,17 @@ impl Column {
 
         // Write the entire buffer in one syscall!
         let write_offset = start_row_id * 64;
+
+        // WAL-log each affected page before the direct write
+        let str_first_page = write_offset / PAGE_SIZE as u64;
+        let str_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
+        for page_offset in 0..str_num_pages {
+            let page_idx = str_first_page + page_offset;
+            let page_start = (page_offset * PAGE_SIZE as u64) as usize;
+            let page_end = std::cmp::min(page_start + PAGE_SIZE, data_vec.len());
+            bm.log_page_update(self.fh.file_id, page_idx, &data_vec[page_start..page_end])?;
+        }
+
         self.fh.write_bytes_at(write_offset, &data_vec)?;
 
         // Invalidate buffer manager cache for affected pages
