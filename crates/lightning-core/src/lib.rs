@@ -247,7 +247,9 @@ impl Drop for Database {
         // Full Database::checkpoint persists dirty pages, catalog, free space map,
         // and header — ensuring num_rows and data files are consistent on restart.
         // This must happen BEFORE shutdown truncates the WAL.
-        self.checkpoint().ok();
+        if let Err(e) = self.checkpoint() {
+            tracing::warn!("Checkpoint failed during database shutdown: {e}");
+        }
 
         // Shutdown buffer manager (final flush + WAL truncation)
         self.buffer_manager.shutdown();

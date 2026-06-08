@@ -286,7 +286,9 @@ impl FusionApp {
             }
         }
         let graph = serde_json::json!({ "nodes": nodes, "links": links });
-        Ok(serde_json::to_string(&graph).unwrap_or_default())
+        let json = serde_json::to_string(&graph)
+            .map_err(|e| crate::LightningError::Internal(format!("Failed to serialize graph: {e}")))?;
+        Ok(json)
     }
 
     /// Recompute PageRank scores for all nodes.
@@ -300,12 +302,14 @@ impl FusionApp {
 
         // Get total node count
         let count_result = conn.query("MATCH (n:CodeNode) RETURN count(n.id) AS cnt")?;
-        let total_nodes = count_result.batches.first()
-            .and_then(|b| arrow_utils::i64_col(b, 0).ok())
-            .map(|c| c.value(0))
-            .unwrap_or(0);
-
-        if total_nodes == 0 {
+        let total_nodes = {
+            let batch = count_result.batches.first()
+                .ok_or_else(|| crate::LightningError::Internal("PageRank: query returned no batches".into()))?;
+            let col = arrow_utils::i64_col(batch, 0)
+                .map_err(|e| crate::LightningError::Internal(format!("PageRank: failed to read count column: {e}")))?;
+            col.value(0)
+        };
+        if total_nodes <= 0 {
             return Err(crate::LightningError::Internal("No nodes to rank".into()));
         }
 
