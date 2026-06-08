@@ -64,6 +64,7 @@ class LightningVectorStore(LlamaVectorStore):
                 content=node.get_content(),
                 entity_type="document",
                 metadata=str(node.metadata or {}),
+                embedding=node.embedding,
             )
             ids.append(node_id)
         return ids
