@@ -29,7 +29,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: After the first 1000 transactions trigger a save, `save_internal` increments `last_saved_tx_count` by **1** instead of setting it to the current transaction count. So `current_tx_count - 1 >= 1000` is always true — every subsequent transaction triggers a full catalog serialization to disk. For a catalog with 1000 tables at 500KB, that's 500GB of writes for 1M transactions instead of 500MB intended.
 
-- [ ] **1.1.1** `[P0]` Fix `save_internal` to set `last_saved_tx_count = current_tx_count` (the value passed to `save_if_needed`), not `fetch_add(1)`.
+- [X] **1.1.1** `[P0]` Fix `save_internal` to set `last_saved_tx_count = current_tx_count` (the value passed to `save_if_needed`), not `fetch_add(1)`.
 
 **Impact**: 1000x more disk writes than intended. Production databases with >1000 transactions will spend all their time writing the catalog.
 
@@ -49,7 +49,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: `format!("{:?}", col)` calls Debug on the **entire** Arrow array, not on the individual cell. For a column with 1000 rows, every cell gets ALL 1000 values serialized. For a 10-column, 1000-row result, each cell contains a 10KB debug string = 100KB per row = 100MB total output. O(rows × cols × rows) = O(N²) in data size.
 
-- [ ] **1.3.1** `[P0]` Replace with per-cell extraction: `string_array.value(row_idx)`, `int_array.value(row_idx)`, etc. Match on `col.data_type()` and downcast to the correct typed array.
+- [X] **1.3.1** `[P0]` Replace with per-cell extraction: `string_array.value(row_idx)`, `int_array.value(row_idx)`, etc. Match on `col.data_type()` and downcast to the correct typed array.
 
 **Impact**: Streaming a 10K-row result from Node.js would produce ~10GB of debug-formatted output and take hours.
 
@@ -69,7 +69,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: `format!("{:?}", va).cmp(&format!("{:?}", vb))` allocates TWO heap Strings per comparison in the sort-based aggregation path. For 200K rows, this is ~200K × log₂(200K) × 2 ≈ 7M String allocations. This is the single worst allocation pathology in the query engine.
 
-- [ ] **1.5.1** `[P1]` Implement `Value::cmp` using type-specific numeric/string comparison instead of Debug formatting. For primitive types (Int64, Float64), compare the raw numeric values. For strings, use `str::cmp`.
+- [X] **1.5.1** `[P1]` Implement `Value::cmp` using type-specific numeric/string comparison instead of Debug formatting. For primitive types (Int64, Float64), compare the raw numeric values. For strings, use `str::cmp`.
 
 **Impact**: Sort-based aggregation on 500K rows takes minutes instead of seconds.
 
@@ -172,7 +172,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: `vec![0u8; padding]` heap-allocates for every WAL record. Padding is at most 7 bytes.
 
-- [ ] **4.3.1** `[P2]` Use `write_all(&[0u8; 8][..padding])` — stack-allocated array.
+- [X] **4.3.1** `[P2]` Use `write_all(&[0u8; 8][..padding])` — stack-allocated array.
 
 ---
 
@@ -184,7 +184,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Every `read_page` and `read_pages` issues `self.file.metadata()?` (an `fstat` syscall). For page-at-a-time reads (typical OLTP), each read_page pays ~100-500ns for the syscall. At 100K page reads/sec: 10-50ms/sec of pure syscall overhead.
 
-- [ ] **5.1.1** `[P1]` Cache the file length in an `AtomicU64` on FileHandle. Update on writes, read from cache on reads. Only syscall as a fallback.
+- [X] **5.1.1** `[P1]` Cache the file length in an `AtomicU64` on FileHandle. Update on writes, read from cache on reads. Only syscall as a fallback.
 
 **Impact**: 30-50% overhead on page read throughput.
 
@@ -194,7 +194,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Same root cause — returns `file.metadata()?.len()` instead of using cached `num_pages × PAGE_SIZE`.
 
-- [ ] **5.2.1** `[P1]` Return `self.num_pages.load() * PAGE_SIZE as u64`.
+- [X] **5.2.1** `[P1]` Return `self.num_pages.load() * PAGE_SIZE as u64`.
 
 ### 5.3 Checkpoint Syncs Files Redundantly Across Shards
 
@@ -202,7 +202,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: Phase 2 iterates all 16 shards and calls `fh.sync()` for each file found in each shard. A file with pages in 8 shards is sync'd 8 times. `fsync` is one of the most expensive syscalls (~1-10ms).
 
-- [ ] **5.3.1** `[P2]` Deduplicate file handles before the sync loop. Use the `synced_fids` set from Phase 1 to sync each file exactly once.
+- [X] **5.3.1** `[P2]` Deduplicate file handles before the sync loop. Use the `synced_fids` set from Phase 1 to sync each file exactly once.
 
 ---
 
@@ -486,7 +486,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `shared.build_chunks.iter().map(|b| b.num_rows()).sum()` recomputes the cumulative row offset from scratch every time a new chunk arrives. For C chunks: O(1+2+...+C) = O(C²).
 
-- [ ] **14.1.1** `[P2]` Maintain a running `base_offset` counter incremented by each chunk's row count.
+- [X] **14.1.1** `[P2]` Maintain a running `base_offset` counter incremented by each chunk's row count.
 
 ### 14.2 UNION Dedup HashSet Memory Explosion
 
@@ -530,7 +530,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `match (val, self.data_type.clone())` clones the entire LogicalType enum (with nested Vec<StructField> for structs) on every serialization.
 
-- [ ] **15.3.1** `[P2]` Match on `&self.data_type` instead.
+- [X] **15.3.1** `[P2]` Match on `&self.data_type` instead.
 
 ### 15.4 `parse_value` Allocates String for Every Inline String Read
 
@@ -650,7 +650,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: First allocates `Vec<f32>` initialized to NaN, then allocates another Vec for actual results. First allocation is dropped immediately.
 
-- [ ] **19.2.1** `[P3]` Remove the first allocation. Initialize directly into the results vector.
+- [X] **19.2.1** `[P3]` Remove the first allocation. Initialize directly into the results vector.
 
 ### 19.3 String Mode Uses format! Per Row
 
