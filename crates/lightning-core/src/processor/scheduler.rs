@@ -28,6 +28,28 @@ impl Scheduler {
         let (ch_tx, rx) = bounded(64);
         let params_arc = params.map(Arc::new);
 
+        // Try to parallelize blocking operators (Sort, Aggregate) into
+        // N parallel workers + a merge step.
+        if self.num_threads > 1 && operator.is_parallel_safe() {
+            if let Some(merged) = operator.try_parallelize(self.num_threads)? {
+                let mut op = merged;
+                loop {
+                    match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
+                        Ok(Some(chunk)) => {
+                            if ch_tx.send(Ok(chunk)).is_err() { break; }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = ch_tx.send(Err(e));
+                            break;
+                        }
+                    }
+                }
+                drop(ch_tx);
+                return Ok(rx);
+            }
+        }
+
         if self.num_threads == 1 || !operator.is_parallel_safe() {
             let mut op = operator;
             loop {

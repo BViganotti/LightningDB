@@ -178,6 +178,36 @@ impl PhysicalOperator for PhysicalSort {
         }
     }
 
+    fn is_parallel_safe(&self) -> bool {
+        true
+    }
+
+    fn try_parallelize(
+        &self,
+        num_workers: usize,
+    ) -> Result<Option<Box<dyn PhysicalOperator + Send + Sync>>> {
+        let mut children = Vec::with_capacity(num_workers);
+        for i in 0..num_workers {
+            let mut child_clone = self.child.clone_box();
+            child_clone.set_partition(i, num_workers);
+            let sort_clone = Box::new(PhysicalSort {
+                child: child_clone,
+                order_by: self.order_by.clone(),
+                shared: Arc::new(::parking_lot::RwLock::new(SharedSort {
+                    batches: Vec::new(),
+                    sorted_result: None,
+                    num_active_collectors: ::std::sync::atomic::AtomicUsize::new(0),
+                    results_returned: ::std::sync::atomic::AtomicUsize::new(0),
+                })),
+                sort_done: Arc::new((::parking_lot::Mutex::new(false), ::parking_lot::Condvar::new())),
+                collected: false,
+            });
+            children.push(sort_clone as Box<dyn PhysicalOperator + Send + Sync>);
+        }
+        let merge = Box::new(super::nway_merge::NWayMerge::new(children, self.order_by.clone()));
+        Ok(Some(merge))
+    }
+
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
             child: self.child.clone_box(),

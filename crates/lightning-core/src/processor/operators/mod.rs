@@ -6,6 +6,7 @@ pub mod filter;
 pub mod hash_join;
 pub mod index_scan;
 pub mod limit_skip;
+pub mod nway_merge;
 pub mod projection;
 pub mod recursive_join;
 pub mod scan;

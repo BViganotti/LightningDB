@@ -58,6 +58,16 @@ pub trait PhysicalOperator: Send + Sync {
     /// Default implementation is a no-op — operators that wrap a child
     /// should forward the call.
     fn set_partition(&mut self, _index: usize, _total: usize) {}
+
+    /// If this operator can be parallelized into N workers + a merge step,
+    /// returns the merged operator tree. Default returns None.
+    /// Sort implements this to create N partition-sorted workers + NWayMerge.
+    fn try_parallelize(
+        &self,
+        _num_workers: usize,
+    ) -> Result<Option<Box<dyn PhysicalOperator + Send + Sync>>> {
+        Ok(None)
+    }
 }
 
 pub struct Processor {
