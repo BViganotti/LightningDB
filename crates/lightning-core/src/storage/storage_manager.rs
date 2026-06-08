@@ -544,6 +544,7 @@ impl StorageManager {
     pub fn create_vector_index(&mut self, table_name: &str, dim: usize) -> Result<()> {
         let index_path = self.db_path.join(format!("{table_name}_vector.lbug"));
         let fh = Arc::new(FileHandle::open(&index_path)?);
+        self.file_handles.insert(fh.file_id, Arc::clone(&fh));
         let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh, dim));
         self.vector_indexes.insert(table_name.to_string(), index);
         Ok(())
@@ -565,14 +566,18 @@ impl StorageManager {
         let bwd_offset_path = self.db_path.join(format!("{table_name}_bwd_offset.lbug"));
         let bwd_adj_path = self.db_path.join(format!("{table_name}_bwd_adj.lbug"));
 
-        let fwd = crate::storage::index::csr::CSRIndex::new(
-            Arc::new(FileHandle::open(&fwd_offset_path)?),
-            Arc::new(FileHandle::open(&fwd_adj_path)?),
-        );
-        let bwd = crate::storage::index::csr::CSRIndex::new(
-            Arc::new(FileHandle::open(&bwd_offset_path)?),
-            Arc::new(FileHandle::open(&bwd_adj_path)?),
-        );
+        let fwd_off_fh = Arc::new(FileHandle::open(&fwd_offset_path)?);
+        let fwd_adj_fh = Arc::new(FileHandle::open(&fwd_adj_path)?);
+        let bwd_off_fh = Arc::new(FileHandle::open(&bwd_offset_path)?);
+        let bwd_adj_fh = Arc::new(FileHandle::open(&bwd_adj_path)?);
+
+        self.file_handles.insert(fwd_off_fh.file_id, Arc::clone(&fwd_off_fh));
+        self.file_handles.insert(fwd_adj_fh.file_id, Arc::clone(&fwd_adj_fh));
+        self.file_handles.insert(bwd_off_fh.file_id, Arc::clone(&bwd_off_fh));
+        self.file_handles.insert(bwd_adj_fh.file_id, Arc::clone(&bwd_adj_fh));
+
+        let fwd = crate::storage::index::csr::CSRIndex::new(fwd_off_fh, fwd_adj_fh);
+        let bwd = crate::storage::index::csr::CSRIndex::new(bwd_off_fh, bwd_adj_fh);
 
         self.fwd_csr.insert(table_name.to_string(), Arc::new(fwd));
         self.bwd_csr.insert(table_name.to_string(), Arc::new(bwd));
