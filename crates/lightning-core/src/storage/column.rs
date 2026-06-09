@@ -1881,7 +1881,13 @@ impl Column {
             }
             CompressionType::Dict => Box::new(crate::storage::compression::dict::DictCompression),
             CompressionType::Alp => Box::new(crate::storage::compression::alp::AlpAlg),
-            _ => Box::new(crate::storage::compression::Uncompressed { element_size }),
+            CompressionType::FixedFrameOfReference => {
+                Box::new(crate::storage::compression::delta::FixedFrameOfReferenceAlg)
+            }
+            CompressionType::Uncompressed
+            | CompressionType::BooleanBitpacking => {
+                Box::new(crate::storage::compression::Uncompressed { element_size })
+            }
         }
     }
 

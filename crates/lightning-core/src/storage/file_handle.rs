@@ -41,12 +41,9 @@ impl FileHandle {
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         // Use ONLY the filename for hash, not the full path
-        // This ensures file_id is consistent across database sessions
-        if let Some(filename) = path.file_name() {
-            filename.hash(&mut hasher);
-        } else {
-            path.hash(&mut hasher);
-        }
+        // Hash the full path to prevent file_id collisions between
+        // different directories with the same filename.
+        path.as_os_str().hash(&mut hasher);
         let file_id = hasher.finish();
 
         Ok(Self {

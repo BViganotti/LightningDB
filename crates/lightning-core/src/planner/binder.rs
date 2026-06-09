@@ -655,11 +655,18 @@ impl<'a> Binder<'a> {
                 name,
                 start_with,
                 increment_by,
-            } => Ok(BoundStatement::CreateSequence {
-                name: name.clone(),
-                start_with: *start_with,
-                increment_by: *increment_by,
-            }),
+            } => {
+                if *increment_by <= 0 {
+                    return Err(LightningError::Query(
+                        "Sequence increment must be positive".into(),
+                    ));
+                }
+                Ok(BoundStatement::CreateSequence {
+                    name: name.clone(),
+                    start_with: *start_with,
+                    increment_by: *increment_by,
+                })
+            },
             Statement::CreateMacro { name, params, body } => Ok(BoundStatement::CreateMacro {
                 name: name.clone(),
                 params: params.clone(),

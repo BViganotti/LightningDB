@@ -19,10 +19,12 @@ impl Task for NextChunk {
     type JsValue = JsChunkResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
+        // Clone the receiver out of the mutex so recv() doesn't hold the lock
         let rx = self
             .rx
             .lock()
-            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
+            .clone();
         match rx.recv() {
             Ok(Ok(chunk)) => {
                 let batch = &chunk.batch;
@@ -70,7 +72,8 @@ impl Task for NextChange {
         let rx = self
             .rx
             .lock()
-            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
+            .clone();
         match rx.recv() {
             Ok(event) => Ok(Some(event)),
             Err(_) => Ok(None),
@@ -95,7 +98,8 @@ impl Task for NextRecall {
         let rx = self
             .rx
             .lock()
-            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?;
+            .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
+            .clone();
         match rx.recv() {
             Ok(Ok(result)) => Ok(Some(result)),
             Ok(Err(e)) => Err(napi::Error::from_reason(format!("Recall error: {}", e))),
