@@ -151,22 +151,34 @@ impl FusionApp {
     }
 
     /// Store an observation in the Observation node table.
-    pub fn add_observation(
+    pub     fn add_observation(
         conn: &Connection,
         id: &str,
         content: &str,
-        _parent_id: Option<&str>,
+        parent_id: Option<&str>,
     ) -> Result<(), crate::LightningError> {
-        let q = format!(
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default();
+
+        let create_obs = format!(
             "CREATE (o:Observation {{id: '{}', content: '{}', is_stale: false, created_at: '{}'}})",
             sq(&id),
             sq(&content).replace('\n', " "),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_default()
+            now
         );
-        conn.execute(&q, None)?;
+
+        if let Some(pid) = parent_id {
+            // Create observation and link to parent via HAS_OBSERVATION relationship
+            let q = format!(
+                "{} WITH o MATCH (p:CodeNode {{id: '{}'}}) CREATE (p)-[:HAS_OBSERVATION]->(o)",
+                create_obs, sq(pid)
+            );
+            conn.execute(&q, None)?;
+        } else {
+            conn.execute(&create_obs, None)?;
+        }
         Ok(())
     }
 
