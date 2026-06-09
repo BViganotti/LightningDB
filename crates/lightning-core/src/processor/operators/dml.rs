@@ -517,6 +517,8 @@ impl PhysicalOperator for PhysicalDelete {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
+            // Phase 1: Collect all node IDs to delete
+            let mut deleted_ids: Vec<u64> = Vec::new();
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let num_rows = chunk.num_rows();
                 for i in 0..num_rows {
@@ -524,81 +526,87 @@ impl PhysicalOperator for PhysicalDelete {
                         Value::Node(id) => id,
                         _ => continue,
                     };
+                    deleted_ids.push(id);
                     self.undo_buffer
                         .push(UndoRecord::DeleteNode(self.table.name.clone(), id));
+                }
+            }
 
-                    if self.detach {
-                        let cat = database.catalog.read();
-                        let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
-                        drop(cat);
-                        for rel_name in &rel_tables {
-                            let storage = database.storage_manager.read();
-                            if let Some(rel_table) = storage.get_table(rel_name) {
-                                let bm = &self.buffer_manager;
-                                if let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM") {
-                                    if let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO") {
-                                        let num_rel_rows = {
-                                            let cat2 = database.catalog.read();
-                                            cat2.get_rel_table(rel_name)
-                                                .map(|t| t.num_rows)
-                                                .unwrap_or(0)
-                                        };
-                                        if num_rel_rows == 0 { continue; }
-                                        let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
-                                        let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
-                                        for row_idx in 0..num_rel_rows as usize {
-                                            let from_val = match Value::from_arrow(&from_arr, row_idx) {
-                                                Value::Node(id) => id,
-                                                _ => continue,
-                                            };
-                                            let to_val = match Value::from_arrow(&to_arr, row_idx) {
-                                                Value::Node(id) => id,
-                                                _ => continue,
-                                            };
-                                            if from_val == id || to_val == id {
-                                                for col in &rel_table.columns {
-                                                    col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
-                                                }
-                                                // Notify CSR indexes of the deleted edge
-                                                let storage_guard = database.storage_manager.read();
-                                                if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
-                                                    fwd.delete_edge(from_val, to_val);
-                                                }
-                                                if let Some(bwd) = storage_guard.bwd_csr.get(rel_name) {
-                                                    bwd.delete_edge(to_val, from_val);
-                                                }
-                                            }
+            // Phase 2: DETACH — scan each rel table once for ALL deleted IDs
+            if self.detach && !deleted_ids.is_empty() {
+                let deleted_set: std::collections::HashSet<u64> =
+                    deleted_ids.iter().copied().collect();
+                let cat = database.catalog.read();
+                let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
+                drop(cat);
+                for rel_name in &rel_tables {
+                    let storage = database.storage_manager.read();
+                    if let Some(rel_table) = storage.get_table(rel_name) {
+                        let bm = &self.buffer_manager;
+                        if let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM" || c.name == "_src") {
+                            if let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO" || c.name == "_dst") {
+                                let num_rel_rows = {
+                                    let cat2 = database.catalog.read();
+                                    cat2.get_rel_table(rel_name)
+                                        .map(|t| t.num_rows)
+                                        .unwrap_or(0)
+                                };
+                                if num_rel_rows == 0 { continue; }
+                                let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                                let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                                for row_idx in 0..num_rel_rows as usize {
+                                    let from_val = match Value::from_arrow(&from_arr, row_idx) {
+                                        Value::Node(id) => id,
+                                        _ => continue,
+                                    };
+                                    let to_val = match Value::from_arrow(&to_arr, row_idx) {
+                                        Value::Node(id) => id,
+                                        _ => continue,
+                                    };
+                                    if deleted_set.contains(&from_val) || deleted_set.contains(&to_val) {
+                                        for col in &rel_table.columns {
+                                            col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
+                                        }
+                                        let storage_guard = database.storage_manager.read();
+                                        if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
+                                            fwd.delete_edge(from_val, to_val);
+                                        }
+                                        if let Some(bwd) = storage_guard.bwd_csr.get(rel_name) {
+                                            bwd.delete_edge(to_val, from_val);
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                }
+            }
 
-                    for col in &self.table.columns {
-                        col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
-                    }
+            // Phase 3: Nullify columns for each deleted node
+            for &id in &deleted_ids {
+                for col in &self.table.columns {
+                    col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
+                }
 
-                    // Remove from FTS and vector indexes
-                    let storage_guard = database.storage_manager.read();
-                    if let Some(fts) = storage_guard.fts_indexes.get(&self.table.name) {
-                        if let Err(e) = fts.delete(id) {
-                            tracing::warn!("FTS delete error for node {}: {e}", id);
-                        }
-                        if let Err(e) = fts.commit() {
-                            tracing::warn!("FTS commit error after delete: {e}");
-                        }
+                // Remove from FTS and vector indexes
+                let storage_guard = database.storage_manager.read();
+                if let Some(fts) = storage_guard.fts_indexes.get(&self.table.name) {
+                    if let Err(e) = fts.delete(id) {
+                        tracing::warn!("FTS delete error for node {}: {e}", id);
                     }
-                    if let Some(vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
-                        // VectorIndex doesn't have a delete-by-node-id method,
-                        // but setting the embedding to zero vector is effectively a delete
-                        // since zero-vector matches nothing in cosine/ip distance.
+                    if let Err(e) = fts.commit() {
+                        tracing::warn!("FTS commit error after delete: {e}");
                     }
                 }
-                self.shared_state
-                    .total_affected
-                    .fetch_add(num_rows as u64, Ordering::SeqCst);
+                if let Some(vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
+                    // VectorIndex doesn't have a delete-by-node-id method,
+                    // but setting the embedding to zero vector is effectively a delete
+                    // since zero-vector matches nothing in cosine/ip distance.
+                }
             }
+            self.shared_state
+                .total_affected
+                .fetch_add(deleted_ids.len() as u64, Ordering::SeqCst);
             // Update catalog cardinality
             let total = self.shared_state.total_affected.load(Ordering::SeqCst);
             {

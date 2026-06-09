@@ -222,7 +222,7 @@ Note: `wasmi` doesn't support interruption natively. Thread-based timeout is the
 ### [X] 1.4 Fix MinHash Similarity Denominator
 ### [X] 1.5 Fix Sequential Commit Holding Connection Lock During I/O
 ### [X] 1.6 CREATE REL TABLE Ignores `if_not_exists`
-### [ ] 1.7 Fix Catalog Save After WAL Truncation Ordering
+### [X] 1.7 Fix Catalog Save After WAL Truncation Ordering
 ### [ ] 1.8 Fix DETACH DELETE Full Rel Table Scan
 ### [ ] 1.9 Fix Prefetch I/O Under Write Lock
 ### [ ] 1.10 Fix `create_new_version` Unsafe `Frame.data` Read Without Pin Guarantee
