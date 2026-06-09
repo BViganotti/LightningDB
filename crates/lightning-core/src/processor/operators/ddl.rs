@@ -467,6 +467,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     crate::catalog::NodeConstraint {
                         name: name.clone(),
                         property: property.clone(),
+                        constraint_type: crate::catalog::ConstraintType::Unique,
                     },
                 )?;
                 database.catalog.mark_dirty();

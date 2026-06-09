@@ -1,11 +1,11 @@
-use crate::catalog::LazyCatalog;
+use crate::catalog::{ConstraintType, LazyCatalog, NodeConstraint};
 use crate::planner::binder::{BoundExpression, BoundNodePattern, BoundPropertyAssignment};
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
 use crate::storage::undo_buffer::{UndoBuffer, UndoRecord};
-use crate::Result;
+use crate::{LightningError, Result};
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -18,6 +18,74 @@ pub struct SharedDMLState {
     pub results_returned: AtomicU64,
     pub is_built: AtomicBool,
     pub final_result: RwLock<Option<RecordBatch>>,
+}
+
+/// Check UNIQUE constraints for a set of row values before insert/update.
+/// Returns an error if any UNIQUE constraint would be violated.
+fn check_unique_constraints(
+    database: &crate::Database,
+    table_name: &str,
+    col_values: &[(usize, &Value)],
+) -> Result<()> {
+    let constraints: Vec<NodeConstraint> = {
+        let cat = database.catalog.read();
+        match cat.get_node_table(table_name) {
+            Some(t) => t.constraints.iter()
+                .filter(|c| c.constraint_type == ConstraintType::Unique)
+                .cloned()
+                .collect(),
+            None => return Ok(()),
+        }
+    };
+
+    if constraints.is_empty() {
+        return Ok(());
+    }
+
+    // Extract needed info while holding storage lock, then drop it
+    let index_opt = {
+        let storage = database.storage_manager.read();
+        storage.get_index(table_name)
+    };
+
+    let bm = &database.buffer_manager;
+
+    if index_opt.is_none() {
+        return Ok(());
+    }
+    let index = index_opt.unwrap();
+
+    // Map constraint property names → column indices while holding storage lock
+    let constraint_cols: Vec<(usize, String)> = {
+        let storage = database.storage_manager.read();
+        let table = match storage.get_table(table_name) {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+        constraints.iter().filter_map(|c| {
+            table.columns.iter().position(|col| col.name == c.property).map(|idx| (idx, c.property.clone()))
+        }).collect()
+    };
+
+    for (col_idx, prop_name) in &constraint_cols {
+        let val = match col_values.iter().find(|(idx, _)| *idx == *col_idx) {
+            Some((_, v)) => v,
+            None => continue,
+        };
+
+        // Check if any existing row has this value via the hash index
+        let tx = database.transaction_manager.begin(true)?;
+        if let Ok(Some(_existing_id)) = index.lookup(bm, val, &tx) {
+            let _ = database.transaction_manager.rollback(&database, &tx);
+            return Err(LightningError::Query(format!(
+                "Unique constraint violation: property '{}' with value '{}' already exists in table '{}'",
+                prop_name, val, table_name
+            )));
+        }
+        let _ = database.transaction_manager.rollback(&database, &tx);
+    }
+
+    Ok(())
 }
 
 pub struct PhysicalCreate {
@@ -115,6 +183,12 @@ impl PhysicalOperator for PhysicalCreate {
                             row_data[*idx] = Value::from_arrow(arr, i);
                         }
 
+                        // Check UNIQUE constraints before inserting
+                        let col_vals: Vec<(usize, &Value)> = col_arrays.iter()
+                            .map(|(idx, arr)| (*idx, &row_data[*idx]))
+                            .collect();
+                        check_unique_constraints(database, &self.table_name, &col_vals)?;
+
                         rows.push(row_data);
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
@@ -168,6 +242,13 @@ impl PhysicalOperator for PhysicalCreate {
                     let val = Value::from_arrow(&v, 0);
                     row_data[*idx] = val;
                 }
+
+                // Check UNIQUE constraints before inserting
+                let col_vals: Vec<(usize, &Value)> = self.properties.iter()
+                    .map(|(idx, _)| (*idx, &row_data[*idx]))
+                    .collect();
+                check_unique_constraints(database, &self.table_name, &col_vals)?;
+
                 {
                     let storage = self.storage_manager.read();
                     if let Some(table) = storage.get_table(&self.table_name) {

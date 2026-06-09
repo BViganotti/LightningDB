@@ -423,7 +423,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.5 Add Connection Pooling
+### [X] 3.5 Add Connection Pooling
 
 **Issue:** Each `Connection` is standalone, no pooling.
 

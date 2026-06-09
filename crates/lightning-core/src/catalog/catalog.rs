@@ -9,10 +9,16 @@ pub struct PropertyDefinition {
     pub type_: LogicalType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConstraintType {
+    Unique,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConstraint {
     pub name: String,
     pub property: String,
+    pub constraint_type: ConstraintType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
