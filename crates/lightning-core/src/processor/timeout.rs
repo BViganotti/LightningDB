@@ -1,6 +1,6 @@
 use crate::processor::DataChunk;
 use crate::Result;
-use crossbeam::channel::{Receiver, RecvError, RecvTimeoutError, Sender};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

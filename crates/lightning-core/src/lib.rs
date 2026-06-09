@@ -1232,8 +1232,10 @@ impl Connection {
             Some(snapshot_ts),
             None,
         )?;
-        let mut processor = Processor::new(physical_plan);
         let timeout_ms = self.client_context.query_timeout_ms;
+        let memory_quota = self.client_context.memory_quota;
+        let mut processor = Processor::new(physical_plan)
+            .with_memory_quota(memory_quota);
         let chunks = processor.execute_with_timeout(
             Arc::clone(&self.client_context.database),
             Arc::clone(&tx),
@@ -1289,8 +1291,10 @@ impl Connection {
         drop(active_tx_guard);
 
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, explicit_tx)?;
-        let mut processor = Processor::new(physical_plan);
         let timeout_ms = self.client_context.query_timeout_ms;
+        let memory_quota = self.client_context.memory_quota;
+        let mut processor = Processor::new(physical_plan)
+            .with_memory_quota(memory_quota);
         let chunks = processor.execute_with_timeout(
             Arc::clone(&self.client_context.database),
             Arc::clone(&tx),

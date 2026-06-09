@@ -2,10 +2,11 @@ pub mod aggregate;
 pub mod arrow_utils;
 pub mod evaluator;
 pub mod functions;
+mod memory_tracker;
 pub mod operators;
 pub mod physical_plan;
 pub mod scheduler;
-mod timeout;
+pub mod timeout;
 
 pub use operators::*;
 
@@ -73,11 +74,22 @@ pub trait PhysicalOperator: Send + Sync {
 
 pub struct Processor {
     pub root: Box<dyn PhysicalOperator>,
+    pub memory_tracker: Option<memory_tracker::MemoryTracker>,
 }
 
 impl Processor {
     pub fn new(root: Box<dyn PhysicalOperator>) -> Self {
-        Self { root }
+        Self {
+            root,
+            memory_tracker: None,
+        }
+    }
+
+    pub fn with_memory_quota(mut self, quota: u64) -> Self {
+        if quota > 0 {
+            self.memory_tracker = Some(memory_tracker::MemoryTracker::new(quota));
+        }
+        self
     }
 
     pub fn execute_simple(
@@ -109,8 +121,17 @@ impl Processor {
     ) -> Result<Vec<DataChunk>> {
         let rx = self.execute_stream_with_timeout(database, tx, params, timeout_ms)?;
         let mut results = Vec::new();
+        let mut total_bytes: u64 = 0;
         while let Ok(res) = rx.recv() {
             let chunk = res?;
+            let chunk_bytes = chunk.batch.get_array_memory_size() as u64;
+            total_bytes += chunk_bytes;
+
+            // Check memory quota if configured
+            if let Some(ref tracker) = self.memory_tracker {
+                tracker.record_allocation(chunk_bytes)?;
+            }
+
             results.push(chunk);
         }
         Ok(results)
