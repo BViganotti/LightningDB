@@ -387,7 +387,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.3 Add Prometheus Metrics Export
+### [X] 3.3 Add Prometheus Metrics Export
 
 **File:** `crates/lightning-core/src/lib.rs:162-229` (`DatabaseMetrics`)
 

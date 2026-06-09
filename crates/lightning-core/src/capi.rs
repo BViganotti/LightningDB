@@ -45,6 +45,7 @@ pub extern "C" fn lightning_database_init(
         prefetch_confidence: 0.15,
         slow_query_threshold_ms: 100,
         copy_base_dir: None,
+        audit_log_enabled: false,
     };
 
     match Database::new(path_str, sys_config) {

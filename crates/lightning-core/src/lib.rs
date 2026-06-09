@@ -1,4 +1,5 @@
 pub mod api;
+pub mod audit;
 pub mod catalog;
 pub mod cdc;
 pub use api::*;
@@ -113,6 +114,9 @@ pub struct SystemConfig {
     /// When None (default), only relative paths are allowed and resolved
     /// relative to the database directory.
     pub copy_base_dir: Option<std::path::PathBuf>,
+    /// Enable audit logging to `<db_path>/audit.log`.
+    /// Records every query with timestamp, query text, duration, and status.
+    pub audit_log_enabled: bool,
 }
 
 impl Default for SystemConfig {
@@ -128,6 +132,7 @@ impl Default for SystemConfig {
             prefetch_confidence: 0.15,
             slow_query_threshold_ms: 100,
             copy_base_dir: None,
+            audit_log_enabled: false,
         }
     }
 }
@@ -287,6 +292,7 @@ pub struct Database {
     pub plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>>,
     pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
     pub metrics: DatabaseMetrics,
+    pub audit_logger: audit::AuditLogger,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -469,6 +475,8 @@ impl Database {
             }
         });
 
+        let audit_logger = audit::AuditLogger::new(&path, config.audit_log_enabled)?;
+
         let db = Arc::new(Self {
             _path: path,
             _config: config,
@@ -479,6 +487,7 @@ impl Database {
             free_space_manager,
             catalog,
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
+            audit_logger,
             header: RwLock::new(header),
             plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(256).expect("infallible: 256 > 0"))))).collect(),
             physical_plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(64).expect("infallible: 64 > 0"))))).collect(),
@@ -1368,11 +1377,19 @@ impl Connection {
             );
         }
 
-        Ok(QueryResult::new_arrow(
+        let result = Ok(QueryResult::new_arrow(
             vec![],
             vec![],
             chunks.into_iter().map(|c| c.batch).collect(),
-        ))
+        ));
+
+        self.client_context.database.audit_logger.record_query(
+            query_str,
+            elapsed_ms,
+            result.is_ok(),
+        );
+
+        result
     }
 
     pub fn bulk_insert_batch(&self, table_name: &str, batch: &RecordBatch) -> Result<usize> {
