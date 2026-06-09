@@ -188,7 +188,7 @@ This eliminates the `_dummy` column entirely.
 
 ---
 
-### [ ] 1.1 WASM Timeout Enforcement
+### [X] 1.1 WASM Timeout Enforcement
 
 **File:** `crates/lightning-core/src/wasm_function.rs`
 **Risk:** Denial of service — WASM functions can execute indefinitely.
