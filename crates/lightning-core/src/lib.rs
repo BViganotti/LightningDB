@@ -34,8 +34,13 @@ fn normalize_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"'[^']*'"#).expect("infallible: valid regex pattern"))
 }
 
-fn normalize_query(query: &str) -> String {
+fn normalize_literals(query: &str) -> String {
     normalize_re().replace_all(query, "'?'").into_owned()
+}
+
+// Alias for backward compatibility
+fn normalize_query(query: &str) -> String {
+    normalize_literals(query)
 }
 
 /// Select a shard index for a cache key using its hash.

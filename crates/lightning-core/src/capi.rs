@@ -57,26 +57,11 @@ pub extern "C" fn lightning_database_init(
 }
 
 #[no_mangle]
-#[deprecated(note = "renamed to lightning_database_init")]
-pub extern "C" fn kuzu_database_init(
-    path: *const c_char,
-    config: kuzu_system_config,
-) -> *mut kuzu_database {
-    lightning_database_init(path, config)
-}
-
-#[no_mangle]
 pub extern "C" fn lightning_database_destroy(database: *mut kuzu_database) {
     if !database.is_null() {
         let db = unsafe { Box::from_raw(database) };
         let _ = unsafe { Box::from_raw(db.database) };
     }
-}
-
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_database_destroy")]
-pub extern "C" fn kuzu_database_destroy(database: *mut kuzu_database) {
-    lightning_database_destroy(database)
 }
 
 #[no_mangle]
@@ -92,23 +77,11 @@ pub extern "C" fn lightning_connection_init(database: *mut kuzu_database) -> *mu
 }
 
 #[no_mangle]
-#[deprecated(note = "renamed to lightning_connection_init")]
-pub extern "C" fn kuzu_connection_init(database: *mut kuzu_database) -> *mut kuzu_connection {
-    lightning_connection_init(database)
-}
-
-#[no_mangle]
 pub extern "C" fn lightning_connection_destroy(connection: *mut kuzu_connection) {
     if !connection.is_null() {
         let conn = unsafe { Box::from_raw(connection) };
         let _ = unsafe { Box::from_raw(conn.connection) };
     }
-}
-
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_connection_destroy")]
-pub extern "C" fn kuzu_connection_destroy(connection: *mut kuzu_connection) {
-    lightning_connection_destroy(connection)
 }
 
 #[no_mangle]
@@ -136,26 +109,11 @@ pub extern "C" fn lightning_connection_query(
 }
 
 #[no_mangle]
-#[deprecated(note = "renamed to lightning_connection_query")]
-pub extern "C" fn kuzu_connection_query(
-    connection: *mut kuzu_connection,
-    query: *const c_char,
-) -> *mut kuzu_query_result {
-    lightning_connection_query(connection, query)
-}
-
-#[no_mangle]
 pub extern "C" fn lightning_query_result_destroy(query_result: *mut kuzu_query_result) {
     if !query_result.is_null() {
         let res = unsafe { Box::from_raw(query_result) };
         let _ = unsafe { Box::from_raw(res.query_result) };
     }
-}
-
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_query_result_destroy")]
-pub extern "C" fn kuzu_query_result_destroy(query_result: *mut kuzu_query_result) {
-    lightning_query_result_destroy(query_result)
 }
 
 #[no_mangle]
@@ -165,12 +123,6 @@ pub extern "C" fn lightning_query_result_is_success(query_result: *mut kuzu_quer
     }
     let res = unsafe { &*(*query_result).query_result };
     res.is_success()
-}
-
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_query_result_is_success")]
-pub extern "C" fn kuzu_query_result_is_success(query_result: *mut kuzu_query_result) -> bool {
-    lightning_query_result_is_success(query_result)
 }
 
 #[no_mangle]
@@ -189,22 +141,10 @@ pub extern "C" fn lightning_query_result_get_error_message(
 }
 
 #[no_mangle]
-#[deprecated(note = "renamed to lightning_query_result_get_error_message")]
-pub extern "C" fn kuzu_query_result_get_error_message(
-    query_result: *mut kuzu_query_result,
-) -> *mut c_char {
-    lightning_query_result_get_error_message(query_result)
-}
-
-#[no_mangle]
 pub extern "C" fn lightning_destroy_string(s: *mut c_char) {
     if !s.is_null() {
         let _ = unsafe { CString::from_raw(s) };
     }
 }
 
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_destroy_string")]
-pub extern "C" fn kuzu_destroy_string(s: *mut c_char) {
-    lightning_destroy_string(s)
-}
+

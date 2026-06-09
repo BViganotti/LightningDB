@@ -281,7 +281,7 @@ impl std::hash::Hash for Value {
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     k.hash(&mut s);
                     v.hash(&mut s);
-                    h = h.wrapping_add(std::hash::Hasher::finish(&s));
+                    h = h.wrapping_mul(31).wrapping_add(std::hash::Hasher::finish(&s));
                 }
                 h.hash(state);
             }

@@ -796,15 +796,6 @@ impl BufferManager {
         }
     }
 
-    fn reset_referenced(&self) {
-        for shard in &self.shards {
-            let mut pool = shard.write();
-            for slot in &mut pool.slots {
-                slot.referenced = false;
-            }
-        }
-    }
-
     pub fn flush_all_with_handles(&self, file_handles: &[std::sync::Arc<FileHandle>]) {
         if file_handles.is_empty() {
             return;

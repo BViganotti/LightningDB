@@ -1151,23 +1151,7 @@ fn parse_factor(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserErro
     Ok(e)
 }
 
-/// Legacy arithmetic parser for flat `arithmetic_expr` grammar.
-/// Kept for reference but no longer used with the new term/factor grammar.
-fn parse_arithmetic(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
-    let ps = p.into_inner().collect::<Vec<_>>();
-    if ps.len() == 1 {
-        return parse_atom(ps[0].clone());
-    }
-    let mut e = parse_atom(ps[0].clone())?;
-    for i in (1..ps.len()).step_by(2) {
-        e = Expression::Arithmetic(
-            Box::new(e),
-            parse_arithmetic_operator(ps[i].clone()),
-            Box::new(parse_atom(ps[i + 1].clone())?),
-        );
-    }
-    Ok(e)
-}
+
 
 fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let i = required_pair(p.into_inner().next(), "pair")?;

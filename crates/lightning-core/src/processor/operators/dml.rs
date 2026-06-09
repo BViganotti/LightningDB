@@ -408,7 +408,7 @@ impl PhysicalOperator for PhysicalSet {
                     }
                 }
 
-                // Vector index: check if embedding column was updated
+                // Vector index: update embedding if the embedding column was modified
                 if let Some(ref vec_idx) = vec_opt {
                     let emb_col_idx = self.table.columns.iter().position(|c| {
                         c.data_type == lightning_types::LogicalType::List(
@@ -428,10 +428,9 @@ impl PhysicalOperator for PhysicalSet {
                                             })
                                             .collect();
                                         if emb_f32.len() == vec_idx.dimension() {
-                                            // VectorIndex::search doesn't have delete-by-id,
-                                            // but insert_batch is the flat-array variant.
-                                            // For simplicity, skip vector index update for SET
-                                            // since VectorIndex is a flat array without node_id lookup.
+                                            if let Err(e) = vec_idx.update(*node_id, &emb_f32, &self.buffer_manager, tx) {
+                                                tracing::warn!("Vector index update error during SET: {e}");
+                                            }
                                         }
                                     }
                                 }
