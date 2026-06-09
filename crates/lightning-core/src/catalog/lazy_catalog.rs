@@ -89,6 +89,23 @@ impl LazyCatalog {
         self.save_internal(current + 1)
     }
 
+    /// Save the catalog to disk using an already-acquired lock guard reference.
+    /// The caller passes a reference to the locked Catalog, and this method uses
+    /// it directly instead of acquiring its own lock.
+    pub fn force_save_with_catalog(&self, catalog: &Catalog) -> Result<()> {
+        let current = self.last_saved_tx_count.load(Ordering::Acquire);
+        let path = match self.get_path() {
+            Some(p) => p,
+            None => {
+                return Ok(());
+            }
+        };
+        catalog.save_to_disk(&path)?;
+        self.dirty.store(false, Ordering::Release);
+        self.last_saved_tx_count.store(current + 1, Ordering::Release);
+        Ok(())
+    }
+
     fn save_internal(&self, current_tx_count: u64) -> Result<()> {
         let path = match self.get_path() {
             Some(p) => p,
