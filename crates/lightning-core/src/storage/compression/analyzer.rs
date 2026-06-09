@@ -208,18 +208,6 @@ impl CompressionAnalyzer {
         CompressionMetadata::new(Value::Null, Value::Null, CompressionType::Uncompressed, 0)
     }
 
-    pub fn analyze_column(
-        _col: &crate::storage::column::Column,
-        _bm: &crate::storage::buffer_manager::BufferManager,
-        _tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<(Box<dyn CompressionAlg>, CompressionMetadata)> {
-        // Simplified analysis for the port
-        // In a real implementation, we'd sample the column data
-        let meta =
-            CompressionMetadata::new(Value::Null, Value::Null, CompressionType::Uncompressed, 0);
-        Ok((Box::new(Uncompressed { element_size: 8 }), meta))
-    }
-
     fn calculate_bit_width(range: u64) -> u32 {
         if range == 0 {
             return 0;
