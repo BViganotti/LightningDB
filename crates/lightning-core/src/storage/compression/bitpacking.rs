@@ -4,6 +4,11 @@ impl BitPacker {
     /// Pack 32 values into a byte buffer using bit_width bits per value.
     pub fn pack_32(values: &[u64], bit_width: u8, output: &mut [u8]) {
         if bit_width == 0 {
+            // All values must be 0 when bit_width is 0 (zero range)
+            debug_assert!(
+                values.iter().all(|&v| v == 0),
+                "bit_width=0 but values are not all zero"
+            );
             return;
         }
         // Special case: bit_width == 64 means store raw u64 values (no packing)
