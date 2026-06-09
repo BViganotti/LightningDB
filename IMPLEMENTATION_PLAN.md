@@ -448,7 +448,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.7 Add Foreign Key Enforcement
+### [X] 3.7 Add Foreign Key Enforcement
 
 **Issue:** No referential integrity — you can CREATE a relationship between non-existent nodes.
 
@@ -459,7 +459,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.8 Add Schema Versioning for Data Files
+### [X] 3.8 Add Schema Versioning for Data Files
 
 **Issue:** No version stamp in column, overflow, or index files. Future versions can't detect format incompatibility.
 
@@ -470,7 +470,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.9 Add Point-in-Time Recovery (PITR) API
+### [X] 3.9 Add Point-in-Time Recovery (PITR) API
 
 **Issue:** WAL archiving exists (`wal.rs:94-134`) but no restore API.
 
