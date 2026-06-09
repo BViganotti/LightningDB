@@ -105,31 +105,34 @@ impl PhysicalOperator for PhysicalUnion {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
-        if !self.local_left_exhausted {
-            if let Some(chunk) = self.left.get_next(database, tx, params)? {
+        // Loop instead of recursion to avoid stack overflow on many consecutive duplicates
+        loop {
+            if !self.local_left_exhausted {
+                if let Some(chunk) = self.left.get_next(database, tx, params)? {
+                    if !self.is_all {
+                        if let Some(deduped) = self.deduplicate(chunk)? {
+                            return Ok(Some(deduped));
+                        } else {
+                            continue;
+                        }
+                    }
+                    return Ok(Some(chunk));
+                }
+                self.local_left_exhausted = true;
+            }
+
+            if let Some(chunk) = self.right.get_next(database, tx, params)? {
                 if !self.is_all {
                     if let Some(deduped) = self.deduplicate(chunk)? {
                         return Ok(Some(deduped));
                     } else {
-                        return self.get_next(database, tx, params);
+                        continue;
                     }
                 }
                 return Ok(Some(chunk));
+            } else {
+                return Ok(None);
             }
-            self.local_left_exhausted = true;
-        }
-
-        if let Some(chunk) = self.right.get_next(database, tx, params)? {
-            if !self.is_all {
-                if let Some(deduped) = self.deduplicate(chunk)? {
-                    return Ok(Some(deduped));
-                } else {
-                    return self.get_next(database, tx, params);
-                }
-            }
-            Ok(Some(chunk))
-        } else {
-            Ok(None)
         }
     }
 

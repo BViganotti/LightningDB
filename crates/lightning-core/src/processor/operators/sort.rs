@@ -51,11 +51,6 @@ impl PhysicalSort {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<()> {
-        self.shared
-            .read()
-            .num_active_collectors
-            .fetch_add(1, Ordering::SeqCst);
-
         let mut local_batches = Vec::new();
         while let Some(chunk) = self.child.get_next(database, tx, params)? {
             local_batches.push(chunk.batch);
@@ -63,6 +58,7 @@ impl PhysicalSort {
 
         {
             let mut shared = self.shared.write();
+            shared.num_active_collectors.fetch_add(1, Ordering::SeqCst);
             shared.batches.extend(local_batches);
             shared.num_active_collectors.fetch_sub(1, Ordering::SeqCst);
 
