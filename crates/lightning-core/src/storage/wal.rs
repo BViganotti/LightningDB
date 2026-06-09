@@ -56,6 +56,9 @@ pub struct WAL {
     sync_mode: SyncMode,
     archive_path: Option<std::path::PathBuf>,
     archive_seq: AtomicU64,
+    /// Pending group-commit buffer: serialized WAL bytes not yet written to disk.
+    /// Accumulated by `log_page_update`, flushed by `log_commit`.
+    pending_buf: Mutex<Vec<u8>>,
 }
 
 impl WAL {
@@ -84,6 +87,7 @@ impl WAL {
             sync_mode,
             archive_path: None,
             archive_seq: AtomicU64::new(0),
+            pending_buf: Mutex::new(Vec::with_capacity(65536)),
         })
     }
 
@@ -173,8 +177,6 @@ impl WAL {
         page_idx: u64,
         data: &[u8],
     ) -> Result<()> {
-        let mut file = self.file.lock();
-
         let mut digest = CRC32C.digest();
         digest.update(&[RECORD_TYPE_PAGE_UPDATE]);
         digest.update(&tx_id.to_le_bytes());
@@ -183,20 +185,35 @@ impl WAL {
         digest.update(data);
         let checksum = digest.finalize();
 
-        file.write_all(&[RECORD_TYPE_PAGE_UPDATE])?;
-        file.write_all(&checksum.to_le_bytes())?;
-        file.write_all(&tx_id.to_le_bytes())?;
-        file.write_all(&file_id.to_le_bytes())?;
-        file.write_all(&page_idx.to_le_bytes())?;
-        file.write_all(data)?;
-
-        Self::align_position(&mut file)?;
+        // Serialize into pending buffer (group commit: batched write at commit time)
+        let mut buf = self.pending_buf.lock();
+        buf.extend_from_slice(&[RECORD_TYPE_PAGE_UPDATE]);
+        buf.extend_from_slice(&checksum.to_le_bytes());
+        buf.extend_from_slice(&tx_id.to_le_bytes());
+        buf.extend_from_slice(&file_id.to_le_bytes());
+        buf.extend_from_slice(&page_idx.to_le_bytes());
+        buf.extend_from_slice(data);
 
         Ok(())
     }
 
     pub fn log_commit(&self, tx_id: u64) -> Result<()> {
+        // Flush all pending page updates from group commit buffer
+        let pending_data = {
+            let mut buf = self.pending_buf.lock();
+            if buf.is_empty() {
+                None
+            } else {
+                Some(std::mem::take(&mut *buf))
+            }
+        };
+
         let mut file = self.file.lock();
+
+        if let Some(ref data) = pending_data {
+            file.write_all(data)?;
+            Self::align_position(&mut file)?;
+        }
 
         let mut digest = CRC32C.digest();
         digest.update(&[RECORD_TYPE_COMMIT]);
