@@ -30,7 +30,7 @@ impl TrigramIndexWorker {
         const BATCH_SIZE: usize = 500;
 
         loop {
-            match task_rx.recv_timeout(std::time::Duration::from_millis(1)) {
+            match task_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(TrigramIndexTask::Shutdown) => {
                     for (row_id, value) in pending.drain(..) {
                         index.insert(row_id, &value);
@@ -58,10 +58,16 @@ impl TrigramIndexWorker {
                         index.insert(row_id, &value);
                     }
                 }
-                Err(_) => {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // Timeout with no new tasks — flush pending batch if stale
+                    // (no-op if nothing pending)
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // All senders dropped, channel is closed — flush and exit
                     for (row_id, value) in pending.drain(..) {
                         index.insert(row_id, &value);
                     }
+                    break;
                 }
             }
         }
