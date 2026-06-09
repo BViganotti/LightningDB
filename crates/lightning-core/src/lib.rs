@@ -1,6 +1,7 @@
 pub mod api;
 pub mod audit;
 pub mod catalog;
+pub mod pool;
 pub mod cdc;
 pub use api::*;
 pub mod capi;

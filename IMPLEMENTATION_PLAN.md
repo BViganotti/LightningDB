@@ -411,7 +411,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.4 Add Audit Logging
+### [X] 3.4 Add Audit Logging
 
 **Issue:** No audit trail of queries or schema changes.
 
