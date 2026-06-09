@@ -821,6 +821,13 @@ impl StorageManager {
     }
 
     pub fn remove_table(&mut self, name: &str) {
+        // Remove trigram workers first (sends Shutdown signal to background threads)
+        if let Some(table) = self.node_tables.get(name) {
+            table.trigram_workers.write().clear();
+        }
+        if let Some(table) = self.rel_tables.get(name) {
+            table.trigram_workers.write().clear();
+        }
         self.node_tables.remove(name);
         self.rel_tables.remove(name);
         self.indexes.remove(name);

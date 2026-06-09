@@ -115,6 +115,17 @@ impl PhysicalScan {
         // If an index is out of bounds (possible catalog/storage desync),
         // silently skip it — the full scan + filter path will handle the comparison.
         filter_idxs.retain(|&idx| idx < self.table.columns.len());
+
+        // Ensure filter columns are included in the projected set so the
+        // pushdown filter evaluation has access to all columns it needs.
+        if let Some(ref mut idxs) = self.projected_idxs {
+            for &fi in &filter_idxs {
+                if !idxs.contains(&fi) {
+                    idxs.push(fi);
+                }
+            }
+        }
+
         self.filter_column_idxs = filter_idxs;
         self.pushdown_filter = Some(filter);
         self
