@@ -555,7 +555,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.5 Fix Database Drop Busy-Wait Loop
+### [X] 4.5 Fix Database Drop Busy-Wait Loop
 
 **File:** `crates/lightning-core/src/lib.rs:278-284`
 
