@@ -154,7 +154,7 @@ impl CompressionAlg for AlpAlg {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&src[start..start + 8]);
             let encoded = i64::from_le_bytes(bytes);
-            let decoded = Alp::decode_value(encoded, 0, exp_idx);
+            let decoded = Alp::decode_value(encoded, fac_idx, exp_idx);
             let dst_start = (dst_offset as usize + i) * 8;
             dst[dst_start..dst_start + 8].copy_from_slice(&decoded.to_le_bytes());
         }
