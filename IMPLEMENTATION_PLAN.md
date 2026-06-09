@@ -36,7 +36,7 @@ if computed_crc != stored_crc {
 
 ---
 
-### [ ] 0.2 Fix Cypher Injection in fusion.rs — Parameterize All Queries
+### [X] 0.2 Fix Cypher Injection in fusion.rs — Parameterize All Queries
 
 **File:** `crates/lightning-core/src/fusion.rs:34,56,71,99-104,127-129,161,397-404`
 **Risk:** Critical security vulnerability — arbitrary Cypher injection via any user-supplied string parameter.

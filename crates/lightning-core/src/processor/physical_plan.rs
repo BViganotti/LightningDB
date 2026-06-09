@@ -1,3 +1,4 @@
+use crate::parser::ast::ComparisonOperator;
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::PhysicalOperator;
@@ -167,12 +168,16 @@ impl PhysicalPlanner {
                 ))
             }
             LogicalOperator::Join(left, right, join_cond) => {
-                let planned_left = self.plan(*left)?;
-                let planned_right = self.plan(*right)?;
+                // Extract join keys BEFORE moving left/right into plan()
+                let join_keys = self.extract_join_keys(&join_cond, &*left, &*right);
                 let is_cross_join = matches!(
                     join_cond,
                     BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
                 );
+
+                let planned_left = self.plan(*left)?;
+                let planned_right = self.plan(*right)?;
+
                 if is_cross_join {
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new_cross_join(
@@ -180,13 +185,25 @@ impl PhysicalPlanner {
                             planned_right,
                         ),
                     ))
-                } else {
+                } else if let Some((l_key, r_key)) = join_keys {
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new(
                             planned_left,
                             planned_right,
-                            0,
-                            0,
+                            l_key,
+                            r_key,
+                        ),
+                    ))
+                } else {
+                    // Non-equi join: cross join + filter
+                    let cross = crate::processor::operators::hash_join::HashJoin::new_cross_join(
+                        planned_left,
+                        planned_right,
+                    );
+                    Ok(Box::new(
+                        crate::processor::operators::filter::PhysicalFilter::new(
+                            Box::new(cross),
+                            join_cond,
                         ),
                     ))
                 }
@@ -777,6 +794,39 @@ impl PhysicalPlanner {
             | LogicalOperator::Checkpoint
             | LogicalOperator::Vacuum
             | LogicalOperator::SingleRow => Ok(0),
+        }
+    }
+
+    /// Extract equi-join key columns from a join condition.
+    /// Returns `(left_key_col_idx, right_key_col_idx)` when the condition is
+    /// `left_var.col = right_var.col`. Falls back to None for non-equi or
+    /// complex conditions (which the caller must handle via cross-join+filter).
+    fn extract_join_keys(
+        &self,
+        cond: &BoundExpression,
+        left_op: &LogicalOperator,
+        right_op: &LogicalOperator,
+    ) -> Option<(usize, usize)> {
+        if let BoundExpression::Comparison(left, ComparisonOperator::Equal, right) = cond {
+            match (left.as_ref(), right.as_ref()) {
+                (
+                    BoundExpression::PropertyLookup(left_var, left_idx, _),
+                    BoundExpression::PropertyLookup(right_var, right_idx, _),
+                ) => {
+                    let left_positions = self.compute_variable_positions(left_op).ok()?;
+                    let right_positions = self.compute_variable_positions(right_op).ok()?;
+                    if left_positions.contains_key(left_var) && right_positions.contains_key(right_var) {
+                        Some((*left_idx, *right_idx))
+                    } else if left_positions.contains_key(right_var) && right_positions.contains_key(left_var) {
+                        Some((*right_idx, *left_idx))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
         }
     }
 
