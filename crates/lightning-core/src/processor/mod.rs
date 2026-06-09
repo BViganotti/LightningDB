@@ -68,6 +68,12 @@ pub trait PhysicalOperator: Send + Sync {
     ) -> Result<Option<Box<dyn PhysicalOperator + Send + Sync>>> {
         Ok(None)
     }
+
+    /// Return the output schema of this operator, if known.
+    /// Useful for optimizers and EXPLAIN to understand the data flow.
+    fn output_schema(&self) -> Option<Arc<arrow::datatypes::Schema>> {
+        None
+    }
 }
 
 pub struct Processor {
