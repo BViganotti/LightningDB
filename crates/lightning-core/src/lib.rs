@@ -546,10 +546,11 @@ impl Database {
             return Err(LightningError::Config("Cannot checkpoint a read-only database".into()));
         }
         let start = std::time::Instant::now();
-        // Flush all dirty pages to disk and sync data files
-        self.buffer_manager.checkpoint()?;
+        // Phase 1: Flush all dirty pages to disk and sync data files.
+        // WAL is NOT truncated here — catalog must be saved first.
+        self.buffer_manager.flush_and_sync()?;
 
-        // Persist free space map
+        // Phase 2: Persist free space map
         {
             let fsm_path = self._path.join("free_space.bin");
             if let Err(e) = self.free_space_manager.save(&fsm_path) {
@@ -557,7 +558,7 @@ impl Database {
             }
         }
 
-        // Persist catalog to disk so num_rows and other metadata survive restart.
+        // Phase 3: Persist catalog to disk so num_rows and other metadata survive restart.
         // This is critical: without it, checkpoint-flushed data files may have
         // rows that the catalog doesn't know about, causing COUNT(*) to return
         // fewer rows than actually exist.
@@ -577,13 +578,13 @@ impl Database {
                     entry.stats = table.stats.read().clone();
                 }
             }
-            drop(cat); // Explicitly drop lock before saving
+            drop(cat);
             self.catalog.force_save().map_err(|e| {
                 LightningError::Internal(format!("Failed to save catalog during checkpoint: {e}"))
             })?;
         }
 
-        // Update the last checkpoint timestamp so recovery can skip these entries
+        // Phase 4: Update the last checkpoint timestamp so recovery can skip these entries
         let last_ts = self.transaction_manager.get_current_ts();
         {
             let mut header = self.header.write();
@@ -592,9 +593,13 @@ impl Database {
             header.save(&header_path)?;
         }
 
-        // Vacuum RowVersion committed entries that are older than
-        // the minimum active read timestamp. These entries accumulate
-        // unboundedly and are no longer needed for snapshot visibility.
+        // Phase 5: NOW truncate the WAL — catalog and header are safely on disk.
+        // If crash occurs between Phase 3 and Phase 5, data is on disk and catalog
+        // is consistent; WAL replay can still proceed from before this checkpoint.
+        self.buffer_manager.truncate_wal()?;
+
+        // Phase 6: Vacuum RowVersion committed entries that are older than
+        // the minimum active read timestamp.
         let min_active = self.transaction_manager.get_min_active_read_ts();
         let mut total_evicted = 0usize;
         for table in self.storage_manager.read().node_tables.values() {

@@ -597,7 +597,10 @@ impl BufferManager {
         Ok(())
     }
 
-    pub fn checkpoint(&self) -> Result<()> {
+    /// Flush all dirty pages to disk and sync file handles.
+    /// Does NOT truncate the WAL — call `truncate_wal()` separately after
+    /// persisting catalog metadata to ensure crash consistency.
+    pub fn flush_and_sync(&self) -> Result<()> {
         let synced_fids: parking_lot::Mutex<std::collections::HashSet<u64>> =
             parking_lot::Mutex::new(std::collections::HashSet::new());
 
@@ -647,14 +650,27 @@ impl BufferManager {
                 }
             }
         }
+        Ok(())
+    }
 
-        // Phase 3: Truncate WAL after data is safely on disk
+    /// Truncate the WAL after all dirty pages and catalog metadata have been
+    /// safely persisted. Must be called AFTER `flush_and_sync()` + catalog save.
+    pub fn truncate_wal(&self) -> Result<()> {
         for shard in &self.shards {
             let pool = shard.read();
             if let Some(wal) = &pool.wal {
                 wal.truncate()?;
             }
         }
+        Ok(())
+    }
+
+    /// Full checkpoint: flush dirty pages, sync data files, then truncate WAL.
+    /// Consider using `flush_and_sync()` + catalog save + `truncate_wal()` for
+    /// safer ordering when catalog metadata must be persisted before truncation.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.flush_and_sync()?;
+        self.truncate_wal()?;
         Ok(())
     }
 
