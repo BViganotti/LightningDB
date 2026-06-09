@@ -146,7 +146,9 @@ fn minhash_similarity(a: &[u64], b: &[u64]) -> f64 {
             std::cmp::Ordering::Greater => j += 1,
         }
     }
-    intersection as f64 / MINHASH_K as f64
+    let union_len = a.len().max(b.len());
+    if union_len == 0 { return 0.0; }
+    intersection as f64 / union_len as f64
 }
 
 impl MemoryStore {
@@ -672,7 +674,7 @@ impl MemoryStore {
              e.valid_from, e.valid_until \
              ORDER BY e.last_accessed DESC LIMIT {top_k}"
         );
-        println!("query: {query}");
+        tracing::debug!("MemoryStore recall_by_type query: {query}");
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
         let res = self.conn.execute(&query, Some(params))?;

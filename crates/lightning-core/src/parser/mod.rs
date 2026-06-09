@@ -896,8 +896,9 @@ fn parse_relationship_pattern(
                 }
             }
             Rule::var_len_bounds => {
-                if let Err(e) = parse_var_len(i) {
-                    tracing::warn!("Failed to parse variable-length bounds: {e}");
+                match parse_var_len(i) {
+                    Ok(bounds) => b = Some(bounds),
+                    Err(e) => tracing::warn!("Failed to parse variable-length bounds: {e}"),
                 }
             }
             _ => {}
