@@ -38,6 +38,14 @@ fn normalize_query(query: &str) -> String {
     normalize_re().replace_all(query, "'?'").into_owned()
 }
 
+/// Select a shard index for a cache key using its hash.
+fn cache_shard(key: &str, num_shards: usize) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    (h.finish() as usize) % num_shards
+}
+
 use crate::catalog::{Catalog, LazyCatalog};
 use crate::parser::parse;
 use crate::planner::Binder;
@@ -231,8 +239,8 @@ pub struct Database {
     pub catalog: Arc<LazyCatalog>,
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
-    pub plan_cache: Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>,
-    pub physical_plan_cache: Arc<parking_lot::Mutex<LruCache<String, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>,
+    pub plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>>,
+    pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
     pub metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
@@ -427,8 +435,8 @@ impl Database {
             catalog,
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
-            plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(1024).expect("infallible: 1024 > 0")))),
-            physical_plan_cache: Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(256).expect("infallible: 256 > 0")))),
+            plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(256).expect("infallible: 256 > 0"))))).collect(),
+            physical_plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(64).expect("infallible: 64 > 0"))))).collect(),
             metrics: DatabaseMetrics::new(),
             vacuum_handle: Some(vacuum_handle),
         });
@@ -1079,7 +1087,7 @@ impl Connection {
         // Fast path: cache lookup with raw query (no regex normalization).
         let mut cache_key = String::new();
         let cached_stmt = {
-            let mut cache = self.client_context.database.plan_cache.lock();
+            let mut cache = self.client_context.database.plan_caches[cache_shard(query_str, 4)].lock();
             let hit = cache.get(query_str).cloned();
             if hit.is_some() {
                 hit
@@ -1093,7 +1101,7 @@ impl Connection {
             }
         };
         let cached_stmt = {
-            let mut cache = self.client_context.database.plan_cache.lock();
+            let mut cache = self.client_context.database.plan_caches[cache_shard(&cache_key, 4)].lock();
             cache.get(&cache_key).cloned()
         };
         let tx = match (snapshot_ts, explicit_tx) {
@@ -1127,9 +1135,10 @@ impl Connection {
             let bound_query = binder.bind_query(&query)?;
             drop(catalog);
             if let Some(bound_union) = bound_query.union_queries.first() {
+                let shard = cache_shard(&cache_key, 4);
                 self.client_context
                     .database
-                    .plan_cache
+                    .plan_caches[shard]
                     .lock()
                     .put(cache_key.clone(), Arc::new(bound_union.statement.clone()));
             }
@@ -1150,9 +1159,10 @@ impl Connection {
         // Cache the physical plan keyed by (cache_key, read_ts) for faster re-execution
         if !cache_key.is_empty() {
             let pp_key = format!("{}:{}", &cache_key, tx.read_ts);
+            let shard = cache_shard(&pp_key, 4);
             self.client_context
                 .database
-                .physical_plan_cache
+                .physical_plan_caches[shard]
                 .lock()
                 .put(pp_key, Arc::from(physical_plan.clone_box()));
         }
