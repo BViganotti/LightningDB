@@ -1182,7 +1182,9 @@ impl Column {
                 let values = BooleanBuffer::new(Buffer::from(packed), 0, num_values);
                 Ok(Arc::new(BooleanArray::new(values, null_buf)))
             }
-            _ => unreachable!(),
+            _ => return Err(crate::LightningError::Internal(format!(
+                "build_array: unsupported target type {target_type:?}"
+            ))),
         }
     }
 

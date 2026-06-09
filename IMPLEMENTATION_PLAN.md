@@ -230,7 +230,7 @@ Note: `wasmi` doesn't support interruption natively. Thread-based timeout is the
 
 ---
 
-### [ ] 2.1 Re-Enable Projection Pushdown Optimizer
+### [X] 2.1 Re-Enable Projection Pushdown Optimizer
 
 ### [X] 2.9 Remove Debug `println!` Statements
 
@@ -261,7 +261,7 @@ pub fn ensure_csr_fresh(&self, table_name: &str, bm: &BufferManager, tx: &Transa
 
 ---
 
-### [ ] 2.11 Fix `normalize_query()` Name Collision
+### [X] 2.11 Fix `normalize_query()` Name Collision
 
 **Files:**
 - `crates/lightning-core/src/lib.rs:37-39` (regex-based normalization)
@@ -301,7 +301,7 @@ pub fn sync_all_data_files(&self) -> Result<()> {
 
 ---
 
-### [ ] 2.13 Fix SET Vector Index Update Skipped
+### [X] 2.13 Fix SET Vector Index Update Skipped
 
 **File:** `crates/lightning-core/src/processor/operators/dml.rs:430-436`
 
@@ -334,7 +334,7 @@ if let Some(ref vec_idx) = vec_opt {
 
 ---
 
-### [ ] 2.14 Fix `Hash` Implementation for `Value::Map` Non-Determinism
+### [X] 2.14 Fix `Hash` Implementation for `Value::Map` Non-Determinism
 
 **File:** `crates/lightning-core/src/processor/mod.rs:268-287`
 
@@ -523,7 +523,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.1 Remove Dead Code: `parse_arithmetic()`
+### [X] 4.1 Remove Dead Code: `parse_arithmetic()`
 
 **File:** `crates/lightning-core/src/parser/mod.rs:1152-1166`
 
@@ -531,7 +531,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.2 Remove Dead Code: `reset_referenced()`
+### [X] 4.2 Remove Dead Code: `reset_referenced()`
 
 **File:** `crates/lightning-core/src/storage/buffer_manager.rs:762-769`
 
@@ -547,7 +547,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.4 Fix `#[deprecated]` Kuzu Function Warnings
+### [X] 4.4 Fix `#[deprecated]` Kuzu Function Warnings
 
 **File:** `crates/lightning-core/src/capi.rs`
 

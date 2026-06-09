@@ -291,9 +291,6 @@ impl LogicalOperator {
                     vars.insert(item.alias.clone());
                 }
             }
-            LogicalOperator::Aggregate { .. } => {
-                // This is slightly more complex as it depends on Projection child
-            }
             _ => {
                 if let Some(child) = self.get_child() {
                     child.get_variables(vars);
