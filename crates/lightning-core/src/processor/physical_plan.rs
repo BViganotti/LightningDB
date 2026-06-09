@@ -593,7 +593,7 @@ impl PhysicalPlanner {
                 on_create_assignments,
                 on_match_assignments,
             } => {
-                let _planned_child = self.plan(*child)?;
+                let planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
                 let table = storage.get_table(&pattern.table_name).ok_or_else(|| {
                     crate::LightningError::Internal(format!("Table '{}' not found for MERGE", pattern.table_name))
@@ -608,6 +608,7 @@ impl PhysicalPlanner {
                 let table_name = pattern.table_name.clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalMerge::new(
+                        Some(planned_child),
                         table_name,
                         table,
                         pattern,

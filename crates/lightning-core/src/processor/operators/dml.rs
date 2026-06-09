@@ -819,6 +819,7 @@ impl PhysicalOperator for PhysicalCreateRel {
 }
 
 pub struct PhysicalMerge {
+    child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
     table_name: String,
     table: Table,
     pattern: BoundNodePattern,
@@ -833,6 +834,7 @@ pub struct PhysicalMerge {
 impl PhysicalMerge {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
         table_name: String,
         table: Table,
         pattern: BoundNodePattern,
@@ -845,6 +847,7 @@ impl PhysicalMerge {
         _current_num_rows: u64,
     ) -> Self {
         Self {
+            child,
             table_name,
             table,
             pattern,
@@ -871,6 +874,14 @@ impl PhysicalOperator for PhysicalMerge {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
+            // Execute child plan first to produce binding context
+            let mut child_batches: Vec<RecordBatch> = Vec::new();
+            if let Some(ref mut child) = self.child {
+                while let Some(chunk) = child.get_next(database, tx, params)? {
+                    child_batches.push(chunk.batch);
+                }
+            }
+
             // 1. Try to find existing node
             let mut existing_id = None;
             let index_opt = database.storage_manager.read().get_index(&self.table_name);
@@ -1037,6 +1048,10 @@ impl PhysicalOperator for PhysicalMerge {
     }
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
+            child: self.child.as_ref().map(|c| {
+                let boxed: Box<dyn PhysicalOperator + Send + Sync> = c.clone_box();
+                boxed
+            }),
             table_name: self.table_name.clone(),
             table: self.table.clone(),
             pattern: self.pattern.clone(),

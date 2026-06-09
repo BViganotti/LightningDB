@@ -75,7 +75,7 @@ For `materialize_pagerank()` bulk update, use UNWIND with parameter arrays.
 
 ---
 
-### [ ] 0.3 Fix HashJoin Condition Extraction — Make Joins Correct
+### [X] 0.3 Fix HashJoin Condition Extraction — Make Joins Correct
 
 **Files:**
 - `crates/lightning-core/src/processor/physical_plan.rs:169-193`
