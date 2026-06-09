@@ -9,7 +9,7 @@
 
 ---
 
-### [ ] 0.1 Fix WAL CRC Check Discarded in CDC Reader
+### [X] 0.1 Fix WAL CRC Check Discarded in CDC Reader
 
 **File:** `crates/lightning-core/src/storage/wal.rs:489-495`
 **Risk:** Silent data corruption — CDC subscribers accept corrupted WAL records without validation.

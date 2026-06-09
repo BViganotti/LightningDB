@@ -1,10 +1,7 @@
-use crate::processor::arrow_utils;
+use crate::processor::{arrow_utils, Value};
 use crate::Connection;
 use serde::Serialize;
-
-fn sq(s: &str) -> String {
-    s.replace('\'', "\\'")
-}
+use std::collections::HashMap;
 
 pub enum ConnectedDirection {
     Incoming,
@@ -31,8 +28,10 @@ impl FusionApp {
 
     /// Find CodeNode IDs by exact name match.
     pub fn find_node_by_name(conn: &Connection, name: &str) -> Result<Vec<String>, crate::LightningError> {
-        let q = format!("MATCH (n:CodeNode) WHERE n.name = '{}' RETURN n.id", sq(name));
-        let result = conn.query(&q)?;
+        let q = "MATCH (n:CodeNode) WHERE n.name = $name RETURN n.id";
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), Value::String(name.to_string()));
+        let result = conn.execute(q, Some(params))?;
         let mut ids = Vec::new();
         for batch in &result.batches {
             if let Ok(col) = arrow_utils::str_col(batch, 0) {
@@ -52,12 +51,11 @@ impl FusionApp {
         _edge_types: &[&str],
     ) -> Result<Vec<String>, crate::LightningError> {
         // Simple direct connection check
-        let q = format!(
-            "MATCH (s:CodeNode {{id: '{}'}})-[r]->(t:CodeNode {{id: '{}'}}) RETURN type(r) as rel_type",
-            source_id.replace('\'', ""),
-            target_id.replace('\'', "")
-        );
-        let result = conn.query(&q)?;
+        let q = "MATCH (s:CodeNode {id: $source_id})-[r]->(t:CodeNode {id: $target_id}) RETURN type(r) as rel_type";
+        let mut params = HashMap::new();
+        params.insert("source_id".to_string(), Value::String(source_id.to_string()));
+        params.insert("target_id".to_string(), Value::String(target_id.to_string()));
+        let result = conn.execute(q, Some(params))?;
         let mut paths = Vec::new();
         for batch in &result.batches {
             if let Ok(col) = arrow_utils::str_col(batch, 0) {
@@ -67,12 +65,11 @@ impl FusionApp {
             }
         }
         // Also check reverse direction
-        let q = format!(
-            "MATCH (t:CodeNode {{id: '{}'}})-[r]->(s:CodeNode {{id: '{}'}}) RETURN type(r) as rel_type",
-            source_id.replace('\'', ""),
-            target_id.replace('\'', "")
-        );
-        let result = conn.query(&q)?;
+        let q = "MATCH (t:CodeNode {id: $target_id})-[r]->(s:CodeNode {id: $source_id}) RETURN type(r) as rel_type";
+        let mut params = HashMap::new();
+        params.insert("source_id".to_string(), Value::String(source_id.to_string()));
+        params.insert("target_id".to_string(), Value::String(target_id.to_string()));
+        let result = conn.execute(q, Some(params))?;
         for batch in &result.batches {
             if let Ok(col) = arrow_utils::str_col(batch, 0) {
                 for i in 0..batch.num_rows() {
@@ -96,15 +93,15 @@ impl FusionApp {
         let edges = edge_types.join("|");
         let q = match direction {
             ConnectedDirection::Incoming => format!(
-                "MATCH (n:CodeNode {{id: '{}'}})<-[r:{edges}]-(connected:CodeNode) RETURN connected.id",
-                sq(node_id)
+                "MATCH (n:CodeNode {{id: $node_id}})<-[r:{edges}]-(connected:CodeNode) RETURN connected.id",
             ),
             ConnectedDirection::Outgoing => format!(
-                "MATCH (n:CodeNode {{id: '{}'}})-[r:{edges}]->(connected:CodeNode) RETURN connected.id",
-                sq(node_id)
+                "MATCH (n:CodeNode {{id: $node_id}})-[r:{edges}]->(connected:CodeNode) RETURN connected.id",
             ),
         };
-        let result = conn.query(&q)?;
+        let mut params = HashMap::new();
+        params.insert("node_id".to_string(), Value::String(node_id.to_string()));
+        let result = conn.execute(&q, Some(params))?;
         let mut ids = Vec::new();
         for batch in &result.batches {
             if let Ok(col) = arrow_utils::str_col(batch, 0) {
@@ -124,26 +121,32 @@ impl FusionApp {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let in_clause: String = ids.iter().map(|id| format!("'{}'", sq(id))).collect::<Vec<_>>().join(",");
+        // Build parameterized OR chain: (n.id = $id0) OR (n.id = $id1) OR ...
+        let conditions: Vec<String> = ids.iter().enumerate()
+            .map(|(i, _)| format!("n.id = $id{i}"))
+            .collect();
         let q = format!(
-            "MATCH (n:CodeNode) WHERE n.id IN [{}] RETURN n.id, n.name, n.node_type",
-            in_clause
+            "MATCH (n:CodeNode) WHERE {} RETURN n.id, n.name, n.node_type",
+            conditions.join(" OR ")
         );
+        let mut params = HashMap::new();
+        for (i, id) in ids.iter().enumerate() {
+            params.insert(format!("id{i}"), Value::String(id.clone()));
+        }
+        let result = conn.execute(&q, Some(params))?;
         let mut results = Vec::new();
-        if let Ok(result) = conn.query(&q) {
-            for batch in &result.batches {
-                if let (Ok(id_col), Ok(name_col), Ok(typ_col)) = (
-                    arrow_utils::str_col(batch, 0),
-                    arrow_utils::str_col(batch, 1),
-                    arrow_utils::str_col(batch, 2),
-                ) {
-                    for i in 0..batch.num_rows() {
-                        results.push((
-                            id_col.value(i).to_string(),
-                            name_col.value(i).to_string(),
-                            typ_col.value(i).to_string(),
-                        ));
-                    }
+        for batch in &result.batches {
+            if let (Ok(id_col), Ok(name_col), Ok(typ_col)) = (
+                arrow_utils::str_col(batch, 0),
+                arrow_utils::str_col(batch, 1),
+                arrow_utils::str_col(batch, 2),
+            ) {
+                for i in 0..batch.num_rows() {
+                    results.push((
+                        id_col.value(i).to_string(),
+                        name_col.value(i).to_string(),
+                        typ_col.value(i).to_string(),
+                    ));
                 }
             }
         }
@@ -157,16 +160,16 @@ impl FusionApp {
         content: &str,
         _parent_id: Option<&str>,
     ) -> Result<(), crate::LightningError> {
-        let q = format!(
-            "CREATE (o:Observation {{id: '{}', content: '{}', is_stale: false, created_at: '{}'}})",
-            sq(&id),
-            sq(&content).replace('\n', " "),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs().to_string())
-                .unwrap_or_default()
-        );
-        conn.execute(&q, None)?;
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let q = "CREATE (o:Observation {id: $id, content: $content, is_stale: false, created_at: $created_at})";
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(id.to_string()));
+        params.insert("content".to_string(), Value::String(content.to_string()));
+        params.insert("created_at".to_string(), Value::Number(created_at as f64));
+        conn.execute(q, Some(params))?;
         Ok(())
     }
 
@@ -387,21 +390,15 @@ ORDER BY n_mod".to_string();
             }
         }
 
-        // Bulk write back all ranks using a single UNWIND batch query
-        let mut cases: Vec<String> = Vec::with_capacity(all_ids.len());
+        // Write back all ranks using individual parameterized queries
         for id in &all_ids {
             if let Some(rank) = ranks.get(id) {
-                cases.push(format!("('{}', {})", id.replace('\'', ""), rank));
+                let q = "MATCH (n:CodeNode {id: $id}) SET n.page_rank = $rank";
+                let mut params = HashMap::new();
+                params.insert("id".to_string(), Value::String(id.clone()));
+                params.insert("rank".to_string(), Value::Number(*rank));
+                conn.execute(q, Some(params))?;
             }
-        }
-        if !cases.is_empty() {
-            let batch_update = format!(
-                "UNWIND [{}] AS pair \
-                 MATCH (n:CodeNode {{id: pair[0]}}) \
-                 SET n.page_rank = pair[1]",
-                cases.join(",")
-            );
-            let _ = conn.execute(&batch_update, None);
         }
 
         Ok(())
