@@ -577,10 +577,12 @@ impl Database {
                     entry.stats = table.stats.read().clone();
                 }
             }
-            drop(cat); // Explicitly drop lock before saving
-            self.catalog.force_save().map_err(|e| {
+            // Save while the write lock is still held, so no concurrent writer
+            // can modify the catalog between our update and the save.
+            self.catalog.force_save_with_catalog(&cat).map_err(|e| {
                 LightningError::Internal(format!("Failed to save catalog during checkpoint: {e}"))
             })?;
+            drop(cat);
         }
 
         // Update the last checkpoint timestamp so recovery can skip these entries
