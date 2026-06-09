@@ -304,7 +304,9 @@ impl Table {
             self.flush_buffer(bm, tx)?;
         }
 
-        self.stats.write().cardinality += 1;
+        // Stats are updated in flush_buffer to avoid double-counting.
+        // append_row buffers the row and flush_buffer increments cardinality
+        // for the entire batch when flushed.
         Ok(())
     }
 
