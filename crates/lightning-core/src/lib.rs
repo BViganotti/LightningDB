@@ -821,9 +821,11 @@ impl Connection {
     }
 
     pub fn commit(&self) -> Result<()> {
-        let mut guard = self.transaction.lock();
-        let tx = guard.take()
-            .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
+        let tx = {
+            let mut guard = self.transaction.lock();
+            guard.take()
+                .ok_or_else(|| LightningError::Query("No active transaction".into()))?
+        };
 
         let bm = &self.client_context.database.buffer_manager;
         let db: &Database = &self.client_context.database;
@@ -834,15 +836,12 @@ impl Connection {
             .read()
             .flush_all_pending(bm, &tx)?;
 
-        // Hold the transaction lock during commit to prevent another thread
-        // from starting a new transaction or calling execute on a stale tx.
-        // Only release after the commit record is written to the WAL.
-        let result = self.client_context
+        // Transaction lock is released before I/O-heavy commit.
+        // Other threads can now start new transactions on this connection.
+        self.client_context
             .database
             .transaction_manager
-            .commit(&tx, bm, db);
-        drop(guard);
-        result
+            .commit(&tx, bm, db)
     }
 
     pub fn fast_insert(&self, table_name: &str, rows: Vec<Vec<(String, Value)>>) -> Result<usize> {
