@@ -692,7 +692,13 @@ impl LogicalPlanner {
                                         &item.expression
                                     {
                                         let func = match name.to_uppercase().as_str() {
-                                            "COUNT" => AggregateFunction::Count,
+                                            "COUNT" => {
+                                                if args.is_empty() {
+                                                    AggregateFunction::CountStar
+                                                } else {
+                                                    AggregateFunction::Count
+                                                }
+                                            }
                                             "COUNT_DISTINCT" => AggregateFunction::CountDistinct,
                                             "SUM" => AggregateFunction::Sum,
                                             "MIN" => AggregateFunction::Min,
@@ -717,17 +723,10 @@ impl LogicalPlanner {
                                         };
 
                                         let input_idx = if args.is_empty() {
-                                            // COUNT(*) — always add a dummy non-null literal.
-                                            // Without this, input_idx=0 would point to the first
-                                            // GROUP BY column, causing COUNT to count non-null
-                                            // GROUP BY values instead of all rows.
-                                            aggregate_arg_exprs.push(BoundProjectionItem {
-                                                expression: BoundExpression::Literal(
-                                                    crate::parser::ast::Literal::Number(1.0),
-                                                ),
-                                                alias: "_dummy".to_string(),
-                                            });
-                                            group_by_exprs.len() + aggregate_arg_exprs.len() - 1
+                                            // COUNT(*) — no input column needed, use CountStar
+                                            // which just counts rows without materializing values.
+                                            // Set input_idx to 0 (unused by CountStar).
+                                            0
                                         } else {
                                             let arg_expr = args[0].clone();
                                             let idx =

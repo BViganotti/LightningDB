@@ -146,7 +146,7 @@ fn extract_join_keys(
 
 ---
 
-### [ ] 0.4 Fix MERGE Discarding Child Plan
+### [X] 0.4 Fix MERGE Discarding Child Plan
 
 **File:** `crates/lightning-core/src/processor/physical_plan.rs:579`
 **Risk:** Silent correctness bug — MERGE queries with preceding MATCH/WITH don't have access to variables from those clauses.

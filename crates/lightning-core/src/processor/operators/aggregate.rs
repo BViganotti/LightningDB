@@ -3,7 +3,7 @@ use crate::processor::functions::aggregate_ext::{
     CollectDistinct, GroupConcat, Median, StdDevPop, StdDevSamp, VarPop, VarSamp,
 };
 use crate::processor::functions::aggregate_function::{
-    AggregateFunction as IAggregateFunction, Avg, Collect, Count, CountDistinct, Max, Min, Sum,
+    AggregateFunction as IAggregateFunction, Avg, Collect, Count, CountDistinct, CountStar, Max, Min, Sum,
 };
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
@@ -60,6 +60,7 @@ impl Aggregate {
             .iter()
             .map(|(t, _)| match t {
                 AggregateFunction::Count => Box::new(Count::new()) as Box<dyn IAggregateFunction>,
+                AggregateFunction::CountStar => Box::new(CountStar::new()) as Box<dyn IAggregateFunction>,
                 AggregateFunction::CountDistinct => {
                     Box::new(CountDistinct::new()) as Box<dyn IAggregateFunction>
                 }
