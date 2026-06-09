@@ -645,9 +645,10 @@ impl Database {
             self.storage_manager.write().rebuild_csr_if_stale(table_name, bm, &tx)?;
         }
 
-        if let Err(e) = self.transaction_manager.rollback(self, &tx) {
-            tracing::warn!("VACUUM transaction rollback failed: {}", e);
-        }
+        // Rollback the read transaction used for optimization.
+        // If rollback fails, the database state is inconsistent — do NOT proceed
+        // to checkpoint as that would persist the inconsistency.
+        self.transaction_manager.rollback(self, &tx)?;
 
         // Force a checkpoint to persist the optimized state
         self.checkpoint()?;
