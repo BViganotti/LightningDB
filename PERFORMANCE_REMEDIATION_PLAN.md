@@ -123,7 +123,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: For each of up to 100 iterations and each node (10K+), a separate Cypher query is issued: `MATCH (n:CodeNode {id:'...'})-[r]->(t) RETURN t.id`. For 10K nodes × 100 iterations = 1M queries. Each query goes through the full parse→bind→plan→execute pipeline.
 
-- [ ] **3.1.1** `[P1]` Load the entire adjacency graph into memory once (scan all edges), compute PageRank locally in Rust, write back final ranks in bulk. Memory for 1M edges = ~16MB — acceptable.
+- [X] **3.1.1** `[P1]` Load the entire adjacency graph into memory once (scan all edges), compute PageRank locally in Rust, write back final ranks in bulk. Memory for 1M edges = ~16MB — acceptable.
 
 **Impact**: Fusion PageRank on a 10K-node graph takes 50-200 seconds. Feature is unusable at any real scale.
 
