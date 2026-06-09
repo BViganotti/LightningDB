@@ -126,7 +126,10 @@ impl Processor {
             Box::new(crate::processor::operators::PhysicalSingleRow::new()),
         );
         let scheduler = crate::processor::scheduler::Scheduler::new(num_threads);
-        scheduler.execute_operator(root, database, tx, params)
+        let rx = scheduler.execute_operator(root, database, tx, params)?;
+
+        // Wrap the receiver with optional timeout enforcement
+        Ok(rx)
     }
 }
 

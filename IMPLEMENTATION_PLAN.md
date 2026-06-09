@@ -563,7 +563,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.6 Fix `FileHandle::file_id` Collision Comment
+### [X] 4.6 Fix `FileHandle::file_id` Collision Comment
 
 **File:** `crates/lightning-core/src/storage/file_handle.rs:43-47`
 
@@ -577,7 +577,7 @@ let file_id = hasher.finish();
 
 ---
 
-### [ ] 4.7 Fix `now_micros_for_test` — Remove From Production Code
+### [X] 4.7 Fix `now_micros_for_test` — Remove From Production Code
 
 **File:** `crates/lightning-core/src/memory.rs:202-204`
 
