@@ -33,35 +33,33 @@ impl PhysicalOperator for PhysicalLimit {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
-        loop {
-            let current = self.shared.count.load(Ordering::SeqCst);
-            if current >= self.shared.limit {
-                return Ok(None);
-            }
+        let current = self.shared.count.load(Ordering::SeqCst);
+        if current >= self.shared.limit {
+            return Ok(None);
+        }
 
-            match self.child.get_next(database, tx, params)? {
-                Some(chunk) => {
-                    let batch = &chunk.batch;
-                    let num_rows = batch.num_rows();
+        match self.child.get_next(database, tx, params)? {
+            Some(chunk) => {
+                let batch = &chunk.batch;
+                let num_rows = batch.num_rows();
 
-                    let old_count = self.shared.count.fetch_add(num_rows, Ordering::SeqCst);
+                let old_count = self.shared.count.fetch_add(num_rows, Ordering::SeqCst);
 
-                    if old_count >= self.shared.limit {
-                        return Ok(None);
-                    }
-
-                    if old_count + num_rows <= self.shared.limit {
-                        return Ok(Some(chunk));
-                    } else {
-                        let take = self.shared.limit - old_count;
-                        let sliced_batch = batch.slice(0, take);
-                        return Ok(Some(DataChunk {
-                            batch: sliced_batch,
-                        }));
-                    }
+                if old_count >= self.shared.limit {
+                    return Ok(None);
                 }
-                None => return Ok(None),
+
+                if old_count + num_rows <= self.shared.limit {
+                    Ok(Some(chunk))
+                } else {
+                    let take = self.shared.limit - old_count;
+                    let sliced_batch = batch.slice(0, take);
+                    Ok(Some(DataChunk {
+                        batch: sliced_batch,
+                    }))
+                }
             }
+            None => Ok(None),
         }
     }
 

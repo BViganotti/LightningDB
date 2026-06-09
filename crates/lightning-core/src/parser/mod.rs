@@ -117,13 +117,8 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
     let mut skp = None;
     let mut lmt = None;
 
-    // Single uppercase computation, track how many chars we remove to adjust positions
-    let upper = result.to_uppercase();
-
-    let mut remove_count = 0usize;
-    let adjust = |pos: usize, removed: usize| -> usize { pos - removed };
-
     // Extract ORDER BY
+    let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
@@ -143,19 +138,13 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
                 }
             };
             ord = Some(order_rest[..end].trim().to_string());
-            let removed_len = 9 + end; // "ORDER BY " + expression
+            let removed_len = 9 + end;
             result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
-            remove_count += removed_len;
         }
     }
 
-    // Extract SKIP using same uppercase, adjusting RETURN position
-    let return_end = match upper.find("RETURN ") {
-        Some(p) => p + 7,
-        None => return (result.trim().to_string(), ord, skp, lmt),
-    };
-    let adj_return = adjust(return_end, remove_count);
-    let adj_upper = &upper[..upper.len().saturating_sub(remove_count)];
+    // Recalculate upper after result mutation so byte indices stay in sync
+    let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
@@ -169,19 +158,18 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
                 skp = Some(v);
             }
             result = format!("{}{}", &result[..skip_pos], &result[skip_val_start + end..]);
-            remove_count += 6 + end;
         }
     }
 
-    // Extract LIMIT using same uppercase
+    // Recalculate upper after SKIP removal
+    let upper = result.to_uppercase();
     if let Some(p) = upper.find("RETURN ") {
         let after_return = p + 7;
         let after_upper = &upper[after_return..];
         if let Some(pos) = after_upper.find(" LIMIT ") {
             let limit_pos = after_return + pos;
-            let limit_val_start = limit_pos + 7; // after "LIMIT "
+            let limit_val_start = limit_pos + 7;
             let limit_rest = &result[limit_val_start..];
-            // Find end of LIMIT value
             let mut end = 0;
             for (i, c) in limit_rest.chars().enumerate() {
                 if !c.is_numeric() && !c.is_whitespace() {
@@ -192,7 +180,6 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
             if let Ok(v) = limit_rest[..end].trim().parse::<f64>() {
                 lmt = Some(v);
             }
-            // Remove only "LIMIT <val>" part
             result = format!(
                 "{}{}",
                 &result[..limit_pos],

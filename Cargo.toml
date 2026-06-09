@@ -5,6 +5,7 @@ members = [
     "crates/lightning-arrow",
     "crates/lightning-node",
     "crates/lightning",
+    "crates/lightning-server",
 ]
 resolver = "2"
 
