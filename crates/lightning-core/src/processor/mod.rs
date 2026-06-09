@@ -5,6 +5,7 @@ pub mod functions;
 pub mod operators;
 pub mod physical_plan;
 pub mod scheduler;
+mod timeout;
 
 pub use operators::*;
 
@@ -94,7 +95,19 @@ impl Processor {
         tx: Arc<crate::transaction::transaction_manager::Transaction>,
         params: Option<std::collections::HashMap<String, Value>>,
     ) -> Result<Vec<DataChunk>> {
-        let rx = self.execute_stream(database, tx, params)?;
+        self.execute_with_timeout(database, tx, params, 0)
+    }
+
+    /// Execute with an optional timeout in milliseconds.
+    /// When `timeout_ms > 0`, the query is cancelled if it exceeds the limit.
+    pub fn execute_with_timeout(
+        &mut self,
+        database: Arc<crate::Database>,
+        tx: Arc<crate::transaction::transaction_manager::Transaction>,
+        params: Option<std::collections::HashMap<String, Value>>,
+        timeout_ms: u64,
+    ) -> Result<Vec<DataChunk>> {
+        let rx = self.execute_stream_with_timeout(database, tx, params, timeout_ms)?;
         let mut results = Vec::new();
         while let Ok(res) = rx.recv() {
             let chunk = res?;
@@ -109,11 +122,17 @@ impl Processor {
     ///
     /// The receiver yields `Result<DataChunk>`. When the query is complete,
     /// the channel is closed and `recv()` will return `Err(RecvError)`.
-    pub fn execute_stream(
+    ///
+    /// If `timeout_ms` > 0, the query is cancelled after the specified
+    /// number of milliseconds by dropping the database handles and closing
+    /// the channel. In-flight operator calls will fail on their next
+    /// database access.
+    pub fn execute_stream_with_timeout(
         &mut self,
         database: Arc<crate::Database>,
         tx: Arc<crate::transaction::transaction_manager::Transaction>,
         params: Option<std::collections::HashMap<String, Value>>,
+        timeout_ms: u64,
     ) -> Result<Receiver<Result<DataChunk>>> {
         let num_threads = if database._config.max_num_threads == 0 {
             num_cpus::get()
@@ -128,8 +147,26 @@ impl Processor {
         let scheduler = crate::processor::scheduler::Scheduler::new(num_threads);
         let rx = scheduler.execute_operator(root, database, tx, params)?;
 
-        // Wrap the receiver with optional timeout enforcement
-        Ok(rx)
+        if timeout_ms > 0 {
+            Ok(crate::processor::timeout::TimeoutReceiver::new(rx, timeout_ms))
+        } else {
+            Ok(rx)
+        }
+    }
+
+    /// Execute the query and return a channel receiver that yields chunks
+    /// as they are produced. This enables streaming processing of large
+    /// result sets without buffering everything in memory.
+    ///
+    /// The receiver yields `Result<DataChunk>`. When the query is complete,
+    /// the channel is closed and `recv()` will return `Err(RecvError)`.
+    pub fn execute_stream(
+        &mut self,
+        database: Arc<crate::Database>,
+        tx: Arc<crate::transaction::transaction_manager::Transaction>,
+        params: Option<std::collections::HashMap<String, Value>>,
+    ) -> Result<Receiver<Result<DataChunk>>> {
+        self.execute_stream_with_timeout(database, tx, params, 0)
     }
 }
 

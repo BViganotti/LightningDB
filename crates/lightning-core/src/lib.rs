@@ -1233,10 +1233,12 @@ impl Connection {
             None,
         )?;
         let mut processor = Processor::new(physical_plan);
-        let chunks = processor.execute(
+        let timeout_ms = self.client_context.query_timeout_ms;
+        let chunks = processor.execute_with_timeout(
             Arc::clone(&self.client_context.database),
             Arc::clone(&tx),
             params,
+            timeout_ms,
         )?;
 
         if is_autocommit {
@@ -1288,10 +1290,12 @@ impl Connection {
 
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, explicit_tx)?;
         let mut processor = Processor::new(physical_plan);
-        let chunks = processor.execute(
+        let timeout_ms = self.client_context.query_timeout_ms;
+        let chunks = processor.execute_with_timeout(
             Arc::clone(&self.client_context.database),
             Arc::clone(&tx),
             params,
+            timeout_ms,
         )?;
 
         if is_autocommit {
