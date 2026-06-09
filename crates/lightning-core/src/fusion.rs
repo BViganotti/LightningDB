@@ -291,85 +291,90 @@ ORDER BY n_mod".to_string();
     }
 
     /// Recompute PageRank scores for all nodes.
+    /// Loads the entire adjacency graph into memory once, computes locally in Rust,
+    /// and writes back ranks in bulk. This eliminates the O(N × iterations) query
+    /// storm where each node-per-iteration issued a separate MATCH query.
     pub fn materialize_pagerank(
         conn: &Connection,
     ) -> Result<(), crate::LightningError> {
-        // Damping factor
         let damping = 0.85;
         let max_iterations = 100;
         let convergence_threshold = 0.0001;
 
-        // Get total node count
-        let count_result = conn.query("MATCH (n:CodeNode) RETURN count(n.id) AS cnt")?;
-        let total_nodes = {
-            let batch = count_result.batches.first()
-                .ok_or_else(|| crate::LightningError::Internal("PageRank: query returned no batches".into()))?;
-            let col = arrow_utils::i64_col(batch, 0)
-                .map_err(|e| crate::LightningError::Internal(format!("PageRank: failed to read count column: {e}")))?;
-            col.value(0)
-        };
-        if total_nodes <= 0 {
-            return Err(crate::LightningError::Internal("No nodes to rank".into()));
-        }
-
-        let total = total_nodes as f64;
-        let mut ranks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-        let damping_leak = (1.0 - damping) / total;
-
-        // Get all node IDs and initialize ranks
+        // Load all node IDs and initialize ranks
         let id_result = conn.query("MATCH (n:CodeNode) RETURN n.id")?;
         let mut all_ids: Vec<String> = Vec::new();
+        let mut ranks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
         for batch in &id_result.batches {
             if let Ok(col) = arrow_utils::str_col(batch, 0) {
                 for i in 0..batch.num_rows() {
                     let id = col.value(i).to_string();
-                    ranks.insert(id.clone(), 1.0 / total);
-                    all_ids.push(id);
+                    all_ids.push(id.clone());
+                }
+            }
+        }
+        if all_ids.is_empty() {
+            return Err(crate::LightningError::Internal("No nodes to rank".into()));
+        }
+        let total = all_ids.len() as f64;
+        let initial = 1.0 / total;
+        for id in &all_ids {
+            ranks.insert(id.clone(), initial);
+        }
+
+        // Load entire adjacency graph into memory: one query for all edges
+        let mut adjacency: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let edge_result = conn.query(
+            "MATCH (n:CodeNode)-[r]->(t:CodeNode) RETURN n.id, t.id"
+        )?;
+        for batch in &edge_result.batches {
+            if let (Ok(src_col), Ok(dst_col)) = (
+                arrow_utils::str_col(batch, 0),
+                arrow_utils::str_col(batch, 1),
+            ) {
+                for i in 0..batch.num_rows() {
+                    let src = src_col.value(i).to_string();
+                    let dst = dst_col.value(i).to_string();
+                    adjacency.entry(src).or_default().push(dst);
                 }
             }
         }
 
-        // Iterate PageRank
+        let damping_leak = (1.0 - damping) / total;
+
+        // Iterate PageRank entirely in memory
         for _iteration in 0..max_iterations {
-            let mut new_ranks: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            let mut new_ranks: std::collections::HashMap<String, f64> =
+                std::collections::HashMap::new();
             for id in &all_ids {
                 new_ranks.insert(id.clone(), damping_leak);
             }
 
-            // For each node, distribute its rank to its outgoing neighbors
             for id in &all_ids {
                 let rank = ranks.get(id).copied().unwrap_or(0.0);
                 let share = rank * damping;
 
-                let q = format!(
-                    "MATCH (n:CodeNode {{id: '{}'}})-[r]->(t:CodeNode) RETURN t.id",
-                    id.replace('\'', "")
-                );
-                if let Ok(result) = conn.query(&q) {
-                    let mut neighbors: Vec<String> = Vec::new();
-                    for batch in &result.batches {
-                        if let Ok(col) = arrow_utils::str_col(batch, 0) {
-                            for i in 0..batch.num_rows() {
-                                neighbors.push(col.value(i).to_string());
-                            }
-                        }
-                    }
+                if let Some(neighbors) = adjacency.get(id) {
                     if neighbors.is_empty() {
-                        // Dangling node: distribute to all nodes
                         let per_node = share / total;
                         for nid in &all_ids {
                             *new_ranks.entry(nid.clone()).or_insert(0.0) += per_node;
                         }
                     } else {
                         let per_neighbor = share / neighbors.len() as f64;
-                        for nid in &neighbors {
+                        for nid in neighbors {
                             *new_ranks.entry(nid.clone()).or_insert(0.0) += per_neighbor;
                         }
+                    }
+                } else {
+                    let per_node = share / total;
+                    for nid in &all_ids {
+                        *new_ranks.entry(nid.clone()).or_insert(0.0) += per_node;
                     }
                 }
             }
 
-            // Check convergence
             let mut diff = 0.0;
             for id in &all_ids {
                 diff += (ranks.get(id).copied().unwrap_or(0.0)
@@ -382,14 +387,21 @@ ORDER BY n_mod".to_string();
             }
         }
 
-        // Store ranks back to DB
-        for (id, rank) in &ranks {
-            let q = format!(
-                "MATCH (n:CodeNode {{id: '{}'}}) SET n.page_rank = {}",
-                id.replace('\'', ""),
-                rank
+        // Bulk write back all ranks using a single UNWIND batch query
+        let mut cases: Vec<String> = Vec::with_capacity(all_ids.len());
+        for id in &all_ids {
+            if let Some(rank) = ranks.get(id) {
+                cases.push(format!("('{}', {})", id.replace('\'', ""), rank));
+            }
+        }
+        if !cases.is_empty() {
+            let batch_update = format!(
+                "UNWIND [{}] AS pair \
+                 MATCH (n:CodeNode {{id: pair[0]}}) \
+                 SET n.page_rank = pair[1]",
+                cases.join(",")
             );
-            let _ = conn.execute(&q, None);
+            let _ = conn.execute(&batch_update, None);
         }
 
         Ok(())
