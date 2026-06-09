@@ -20,6 +20,90 @@ pub struct SharedDMLState {
     pub final_result: RwLock<Option<RecordBatch>>,
 }
 
+/// Check that a relationship's source and target nodes exist (foreign key enforcement).
+/// Called before CREATE REL to prevent dangling references.
+fn check_foreign_keys(
+    database: &crate::Database,
+    rel_table_name: &str,
+    src_val: &Value,
+    dst_val: &Value,
+) -> Result<()> {
+    let cat = database.catalog.read();
+    let rel_entry = match cat.rel_tables.get(rel_table_name) {
+        Some(e) => e.clone(),
+        None => return Ok(()),
+    };
+    drop(cat);
+
+    let from_table = rel_entry.from_table;
+    let to_table = rel_entry.to_table;
+
+    // Check source node exists
+    let src_id = match src_val {
+        Value::Node(id) => *id,
+        _ => return Err(LightningError::Query(format!(
+            "Foreign key violation: invalid source node value in relationship '{}'", rel_table_name
+        ))),
+    };
+
+    let storage = database.storage_manager.read();
+    let src_table = match storage.node_tables.get(&from_table) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    // Read _id column to verify source node exists
+    let bm = &database.buffer_manager;
+    let tx = database.transaction_manager.begin(true)?;
+    let src_exists = if src_table.columns.len() >= 1 {
+        let col = &src_table.columns[0]; // _id column
+        let val = col.get_value(bm, src_id, &tx).unwrap_or(Value::Null);
+        !matches!(val, Value::Null)
+    } else {
+        false
+    };
+    let _ = database.transaction_manager.rollback(&database, &tx);
+
+    if !src_exists {
+        return Err(LightningError::Query(format!(
+            "Foreign key violation: source node {} does not exist in table '{}'",
+            src_id, from_table
+        )));
+    }
+
+    // Check destination node exists
+    let dst_id = match dst_val {
+        Value::Node(id) => *id,
+        _ => return Err(LightningError::Query(format!(
+            "Foreign key violation: invalid destination node value in relationship '{}'", rel_table_name
+        ))),
+    };
+
+    let dst_table = match storage.node_tables.get(&to_table) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    let tx = database.transaction_manager.begin(true)?;
+    let dst_exists = if dst_table.columns.len() >= 1 {
+        let col = &dst_table.columns[0]; // _id column
+        let val = col.get_value(bm, dst_id, &tx).unwrap_or(Value::Null);
+        !matches!(val, Value::Null)
+    } else {
+        false
+    };
+    let _ = database.transaction_manager.rollback(&database, &tx);
+
+    if !dst_exists {
+        return Err(LightningError::Query(format!(
+            "Foreign key violation: destination node {} does not exist in table '{}'",
+            dst_id, to_table
+        )));
+    }
+
+    Ok(())
+}
+
 /// Check UNIQUE constraints for a set of row values before insert/update.
 /// Returns an error if any UNIQUE constraint would be violated.
 fn check_unique_constraints(
@@ -830,6 +914,9 @@ impl PhysicalOperator for PhysicalCreateRel {
                             Value::Node(id) => id,
                             _ => continue,
                         };
+
+                        // Foreign key check: verify source and destination nodes exist
+                        check_foreign_keys(database, &self.table_name, &src_val, &dst_val)?;
 
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
                     if row_data.len() >= 2 {

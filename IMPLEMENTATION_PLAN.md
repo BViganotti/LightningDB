@@ -436,7 +436,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.6 Add UNIQUE Constraint Enforcement
+### [X] 3.6 Add UNIQUE Constraint Enforcement
 
 **Issue:** No UNIQUE constraint support beyond PRIMARY KEY.
 
