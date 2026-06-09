@@ -359,7 +359,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.1 Add Query Timeout Enforcement
+### [X] 3.1 Add Query Timeout Enforcement
 
 **File:** `crates/lightning-core/src/lib.rs:741` (`ClientContext.query_timeout_ms`)
 
@@ -373,7 +373,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.2 Add Memory Quota Enforcement
+### [X] 3.2 Add Memory Quota Enforcement
 
 **File:** `crates/lightning-core/src/lib.rs:742` (`ClientContext.memory_quota`)
 
@@ -483,7 +483,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.10 Add Data Type Support
+### [X] 3.10 Add Data Type Support
 
 **Issue:** Missing common types: DECIMAL, TEXT (unlimited), BLOB, UUID, JSON, INET, CIDR.
 
@@ -495,7 +495,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.11 Add OFFSET/LIMIT with Cursor-Based Pagination
+### [X] 3.11 Add OFFSET/LIMIT with Cursor-Based Pagination
 
 **Issue:** OFFSET/LIMIT is O(n) — it must scan and skip all preceding rows.
 
@@ -506,7 +506,7 @@ h.hash(state);
 
 ---
 
-### [ ] 3.12 Add Backup/Restore API
+### [X] 3.12 Add Backup/Restore API
 
 **Issue:** No built-in backup — requires manual file copy which may be inconsistent.
 

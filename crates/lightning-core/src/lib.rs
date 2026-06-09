@@ -231,6 +231,46 @@ impl DatabaseMetrics {
         let total_us = self.checkpoint_duration_us.load(Ordering::Relaxed);
         (total_us / count) as f64 / 1000.0
     }
+
+    /// Export all metrics in Prometheus exposition format.
+    /// This allows any HTTP endpoint or collector to serve /metrics.
+    pub fn metrics_text(&self) -> String {
+        let mut out = String::new();
+        out.push_str("# HELP lightning_queries_total Total queries executed\n");
+        out.push_str("# TYPE lightning_queries_total counter\n");
+        out.push_str(&format!("lightning_queries_total {}\n", self.total_queries.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP lightning_checkpoints_total Total checkpoints performed\n");
+        out.push_str("# TYPE lightning_checkpoints_total counter\n");
+        out.push_str(&format!("lightning_checkpoints_total {}\n", self.total_checkpoints.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP lightning_checkpoint_duration_ms Cumulative checkpoint duration in milliseconds\n");
+        out.push_str("# TYPE lightning_checkpoint_duration_ms counter\n");
+        out.push_str(&format!("lightning_checkpoint_duration_ms {}\n", self.checkpoint_duration_us.load(Ordering::Relaxed) / 1000));
+
+        out.push_str("# HELP lightning_wal_bytes_written Total bytes written to WAL\n");
+        out.push_str("# TYPE lightning_wal_bytes_written counter\n");
+        out.push_str(&format!("lightning_wal_bytes_written {}\n", self.wal_bytes_written.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP lightning_wal_fsync_count Total WAL fsync calls\n");
+        out.push_str("# TYPE lightning_wal_fsync_count counter\n");
+        out.push_str(&format!("lightning_wal_fsync_count {}\n", self.wal_fsync_count.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP lightning_buffer_evictions_total Total buffer page evictions\n");
+        out.push_str("# TYPE lightning_buffer_evictions_total counter\n");
+        out.push_str(&format!("lightning_buffer_evictions_total {}\n", self.eviction_count.load(Ordering::Relaxed)));
+
+        out.push_str("# HELP lightning_buffer_hit_ratio Buffer pool hit ratio (0..1)\n");
+        out.push_str("# TYPE lightning_buffer_hit_ratio gauge\n");
+        out.push_str(&format!("lightning_buffer_hit_ratio {}\n", self.buffer_hit_rate()));
+
+        out.push_str("# HELP lightning_buffer_accesses_total Total buffer accesses (hits + misses)\n");
+        out.push_str("# TYPE lightning_buffer_accesses_total counter\n");
+        let total_accesses = self.buffer_hit_count.load(Ordering::Relaxed) + self.buffer_miss_count.load(Ordering::Relaxed);
+        out.push_str(&format!("lightning_buffer_accesses_total {}\n", total_accesses));
+
+        out
+    }
 }
 
 pub struct Database {
@@ -619,6 +659,12 @@ impl Database {
 
         self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
         Ok(())
+    }
+
+    /// Return the current metrics in Prometheus exposition format.
+    /// Useful for exposing /metrics endpoints.
+    pub fn metrics_text(&self) -> String {
+        self.metrics.metrics_text()
     }
 
     pub fn is_column_indexed(&self, table_name: &str, col_name: &str) -> bool {
