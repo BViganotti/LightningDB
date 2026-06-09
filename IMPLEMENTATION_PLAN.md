@@ -225,7 +225,6 @@ Note: `wasmi` doesn't support interruption natively. Thread-based timeout is the
 ### [X] 1.7 Fix Catalog Save After WAL Truncation Ordering
 ### [X] 1.8 Fix DETACH DELETE Full Rel Table Scan
 ### [X] 1.9 Fix Prefetch I/O Under Write Lock
-### [ ] 1.10 Fix `create_new_version` Unsafe `Frame.data` Read Without Pin Guarantee
 
 ## TIER 2: MEDIUM PRIORITY (Performance + Quality)
 
@@ -245,7 +244,7 @@ Change to `tracing::debug!()` or remove entirely.
 
 ---
 
-### [ ] 2.10 Fix `ensure_csr_fresh` / `rebuild_csr_if_stale` Duplication
+### [X] 2.10 Fix `ensure_csr_fresh` / `rebuild_csr_if_stale` Duplication
 
 **File:** `crates/lightning-core/src/storage/storage_manager.rs:976-1020`
 **Risk:** Code duplication — two identical methods.
