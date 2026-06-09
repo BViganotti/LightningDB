@@ -67,7 +67,7 @@ impl FunctionRegistry {
                 )
             }),
         );
-        // Define UPPER
+        // Define UPPER — vectorized via direct buffer access
         scalar_functions.insert(
             "UPPER".to_string(),
             ScalarFunction::new(
@@ -86,16 +86,38 @@ impl FunctionRegistry {
                                 "UPPER expects a String argument".into(),
                             )
                         })?;
-                    let result: arrow::array::StringArray = string_array
-                        .iter()
-                        .map(|opt_str| opt_str.map(|s| s.to_uppercase()))
-                        .collect();
+                    // Direct buffer iteration avoids per-element builder overhead
+                    let offsets = string_array.value_offsets();
+                    let values = string_array.value_data();
+                    let mut out_values = Vec::<u8>::with_capacity(values.len());
+                    let mut out_offsets = Vec::<i32>::with_capacity(offsets.len());
+                    out_offsets.push(0);
+                    for i in 0..string_array.len() {
+                        if string_array.is_null(i) {
+                            out_offsets.push(out_offsets.last().copied().unwrap_or(0));
+                            continue;
+                        }
+                        let start = offsets[i] as usize;
+                        let end = offsets[i + 1] as usize;
+                        let s = &values[start..end];
+                        for &b in s {
+                            out_values.push(b.to_ascii_uppercase());
+                        }
+                        out_offsets.push(out_values.len() as i32);
+                    }
+                    let result = unsafe {
+                        arrow::array::StringArray::new_unchecked(
+                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(out_offsets)),
+                            out_values.into(),
+                            None,
+                        )
+                    };
                     Ok(Arc::new(result))
                 }),
             ),
         );
 
-        // Define LOWER
+        // Define LOWER — vectorized via direct buffer access
         scalar_functions.insert(
             "LOWER".to_string(),
             ScalarFunction::new(
@@ -114,10 +136,31 @@ impl FunctionRegistry {
                                 "LOWER expects a String argument".into(),
                             )
                         })?;
-                    let result: arrow::array::StringArray = string_array
-                        .iter()
-                        .map(|opt_str| opt_str.map(|s| s.to_lowercase()))
-                        .collect();
+                    let offsets = string_array.value_offsets();
+                    let values = string_array.value_data();
+                    let mut out_values = Vec::<u8>::with_capacity(values.len());
+                    let mut out_offsets = Vec::<i32>::with_capacity(offsets.len());
+                    out_offsets.push(0);
+                    for i in 0..string_array.len() {
+                        if string_array.is_null(i) {
+                            out_offsets.push(out_offsets.last().copied().unwrap_or(0));
+                            continue;
+                        }
+                        let start = offsets[i] as usize;
+                        let end = offsets[i + 1] as usize;
+                        let s = &values[start..end];
+                        for &b in s {
+                            out_values.push(b.to_ascii_lowercase());
+                        }
+                        out_offsets.push(out_values.len() as i32);
+                    }
+                    let result = unsafe {
+                        arrow::array::StringArray::new_unchecked(
+                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(out_offsets)),
+                            out_values.into(),
+                            None,
+                        )
+                    };
                     Ok(Arc::new(result))
                 }),
             ),
