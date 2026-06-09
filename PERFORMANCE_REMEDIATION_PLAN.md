@@ -153,7 +153,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: The WAL uses a single `Mutex<File>` for all write operations. Every concurrent writer serializes through this Mutex. Under 8+ concurrent writers, throughput collapses to single-threaded WAL write speed (~50-100 MB/s regardless of core count).
 
-- [ ] **4.1.1** `[P1]` Implement group commit. Batch pending page updates from all threads, write them as a single I/O. Use a leader-follower pattern: one thread collects pending writes, issues a single `writev`, signals completion.
+- [X] **4.1.1** `[P1]` Implement group commit. Batch pending page updates from all threads, write them as a single I/O. Use a leader-follower pattern: one thread collects pending writes, issues a single `writev`, signals completion.
 - [ ] **4.1.2** `[P2]` Alternative: segment the WAL into multiple files with round-robin assignment per transaction.
 
 **Impact**: 8× throughput degradation under concurrent writes vs group commit.
