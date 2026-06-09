@@ -333,11 +333,15 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 primary_key,
                 if_not_exists,
             } => {
-                if *if_not_exists {
-                    let catalog = database.catalog.read();
-                    if catalog.get_node_table(name).is_some() {
+                // Check for existing table
+                let catalog_exists = database.catalog.read().get_node_table(name).is_some();
+                if catalog_exists {
+                    if *if_not_exists {
                         return Ok(None);
                     }
+                    return Err(crate::LightningError::Database(format!(
+                        "Table '{}' already exists", name
+                    )));
                 }
                 // 1. Update Catalog
                 let mut catalog = database.catalog.write();
@@ -369,11 +373,14 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 columns,
                 if_not_exists,
             } => {
-                if *if_not_exists {
-                    let catalog = database.catalog.read();
-                    if catalog.get_rel_table(name).is_some() {
+                let catalog_exists = database.catalog.read().get_rel_table(name).is_some();
+                if catalog_exists {
+                    if *if_not_exists {
                         return Ok(None);
                     }
+                    return Err(crate::LightningError::Database(format!(
+                        "Table '{}' already exists", name
+                    )));
                 }
                 // 1. Update Catalog
                 let mut catalog = database.catalog.write();
