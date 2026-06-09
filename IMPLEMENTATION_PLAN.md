@@ -224,7 +224,7 @@ Note: `wasmi` doesn't support interruption natively. Thread-based timeout is the
 ### [X] 1.6 CREATE REL TABLE Ignores `if_not_exists`
 ### [X] 1.7 Fix Catalog Save After WAL Truncation Ordering
 ### [X] 1.8 Fix DETACH DELETE Full Rel Table Scan
-### [ ] 1.9 Fix Prefetch I/O Under Write Lock
+### [X] 1.9 Fix Prefetch I/O Under Write Lock
 ### [ ] 1.10 Fix `create_new_version` Unsafe `Frame.data` Read Without Pin Guarantee
 
 ## TIER 2: MEDIUM PRIORITY (Performance + Quality)
