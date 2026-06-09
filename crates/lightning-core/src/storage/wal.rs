@@ -27,6 +27,18 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use crc::{Algorithm, Crc, Digest};
+
+const CRC32C: Crc<u32> = Crc::<u32>::new(&Algorithm {
+    width: 32,
+    poly: 0x1EDC6F41,
+    init: 0xFFFFFFFF,
+    refin: true,
+    refout: true,
+    xorout: 0xFFFFFFFF,
+    check: 0xE3069283,
+    residue: 0xB798B438,
+});
 
 const WAL_MAGIC: [u8; 4] = *b"LNIW";
 const WAL_VERSION: u8 = 0x01;
@@ -163,13 +175,13 @@ impl WAL {
     ) -> Result<()> {
         let mut file = self.file.lock();
 
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&[RECORD_TYPE_PAGE_UPDATE]);
-        hasher.update(&tx_id.to_le_bytes());
-        hasher.update(&file_id.to_le_bytes());
-        hasher.update(&page_idx.to_le_bytes());
-        hasher.update(data);
-        let checksum = hasher.finalize();
+        let mut digest = CRC32C.digest();
+        digest.update(&[RECORD_TYPE_PAGE_UPDATE]);
+        digest.update(&tx_id.to_le_bytes());
+        digest.update(&file_id.to_le_bytes());
+        digest.update(&page_idx.to_le_bytes());
+        digest.update(data);
+        let checksum = digest.finalize();
 
         file.write_all(&[RECORD_TYPE_PAGE_UPDATE])?;
         file.write_all(&checksum.to_le_bytes())?;
@@ -186,10 +198,10 @@ impl WAL {
     pub fn log_commit(&self, tx_id: u64) -> Result<()> {
         let mut file = self.file.lock();
 
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&[RECORD_TYPE_COMMIT]);
-        hasher.update(&tx_id.to_le_bytes());
-        let checksum = hasher.finalize();
+        let mut digest = CRC32C.digest();
+        digest.update(&[RECORD_TYPE_COMMIT]);
+        digest.update(&tx_id.to_le_bytes());
+        let checksum = digest.finalize();
 
         file.write_all(&[RECORD_TYPE_COMMIT])?;
         file.write_all(&checksum.to_le_bytes())?;
@@ -257,13 +269,13 @@ impl WAL {
                         break;
                     }
 
-                    let mut hasher = crc32fast::Hasher::new();
-                    hasher.update(&[RECORD_TYPE_PAGE_UPDATE]);
-                    hasher.update(&tx_id_bytes);
-                    hasher.update(&file_id_bytes);
-                    hasher.update(&page_idx_bytes);
-                    hasher.update(&data);
-                    if hasher.finalize() != stored_crc {
+                    let mut digest = CRC32C.digest();
+                    digest.update(&[RECORD_TYPE_PAGE_UPDATE]);
+                    digest.update(&tx_id_bytes);
+                    digest.update(&file_id_bytes);
+                    digest.update(&page_idx_bytes);
+                    digest.update(&data);
+                    if digest.finalize() != stored_crc {
                         corrupt_records_skipped += 1;
                         tracing::warn!("Skipping corrupt WAL page update record (checksum mismatch)");
                         continue;
@@ -293,10 +305,10 @@ impl WAL {
                         break;
                     }
 
-                    let mut hasher = crc32fast::Hasher::new();
-                    hasher.update(&[RECORD_TYPE_COMMIT]);
-                    hasher.update(&tx_id_bytes);
-                    if hasher.finalize() != stored_crc {
+                    let mut digest = CRC32C.digest();
+                    digest.update(&[RECORD_TYPE_COMMIT]);
+                    digest.update(&tx_id_bytes);
+                    if digest.finalize() != stored_crc {
                         corrupt_records_skipped += 1;
                         tracing::warn!("Skipping corrupt WAL commit record (checksum mismatch)");
                         continue;
@@ -457,13 +469,13 @@ impl WALRecordIter {
                     let data_start = off + 24;
                     let data = self.buf[data_start..data_start + PAGE_SIZE].to_vec();
 
-                    let mut hasher = crc32fast::Hasher::new();
-                    hasher.update(&[RECORD_TYPE_PAGE_UPDATE]);
-                    hasher.update(&tx_id.to_le_bytes());
-                    hasher.update(&file_id.to_le_bytes());
-                    hasher.update(&page_idx.to_le_bytes());
-                    hasher.update(&data);
-                    let _computed_crc = hasher.finalize();
+                    let mut digest = CRC32C.digest();
+                    digest.update(&[RECORD_TYPE_PAGE_UPDATE]);
+                    digest.update(&tx_id.to_le_bytes());
+                    digest.update(&file_id.to_le_bytes());
+                    digest.update(&page_idx.to_le_bytes());
+                    digest.update(&data);
+                    let _computed_crc = digest.finalize();
 
                     let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
 

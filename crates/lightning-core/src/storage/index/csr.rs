@@ -1,10 +1,22 @@
 use crate::storage::buffer_manager::{BufferManager, PAGE_SIZE};
 use crate::storage::file_handle::FileHandle;
 use crate::Result;
+use crc::{Algorithm, Crc, Digest};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::io::Write;
+
+const CRC32C: Crc<u32> = Crc::<u32>::new(&Algorithm {
+    width: 32,
+    poly: 0x1EDC6F41,
+    init: 0xFFFFFFFF,
+    refin: true,
+    refout: true,
+    xorout: 0xFFFFFFFF,
+    check: 0xE3069283,
+    residue: 0xB798B438,
+});
 
 /// Bitmask for the highest bit of a u64 adjacency value.
 /// When set, the adjacency entry is a tombstone (deleted edge).
@@ -22,15 +34,15 @@ const CSR_ADJ_MAGIC: [u8; 4] = *b"CSRA";
 const CSR_VERSION: u8 = 0x01;
 
 /// Write the CSR format header into a byte buffer at offset 0.
-/// Header layout: 4B magic, 1B version, 3B reserved, 4B CRC32.
+/// Header layout: 4B magic, 1B version, 3B reserved, 4B CRC32C.
 fn write_csr_header(buf: &mut [u8; PAGE_SIZE], magic: [u8; 4]) {
     buf[..4].copy_from_slice(&magic);
     buf[4] = CSR_VERSION;
     // bytes 5-7: reserved (zeroed)
-    // bytes 8-11: CRC32 of bytes 0-7 (simple checksum for the header itself)
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(&buf[..8]);
-    let checksum = crc.finalize();
+    // bytes 8-11: CRC32C of bytes 0-7 (simple checksum for the header itself)
+    let mut digest = CRC32C.digest();
+    digest.update(&buf[..8]);
+    let checksum = digest.finalize();
     buf[8..12].copy_from_slice(&checksum.to_le_bytes());
 }
 
@@ -52,9 +64,9 @@ fn validate_csr_header(buf: &[u8; PAGE_SIZE], expected_magic: [u8; 4]) -> Result
         )));
     }
     let stored_crc = u32::from_le_bytes(buf[8..12].try_into().unwrap());
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(&buf[..8]);
-    if crc.finalize() != stored_crc {
+    let mut digest = CRC32C.digest();
+    digest.update(&buf[..8]);
+    if digest.finalize() != stored_crc {
         return Err(crate::LightningError::Internal(
             "CSR header checksum mismatch".into(),
         ));
