@@ -39,7 +39,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: In ScalarF64 mode, a fresh `wasmi::Store` is created INSIDE the per-row loop (line 150). Each Store creation allocates WASM linear memory, initializes globals, sets up the call stack — ~5-50µs per creation. For 1M rows: 5-50 seconds of overhead just recreating the same store.
 
-- [ ] **1.2.1** `[P0]` Move Store creation outside the row loop. Create one Store before the loop, reuse it across rows. For stateless WASM functions, this is safe. For stateful ones, reset memory between calls instead of recreating.
+- [X] **1.2.1** `[P0]` Move Store creation outside the row loop. Create one Store before the loop, reuse it across rows. For stateless WASM functions, this is safe. For stateful ones, reset memory between calls instead of recreating.
 
 **Impact**: 1M-row WASM UDF evaluation goes from seconds to minutes. Also flagged: the `wasm` binary bytes are captured in the closure unnecessarily (line 117), holding hundreds of KB of leaked memory.
 
@@ -164,7 +164,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: CRC32 on 4KB of data takes ~1-3µs (software CRC32, ~1.5 GB/s). At 10K page updates/sec, CRC computation consumes 10-30 ms/s of CPU.
 
-- [ ] **4.2.1** `[P2]` Switch to CRC32C with hardware acceleration (SSE 4.2 on x86, ARMv8 on ARM). CRC32C runs at ~10-20 GB/s, reducing overhead by ~10×. Or use xxHash3 (~20 GB/s) if cryptographic strength isn't needed.
+- [X] **4.2.1** `[P2]` Switch to CRC32C with hardware acceleration (SSE 4.2 on x86, ARMv8 on ARM). CRC32C runs at ~10-20 GB/s, reducing overhead by ~10×. Or use xxHash3 (~20 GB/s) if cryptographic strength isn't needed.
 
 ### 4.3 WAL Align Position Allocates Vec for 0-7 Bytes
 
@@ -680,7 +680,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Iterates the entire sample to compute min, max, all_same — but the caller (`column.rs:optimize`) already has these from column stats.
 
-- [ ] **20.2.1** `[P3]` Accept pre-computed min/max as parameters to the analyzer.
+- [X] **20.2.1** `[P3]` Accept pre-computed min/max as parameters to the analyzer.
 
 ### 20.3 HashSet Allocated Per Analysis Call for Distinct Counting
 
