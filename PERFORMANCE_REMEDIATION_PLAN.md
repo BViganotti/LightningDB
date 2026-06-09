@@ -101,7 +101,7 @@ Tier 4 — Incremental: <2x improvement, or niche                   [Sections 16
 
 **Problem**: For each deleted node, the detach loop scans EVERY row of EVERY relationship table from position 0. For deleting 1000 nodes with 5 rel tables of 100K rows each: 1000 × 5 × 100K = 500M row scans. O(N × M) where N = deleted nodes, M = total edges.
 
-- [ ] **2.2.1** `[P1]` Use the CSR index (`fwd_csr`, `bwd_csr`) to find incident edges in O(degree) per node instead of O(rel_table_size). The CSR already exists — use it for detach lookups.
+- [X] **2.2.1** `[P1]` Use the CSR index (`fwd_csr`, `bwd_csr`) to find incident edges in O(degree) per node instead of O(rel_table_size). The CSR already exists — use it for detach lookups.
 
 **Impact**: DELETE with DETACH on any non-trivial graph takes hours.
 
@@ -558,7 +558,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: FTS search and vector search each create and rollback their own read transaction.
 
-- [ ] **16.2.1** `[P2]` Share a single read transaction.
+- [X] **16.2.1** `[P2]` Share a single read transaction.
 
 ### 16.3 lookup_by_internal_id() Executes Full Cypher Query Per Call
 
@@ -574,7 +574,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: Full column scan of all Relates edges per rag_query call. For 1M edges: 8MB read per call.
 
-- [ ] **16.4.1** `[P1]` Use the CSR index (`fwd_csr`) instead of the full column scan.
+- [X] **16.4.1** `[P1]` Use the CSR index (`fwd_csr`) instead of the full column scan.
 
 ---
 
@@ -630,7 +630,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 
 **Problem**: `convert_mpsc_to_crossbeam` spawns a thread that runs for the subscriber's lifetime. Each thread has 8MB stack reservation.
 
-- [ ] **18.3.1** `[P2]` Use a crossbeam channel from the start in the CDC event system. Eliminates the bridge thread entirely.
+- [X] **18.3.1** `[P2]` Use a crossbeam channel from the start in the CDC event system. Eliminates the bridge thread entirely.
 
 ---
 
