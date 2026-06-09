@@ -2171,7 +2171,7 @@ impl Column {
         let data_type = &self.data_type;
         let meta = match data_type {
             LogicalType::Int64 | LogicalType::Int32 | LogicalType::Uint64 | LogicalType::Node(_) => {
-                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_integer_chunk(&values, data_type)
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_integer_chunk(&values, data_type, None, None)
             }
             LogicalType::Double | LogicalType::Float => {
                 crate::storage::compression::analyzer::CompressionAnalyzer::analyze_float_chunk(&values)

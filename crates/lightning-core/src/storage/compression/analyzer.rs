@@ -41,7 +41,12 @@ impl Hll {
 pub struct CompressionAnalyzer;
 
 impl CompressionAnalyzer {
-    pub fn analyze_integer_chunk(values: &[Value], data_type: &LogicalType) -> CompressionMetadata {
+    pub fn analyze_integer_chunk(
+        values: &[Value],
+        data_type: &LogicalType,
+        precomputed_min: Option<&Value>,
+        precomputed_max: Option<&Value>,
+    ) -> CompressionMetadata {
         if values.is_empty() {
             return CompressionMetadata::new(
                 Value::Null,
@@ -51,11 +56,15 @@ impl CompressionAnalyzer {
             );
         }
 
-        let mut min = values[0].clone();
-        let mut max = values[0].clone();
+        let mut min = precomputed_min.cloned().unwrap_or_else(|| values[0].clone());
+        let mut max = precomputed_max.cloned().unwrap_or_else(|| values[0].clone());
         let mut all_same = true;
         let mut count_same = 0;
         let mut prev = &values[0];
+
+        // Skip min/max computation if pre-computed values were provided
+        let skip_minmax = precomputed_min.is_some() && precomputed_max.is_some();
+        if !skip_minmax {
 
         for val in values {
             if val != &values[0] {
@@ -71,6 +80,7 @@ impl CompressionAnalyzer {
             if val > &max {
                 max = val.clone();
             }
+        }
         }
 
         if all_same {
