@@ -1235,26 +1235,20 @@ impl FunctionRegistry {
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
                             .expect("type mismatch in function");
-                        let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            if n_arr.is_null(i) {
-                                results.append_null();
-                                continue;
-                            }
-                            let n = n_arr.value(i);
-                            let res = match *name {
-                                "SQRT" => n.sqrt(),
-                                "LOG" => n.log10(),
-                                "LN" => n.ln(),
-                                "EXP" => n.exp(),
-                                "SIN" => n.sin(),
-                                "COS" => n.cos(),
-                                "TAN" => n.tan(),
-                                _ => unreachable!(),
-                            };
-                            results.append_value(res);
-                        }
-                        Ok(Arc::new(results.finish()))
+                        // Vectorized: use Arrow unary kernel instead of per-row loop
+                        use arrow::compute::kernels::arity::unary;
+                        use arrow::datatypes::Float64Type;
+                        let result: arrow::array::PrimitiveArray<Float64Type> = match *name {
+                            "SQRT" => unary(n_arr, |n: f64| n.sqrt()),
+                            "LOG" => unary(n_arr, |n: f64| n.log10()),
+                            "LN" => unary(n_arr, |n: f64| n.ln()),
+                            "EXP" => unary(n_arr, |n: f64| n.exp()),
+                            "SIN" => unary(n_arr, |n: f64| n.sin()),
+                            "COS" => unary(n_arr, |n: f64| n.cos()),
+                            "TAN" => unary(n_arr, |n: f64| n.tan()),
+                            _ => unreachable!(),
+                        };
+                        Ok(Arc::new(result))
                     }),
                 ),
             );
