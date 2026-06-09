@@ -340,40 +340,61 @@ impl BufferManager {
         // This builds the transition matrix used to predict future accesses.
         self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
 
-        // Speculative prefetch: predict which pages will be accessed next
-        // and load them into the buffer pool for zero-latency access.
-        if self.prefetch_enabled {
-            let predicted = self.prefetch_tracker.predict_next(
+        // Collect prefetch predictions, then release the write lock before
+        // performing I/O to avoid blocking other operations on this shard.
+        let predictions: Vec<(u64, u64)> = if self.prefetch_enabled {
+            self.prefetch_tracker.predict_next(
                 fh_arc.file_id,
                 page_idx,
                 self.prefetch_depth,
                 self.prefetch_confidence,
-            );
-            for (pf_id, pf_pg) in predicted {
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Collect file handles for prefetch while write lock is still held
+        let pf_handles: Vec<(u64, u64, Arc<FileHandle>)> = predictions
+            .iter()
+            .filter_map(|&(pf_id, pf_pg)| {
                 let pf_key = (pf_id, pf_pg);
-                let already_cached = pool.page_to_slots.contains_key(&pf_key);
-                let pf_fh_opt = pool.file_handles.get(&pf_id).map(|f| Arc::clone(f));
-                if !already_cached {
-                    if let Some(pf_fh) = pf_fh_opt {
-                        if (pf_pg as usize) < pf_fh.get_num_pages() as usize {
-                            let pf_slot = self.evict_with_clock(&mut pool)?;
-                            let mut pf_data = [0u8; PAGE_SIZE];
-                            let _ = pf_fh.read_page(pf_pg, &mut pf_data);
-                            let pf_frame = Arc::new(Frame::new(pf_data, 0));
-                            if let Some(old_key) = pool.slots[pf_slot].key {
-                                if let Some(slots) = pool.page_to_slots.get_mut(&old_key) {
-                                    slots.retain(|&idx| idx != pf_slot);
-                                }
-                            }
-                            pool.slots[pf_slot].key = Some(pf_key);
-                            pool.slots[pf_slot].frame = pf_frame;
-                            pool.slots[pf_slot].dirty = false;
-                            pool.slots[pf_slot].referenced = true;
-                            pool.page_to_slots.entry(pf_key).or_default().push(pf_slot);
-                        }
-                    }
+                if pool.page_to_slots.contains_key(&pf_key) {
+                    return None;
+                }
+                pool.file_handles.get(&pf_id).map(|fh| {
+                    (pf_id, pf_pg, Arc::clone(fh))
+                })
+            })
+            .collect();
+
+        drop(pool); // Release write lock before I/O
+
+        // Prefetch pages without holding any shard lock
+        for (pf_id, pf_pg, pf_fh) in pf_handles {
+            if (pf_pg as usize) >= pf_fh.get_num_pages() as usize {
+                continue;
+            }
+            let pf_shard_idx = self.get_shard_idx((pf_id, pf_pg));
+            let mut pf_pool = self.shards[pf_shard_idx].write();
+
+            // Double-check under write lock in case another thread cached it
+            if pf_pool.page_to_slots.contains_key(&(pf_id, pf_pg)) {
+                continue;
+            }
+            let pf_slot = self.evict_with_clock(&mut pf_pool)?;
+            let mut pf_data = [0u8; PAGE_SIZE];
+            let _ = pf_fh.read_page(pf_pg, &mut pf_data);
+            let pf_frame = Arc::new(Frame::new(pf_data, 0));
+            if let Some(old_key) = pf_pool.slots[pf_slot].key {
+                if let Some(slots) = pf_pool.page_to_slots.get_mut(&old_key) {
+                    slots.retain(|&idx| idx != pf_slot);
                 }
             }
+            pf_pool.slots[pf_slot].key = Some((pf_id, pf_pg));
+            pf_pool.slots[pf_slot].frame = pf_frame;
+            pf_pool.slots[pf_slot].dirty = false;
+            pf_pool.slots[pf_slot].referenced = true;
+            pf_pool.page_to_slots.entry((pf_id, pf_pg)).or_default().push(pf_slot);
         }
 
         Ok(new_frame)
