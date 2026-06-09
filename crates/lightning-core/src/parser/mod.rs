@@ -22,7 +22,8 @@ fn required_pair<'i>(pair: Option<pest::iterators::Pair<'i, Rule>>, context: &st
 }
 
 pub fn parse(query_str: &str) -> Result<Query, ParserError> {
-    let preprocessed = preprocess_distinct_functions(query_str);
+    let normalized = normalize_query(query_str);
+    let preprocessed = preprocess_distinct_functions(&normalized);
 
     let (clean, order_by, skip, limit) = strip_modifiers(&preprocessed);
     let mut pairs = CypherParser::parse(Rule::query, &clean)?;
@@ -64,6 +65,50 @@ fn preprocess_distinct_functions(s: &str) -> String {
     }
 
     result
+}
+
+/// Normalize a query string before parsing:
+/// 1. Strip single-line comments (`// ...`)
+/// 2. Strip block comments (`/* ... */`)
+/// 3. Collapse contiguous whitespace to single space
+fn normalize_query(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // Single-line comment: // ... \n
+        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment: /* ... */
+        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        }
+        // Collapse contiguous whitespace to single space
+        if bytes[i].is_ascii_whitespace() {
+            result.push(' ');
+            i += 1;
+            while i < len && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            continue;
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    result.trim().to_string()
 }
 
 fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>) {
