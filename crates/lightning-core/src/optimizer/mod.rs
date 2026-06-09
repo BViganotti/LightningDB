@@ -41,8 +41,7 @@ impl Optimizer {
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
                 Box::new(order_by_pushdown::OrderByPushDown::new()),
-                // NOTE: projection_pushdown disabled — needs cross-operator
-                //   expression index remapping in all expression-bearing ops.
+                Box::new(projection_pushdown::ProjectionPushDown::new()),
                 // NOTE: semijoin_pushdown + acc_hash_join_optimizer disabled —
                 //   physical planner mask lifecycle issues with rel table scans.
                 // NOTE: agg_key_dependency_optimizer disabled — incorrect group-by

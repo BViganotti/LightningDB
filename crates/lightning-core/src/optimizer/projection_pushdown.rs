@@ -84,39 +84,38 @@ impl ProjectionPushDown {
 
     fn remap_expression_indices(
         expr: &mut BoundExpression,
-        required_indices: &HashMap<String, HashSet<usize>>,
+        child_indices: &HashMap<String, HashSet<usize>>,
     ) {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
-                if let Some(set) = required_indices.get(var) {
-                    let mut v: Vec<_> = set.iter().cloned().collect();
-                    v.sort();
-                    if let Some(pos) = v.iter().position(|&i| i == *idx) {
+                if let Some(set) = child_indices.get(var) {
+                    let mut sorted: Vec<_> = set.iter().cloned().collect();
+                    sorted.sort();
+                    if let Some(pos) = sorted.iter().position(|&i| i == *idx) {
                         *idx = pos;
-                        *var = "".to_string(); // Mark as remapped
                     }
                 }
             }
             BoundExpression::Comparison(l, _, r) => {
-                Self::remap_expression_indices(l, required_indices);
-                Self::remap_expression_indices(r, required_indices);
+                Self::remap_expression_indices(l, child_indices);
+                Self::remap_expression_indices(r, child_indices);
             }
             BoundExpression::Arithmetic(l, _, r) => {
-                Self::remap_expression_indices(l, required_indices);
-                Self::remap_expression_indices(r, required_indices);
+                Self::remap_expression_indices(l, child_indices);
+                Self::remap_expression_indices(r, child_indices);
             }
             BoundExpression::Logical(l, _, r) => {
-                Self::remap_expression_indices(l, required_indices);
-                Self::remap_expression_indices(r, required_indices);
+                Self::remap_expression_indices(l, child_indices);
+                Self::remap_expression_indices(r, child_indices);
             }
             BoundExpression::Function(_, args, _) => {
                 for arg in args {
-                    Self::remap_expression_indices(arg, required_indices);
+                    Self::remap_expression_indices(arg, child_indices);
                 }
             }
             BoundExpression::List(exprs, _) => {
                 for e in exprs {
-                    Self::remap_expression_indices(e, required_indices);
+                    Self::remap_expression_indices(e, child_indices);
                 }
             }
             BoundExpression::Case {
@@ -126,23 +125,23 @@ impl ProjectionPushDown {
                 ..
             } => {
                 if let Some(e) = expression {
-                    Self::remap_expression_indices(e, required_indices);
+                    Self::remap_expression_indices(e, child_indices);
                 }
                 for (w, t) in when_then {
-                    Self::remap_expression_indices(w, required_indices);
-                    Self::remap_expression_indices(t, required_indices);
+                    Self::remap_expression_indices(w, child_indices);
+                    Self::remap_expression_indices(t, child_indices);
                 }
                 if let Some(e) = else_expression {
-                    Self::remap_expression_indices(e, required_indices);
+                    Self::remap_expression_indices(e, child_indices);
                 }
             }
             BoundExpression::Aggregate(_, args, _) => {
                 for arg in args {
-                    Self::remap_expression_indices(arg, required_indices);
+                    Self::remap_expression_indices(arg, child_indices);
                 }
             }
             BoundExpression::Lambda(_, body) => {
-                Self::remap_expression_indices(body, required_indices);
+                Self::remap_expression_indices(body, child_indices);
             }
             _ => {}
         }
@@ -165,20 +164,25 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Filter(child, cond) => {
+            LogicalOperator::Filter(child, mut cond) => {
                 let mut my_indices = required_indices;
                 Self::extract_property_indices(&cond, &mut my_indices);
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                // Remap filter expression indices to match the child's new column layout
+                Self::remap_expression_indices(&mut cond, &child_indices);
                 Ok((
                     LogicalOperator::Filter(Box::new(new_child), cond),
                     child_indices,
                 ))
             }
-            LogicalOperator::Join(left, right, cond) => {
+            LogicalOperator::Join(left, right, mut cond) => {
                 let mut my_indices = required_indices;
                 Self::extract_property_indices(&cond, &mut my_indices);
                 let (new_left, left_indices) = self.push_down(*left, my_indices.clone())?;
                 let (new_right, right_indices) = self.push_down(*right, my_indices.clone())?;
+                // Remap join condition to match both children's new column layouts
+                Self::remap_expression_indices(&mut cond, &left_indices);
+                Self::remap_expression_indices(&mut cond, &right_indices);
                 let mut combined = left_indices;
                 for (k, v) in right_indices {
                     combined.entry(k).or_default().extend(v);
@@ -239,23 +243,29 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Sort(child, items) => {
+            LogicalOperator::Sort(child, mut items) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for item in &mut items {
+                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::Sort(Box::new(new_child), items),
                     child_indices,
                 ))
             }
-            LogicalOperator::TopK(child, items, limit) => {
+            LogicalOperator::TopK(child, mut items, limit) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for item in &mut items {
+                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::TopK(Box::new(new_child), items, limit),
                     child_indices,
@@ -275,16 +285,19 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Set(child, assignments) => {
+            LogicalOperator::Set(child, mut assignments) => {
                 let mut my_indices = required_indices;
                 for assignment in &assignments {
                     my_indices
                         .entry(assignment.variable.clone())
                         .or_default()
-                        .insert(0); // Always need _id for SET
+                        .insert(0);
                     Self::extract_property_indices(&assignment.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for assign in &mut assignments {
+                    Self::remap_expression_indices(&mut assign.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::Set(Box::new(new_child), assignments),
                     child_indices,
