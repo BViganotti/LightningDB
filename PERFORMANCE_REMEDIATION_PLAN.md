@@ -354,7 +354,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 **Problem**: `LruCache<String, Arc<BoundStatement>>` uses the full normalized query text. Whitespace differences, comment changes, or alias variations create cache misses. Protected by a `Mutex`, creating serialization on every query lookup.
 
 - [X] **9.3.1** `[P2]` Use a two-level cache: logical plan (cheap) + physical plan (expensive). Use a hash of a structurally-normalized AST as the key. Normalize aliases and strip whitespace more aggressively.
-- [ ] **9.3.2** `[P2]` Use `RwLock` or sharded cache to reduce lock contention.
+- [X] **9.3.2** `[P2]` Use `RwLock` or sharded cache to reduce lock contention.
 
 ---
 
