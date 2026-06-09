@@ -201,6 +201,7 @@ impl MemoryStore {
         Ok(())
     }
 
+    #[doc(hidden)]
     pub fn now_micros_for_test() -> i64 {
         Self::now_micros()
     }

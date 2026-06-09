@@ -40,9 +40,10 @@ impl FileHandle {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        // Use ONLY the filename for hash, not the full path
-        // Hash the full path to prevent file_id collisions between
-        // different directories with the same filename.
+        // Hash the full path to produce a unique file_id.
+        // Collisions are astronomically unlikely with 64-bit SipHash;
+        // if a collision does occur, the second FileHandle silently
+        // reuses the same slot in the buffer pool.
         path.as_os_str().hash(&mut hasher);
         let file_id = hasher.finish();
 

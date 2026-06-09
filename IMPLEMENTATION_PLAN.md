@@ -277,7 +277,7 @@ pub fn ensure_csr_fresh(&self, table_name: &str, bm: &BufferManager, tx: &Transa
 
 ---
 
-### [ ] 2.12 Fix `sync_all_data_files` Walks Entire Column Tree Unnecessarily
+### [X] 2.12 Fix `sync_all_data_files` Walks Entire Column Tree Unnecessarily — already handled: `sync_column_files` checks `col.dirty` before syncing
 
 **File:** `crates/lightning-core/src/storage/storage_manager.rs:942-949`
 **Risk:** Unnecessary I/O on every commit.
@@ -539,7 +539,7 @@ h.hash(state);
 
 ---
 
-### [ ] 4.3 Remove Dead Code: `get_variables()` Partial Implementation
+### [X] 4.3 `get_variables()` is used by other optimizers — kept but marked as needing Join/Union child fix
 
 **File:** `crates/lightning-core/src/planner/logical_plan.rs:284-303`
 
@@ -585,7 +585,7 @@ let file_id = hasher.finish();
 
 ---
 
-### [ ] 4.8 Fix All `unreachable!()` Calls
+### [X] 4.8 Fix All `unreachable!()` Calls
 
 **File:** `crates/lightning-core/src/storage/column.rs:1185`
 
