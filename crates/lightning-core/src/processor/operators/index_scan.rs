@@ -69,6 +69,12 @@ impl PhysicalOperator for PhysicalIndexScan {
         )?;
         let pk_value = Value::from_arrow(&val_array, 0);
         if let Some(row_id) = self.index.lookup(&self.buffer_manager, &pk_value, tx)? {
+            // Check MVCC visibility for this row
+            if !self.table.columns[0].version_info.is_visible(
+                row_id, tx.tx_id, self.read_ts
+            ) {
+                return Ok(None);
+            }
             let mut columns = Vec::new();
             let mut fields = Vec::new();
             if let Some(idxs) = &self.projected_idxs {
