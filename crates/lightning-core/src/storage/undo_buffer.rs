@@ -1,5 +1,6 @@
 use crate::processor::Value;
 use parking_lot::Mutex;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub enum UndoRecord {
@@ -84,10 +85,13 @@ impl UndoBuffer {
                 UndoRecord::CreateNodeTable(name) => {
                     db.catalog.write().remove_table(&name);
                     db.storage_manager.write().remove_table(&name);
+                    // Delete data files so a subsequent CREATE doesn't inherit stale data
+                    Self::cleanup_table_files(&db._path, &name);
                 }
                 UndoRecord::CreateRelTable(name) => {
                     db.catalog.write().remove_table(&name);
                     db.storage_manager.write().remove_table(&name);
+                    Self::cleanup_table_files(&db._path, &name);
                 }
                 UndoRecord::DropTable(name, entry) => {
                     let mut catalog = db.catalog.write();
@@ -221,5 +225,28 @@ impl UndoBuffer {
 
     pub fn clear(&self) {
         self.records.lock().clear();
+    }
+
+    /// Delete all data files associated with a table.
+    /// Called during rollback of CREATE TABLE to prevent stale files
+    /// from corrupting a subsequent CREATE with the same name.
+    fn cleanup_table_files(db_path: &Path, table_name: &str) {
+        if let Ok(entries) = std::fs::read_dir(db_path) {
+            let prefix = table_name.to_lowercase();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    let lower = filename.to_lowercase();
+                    if lower.starts_with(&prefix)
+                        && (lower.ends_with(".lbug") || lower.ends_with(".lbug.shadow"))
+                    {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+        // Also try to remove the FTS directory
+        let fts_dir = db_path.join(format!("{}_fts", table_name));
+        let _ = std::fs::remove_dir_all(&fts_dir);
     }
 }
