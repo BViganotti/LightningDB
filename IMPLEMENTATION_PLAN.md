@@ -165,7 +165,7 @@ Example: `MATCH (a:Person) MERGE (a)-[:KNOWS]->(b:Person {name: 'Bob'})` — the
 
 ---
 
-### [ ] 0.5 Fix COUNT(*) Materializing Dummy Column
+### [X] 0.5 Fix COUNT(*) Materializing Dummy Column
 
 **File:** `crates/lightning-core/src/planner/logical_plan.rs:718-731`
 **Risk:** Significant performance waste — COUNT(*) forces full column materialization of a dummy `1.0` column for every single row.

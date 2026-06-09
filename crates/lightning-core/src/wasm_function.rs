@@ -2,6 +2,7 @@ use crate::processor::functions::ScalarFunction;
 use crate::Result;
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, StringArray};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Default maximum execution time for a single WASM function call.
 const DEFAULT_WASM_TIMEOUT_MS: u64 = 100;
@@ -112,9 +113,10 @@ impl WasmFunction {
     }
 
     pub fn to_scalar_function(&self) -> ScalarFunction {
-        let exec_mode = self.exec_mode.to_u8();
+        let exec_mode_u8 = self.exec_mode.to_u8();
         let func_name = self.func_name.clone();
         let wasm = self.wasm_bytes.clone();
+        let timeout_ms = self.timeout_ms;
 
         let engine = wasmi::Engine::default();
         let module = match wasmi::Module::new(&engine, &wasm) {
@@ -133,193 +135,222 @@ impl WasmFunction {
             }
         };
 
-    let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
-        move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
-            let exec_mode = WasmExecMode::from_u8(exec_mode, args.len());
+        let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
+            move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
+                let start = std::time::Instant::now();
+                let exec_mode = WasmExecMode::from_u8(exec_mode_u8, args.len());
 
-            match exec_mode {
-                    WasmExecMode::ScalarF64 | WasmExecMode::MultiArgF64(_) => {
-                        // Multi-arg f64 path: pass all args as f64 params
-                        let arg_arrays: Vec<&Float64Array> = args.iter().map(|a| {
-                            a.as_any().downcast_ref::<Float64Array>()
-                                .ok_or_else(|| crate::LightningError::Internal(
-                                    "WASM multi-arg requires Float64 inputs".into()
-                                ))
-                        }).collect::<Result<Vec<_>>>()?;
+                let result = (|| -> Result<ArrayRef> {
+                    match exec_mode {
+                        WasmExecMode::ScalarF64 | WasmExecMode::MultiArgF64(_) => {
+                            let arg_arrays: Vec<&Float64Array> = args.iter().map(|a| {
+                                a.as_any().downcast_ref::<Float64Array>()
+                                    .ok_or_else(|| crate::LightningError::Internal(
+                                        "WASM multi-arg requires Float64 inputs".into()
+                                    ))
+                            }).collect::<Result<Vec<_>>>()?;
 
-                        let mut store = wasmi::Store::new(&engine, ());
-                        let instance = wasmi::Instance::new(&mut store, &module, &[])
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM instantiation failed: {e}"
-                            )))?;
+                            let mut store = wasmi::Store::new(&engine, ());
+                            let instance = wasmi::Instance::new(&mut store, &module, &[])
+                                .map_err(|e| crate::LightningError::Internal(format!(
+                                    "WASM instantiation failed: {e}"
+                                )))?;
 
-                        let arity = arg_arrays.len();
-                        let results = match arity {
-                            1 => {
-                                let func = instance.get_typed_func::<(f64,), f64>(&mut store, &func_name)
-                                    .map_err(|e| crate::LightningError::Internal(format!(
-                                        "WASM function '{func_name}' with 1 arg not found: {e}"
-                                    )))?;
-                                let mut res = Vec::with_capacity(num_rows);
-                                for i in 0..num_rows {
-                                    let val = if arg_arrays[0].is_valid(i) {
-                                        func.call(&mut store, (arg_arrays[0].value(i),))
+                            let arity = arg_arrays.len();
+                            let results = match arity {
+                                1 => {
+                                    let func = instance.get_typed_func::<(f64,), f64>(&mut store, &func_name)
+                                        .map_err(|e| crate::LightningError::Internal(format!(
+                                            "WASM function '{func_name}' with 1 arg not found: {e}"
+                                        )))?;
+                                    let mut res = Vec::with_capacity(num_rows);
+                                    for i in 0..num_rows {
+                                        if start.elapsed() > Duration::from_millis(timeout_ms) {
+                                            return Err(crate::LightningError::Internal(
+                                                format!("WASM function '{func_name}' timed out after {timeout_ms}ms")
+                                            ));
+                                        }
+                                        let val = if arg_arrays[0].is_valid(i) {
+                                            func.call(&mut store, (arg_arrays[0].value(i),))
+                                                .map_err(|e| crate::LightningError::Internal(format!(
+                                                    "WASM call failed: {e}"
+                                                )))?
+                                        } else { f64::NAN };
+                                        res.push(val);
+                                    }
+                                    res
+                                }
+                                2 => {
+                                    let func = instance.get_typed_func::<(f64, f64), f64>(&mut store, &func_name)
+                                        .map_err(|e| crate::LightningError::Internal(format!(
+                                            "WASM function '{func_name}' with 2 args not found: {e}"
+                                        )))?;
+                                    let mut res = Vec::with_capacity(num_rows);
+                                    for i in 0..num_rows {
+                                        if start.elapsed() > Duration::from_millis(timeout_ms) {
+                                            return Err(crate::LightningError::Internal(
+                                                format!("WASM function '{func_name}' timed out after {timeout_ms}ms")
+                                            ));
+                                        }
+                                        let v0 = if arg_arrays[0].is_valid(i) { arg_arrays[0].value(i) } else { f64::NAN };
+                                        let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
+                                        let val = func.call(&mut store, (v0, v1))
                                             .map_err(|e| crate::LightningError::Internal(format!(
                                                 "WASM call failed: {e}"
-                                            )))?
-                                    } else { f64::NAN };
-                                    res.push(val);
+                                            )))?;
+                                        res.push(val);
+                                    }
+                                    res
                                 }
-                                res
-                            }
-                            2 => {
-                                let func = instance.get_typed_func::<(f64, f64), f64>(&mut store, &func_name)
-                                    .map_err(|e| crate::LightningError::Internal(format!(
-                                        "WASM function '{func_name}' with 2 args not found: {e}"
-                                    )))?;
-                                let mut res = Vec::with_capacity(num_rows);
-                                for i in 0..num_rows {
-                                    let v0 = if arg_arrays[0].is_valid(i) { arg_arrays[0].value(i) } else { f64::NAN };
-                                    let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
-                                    let val = func.call(&mut store, (v0, v1))
+                                3 => {
+                                    let func = instance.get_typed_func::<(f64, f64, f64), f64>(&mut store, &func_name)
                                         .map_err(|e| crate::LightningError::Internal(format!(
-                                            "WASM call failed: {e}"
+                                            "WASM function '{func_name}' with 3 args not found: {e}"
                                         )))?;
-                                    res.push(val);
+                                    let mut res = Vec::with_capacity(num_rows);
+                                    for i in 0..num_rows {
+                                        if start.elapsed() > Duration::from_millis(timeout_ms) {
+                                            return Err(crate::LightningError::Internal(
+                                                format!("WASM function '{func_name}' timed out after {timeout_ms}ms")
+                                            ));
+                                        }
+                                        let v0 = if arg_arrays[0].is_valid(i) { arg_arrays[0].value(i) } else { f64::NAN };
+                                        let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
+                                        let v2 = if arg_arrays[2].is_valid(i) { arg_arrays[2].value(i) } else { f64::NAN };
+                                        let val = func.call(&mut store, (v0, v1, v2))
+                                            .map_err(|e| crate::LightningError::Internal(format!(
+                                                "WASM call failed: {e}"
+                                            )))?;
+                                        res.push(val);
+                                    }
+                                    res
                                 }
-                                res
-                            }
-                            3 => {
-                                let func = instance.get_typed_func::<(f64, f64, f64), f64>(&mut store, &func_name)
-                                    .map_err(|e| crate::LightningError::Internal(format!(
-                                        "WASM function '{func_name}' with 3 args not found: {e}"
-                                    )))?;
-                                let mut res = Vec::with_capacity(num_rows);
-                                for i in 0..num_rows {
-                                    let v0 = if arg_arrays[0].is_valid(i) { arg_arrays[0].value(i) } else { f64::NAN };
-                                    let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
-                                    let v2 = if arg_arrays[2].is_valid(i) { arg_arrays[2].value(i) } else { f64::NAN };
-                                    let val = func.call(&mut store, (v0, v1, v2))
-                                        .map_err(|e| crate::LightningError::Internal(format!(
-                                            "WASM call failed: {e}"
-                                        )))?;
-                                    res.push(val);
-                                }
-                                res
-                            }
-                            _ => return Err(crate::LightningError::Internal(
-                                format!("WASM: unsupported arg count {arity}, max 3")
-                            )),
-                        };
-                        Ok(Arc::new(Float64Array::from(results)))
-                    }
-                    WasmExecMode::MemoryF32 => {
-                        let input = args[0].as_any()
-                            .downcast_ref::<Float32Array>()
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "WASM vector mode requires Float32 input".into()
-                            ))?;
-
-                        let mut store = wasmi::Store::new(&engine, ());
-                        let instance = wasmi::Instance::new(&mut store, &module, &[])
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM instantiation failed: {e}"
-                            )))?;
-
-                        let func = instance.get_typed_func::<(i32, i32), i32>(&mut store, &func_name)
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM vector function '{func_name}' not found: {e}"
-                            )))?;
-
-                        let mem = instance.get_memory(&mut store, "memory")
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "WASM vector function requires exported 'memory'".into()
-                            ))?;
-
-                        let input_bytes: Vec<u8> = (0..num_rows)
-                            .flat_map(|i| input.value(i).to_le_bytes().into_iter())
-                            .collect();
-                        let write_offset = 0i32;
-                        let num_elements = num_rows as i32;
-                        {
-                            let mem_data = mem.data_mut(&mut store);
-                            let write_len = input_bytes.len().min(mem_data.len());
-                            mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
+                                _ => return Err(crate::LightningError::Internal(
+                                    format!("WASM: unsupported arg count {arity}, max 3")
+                                )),
+                            };
+                            Ok(Arc::new(Float64Array::from(results)))
                         }
+                        WasmExecMode::MemoryF32 => {
+                            let input = args[0].as_any()
+                                .downcast_ref::<Float32Array>()
+                                .ok_or_else(|| crate::LightningError::Internal(
+                                    "WASM vector mode requires Float32 input".into()
+                                ))?;
 
-                        let output_offset = func.call(&mut store, (write_offset, num_elements))
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM vector call failed: {e}"
-                            )))?;
+                            let mut store = wasmi::Store::new(&engine, ());
+                            let instance = wasmi::Instance::new(&mut store, &module, &[])
+                                .map_err(|e| crate::LightningError::Internal(format!(
+                                    "WASM instantiation failed: {e}"
+                                )))?;
 
-                        let mut results = vec![f32::NAN; num_rows];
-                        {
-                            let mem_data = mem.data(&store);
-                            let read_offset = output_offset as usize;
-                            let read_end = (read_offset + num_rows * 4).min(mem_data.len());
-                            let byte_count = read_end - read_offset;
-                            let valid_entries = byte_count / 4;
-                            for j in 0..valid_entries.min(num_rows) {
-                                let mut bytes = [0u8; 4];
-                                let start = read_offset + j * 4;
-                                if start + 4 <= mem_data.len() {
-                                    bytes.copy_from_slice(&mem_data[start..start + 4]);
-                                    results[j] = f32::from_le_bytes(bytes);
-                                }
+                            if start.elapsed() > Duration::from_millis(timeout_ms) {
+                                return Err(crate::LightningError::Internal(
+                                    format!("WASM function '{func_name}' timed out after {timeout_ms}ms")
+                                ));
                             }
-                        }
 
-                        Ok(Arc::new(Float32Array::from(results)))
-                    }
-                    WasmExecMode::MemoryString => {
-                        let mut store = wasmi::Store::new(&engine, ());
-                        let instance = wasmi::Instance::new(&mut store, &module, &[])
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM instantiation failed: {e}"
-                            )))?;
+                            let func = instance.get_typed_func::<(i32, i32), i32>(&mut store, &func_name)
+                                .map_err(|e| crate::LightningError::Internal(format!(
+                                    "WASM vector function '{func_name}' not found: {e}"
+                                )))?;
 
-                        let func = instance.get_typed_func::<(i32, i32), i32>(&mut store, &func_name)
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM string function '{func_name}' not found: {e}"
-                            )))?;
+                            let mem = instance.get_memory(&mut store, "memory")
+                                .ok_or_else(|| crate::LightningError::Internal(
+                                    "WASM vector function requires exported 'memory'".into()
+                                ))?;
 
-                        let mem = instance.get_memory(&mut store, "memory")
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "WASM string function requires exported 'memory'".into()
-                            ))?;
-
-                        let mut results = Vec::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            let input_str = format!("{}", Value::from_arrow(&args[0], i));
-                            let input_bytes = input_str.as_bytes();
+                            let input_bytes: Vec<u8> = (0..num_rows)
+                                .flat_map(|i| input.value(i).to_le_bytes().into_iter())
+                                .collect();
                             let write_offset = 0i32;
+                            let num_elements = num_rows as i32;
                             {
                                 let mem_data = mem.data_mut(&mut store);
                                 let write_len = input_bytes.len().min(mem_data.len());
                                 mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
                             }
 
-                            let output_offset = func.call(&mut store, (write_offset, input_bytes.len() as i32))
+                            let output_offset = func.call(&mut store, (write_offset, num_elements))
                                 .map_err(|e| crate::LightningError::Internal(format!(
-                                    "WASM string call failed: {e}"
+                                    "WASM vector call failed: {e}"
                                 )))?;
 
-                            let output = {
+                            let mut results = vec![f32::NAN; num_rows];
+                            {
                                 let mem_data = mem.data(&store);
-                                let start = output_offset as usize;
-                                // Read until null byte or end of memory
-                                let end = mem_data[start..].iter()
-                                    .position(|&b| b == 0)
-                                    .map(|p| start + p)
-                                    .unwrap_or(start);
-                                String::from_utf8_lossy(&mem_data[start..end]).to_string()
-                            };
-                            results.push(output);
-                        }
+                                let read_offset = output_offset as usize;
+                                let read_end = (read_offset + num_rows * 4).min(mem_data.len());
+                                let byte_count = read_end - read_offset;
+                                let valid_entries = byte_count / 4;
+                                for j in 0..valid_entries.min(num_rows) {
+                                    let mut bytes = [0u8; 4];
+                                    let start = read_offset + j * 4;
+                                    if start + 4 <= mem_data.len() {
+                                        bytes.copy_from_slice(&mem_data[start..start + 4]);
+                                        results[j] = f32::from_le_bytes(bytes);
+                                    }
+                                }
+                            }
 
-                        Ok(Arc::new(StringArray::from(results)))
+                            Ok(Arc::new(Float32Array::from(results)))
+                        }
+                        WasmExecMode::MemoryString => {
+                            let mut store = wasmi::Store::new(&engine, ());
+                            let instance = wasmi::Instance::new(&mut store, &module, &[])
+                                .map_err(|e| crate::LightningError::Internal(format!(
+                                    "WASM instantiation failed: {e}"
+                                )))?;
+
+                            let func = instance.get_typed_func::<(i32, i32), i32>(&mut store, &func_name)
+                                .map_err(|e| crate::LightningError::Internal(format!(
+                                    "WASM string function '{func_name}' not found: {e}"
+                                )))?;
+
+                            let mem = instance.get_memory(&mut store, "memory")
+                                .ok_or_else(|| crate::LightningError::Internal(
+                                    "WASM string function requires exported 'memory'".into()
+                                ))?;
+
+                            let mut results = Vec::with_capacity(num_rows);
+                            for i in 0..num_rows {
+                                if start.elapsed() > Duration::from_millis(timeout_ms) {
+                                    return Err(crate::LightningError::Internal(
+                                        format!("WASM function '{func_name}' timed out after {timeout_ms}ms")
+                                    ));
+                                }
+                                let input_str = format!("{}", Value::from_arrow(&args[0], i));
+                                let input_bytes = input_str.as_bytes();
+                                let write_offset = 0i32;
+                                {
+                                    let mem_data = mem.data_mut(&mut store);
+                                    let write_len = input_bytes.len().min(mem_data.len());
+                                    mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
+                                }
+
+                                let output_offset = func.call(&mut store, (write_offset, input_bytes.len() as i32))
+                                    .map_err(|e| crate::LightningError::Internal(format!(
+                                        "WASM string call failed: {e}"
+                                    )))?;
+
+                                let output = {
+                                    let mem_data = mem.data(&store);
+                                    let start = output_offset as usize;
+                                    let end = mem_data[start..].iter()
+                                        .position(|&b| b == 0)
+                                        .map(|p| start + p)
+                                        .unwrap_or(start);
+                                    String::from_utf8_lossy(&mem_data[start..end]).to_string()
+                                };
+                                results.push(output);
+                            }
+
+                            Ok(Arc::new(StringArray::from(results)))
+                        }
                     }
-                }
+                })();
+
+                result
             },
         );
 
