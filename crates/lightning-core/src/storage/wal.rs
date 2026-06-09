@@ -492,7 +492,13 @@ impl WALRecordIter {
                     digest.update(&file_id.to_le_bytes());
                     digest.update(&page_idx.to_le_bytes());
                     digest.update(&data);
-                    let _computed_crc = digest.finalize();
+                    let computed_crc = digest.finalize();
+
+                    if computed_crc != stored_crc {
+                        // Corrupted record — skip it (same as the replay path)
+                        self.pos += 1;
+                        continue;
+                    }
 
                     let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
 
@@ -506,8 +512,23 @@ impl WALRecordIter {
                     if self.pos + needed > self.buf.len() {
                         return None;
                     }
+                    let mut crc_bytes = [0u8; WAL_CHECKSUM_SIZE];
+                    crc_bytes.copy_from_slice(&self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE]);
+                    let stored_crc = u32::from_le_bytes(crc_bytes);
+
                     let off = self.pos + 1 + WAL_CHECKSUM_SIZE;
                     let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
+
+                    let mut digest = CRC32C.digest();
+                    digest.update(&[RECORD_TYPE_COMMIT]);
+                    digest.update(&tx_id.to_le_bytes());
+                    let computed_crc = digest.finalize();
+
+                    if computed_crc != stored_crc {
+                        // Corrupted commit record — skip it
+                        self.pos += 1;
+                        continue;
+                    }
 
                     let record = WALRecord::Commit { tx_id };
 
