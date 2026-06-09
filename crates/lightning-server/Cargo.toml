@@ -1,0 +1,35 @@
+[package]
+name = "lightning-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP server for LightningDB — graph+vector+RAG database for AI agent memory"
+
+[[bin]]
+name = "lightning-server"
+path = "src/main.rs"
+
+[dependencies]
+lightning-core = { path = "../lightning-core" }
+lightning = { path = "../lightning" }
+axum = { version = "0.8", features = ["json", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive", "env"] }
+crossbeam = { workspace = true }
+parking_lot = { workspace = true }
+# utoipa = { version = "5", features = ["axum_extras"] }
+# utoipa-swagger-ui disabled temporarily
+uuid = { version = "1", features = ["v4"] }
+async-stream = "0.3"
+futures = "0.3"
+arrow = { workspace = true }
+thiserror = { workspace = true }
+mime = "0.3"
+chrono = { version = "0.4", features = ["serde"] }

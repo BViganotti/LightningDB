@@ -908,12 +908,17 @@ impl MemoryStore {
 
     pub fn recall_recent(&self, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
+        let limit_clause = if top_k < usize::MAX {
+            format!(" LIMIT {top_k}")
+        } else {
+            String::new()
+        };
         let query = format!(
             "MATCH (e:{ENTITY_TABLE}) WHERE (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.created_at DESC LIMIT {top_k}"
+             ORDER BY e.created_at DESC{limit_clause}"
         );
         let res = self.conn.execute(&query, None)?;
         Ok(self.batches_to_entities(&res.batches))

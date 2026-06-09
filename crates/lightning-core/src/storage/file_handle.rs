@@ -136,7 +136,7 @@ impl FileHandle {
     }
 
     pub fn get_file_size(&self) -> u64 {
-        self.get_num_pages() * PAGE_SIZE as u64
+        self.file.metadata().map(|m| m.len()).unwrap_or(0)
     }
 
     pub fn get_page_state(&self, page_idx: u64) -> Option<u64> {
