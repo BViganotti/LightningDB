@@ -225,7 +225,7 @@ This negates ALL Arrow columnar benefits. No use of Arrow compute kernels (which
 - [X] **6.1.1** `[P1]` Use `arrow::compute::kernels` for math functions (sqrt, sin, cos, abs, ceil, floor, round) directly on `Float64Array` — these accept whole arrays.
 - [X] **6.1.2** `[P1]` Use `arrow::compute::kernels::comparison` for comparison operators — `eq`, `neq`, `lt`, `gt`, `leq`, `geq` work on whole arrays.
 - [X] **6.1.3** `[P1]` Use `arrow::compute::kernels::boolean` for AND, OR, NOT — bitwise bitmap operations on whole arrays.
-- [ ] **6.1.4** `[P2]` For string functions that can't use Arrow kernels, batch-process with SIMD-accelerated operations where possible.
+- [X] **6.1.4** `[P2]` For string functions that can't use Arrow kernels, batch-process with SIMD-accelerated operations where possible.
 
 **Impact**: All scalar function evaluation on 10M+ rows is 10-100x slower than vectorized alternatives. ALL ~60+ functions in registry.rs are affected.
 
