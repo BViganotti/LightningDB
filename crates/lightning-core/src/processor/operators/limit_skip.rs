@@ -33,29 +33,23 @@ impl PhysicalOperator for PhysicalLimit {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
-        let current = self.shared.count.load(Ordering::SeqCst);
-        if current >= self.shared.limit {
-            return Ok(None);
-        }
-
         match self.child.get_next(database, tx, params)? {
             Some(chunk) => {
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
 
-                let old_count = self.shared.count.fetch_add(num_rows, Ordering::SeqCst);
-
-                if old_count >= self.shared.limit {
+                let start = self.shared.count.fetch_add(num_rows, Ordering::SeqCst);
+                if start >= self.shared.limit {
                     return Ok(None);
                 }
 
-                if old_count + num_rows <= self.shared.limit {
+                let end = std::cmp::min(start + num_rows, self.shared.limit);
+                let take = end - start;
+                if take == num_rows {
                     Ok(Some(chunk))
                 } else {
-                    let take = self.shared.limit - old_count;
-                    let sliced_batch = batch.slice(0, take);
                     Ok(Some(DataChunk {
-                        batch: sliced_batch,
+                        batch: batch.slice(0, take),
                     }))
                 }
             }
