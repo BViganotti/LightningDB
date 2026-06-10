@@ -65,6 +65,8 @@ impl PhysicalIntersect {
         {
             return Ok(());
         }
+        // Lock ordering: acquire write locks in index order (0, 1, 2, ...)
+        // to match the probe path's read lock order and prevent deadlock.
         for i in 0..self.build_operators.len() {
             let ht_arc = self.build_hts[i].clone();
             let mut ht = ht_arc.write();
@@ -123,8 +125,16 @@ impl PhysicalOperator for PhysicalIntersect {
                         let mut smallest_idx = 0;
                         let mut possible = true;
 
-                        let ht_read_locks: Vec<_> =
-                            self.build_hts.iter().map(|ht| ht.read()).collect();
+                        // Acquire locks in strict index order (0, 1, 2, ...) to prevent deadlock.
+                        // Lock ordering: always build_hts[0], build_hts[1], ...
+                        // Build phase (PhysicalIntersect::build) acquires write locks in the same order.
+                        let ht_read_locks: Vec<_> = {
+                            let mut guards = Vec::with_capacity(self.build_hts.len());
+                            for ht in self.build_hts.iter() {
+                                guards.push(ht.read());
+                            }
+                            guards
+                        };
 
                         for (i, ht) in ht_read_locks.iter().enumerate() {
                             let key = Value::from_arrow(
