@@ -119,6 +119,9 @@ impl PhysicalCopy {
 }
 
 impl PhysicalOperator for PhysicalCopy {
+    fn is_read_only(&self) -> bool {
+        false
+    }
     fn get_next(
         &mut self,
         database: &Database,
@@ -456,7 +459,4 @@ impl PhysicalCopy {
             .map_err(|e| crate::LightningError::Internal(e.to_string()))
     }
 
-    fn is_read_only(&self) -> bool {
-        false
-    }
 }

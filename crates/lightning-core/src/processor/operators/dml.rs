@@ -72,6 +72,9 @@ impl PhysicalCreate {
 }
 
 impl PhysicalOperator for PhysicalCreate {
+    fn is_read_only(&self) -> bool {
+        false
+    }
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -289,11 +292,11 @@ impl PhysicalSet {
         }
     }
 
+}
+impl PhysicalOperator for PhysicalSet {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalSet {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -513,11 +516,11 @@ impl PhysicalDelete {
         }
     }
 
+}
+impl PhysicalOperator for PhysicalDelete {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalDelete {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -697,11 +700,11 @@ impl PhysicalCreateRel {
             tx_id,
         }
     }
+}
+impl PhysicalOperator for PhysicalCreateRel {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalCreateRel {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -882,11 +885,11 @@ impl PhysicalMerge {
             read_ts,
         }
     }
+}
+impl PhysicalOperator for PhysicalMerge {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalMerge {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -1079,9 +1082,5 @@ impl PhysicalOperator for PhysicalMerge {
             tx_id: self.tx_id,
             read_ts: self.read_ts,
         })
-    }
-
-    fn is_read_only(&self) -> bool {
-        false
     }
 }
