@@ -51,9 +51,13 @@ impl PhysicalUnion {
             let mut seen = self.shared_state.seen_hashes.write();
             let mut collisions = self.shared_state.collision_rows.write();
             for i in 0..num_rows {
+                // Convert row once, cache it for both hashing and collision comparison.
+                let row: Vec<Value> = (0..num_cols)
+                    .map(|j| Value::from_arrow(batch.column(j), i))
+                    .collect();
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                for j in 0..num_cols {
-                    Value::from_arrow(batch.column(j), i).hash(&mut hasher);
+                for val in &row {
+                    val.hash(&mut hasher);
                 }
                 let hash = hasher.finish();
 
@@ -62,9 +66,6 @@ impl PhysicalUnion {
                     filtered_indices.push(i as u64);
                 } else {
                     // Hash collision: check all collision rows for equality
-                    let row: Vec<Value> = (0..num_cols)
-                        .map(|j| Value::from_arrow(batch.column(j), i))
-                        .collect();
                     let is_dup = collisions.iter().any(|(h, r)| *h == hash && r == &row);
                     if !is_dup {
                         collisions.push((hash, row));

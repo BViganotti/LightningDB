@@ -46,7 +46,14 @@ impl CardinalityEstimator {
                 if let BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)) = cond {
                     left_card.saturating_mul(right_card)
                 } else {
-                    std::cmp::max(left_card, right_card)
+                    let product = left_card as f64 * right_card as f64;
+                    let geom = product.sqrt();
+                    let sel = self.estimate_selectivity(cond, &LogicalOperator::Join(
+                        left.clone(),
+                        right.clone(),
+                        cond.clone(),
+                    ));
+                    (geom * sel).max(1.0) as u64
                 }
             }
             LogicalOperator::Aggregate {
@@ -87,7 +94,7 @@ impl CardinalityEstimator {
                     s1 + s2 - (s1 * s2)
                 }
                 AstLogicalOperator::Not => {
-                    unreachable!("Not should be BoundExpression::Not, not LogicalOperator::Not")
+                    0.5 // Fallback selectivity for Not
                 }
                 AstLogicalOperator::Xor => {
                     let s1 = self.estimate_selectivity(left, child);

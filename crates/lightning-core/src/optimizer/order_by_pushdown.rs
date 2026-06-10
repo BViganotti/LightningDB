@@ -35,8 +35,14 @@ impl OrderByPushDown {
                 }
             }
             _ => {
-                // Generic recursion should be handled by the optimizer loop or explicitly.
-                Ok(plan)
+                if let Some(child) = plan.clone().get_child().cloned() {
+                    let pushed_child = self.push_down(child)?;
+                    let mut new_plan = plan.clone();
+                    new_plan.set_child(pushed_child);
+                    Ok(new_plan)
+                } else {
+                    Ok(plan)
+                }
             }
         }
     }

@@ -32,6 +32,13 @@ impl GDSFrontier {
     pub fn get_distance(&self, node_id: usize) -> u32 {
         self.nodes[node_id].load(Ordering::Relaxed)
     }
+
+    pub fn clear(&mut self) {
+        for &node_id in &self.active_nodes {
+            self.nodes[node_id as usize].store(u32::MAX, Ordering::Relaxed);
+        }
+        self.active_nodes.clear();
+    }
 }
 
 pub struct GDSState {
@@ -51,7 +58,9 @@ impl GDSState {
 
     pub fn swap_frontiers(&mut self) {
         std::mem::swap(&mut self.current_frontier, &mut self.next_frontier);
-        // Clear next frontier for next iteration logic would go here
+        if let Some(frontier) = Arc::get_mut(&mut self.next_frontier) {
+            frontier.clear();
+        }
         self.iteration += 1;
     }
 }

@@ -5,7 +5,8 @@ use crate::{LightningError, Result};
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray,
 };
-use arrow::compute::cast;
+
+use arrow::compute::{cast, interleave};
 use arrow::compute::kernels::boolean::{and, not, or};
 use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -454,39 +455,86 @@ impl ExpressionEvaluator {
                 ..
             } => {
                 let num_rows = batch.map(|b| b.num_rows()).unwrap_or(1);
+
+                if when_then.is_empty() {
+                    return if let Some(ref expr) = else_expression {
+                        Self::evaluate(expr, batch, params, num_rows, registry, database)
+                    } else {
+                        Ok(arrow::array::new_null_array(&arrow::datatypes::DataType::Null, num_rows))
+                    };
+                }
+
                 let case_val = if let Some(ref expr) = expression {
                     Some(Self::evaluate(expr, batch, params, num_rows, registry, database)?)
                 } else {
                     None
                 };
-                let mut result: Option<ArrayRef> = None;
-                for (when, then) in when_then {
-                    let when_val = Self::evaluate(when, batch, params, num_rows, registry, database)?;
-                    let matched: ArrayRef = if let Some(ref cv) = case_val {
-                        Arc::new(arrow::compute::kernels::cmp::eq(cv, &when_val)
-                            .map_err(|e| LightningError::Internal(e.to_string()))?)
-                    } else {
-                        when_val
-                    };
-                    let bool_arr = matched.as_any()
-                        .downcast_ref::<arrow::array::BooleanArray>()
-                        .ok_or_else(|| LightningError::Internal("CASE WHEN must be boolean".into()))?;
-                    if bool_arr.true_count() > 0 {
-                        result = Some(Self::evaluate(then, batch, params, num_rows, registry, database)?);
-                        break;
-                    }
+
+                let evaluated: Vec<(ArrayRef, ArrayRef)> = when_then
+                    .iter()
+                    .map(|(when, then)| {
+                        let when_arr = Self::evaluate(when, batch, params, num_rows, registry, database)?;
+                        let then_arr = Self::evaluate(then, batch, params, num_rows, registry, database)?;
+                        Ok((when_arr, then_arr))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let else_arr = if let Some(ref expr) = else_expression {
+                    Some(Self::evaluate(expr, batch, params, num_rows, registry, database)?)
+                } else {
+                    None
+                };
+
+                let match_masks: Vec<ArrayRef> = if let Some(ref cv) = case_val {
+                    evaluated
+                        .iter()
+                        .map(|(when_arr, _)| {
+                            let eq_arr = arrow::compute::kernels::cmp::eq(cv, when_arr)
+                                .map_err(|e| LightningError::Internal(e.to_string()))?;
+                            Ok(Arc::new(eq_arr) as ArrayRef)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    evaluated.iter().map(|(when_arr, _)| when_arr.clone()).collect()
+                };
+
+                let mut sources: Vec<ArrayRef> = Vec::new();
+                for (_, then_arr) in &evaluated {
+                    sources.push(then_arr.clone());
                 }
-                let final_result = match result {
-                    Some(val) => val,
-                    None => {
-                        if let Some(ref else_expr) = else_expression {
-                            Self::evaluate(else_expr, batch, params, num_rows, registry, database)?
-                        } else {
-                            arrow::array::new_null_array(&arrow::datatypes::DataType::Null, num_rows)
+                if let Some(ref arr) = else_arr {
+                    sources.push(arr.clone());
+                } else if !sources.is_empty() {
+                    sources.push(arrow::array::new_null_array(sources[0].data_type(), num_rows));
+                } else {
+                    return Err(LightningError::Internal("CASE WHEN without any branches".into()));
+                }
+                let else_idx = sources.len() - 1;
+
+                // Build interleave indices: for each output row, pick (source_array_idx, row_idx)
+                let source_refs: Vec<&dyn Array> = sources.iter().map(|a| a.as_ref()).collect();
+                let mut indices: Vec<(usize, usize)> = Vec::with_capacity(num_rows);
+                for i in 0..num_rows {
+                    let mut matched = false;
+                    for (j, mask) in match_masks.iter().enumerate() {
+                        let bool_mask = mask
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .ok_or_else(|| LightningError::Internal("CASE WHEN must be boolean".into()))?;
+                        if !bool_mask.is_null(i) && bool_mask.value(i) {
+                            indices.push((j, i));
+                            matched = true;
+                            break;
                         }
                     }
-                };
-                Ok(final_result)
+                    if !matched {
+                        indices.push((else_idx, i));
+                    }
+                }
+                // Use arrow::compute::interleave which replaces the removed MutableArrayData
+                let result_arr = interleave(&source_refs, &indices)
+                    .map_err(|e| LightningError::Internal(format!("CASE interleave failed: {e}")))?;
+                Ok(result_arr)
             }
             BoundExpression::Parameter(name) => {
                 let val = params.and_then(|p| p.get(name)).ok_or_else(|| {

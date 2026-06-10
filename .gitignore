@@ -1,9 +1,4 @@
-/target
-.fusion_mcp.db
-.fusion/
-*.lbug
-*.patch
-__pycache__/
-*.pyc
-dist/
-*.egg-info/
+.opencode/
+target/
+.analyst_data/
+.analyst_data.bak/

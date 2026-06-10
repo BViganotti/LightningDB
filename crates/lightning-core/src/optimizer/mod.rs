@@ -36,7 +36,7 @@ impl Optimizer {
             rules: vec![
                 Box::new(subquery_unnesting::SubqueryUnnesting::new()),
                 Box::new(filter_pushdown::FilterPushDown::new()),
-                Box::new(index_pushdown::IndexPushDown::new(cat2)),
+                // Box::new(index_pushdown::IndexPushDown::new(cat2)),
                 Box::new(join_reordering::JoinReordering::new(cat1)),
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
@@ -56,11 +56,11 @@ impl Optimizer {
     pub fn optimize(&self, mut plan: LogicalOperator) -> Result<LogicalOperator> {
         let max_iters = 5;
         for _iter in 0..max_iters {
-            let before = plan.node_count();
+            let before = format!("{:?}", plan);
             for rule in &self.rules {
                 plan = rule.apply(plan)?;
             }
-            if plan.node_count() == before {
+            if format!("{:?}", plan) == before {
                 break;
             }
         }

@@ -6,6 +6,9 @@ use std::sync::Arc;
 /// Default maximum execution time for a single WASM function call.
 const DEFAULT_WASM_TIMEOUT_MS: u64 = 100;
 
+/// Fuel units per millisecond of timeout. Each wasm instruction consumes 1 fuel unit.
+const WASM_FUEL_PER_MS: u64 = 100_000;
+
 pub struct WasmFunction {
     name: String,
     wasm_bytes: Vec<u8>,
@@ -115,8 +118,11 @@ impl WasmFunction {
         let exec_mode = self.exec_mode.to_u8();
         let func_name = self.func_name.clone();
         let wasm = self.wasm_bytes.clone();
+        let timeout_ms = self.timeout_ms;
 
-        let engine = wasmi::Engine::default();
+        let mut config = wasmi::Config::default();
+        config.consume_fuel(true);
+        let engine = wasmi::Engine::new(&config);
         let module = match wasmi::Module::new(&engine, &wasm) {
             Ok(m) => m,
             Err(e) => {
@@ -148,6 +154,10 @@ impl WasmFunction {
                         }).collect::<Result<Vec<_>>>()?;
 
                         let mut store = wasmi::Store::new(&engine, ());
+                        store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
+                            .map_err(|e| crate::LightningError::Internal(format!(
+                                "WASM fuel metering failed: {e}"
+                            )))?;
                         let instance = wasmi::Instance::new(&mut store, &module, &[])
                             .map_err(|e| crate::LightningError::Internal(format!(
                                 "WASM instantiation failed: {e}"
@@ -164,9 +174,14 @@ impl WasmFunction {
                                 for i in 0..num_rows {
                                     let val = if arg_arrays[0].is_valid(i) {
                                         func.call(&mut store, (arg_arrays[0].value(i),))
-                                            .map_err(|e| crate::LightningError::Internal(format!(
-                                                "WASM call failed: {e}"
-                                            )))?
+                                            .map_err(|e| {
+                                                let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                                                    format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                                } else {
+                                                    format!("WASM call failed: {e}")
+                                                };
+                                                crate::LightningError::Internal(msg)
+                                            })?
                                     } else { f64::NAN };
                                     res.push(val);
                                 }
@@ -182,9 +197,14 @@ impl WasmFunction {
                                     let v0 = if arg_arrays[0].is_valid(i) { arg_arrays[0].value(i) } else { f64::NAN };
                                     let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
                                     let val = func.call(&mut store, (v0, v1))
-                                        .map_err(|e| crate::LightningError::Internal(format!(
-                                            "WASM call failed: {e}"
-                                        )))?;
+                                        .map_err(|e| {
+                                            let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                                                format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                            } else {
+                                                format!("WASM call failed: {e}")
+                                            };
+                                            crate::LightningError::Internal(msg)
+                                        })?;
                                     res.push(val);
                                 }
                                 res
@@ -200,9 +220,14 @@ impl WasmFunction {
                                     let v1 = if arg_arrays[1].is_valid(i) { arg_arrays[1].value(i) } else { f64::NAN };
                                     let v2 = if arg_arrays[2].is_valid(i) { arg_arrays[2].value(i) } else { f64::NAN };
                                     let val = func.call(&mut store, (v0, v1, v2))
-                                        .map_err(|e| crate::LightningError::Internal(format!(
-                                            "WASM call failed: {e}"
-                                        )))?;
+                                        .map_err(|e| {
+                                            let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                                                format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                            } else {
+                                                format!("WASM call failed: {e}")
+                                            };
+                                            crate::LightningError::Internal(msg)
+                                        })?;
                                     res.push(val);
                                 }
                                 res
@@ -221,6 +246,10 @@ impl WasmFunction {
                             ))?;
 
                         let mut store = wasmi::Store::new(&engine, ());
+                        store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
+                            .map_err(|e| crate::LightningError::Internal(format!(
+                                "WASM fuel metering failed: {e}"
+                            )))?;
                         let instance = wasmi::Instance::new(&mut store, &module, &[])
                             .map_err(|e| crate::LightningError::Internal(format!(
                                 "WASM instantiation failed: {e}"
@@ -248,9 +277,14 @@ impl WasmFunction {
                         }
 
                         let output_offset = func.call(&mut store, (write_offset, num_elements))
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM vector call failed: {e}"
-                            )))?;
+                            .map_err(|e| {
+                                let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                                    format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                } else {
+                                    format!("WASM vector call failed: {e}")
+                                };
+                                crate::LightningError::Internal(msg)
+                            })?;
 
                         let mut results = vec![f32::NAN; num_rows];
                         {
@@ -269,10 +303,19 @@ impl WasmFunction {
                             }
                         }
 
+                        {
+                            let mem_data = mem.data_mut(&mut store);
+                            mem_data.fill(0);
+                        }
+
                         Ok(Arc::new(Float32Array::from(results)))
                     }
                     WasmExecMode::MemoryString => {
                         let mut store = wasmi::Store::new(&engine, ());
+                        store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
+                            .map_err(|e| crate::LightningError::Internal(format!(
+                                "WASM fuel metering failed: {e}"
+                            )))?;
                         let instance = wasmi::Instance::new(&mut store, &module, &[])
                             .map_err(|e| crate::LightningError::Internal(format!(
                                 "WASM instantiation failed: {e}"
@@ -300,9 +343,14 @@ impl WasmFunction {
                             }
 
                             let output_offset = func.call(&mut store, (write_offset, input_bytes.len() as i32))
-                                .map_err(|e| crate::LightningError::Internal(format!(
-                                    "WASM string call failed: {e}"
-                                )))?;
+                                .map_err(|e| {
+                                    let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                                        format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                    } else {
+                                        format!("WASM string call failed: {e}")
+                                    };
+                                    crate::LightningError::Internal(msg)
+                                })?;
 
                             let output = {
                                 let mem_data = mem.data(&store);
@@ -315,6 +363,11 @@ impl WasmFunction {
                                 String::from_utf8_lossy(&mem_data[start..end]).to_string()
                             };
                             results.push(output);
+                        }
+
+                        {
+                            let mem_data = mem.data_mut(&mut store);
+                            mem_data.fill(0);
                         }
 
                         Ok(Arc::new(StringArray::from(results)))

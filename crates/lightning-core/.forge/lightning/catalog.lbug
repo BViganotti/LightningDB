@@ -1,0 +1,262 @@
+{
+  "node_tables": {
+    "Entity": {
+      "name": "Entity",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "type",
+          "type_": "String"
+        },
+        {
+          "name": "content",
+          "type_": "String"
+        },
+        {
+          "name": "created_at",
+          "type_": "Int64"
+        },
+        {
+          "name": "last_accessed",
+          "type_": "Int64"
+        },
+        {
+          "name": "access_count",
+          "type_": "Int64"
+        },
+        {
+          "name": "ttl_seconds",
+          "type_": "Int64"
+        },
+        {
+          "name": "metadata",
+          "type_": "String"
+        },
+        {
+          "name": "valid_from",
+          "type_": "Int64"
+        },
+        {
+          "name": "valid_until",
+          "type_": "Int64"
+        }
+      ],
+      "num_rows": 6,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 5,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 5,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": {
+              "Number": 1780387785672499.0
+            },
+            "max": {
+              "Number": 1780387785756531.0
+            },
+            "null_count": 0,
+            "num_values": 8,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    }
+  },
+  "rel_tables": {
+    "Relates": {
+      "name": "Relates",
+      "from_table": "Entity",
+      "to_table": "Entity",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        },
+        {
+          "name": "type",
+          "type_": "String"
+        },
+        {
+          "name": "weight",
+          "type_": "Double"
+        },
+        {
+          "name": "created_at",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    }
+  },
+  "sequences": {},
+  "macros": {}
+}

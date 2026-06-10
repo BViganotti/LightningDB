@@ -80,7 +80,8 @@ impl BitPacker {
             let mask = ((1u32 << bits_to_write_in_byte) - 1) as u8;
             let bits = ((val >> bits_written) & mask as u64) as u8;
 
-            data[byte_idx] |= bits << bit_in_byte;
+            let shifted_mask = (mask as u8) << bit_in_byte;
+            data[byte_idx] = (data[byte_idx] & !shifted_mask) | (bits << bit_in_byte);
 
             bits_written += bits_to_write_in_byte;
         }
