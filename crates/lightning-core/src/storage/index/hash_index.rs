@@ -3,6 +3,7 @@ use crate::storage::buffer_manager::{BufferManager, PAGE_SIZE};
 use crate::storage::file_handle::FileHandle;
 use crate::LightningError;
 use crate::Result;
+use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -17,6 +18,7 @@ use std::sync::Arc;
 pub struct HashIndex {
     file_handle: Arc<FileHandle>,
     num_buckets: std::sync::atomic::AtomicU64,
+    resize_lock: Mutex<()>,
 }
 
 const HEADER_PAGE_IDX: u64 = 0;
@@ -58,6 +60,7 @@ impl HashIndex {
         let index = Self {
             file_handle,
             num_buckets: std::sync::atomic::AtomicU64::new(num_buckets),
+            resize_lock: Mutex::new(()),
         };
         if is_new {
             index.initialize_header()?;
@@ -90,6 +93,7 @@ impl HashIndex {
     /// Collects all active entries, reinitializes the table with
     /// twice the bucket count, and rehashes every entry.
     pub fn resize(&self, bm: &BufferManager, tx: &crate::transaction::transaction_manager::Transaction) -> Result<()> {
+        let _lock = self.resize_lock.lock();
         let entries = self.collect_all_entries(bm, tx)?;
         let new_buckets = self.num_buckets.load(std::sync::atomic::Ordering::Acquire) * 2;
 
@@ -431,6 +435,7 @@ impl HashIndex {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        let _lock = self.resize_lock.lock();
         let hash = Self::compute_hash(key);
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
@@ -487,6 +492,7 @@ impl HashIndex {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<bool> {
+        let _lock = self.resize_lock.lock();
         let hash = Self::compute_hash(key);
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
