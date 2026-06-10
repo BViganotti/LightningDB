@@ -239,7 +239,24 @@ pub struct Database {
     pub catalog: Arc<LazyCatalog>,
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
-    pub plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>>,
+    /// Cached bound statements paired with their binder column offsets, keyed by
+    /// normalized query string. The column offsets map variable names to their
+    /// starting column position in the binder's flat layout and are needed by the
+    /// physical plan builder to remap PropertyLookup indices after optimizer
+    /// transforms (e.g. join reordering) alter the physical column layout.
+    pub plan_caches: Vec<
+        Arc<
+            parking_lot::Mutex<
+                LruCache<
+                    String,
+                    Arc<(
+                        crate::planner::binder::BoundStatement,
+                        std::collections::HashMap<String, usize>,
+                    )>,
+                >,
+            >,
+        >,
+    >,
     pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
     pub metrics: DatabaseMetrics,
 
@@ -1154,12 +1171,13 @@ impl Connection {
         db.storage_manager.read().flush_all_pending(bm, &tx)?;
 
         // Try bound statement cache
-        let bound_stmt = {
+        let (bound_stmt, binder_column_offsets) = {
             let cache_shard_idx = cache_shard(&cache_key, 4);
             let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
             let cached = cache.get(&cache_key).cloned();
-            if let Some(stmt) = cached {
-                (*stmt).clone()
+            if let Some(pair) = cached {
+                let (stmt, offsets) = &*pair;
+                (stmt.clone(), offsets.clone())
             } else {
                 drop(cache);
                 let query = parse(query_str)
@@ -1171,14 +1189,15 @@ impl Connection {
                 );
                 let bound_query = binder.bind_query(&query)?;
                 drop(catalog);
+                let binder_offsets = bound_query.column_offsets.clone();
                 let bound_union = bound_query
                     .union_queries
                     .first()
                     .ok_or_else(|| LightningError::Query("No query".into()))?;
                 let stmt = bound_union.statement.clone();
                 let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
-                cache.put(cache_key.clone(), Arc::new(stmt.clone()));
-                stmt
+                cache.put(cache_key.clone(), Arc::new((stmt.clone(), binder_offsets.clone())));
+                (stmt, binder_offsets)
             }
         };
 
@@ -1189,6 +1208,7 @@ impl Connection {
             tx.tx_id,
             Arc::clone(&tx.undo_buffer),
         );
+        planner.binder_column_offsets = binder_column_offsets;
         let physical_plan = planner.plan(logical_plan)?;
 
         // Cache physical plan for read-only queries — these are safe to share

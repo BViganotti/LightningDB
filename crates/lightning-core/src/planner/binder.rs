@@ -10,6 +10,7 @@ pub struct BoundQuery {
     pub union_queries: Vec<BoundUnionQuery>,
     pub is_explain: bool,
     pub is_profile: bool,
+    pub column_offsets: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +391,7 @@ impl<'a> Binder<'a> {
             union_queries,
             is_explain: query.is_explain,
             is_profile: query.is_profile,
+            column_offsets: self.column_offsets.clone(),
         })
     }
 

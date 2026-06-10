@@ -67,6 +67,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
             storage.ensure_csr_fresh(&self.rel_table.name, &self.bm, tx)?;
             let csr = storage.fwd_csr.get(&self.rel_table.name);
 
+            let mut fallback_adj: Option<std::collections::HashMap<u64, Vec<u64>>> = None;
+
             for i in 0..chunk.batch.num_rows() {
                 let start_node = Value::from_arrow(chunk.batch.column(self.src_var_idx), i);
                 let start_id = match start_node {
@@ -84,13 +86,11 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         continue;
                     }
                     if depth >= self.bounds.0 && depth > 0 {
-                        // Add result: Duplicate child row + this neighbor
                         for col_idx in 0..chunk.batch.num_columns() {
                             final_columns[col_idx]
                                 .push(Value::from_arrow(chunk.batch.column(col_idx), i));
                         }
                         final_columns[chunk.batch.num_columns()].push(Value::Node(node_id));
-                        // Add properties of the destination node
                         for (prop_idx, col) in self.dst_table.columns[1..].iter().enumerate() {
                             let val = col.get_value(&self.bm, node_id, tx)?;
                             final_columns[chunk.batch.num_columns() + 1 + prop_idx].push(val);
@@ -107,21 +107,26 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                 }
                             }
                         } else {
-                            // Correct Fallback: Scan the relationship table for this node_id
-                            let src_col = &self.rel_table.columns[0]; // _src
-                            let dst_col = &self.rel_table.columns[1]; // _dst
-                            let total_rels = self.rel_table.stats.read().cardinality;
-                            for r_idx in 0..total_rels {
-                                let s_val = src_col.get_value(&self.bm, r_idx, tx)?;
-                                let d_val = dst_col.get_value(&self.bm, r_idx, tx)?;
-                                if let Value::Node(s_id) = s_val {
-                                    if s_id == node_id {
-                                        if let Value::Node(d_id) = d_val {
-                                            if !visited.contains(&d_id) {
-                                                visited.insert(d_id);
-                                                queue.push_back((d_id, depth + 1));
-                                            }
-                                        }
+                            if fallback_adj.is_none() {
+                                let src_col = &self.rel_table.columns[0];
+                                let dst_col = &self.rel_table.columns[1];
+                                let total_rels = self.rel_table.stats.read().cardinality;
+                                let mut map: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
+                                for r_idx in 0..total_rels {
+                                    let Ok(s_val) = src_col.get_value(&self.bm, r_idx, tx) else { continue };
+                                    let Ok(d_val) = dst_col.get_value(&self.bm, r_idx, tx) else { continue };
+                                    if let (Value::Node(s_id), Value::Node(d_id)) = (s_val, d_val) {
+                                        map.entry(s_id).or_default().push(d_id);
+                                    }
+                                }
+                                fallback_adj = Some(map);
+                            }
+                            let adj = fallback_adj.as_ref().unwrap();
+                            if let Some(neighbors) = adj.get(&node_id) {
+                                for &neighbor_id in neighbors {
+                                    if !visited.contains(&neighbor_id) {
+                                        visited.insert(neighbor_id);
+                                        queue.push_back((neighbor_id, depth + 1));
                                     }
                                 }
                             }
