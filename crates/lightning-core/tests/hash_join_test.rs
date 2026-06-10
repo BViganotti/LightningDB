@@ -53,7 +53,8 @@ fn test_hash_join_vectorized() {
     // Join on 'id' (index 0)
     let mut join = HashJoin::new(left, right, 0, 0);
     
-    let db = lightning_core::Database::new(tempfile::tempdir().unwrap().path(), Default::default()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let db = lightning_core::Database::new(dir.path(), Default::default()).unwrap();
     let tx = db.transaction_manager.begin(false).unwrap();
     let res = join.get_next(&db, &tx, None).unwrap().expect("Should have output");
     let batch = res.batch;
