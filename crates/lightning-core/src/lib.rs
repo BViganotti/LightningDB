@@ -108,6 +108,11 @@ pub struct SystemConfig {
     /// When None (default), only relative paths are allowed and resolved
     /// relative to the database directory.
     pub copy_base_dir: Option<std::path::PathBuf>,
+    /// Base directory for WASM UDF/module file loading.
+    /// When set, all WASM file paths must resolve within this directory.
+    /// When None (default), only relative paths are allowed and resolved
+    /// relative to the database directory.
+    pub wasm_base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for SystemConfig {
@@ -123,6 +128,7 @@ impl Default for SystemConfig {
             prefetch_confidence: 0.15,
             slow_query_threshold_ms: 100,
             copy_base_dir: None,
+            wasm_base_dir: None,
         }
     }
 }
@@ -547,7 +553,8 @@ impl Database {
         if self._config.read_only {
             return Err(LightningError::Config("Database is opened as read-only".into()));
         }
-        let wasm_func = crate::wasm_function::WasmFunction::load(wasm_path, func_name)?;
+        let validated = self.validate_wasm_path(wasm_path.as_ref())?;
+        let wasm_func = crate::wasm_function::WasmFunction::load(validated, func_name)?;
         let scalar = wasm_func.to_scalar_function();
         self.function_registry.register_scalar(scalar);
         tracing::info!("Registered WASM function: {}", func_name);
@@ -556,6 +563,59 @@ impl Database {
 
     pub fn get_catalog_path(&self) -> PathBuf {
         self._path.join("catalog.lbug")
+    }
+
+    /// Validate that `user_path` resolves within `base_dir` (or the database directory).
+    fn validate_wasm_path(
+        &self,
+        user_path: &Path,
+    ) -> Result<PathBuf> {
+        use std::path::Component;
+        let base_dir = self._config.wasm_base_dir.as_deref();
+        let database_path = &self._path;
+
+        if user_path.is_absolute() && base_dir.is_none() {
+            return Err(LightningError::Config(
+                "Absolute WASM paths require wasm_base_dir to be set in SystemConfig".into(),
+            ));
+        }
+        for component in user_path.components() {
+            if let Component::ParentDir = component {
+                return Err(LightningError::Config(format!(
+                    "WASM path '{}' contains '..' traversal",
+                    user_path.display()
+                )));
+            }
+        }
+        let base = base_dir.unwrap_or(database_path);
+        let resolved = base.join(user_path);
+        let canonical_base = base
+            .canonicalize()
+            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM base: {}", e)))?;
+        let parent = resolved.parent().ok_or_else(|| {
+            LightningError::Config(format!(
+                "Cannot determine parent for WASM path '{}'",
+                user_path.display()
+            ))
+        })?;
+        let file_name = resolved.file_name().ok_or_else(|| {
+            LightningError::Config(format!(
+                "Cannot determine filename for WASM path '{}'",
+                user_path.display()
+            ))
+        })?;
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM path parent: {}", e)))?;
+        let canonical = canonical_parent.join(file_name);
+        if !canonical.starts_with(&canonical_base) {
+            return Err(LightningError::Config(format!(
+                "WASM path '{}' escapes base directory '{}'",
+                user_path.display(),
+                canonical_base.display()
+            )));
+        }
+        Ok(canonical)
     }
 
     pub fn checkpoint(&self) -> Result<()> {
