@@ -321,8 +321,81 @@ impl PhysicalOperator for HashJoin {
                         for build_idx in 0..n {
                             left_indices.push(self.left_row_idx as u32);
                             right_indices.push(Some(build_idx as u32));
-                if left_indices.len() >= 1024 {
-                    break;
+                            if left_indices.len() >= 1024 {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Find matches using specialized or generic hash table
+                    let matches_ref = match left_key_col.data_type() {
+                        DataType::UInt64 => {
+                            let arr = left_key_col.as_any().downcast_ref::<UInt64Array>()
+                                .expect("hash join probe: UInt64 key");
+                            if arr.is_null(self.left_row_idx) {
+                                None
+                            } else {
+                                shared.u64_hash_table.get(&arr.value(self.left_row_idx))
+                            }
+                        }
+                        DataType::Int64 => {
+                            let arr = left_key_col.as_any().downcast_ref::<Int64Array>()
+                                .expect("hash join probe: Int64 key");
+                            if arr.is_null(self.left_row_idx) {
+                                None
+                            } else {
+                                shared
+                                    .u64_hash_table
+                                    .get(&(arr.value(self.left_row_idx) as u64))
+                            }
+                        }
+                        _ => {
+                            let key = Value::from_arrow(left_key_col, self.left_row_idx);
+                            shared.hash_table.get(&key)
+                        }
+                    };
+
+                    match self.join_type {
+                        JoinType::Inner => {
+                            if let Some(m) = matches_ref {
+                                for &build_idx in m {
+                                    left_indices.push(self.left_row_idx as u32);
+                                    right_indices.push(Some(build_idx as u32));
+                                    if left_indices.len() >= 1024 {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        JoinType::LeftOuter => {
+                            if let Some(m) = matches_ref {
+                                for &build_idx in m {
+                                    left_indices.push(self.left_row_idx as u32);
+                                    right_indices.push(Some(build_idx as u32));
+                                    if left_indices.len() >= 1024 {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                left_indices.push(self.left_row_idx as u32);
+                                right_indices.push(None);
+                            }
+                        }
+                        JoinType::LeftSemi => {
+                            if matches_ref.is_some() {
+                                left_indices.push(self.left_row_idx as u32);
+                            }
+                        }
+                        JoinType::LeftAnti => {
+                            if matches_ref.is_none() {
+                                left_indices.push(self.left_row_idx as u32);
+                            }
+                        }
+                    }
+                }
+
+                if left_indices.len() < 1024 {
+                    self.left_row_idx += 1;
                 }
             }
 
