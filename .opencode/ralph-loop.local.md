@@ -30,7 +30,7 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 5. `crates/lightning-core/src/storage/index/hash_index.rs:92-148` — resize race (header updated before zeroing)
 6. ~~`crates/lightning-core/src/storage/wal.rs:495` — WAL CRC computed but never compared~~ (FIXED)
 7. ~~`crates/lightning-core/tests/hash_join_test.rs:57` — dangling tempdir use-after-free~~ (FIXED)
-8. `crates/lightning-core/src/memory.rs:1047-1051,1268-1275` — remaining cypher injection sites
+8. ~~`crates/lightning-core/src/memory.rs:1047-1051,1268-1275` — remaining cypher injection sites~~ (FIXED)
 9. `crates/lightning-core/src/planner/binder.rs:562-597` — COPY TO/FROM path validation against copy_base_dir
 10. `crates/lightning-core/src/cdc.rs:86-108` — CDC thread holds lock during blocking I/O
 11. `crates/lightning-core/src/transaction/transaction_manager.rs:232-246` — unsafe pointer mutation bypasses buffer manager
