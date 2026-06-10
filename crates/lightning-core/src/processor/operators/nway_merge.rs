@@ -4,10 +4,46 @@ use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
 
 use arrow::array::ArrayRef;
-use arrow::compute::SortColumn;
-use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
+use std::collections::BinaryHeap;
 use std::sync::Arc;
+
+/// Min-heap wrapper: custom Ord so BinaryHeap acts as a min-heap on (sort_keys, child_idx).
+struct HeapEntry {
+    keys: Vec<Value>,
+    child_idx: usize,
+}
+
+impl Eq for HeapEntry {}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.child_idx == other.child_idx
+    }
+}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse so BinaryHeap pops the *smallest* entry (min-heap).
+        compare_key_slices(&self.keys, &other.keys).reverse()
+    }
+}
+
+fn compare_key_slices(a: &[Value], b: &[Value]) -> std::cmp::Ordering {
+    for (ak, bk) in a.iter().zip(b.iter()) {
+        let cmp = compare_values(ak, bk);
+        if cmp != std::cmp::Ordering::Equal {
+            return cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
 
 /// NWayMerge merges multiple sorted streams from parallel sort workers
 /// into a single sorted output using a K-way merge. Each child is a
@@ -38,22 +74,6 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (_, Value::Null) => std::cmp::Ordering::Greater,
         _ => std::cmp::Ordering::Equal,
     }
-}
-
-fn compare_rows(
-    sort_keys: &[Vec<Value>],
-    idx_a: usize,
-    idx_b: usize,
-    order_by: &[BoundOrderByItem],
-) -> std::cmp::Ordering {
-    for (i, item) in order_by.iter().enumerate() {
-        let cmp = compare_values(&sort_keys[i][idx_a], &sort_keys[i][idx_b]);
-        let ordered = if item.descending { cmp.reverse() } else { cmp };
-        if ordered != std::cmp::Ordering::Equal {
-            return ordered;
-        }
-    }
-    std::cmp::Ordering::Equal
 }
 
 impl PhysicalOperator for NWayMerge {
@@ -146,31 +166,34 @@ impl PhysicalOperator for NWayMerge {
             child_sort_keys.push(keys);
         }
 
-        // K-way merge: build output column by column
+        // K-way merge using a BinaryHeap — O(N log K) instead of O(N×K)
         let mut cursors: Vec<usize> = vec![0; num_children];
         let mut out_arrays: Vec<Vec<Value>> = vec![Vec::with_capacity(total_rows); num_cols];
 
-        for _ in 0..total_rows {
-            let mut best_child = None;
-            for child_idx in 0..num_children {
-                if cursors[child_idx] >= child_data[child_idx].num_rows() {
-                    continue;
-                }
-                match best_child {
-                    None => best_child = Some(child_idx),
-                    Some(best) => {
-                        if compare_rows(&child_sort_keys[child_idx], cursors[child_idx], cursors[best], &self.order_by) == std::cmp::Ordering::Less {
-                            best_child = Some(child_idx);
-                        }
-                    }
-                }
+        let mut heap = BinaryHeap::with_capacity(num_children);
+        for child_idx in 0..num_children {
+            if cursors[child_idx] < child_data[child_idx].num_rows() {
+                let keys: Vec<Value> = child_sort_keys[child_idx]
+                    .iter()
+                    .map(|col| col[cursors[child_idx]].clone())
+                    .collect();
+                heap.push(HeapEntry { keys, child_idx });
             }
-            let bc = best_child.unwrap();
-            let row = cursors[bc];
+        }
+
+        while let Some(HeapEntry { child_idx, .. }) = heap.pop() {
+            let row = cursors[child_idx];
             for col_idx in 0..num_cols {
-                out_arrays[col_idx].push(Value::from_arrow(child_data[bc].column(col_idx), row));
+                out_arrays[col_idx].push(Value::from_arrow(child_data[child_idx].column(col_idx), row));
             }
-            cursors[bc] += 1;
+            cursors[child_idx] += 1;
+            if cursors[child_idx] < child_data[child_idx].num_rows() {
+                let keys: Vec<Value> = child_sort_keys[child_idx]
+                    .iter()
+                    .map(|col| col[cursors[child_idx]].clone())
+                    .collect();
+                heap.push(HeapEntry { keys, child_idx });
+            }
         }
 
         // Convert output columns to arrow arrays
