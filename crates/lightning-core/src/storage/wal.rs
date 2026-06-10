@@ -492,7 +492,17 @@ impl WALRecordIter {
                     digest.update(&file_id.to_le_bytes());
                     digest.update(&page_idx.to_le_bytes());
                     digest.update(&data);
-                    let _computed_crc = digest.finalize();
+                    let computed_crc = digest.finalize();
+                    if computed_crc != stored_crc {
+                        return Some(WALRecord::Corrupt {
+                            msg: format!(
+                                "CRC mismatch at offset {}: computed {:08x} != stored {:08x}",
+                                self.base_offset + self.pos as u64,
+                                computed_crc,
+                                stored_crc
+                            ),
+                        });
+                    }
 
                     let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
 
@@ -539,6 +549,9 @@ pub enum WALRecord {
     },
     Commit {
         tx_id: u64,
+    },
+    Corrupt {
+        msg: String,
     },
 }
 
