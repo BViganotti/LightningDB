@@ -74,6 +74,15 @@ pub trait PhysicalOperator: Send + Sync {
     fn output_schema(&self) -> Option<Arc<arrow::datatypes::Schema>> {
         None
     }
+
+    /// Whether this operator performs writes (DML, DDL, checkpoint, vacuum, COPY FROM).
+    /// Read-only operators (Scan, Filter, Projection, Sort, etc.) can have their
+    /// physical plans cached and shared across transactions without read_ts/tx_id
+    /// in the cache key. Write operators must either not be cached or use a
+    /// transaction-specific key.
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 pub struct Processor {

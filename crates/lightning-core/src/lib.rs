@@ -240,7 +240,7 @@ pub struct Database {
     pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
     pub header: RwLock<crate::storage::DatabaseHeader>,
     pub plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<crate::planner::binder::BoundStatement>>>>>,
-    pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
+    pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
     pub metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
@@ -1086,26 +1086,54 @@ impl Connection {
         Box<dyn crate::processor::PhysicalOperator + Send + Sync>,
         Arc<crate::transaction::transaction_manager::Transaction>,
     )> {
-        // Fast path: cache lookup with raw query (no regex normalization).
-        let mut cache_key = String::new();
-        let cached_stmt = {
-            let mut cache = self.client_context.database.plan_caches[cache_shard(query_str, 4)].lock();
-            let hit = cache.get(query_str).cloned();
-            if hit.is_some() {
-                hit
-            } else {
-                cache_key = normalize_query(query_str);
-                if cache_key != query_str {
-                    cache.get(&cache_key).cloned()
-                } else {
-                    None
-                }
-            }
+        // Normalize query once for both plan cache and physical plan cache
+        let normalized = normalize_query(query_str);
+        let cache_key = if normalized != query_str {
+            normalized
+        } else {
+            query_str.to_string()
         };
-        let cached_stmt = {
-            let mut cache = self.client_context.database.plan_caches[cache_shard(&cache_key, 4)].lock();
-            cache.get(&cache_key).cloned()
+
+        // Hash the cache key for zero-allocation physical plan cache lookups
+        let query_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            cache_key.hash(&mut h);
+            h.finish()
         };
+
+        let pp_shard = cache_shard(&cache_key, 4);
+
+        // Try physical plan cache first (fastest path: saves logical plan,
+        // optimizer, and physical planner)
+        let cached_pp = {
+            let mut cache = self.client_context.database.physical_plan_caches[pp_shard].lock();
+            cache.get(&query_hash).cloned()
+        };
+        if let Some(cached_plan) = cached_pp {
+            // Read-only plans are safe to reuse across any transaction
+            let plan = cached_plan.clone_box();
+            let tx = match (snapshot_ts, explicit_tx) {
+                (_, Some(tx)) => tx,
+                (Some(ts), None) => Arc::new(
+                    self.client_context
+                        .database
+                        .transaction_manager
+                        .begin_at(true, ts)?,
+                ),
+                (None, None) => Arc::new(
+                    self.client_context
+                        .database
+                        .transaction_manager
+                        .begin(false)?,
+                ),
+            };
+            let bm = &self.client_context.database.buffer_manager;
+            let db: &Database = &self.client_context.database;
+            db.storage_manager.read().flush_all_pending(bm, &tx)?;
+            return Ok((plan, tx));
+        }
+
         let tx = match (snapshot_ts, explicit_tx) {
             (_, Some(tx)) => tx,
             (Some(ts), None) => Arc::new(
@@ -1124,32 +1152,36 @@ impl Connection {
         let bm = &self.client_context.database.buffer_manager;
         let db: &Database = &self.client_context.database;
         db.storage_manager.read().flush_all_pending(bm, &tx)?;
-        let bound_stmt = if let Some(stmt) = cached_stmt {
-            (*stmt).clone()
-        } else {
-            let query = parse(query_str)
-                .map_err(|e| LightningError::Query(e.to_string()))?;
-            let catalog = self.client_context.database.catalog.read();
-            let mut binder = Binder::new(
-                &catalog,
-                &self.client_context.database.function_registry,
-            );
-            let bound_query = binder.bind_query(&query)?;
-            drop(catalog);
-            if let Some(bound_union) = bound_query.union_queries.first() {
-                let shard = cache_shard(&cache_key, 4);
-                self.client_context
-                    .database
-                    .plan_caches[shard]
-                    .lock()
-                    .put(cache_key.clone(), Arc::new(bound_union.statement.clone()));
+
+        // Try bound statement cache
+        let bound_stmt = {
+            let cache_shard_idx = cache_shard(&cache_key, 4);
+            let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
+            let cached = cache.get(&cache_key).cloned();
+            if let Some(stmt) = cached {
+                (*stmt).clone()
+            } else {
+                drop(cache);
+                let query = parse(query_str)
+                    .map_err(|e| LightningError::Query(e.to_string()))?;
+                let catalog = self.client_context.database.catalog.read();
+                let mut binder = Binder::new(
+                    &catalog,
+                    &self.client_context.database.function_registry,
+                );
+                let bound_query = binder.bind_query(&query)?;
+                drop(catalog);
+                let bound_union = bound_query
+                    .union_queries
+                    .first()
+                    .ok_or_else(|| LightningError::Query("No query".into()))?;
+                let stmt = bound_union.statement.clone();
+                let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
+                cache.put(cache_key.clone(), Arc::new(stmt.clone()));
+                stmt
             }
-            let bound_union = bound_query
-                .union_queries
-                .first()
-                .ok_or_else(|| LightningError::Query("No query".into()))?;
-            bound_union.statement.clone()
         };
+
         let logical_plan = self.plan_and_optimize(bound_stmt)?;
         let mut planner = PhysicalPlanner::new(
             Arc::clone(&self.client_context.database),
@@ -1158,16 +1190,19 @@ impl Connection {
             Arc::clone(&tx.undo_buffer),
         );
         let physical_plan = planner.plan(logical_plan)?;
-        // Cache the physical plan keyed by (cache_key, read_ts) for faster re-execution
-        if !cache_key.is_empty() {
-            let pp_key = format!("{}:{}", &cache_key, tx.read_ts);
-            let shard = cache_shard(&pp_key, 4);
+
+        // Cache physical plan for read-only queries — these are safe to share
+        // across all transactions since operators use tx.read_ts dynamically.
+        // Non-read-only plans (DML, DDL) have tx_id baked into operators and
+        // cannot be safely reused.
+        if physical_plan.is_read_only() {
             self.client_context
                 .database
-                .physical_plan_caches[shard]
+                .physical_plan_caches[pp_shard]
                 .lock()
-                .put(pp_key, Arc::from(physical_plan.clone_box()));
+                .put(query_hash, Arc::from(physical_plan.clone_box()));
         }
+
         Ok((physical_plan, tx))
     }
 
