@@ -447,7 +447,14 @@ impl Value {
             Value::Null => serde_json::Value::Null,
             Value::Boolean(b) => serde_json::Value::Bool(*b),
             Value::Number(n) => {
-                serde_json::Value::Number(serde_json::Number::from_f64(*n).expect("internal invariant violated"))
+                if n.is_nan() || n.is_infinite() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(*n)
+                            .unwrap_or(serde_json::Number::from_f64(0.0).unwrap()),
+                    )
+                }
             }
             Value::String(s) => serde_json::Value::String(s.clone()),
             Value::Node(id) | Value::Relationship(id) => serde_json::Value::Number((*id).into()),
