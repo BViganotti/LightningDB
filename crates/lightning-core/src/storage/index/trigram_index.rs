@@ -213,6 +213,7 @@ impl TrigramIndex {
                 let list = map.entry(tri).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
@@ -223,6 +224,7 @@ impl TrigramIndex {
                 let list = map.entry(bi).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
@@ -233,6 +235,7 @@ impl TrigramIndex {
                 let list = map.entry(u).or_insert_with(Vec::new);
                 if list.last() != Some(&row_id) {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
