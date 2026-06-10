@@ -5,11 +5,12 @@ use crate::Result;
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct FileHandle {
     pub file_id: u64,
+    pub path: PathBuf,
     file: Arc<File>,
     num_pages: RwLock<u64>,
     pub(crate) page_states: RwLock<Vec<PageState>>,
@@ -48,6 +49,7 @@ impl FileHandle {
 
         Ok(Self {
             file_id,
+            path: path.to_path_buf(),
             file: Arc::new(file),
             num_pages: RwLock::new(num_pages),
             page_states: RwLock::new(page_states),
