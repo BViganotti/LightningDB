@@ -1,4 +1,5 @@
-use crate::parser::ast::ComparisonOperator;
+use crate::parser::ast::{ArithmeticOperator, ComparisonOperator, Literal};
+use crate::parser::ast::LogicalOperator as BoolOperator;
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::PhysicalOperator;
@@ -1042,10 +1043,230 @@ impl PhysicalPlanner {
 
     pub fn plan_expression(
         &self,
-        _op: &LogicalOperator,
-        _expr: &BoundExpression,
+        op: &LogicalOperator,
+        expr: &BoundExpression,
     ) -> Result<BoundExpression> {
-        Ok(_expr.clone())
+        // 1. Recursively plan child expressions (bottom-up)
+        let expr = self.plan_expression_children(op, expr)?;
+        // 2. Apply simplification / constant folding
+        Ok(self.simplify_expression(expr))
+    }
+
+    /// Recursively walk the expression tree and plan child sub-expressions first.
+    fn plan_expression_children(
+        &self,
+        op: &LogicalOperator,
+        expr: &BoundExpression,
+    ) -> Result<BoundExpression> {
+        match expr {
+            BoundExpression::Arithmetic(left, arith_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Number(a)),
+                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                {
+                    let result = match arith_op {
+                        ArithmeticOperator::Add => a + b,
+                        ArithmeticOperator::Subtract => a - b,
+                        ArithmeticOperator::Multiply => a * b,
+                        ArithmeticOperator::Divide => {
+                            if *b == 0.0 {
+                                return Err(LightningError::Internal(
+                                    "Division by zero in constant expression".into(),
+                                ));
+                            }
+                            a / b
+                        }
+                        ArithmeticOperator::Modulo => a % b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Number(result)));
+                }
+                Ok(BoundExpression::Arithmetic(Box::new(l), *arith_op, Box::new(r)))
+            }
+            BoundExpression::Comparison(left, cmp_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Number(a)),
+                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                {
+                    let result = match cmp_op {
+                        ComparisonOperator::Equal => a == b,
+                        ComparisonOperator::NotEqual => a != b,
+                        ComparisonOperator::LessThan => a < b,
+                        ComparisonOperator::LessThanOrEqual => a <= b,
+                        ComparisonOperator::GreaterThan => a > b,
+                        ComparisonOperator::GreaterThanOrEqual => a >= b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                if let (BoundExpression::Literal(Literal::String(a)),
+                        BoundExpression::Literal(Literal::String(b))) = (&l, &r)
+                {
+                    let result = match cmp_op {
+                        ComparisonOperator::Equal => a == b,
+                        ComparisonOperator::NotEqual => a != b,
+                        _ => false,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                Ok(BoundExpression::Comparison(Box::new(l), *cmp_op, Box::new(r)))
+            }
+            BoundExpression::Logical(left, log_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Boolean(a)),
+                        BoundExpression::Literal(Literal::Boolean(b))) = (&l, &r)
+                {
+                    let result = match log_op {
+                        BoolOperator::And => *a && *b,
+                        BoolOperator::Or => *a || *b,
+                        BoolOperator::Xor => *a ^ *b,
+                        _ => false,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                Ok(BoundExpression::Logical(Box::new(l), *log_op, Box::new(r)))
+            }
+            BoundExpression::Not(inner) => {
+                let inner = self.plan_expression(op, inner)?;
+                if let BoundExpression::Not(inner_inner) = &inner {
+                    return Ok(*inner_inner.clone());
+                }
+                if let BoundExpression::Literal(Literal::Boolean(b)) = &inner {
+                    return Ok(BoundExpression::Literal(Literal::Boolean(!b)));
+                }
+                Ok(BoundExpression::Not(Box::new(inner)))
+            }
+            BoundExpression::Function(name, args, return_type) => {
+                let mut planned_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    planned_args.push(self.plan_expression(op, arg)?);
+                }
+                Ok(BoundExpression::Function(name.clone(), planned_args, return_type.clone()))
+            }
+            BoundExpression::List(items, t) => {
+                let mut planned = Vec::with_capacity(items.len());
+                for item in items {
+                    planned.push(self.plan_expression(op, item)?);
+                }
+                Ok(BoundExpression::List(planned, t.clone()))
+            }
+            BoundExpression::Case { expression, when_then, else_expression, return_type } => {
+                let expr = expression
+                    .as_ref()
+                    .map(|e| self.plan_expression(op, e))
+                    .transpose()?;
+                let mut planned_when_then = Vec::with_capacity(when_then.len());
+                for (w, t) in when_then {
+                    let w = self.plan_expression(op, w)?;
+                    let t = self.plan_expression(op, t)?;
+                    planned_when_then.push((w, t));
+                }
+                let else_expr = else_expression
+                    .as_ref()
+                    .map(|e| self.plan_expression(op, e))
+                    .transpose()?;
+                Ok(BoundExpression::Case {
+                    expression: expr.map(Box::new),
+                    when_then: planned_when_then,
+                    else_expression: else_expr.map(Box::new),
+                    return_type: return_type.clone(),
+                })
+            }
+            BoundExpression::Map(items, t) => {
+                let mut planned = Vec::with_capacity(items.len());
+                for (k, v) in items {
+                    planned.push((k.clone(), self.plan_expression(op, v)?));
+                }
+                Ok(BoundExpression::Map(planned, t.clone()))
+            }
+            BoundExpression::Aggregate(name, args, filter) => {
+                let mut planned = Vec::with_capacity(args.len());
+                for arg in args {
+                    planned.push(self.plan_expression(op, arg)?);
+                }
+                Ok(BoundExpression::Aggregate(name.clone(), planned, filter.clone()))
+            }
+            BoundExpression::Lambda(var, body) => {
+                let body = self.plan_expression(op, body)?;
+                Ok(BoundExpression::Lambda(var.clone(), Box::new(body)))
+            }
+            BoundExpression::Literal(_)
+            | BoundExpression::Variable(_, _)
+            | BoundExpression::PropertyLookup(_, _, _)
+            | BoundExpression::Parameter(_)
+            | BoundExpression::NextVal(_)
+            | BoundExpression::Exists(_)
+            | BoundExpression::CountSubquery(_) => Ok(expr.clone()),
+        }
+    }
+
+    /// Apply algebraic simplification rules (predicate simplification, etc.)
+    fn simplify_expression(&self, expr: BoundExpression) -> BoundExpression {
+        match expr {
+            // NOT (a > b) → a <= b
+            BoundExpression::Not(inner) => match *inner {
+                BoundExpression::Comparison(a, ComparisonOperator::GreaterThan, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::LessThanOrEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::GreaterThanOrEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::LessThan, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::LessThan, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::GreaterThanOrEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::LessThanOrEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::GreaterThan, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::Equal, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::NotEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::NotEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::Equal, b)
+                }
+                BoundExpression::Not(inner_inner) => self.simplify_expression(*inner_inner),
+                other => BoundExpression::Not(Box::new(self.simplify_expression(other))),
+            },
+            // Logical short-circuit: x AND true → x, x OR false → x, etc.
+            BoundExpression::Logical(left, op, right) => {
+                let l = self.simplify_expression(*left);
+                let r = self.simplify_expression(*right);
+                match (&l, op, &r) {
+                    (BoundExpression::Literal(Literal::Boolean(true)), BoolOperator::And, _) => r,
+                    (_, BoolOperator::And, BoundExpression::Literal(Literal::Boolean(true))) => l,
+                    (BoundExpression::Literal(Literal::Boolean(false)), BoolOperator::And, _) => {
+                        BoundExpression::Literal(Literal::Boolean(false))
+                    }
+                    (_, BoolOperator::And, BoundExpression::Literal(Literal::Boolean(false))) => {
+                        BoundExpression::Literal(Literal::Boolean(false))
+                    }
+                    (BoundExpression::Literal(Literal::Boolean(false)), BoolOperator::Or, _) => r,
+                    (_, BoolOperator::Or, BoundExpression::Literal(Literal::Boolean(false))) => l,
+                    (BoundExpression::Literal(Literal::Boolean(true)), BoolOperator::Or, _) => {
+                        BoundExpression::Literal(Literal::Boolean(true))
+                    }
+                    (_, BoolOperator::Or, BoundExpression::Literal(Literal::Boolean(true))) => {
+                        BoundExpression::Literal(Literal::Boolean(true))
+                    }
+                    _ => BoundExpression::Logical(Box::new(l), op, Box::new(r)),
+                }
+            }
+            BoundExpression::Arithmetic(l, op, r) => {
+                let l = self.simplify_expression(*l);
+                let r = self.simplify_expression(*r);
+                BoundExpression::Arithmetic(Box::new(l), op, Box::new(r))
+            }
+            BoundExpression::Comparison(l, op, r) => {
+                let l = self.simplify_expression(*l);
+                let r = self.simplify_expression(*r);
+                BoundExpression::Comparison(Box::new(l), op, Box::new(r))
+            }
+            BoundExpression::Function(name, args, return_type) => {
+                let args: Vec<_> = args.into_iter().map(|a| self.simplify_expression(a)).collect();
+                BoundExpression::Function(name, args, return_type)
+            }
+            other => other,
+        }
     }
 
     fn extract_trigram_candidates(
