@@ -98,9 +98,7 @@ impl CdcManager {
                                         file_id,
                                         page_idx,
                                     };
-                                    if tx.try_send(event.clone()).is_err() {
-                                        let _ = tx.send(event);
-                                    }
+                                    let _ = tx.try_send(event);
                                 }
                                 Some(WALRecord::Commit { .. }) => {}
                                 Some(WALRecord::Corrupt { msg }) => {
