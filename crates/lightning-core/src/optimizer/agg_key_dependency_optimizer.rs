@@ -94,10 +94,10 @@ impl AggKeyDependencyOptimizer {
                 }
             }
             _ => {
-                if let Some(child) = op.get_child().cloned() {
-                    let new_child = self.rewrite(child)?;
+                if let Some(child) = op.clone().get_child().cloned() {
+                    let rewritten = self.rewrite(child)?;
                     let mut new_op = op.clone();
-                    new_op.set_child(new_child);
+                    new_op.set_child(rewritten);
                     Ok(new_op)
                 } else {
                     Ok(op)

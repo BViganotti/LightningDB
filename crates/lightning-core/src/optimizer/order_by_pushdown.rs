@@ -35,10 +35,10 @@ impl OrderByPushDown {
                 }
             }
             _ => {
-                if let Some(child) = plan.get_child().cloned() {
-                    let new_child = self.push_down(child)?;
+                if let Some(child) = plan.clone().get_child().cloned() {
+                    let pushed_child = self.push_down(child)?;
                     let mut new_plan = plan.clone();
-                    new_plan.set_child(new_child);
+                    new_plan.set_child(pushed_child);
                     Ok(new_plan)
                 } else {
                     Ok(plan)
