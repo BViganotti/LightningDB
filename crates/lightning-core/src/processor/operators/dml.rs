@@ -930,11 +930,15 @@ impl PhysicalOperator for PhysicalMerge {
                     let index_opt = database.storage_manager.read().get_index(&self.table_name);
 
                     if let Some(index) = index_opt {
-                        for (i, (_idx, _)) in self.pattern.properties.iter().enumerate() {
-                            let pk_val = Value::from_arrow(&prop_arrays[i], row_idx);
-                            if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
-                                existing_id = Some(id);
-                                break;
+                        // Only use _id (primary key, column 0) for index lookup.
+                        // Using all pattern properties would match on any single
+                        // property instead of requiring all to match.
+                        if let Some(&(first_idx, _)) = self.pattern.properties.first() {
+                            if first_idx == 0 {
+                                let pk_val = Value::from_arrow(&prop_arrays[0], row_idx);
+                                if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
+                                    existing_id = Some(id);
+                                }
                             }
                         }
                     }
