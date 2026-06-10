@@ -43,10 +43,10 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 18. ~~`crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed~~ (FIXED)
 19. ~~`crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child~~ (FIXED)
 20. ~~`crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys~~ (FIXED)
-21. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
-22. `crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss
-23. `crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation
-24. `crates/lightning-core/src/storage/database_header.rs:21` — MAGIC number comment
+21. ~~`crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition~~ (FIXED)
+22. ~~`crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss~~ (FIXED)
+23. ~~`crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation~~ (FIXED)
+24. ~~`crates/lightning-core/src/storage/database_header.rs:21` — MAGIC number comment~~ (FIXED)
 
 ## P1-P3 Issues
 Fix P0 first, then continue through HIGH (section 2), MEDIUM (section 3), and LOW (section 4) issues in order.
