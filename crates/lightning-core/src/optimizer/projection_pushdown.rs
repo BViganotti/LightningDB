@@ -153,21 +153,25 @@ impl ProjectionPushDown {
         required_indices: HashMap<String, HashSet<usize>>,
     ) -> Result<(LogicalOperator, HashMap<String, HashSet<usize>>)> {
         match plan {
-            LogicalOperator::Projection(child, items) => {
+            LogicalOperator::Projection(child, mut items) => {
                 let mut my_indices = HashMap::new();
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for item in &mut items {
+                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::Projection(Box::new(new_child), items),
                     child_indices,
                 ))
             }
-            LogicalOperator::Filter(child, cond) => {
+            LogicalOperator::Filter(child, mut cond) => {
                 let mut my_indices = required_indices;
                 Self::extract_property_indices(&cond, &mut my_indices);
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                Self::remap_expression_indices(&mut cond, &child_indices);
                 Ok((
                     LogicalOperator::Filter(Box::new(new_child), cond),
                     child_indices,
@@ -238,23 +242,29 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Sort(child, items) => {
+            LogicalOperator::Sort(child, mut items) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for item in &mut items {
+                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::Sort(Box::new(new_child), items),
                     child_indices,
                 ))
             }
-            LogicalOperator::TopK(child, items, limit) => {
+            LogicalOperator::TopK(child, mut items, limit) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                for item in &mut items {
+                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                }
                 Ok((
                     LogicalOperator::TopK(Box::new(new_child), items, limit),
                     child_indices,
