@@ -94,11 +94,11 @@ impl AggKeyDependencyOptimizer {
                 }
             }
             _ => {
-                if let Some(_child) = op.get_child() {
-                    // Generic recursion for non-aggregate operators
-                    // This is tricky because we need to rebuild the operator.
-                    // For now, only applying to the top-level or specific branches.
-                    Ok(op)
+                if let Some(child) = op.get_child().cloned() {
+                    let new_child = self.rewrite(child)?;
+                    let mut new_op = op.clone();
+                    new_op.set_child(new_child);
+                    Ok(new_op)
                 } else {
                     Ok(op)
                 }
