@@ -37,10 +37,10 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 12. ~~`crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write~~ (FIXED)
 13. ~~`crates/lightning-core/src/optimizer/projection_pushdown.rs:96` — variable corruption (sets var to "")~~ (FIXED)
 14. ~~`crates/lightning-core/src/optimizer/projection_pushdown.rs:346-349` — empty required_indices prunes all columns~~ (FIXED — wired up remap_expression_indices)
-15. `crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse
-16. `crates/lightning-core/src/optimizer/order_by_pushdown.rs:37-41` — generic catch-all doesn't recurse
-17. `crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type
-18. `crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed
+15. ~~`crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse~~ (FIXED)
+16. ~~`crates/lightning-core/src/optimizer/order_by_pushdown.rs:37-41` — generic catch-all doesn't recurse~~ (FIXED)
+17. ~~`crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type~~ (FIXED — added is_rel_table catalog check)
+18. ~~`crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed~~ (FIXED)
 19. `crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child
 20. `crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys
 21. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
