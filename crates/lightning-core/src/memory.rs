@@ -1046,11 +1046,17 @@ impl MemoryStore {
     }
 
     fn resolve_to_internal_id(&self, entity_id: &str) -> Option<u64> {
+        let db = self.conn.client_context.database.clone();
+        // Use a read-only snapshot transaction for the resolve query.
+        // Auto-commit (read-write) transactions sometimes don't see data
+        // committed by other auto-commit transactions due to MVCC ordering.
+        let tx = db.transaction_manager.begin(true).ok()?;
         let query = format!(
             "MATCH (e:{ENTITY_TABLE} {{id: \"{entity_id}\"}}) RETURN e._id LIMIT 1"
         );
-        self.conn.execute(&query, None).ok()
-            .and_then(|res| res.batches.into_iter().next())
+        let res = db.connect().execute_at(&query, tx.read_ts, None).ok()?;
+        let _ = db.transaction_manager.rollback(&db, &tx);
+        res.batches.first()
             .and_then(|b| {
                 if b.num_rows() > 0 {
                     b.column(0).as_any().downcast_ref::<UInt64Array>().map(|a| a.value(0))
