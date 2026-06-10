@@ -971,27 +971,36 @@ impl MemoryStore {
             Err(_) => return Ok(Vec::new()),
         };
 
-        // Parse edges. Column 0 (a.id) is StringArray with string IDs.
         // Column 1 (b.id) is UInt64Array with node _id values (planner bug).
         // We resolve each string ID to _id for BFS consistency.
+        let mut total_rows = 0usize;
+        let mut edges: Vec<(u64, u64)> = Vec::new();
         let mut resolver: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         resolver.insert(entity_id.to_string(), start_id);
-        let mut edges: Vec<(u64, u64)> = Vec::new();
 
         for batch in &res.batches {
             if batch.num_columns() < 2 { continue; }
+            total_rows += batch.num_rows();
             let src_str = match batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
                 Some(a) => a,
-                None => continue,
+                None => { tracing::warn!("MemoryStore: expand col0 not StringArray (type={:?})", batch.column(0).data_type()); continue; }
             };
-            let dst_id = match batch.column(1).as_any().downcast_ref::<UInt64Array>() {
-                Some(a) => a,
-                None => continue,
+            let dst_id = if let Some(arr) = batch.column(1).as_any().downcast_ref::<UInt64Array>() {
+                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).map(|i| arr.value(i)).collect::<Vec<_>>())
+            } else if let Some(arr) = batch.column(1).as_any().downcast_ref::<arrow::array::Int64Array>() {
+                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).map(|i| arr.value(i) as u64).collect::<Vec<_>>())
+            } else if let Some(arr) = batch.column(1).as_any().downcast_ref::<arrow::array::StringArray>() {
+                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).filter_map(|i| arr.value(i).parse::<u64>().ok()).collect::<Vec<_>>())
+            } else {
+                tracing::warn!("MemoryStore: expand col1 type={:?}", batch.column(1).data_type());
+                None
             };
-            for i in 0..batch.num_rows() {
-                if !src_str.is_valid(i) || !dst_id.is_valid(i) { continue; }
+            let dst_ids = match dst_id { Some(v) => v, None => continue };
+            tracing::warn!("MemoryStore: expand parsed {} edges (col1={} values)", src_str.len(), dst_ids.len());
+            for i in 0..src_str.len().min(dst_ids.len()) {
+                if !src_str.is_valid(i) { continue; }
                 let src_s = src_str.value(i).to_string();
-                let dst_i = dst_id.value(i);
+                let dst_i = dst_ids[i];
                 // Resolve src string ID to _id
                 let src_i = if let Some(&id) = resolver.get(&src_s) {
                     id
@@ -1006,6 +1015,7 @@ impl MemoryStore {
                 edges.push((src_i, dst_i));
             }
         }
+        tracing::warn!("MemoryStore: expand parsed {} edges from {} rows", edges.len(), total_rows);
 
         // Build bidirectional adjacency
         let mut adj: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
@@ -1047,23 +1057,37 @@ impl MemoryStore {
 
     fn resolve_to_internal_id(&self, entity_id: &str) -> Option<u64> {
         let db = self.conn.client_context.database.clone();
-        // Use a read-only snapshot transaction for the resolve query.
-        // Auto-commit (read-write) transactions sometimes don't see data
-        // committed by other auto-commit transactions due to MVCC ordering.
+
+        // Use the hash index directly (same approach as forget_inner).
+        let storage = db.storage_manager.read();
+        let index_opt = storage.get_index(ENTITY_TABLE);
+        let index = match index_opt {
+            Some(idx) => idx,
+            None => {
+                tracing::warn!("MemoryStore: resolve {} - no hash index for Entity", entity_id);
+                return None;
+            }
+        };
+        let bm = &db.buffer_manager;
+        drop(storage);
         let tx = db.transaction_manager.begin(true).ok()?;
-        let query = format!(
-            "MATCH (e:{ENTITY_TABLE} {{id: \"{entity_id}\"}}) RETURN e._id LIMIT 1"
-        );
-        let res = db.connect().execute_at(&query, tx.read_ts, None).ok()?;
-        let _ = db.transaction_manager.rollback(&db, &tx);
-        res.batches.first()
-            .and_then(|b| {
-                if b.num_rows() > 0 {
-                    b.column(0).as_any().downcast_ref::<UInt64Array>().map(|a| a.value(0))
-                } else {
-                    None
-                }
-            })
+        let pk_value = Value::String(entity_id.to_string());
+        match index.lookup(bm, &pk_value, &tx) {
+            Ok(Some(id)) => {
+                let _ = db.transaction_manager.rollback(&db, &tx);
+                Some(id)
+            }
+            Ok(None) => {
+                tracing::warn!("MemoryStore: resolve {} - hash index lookup returned None", entity_id);
+                let _ = db.transaction_manager.rollback(&db, &tx);
+                None
+            }
+            Err(e) => {
+                tracing::warn!("MemoryStore: resolve {} - hash index lookup failed: {}", entity_id, e);
+                let _ = db.transaction_manager.rollback(&db, &tx);
+                None
+            }
+        }
     }
 
     pub fn associate(&self, src_id: &str, dst_id: &str, rel_type: &str, weight: f64) -> Result<()> {
