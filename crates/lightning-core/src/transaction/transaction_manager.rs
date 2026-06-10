@@ -212,7 +212,7 @@ impl TransactionManager {
                                     "deadlock detected while acquiring page merge lock".into()
                                 ))?;
 
-                            // Pin the latest committed version INSIDE the lock
+                            // Pin the latest committed version INSIDE the lock to get source data
                             let latest_frame = bm.pin_latest_committed(
                                 std::sync::Arc::clone(&fh),
                                 *page_idx,
@@ -221,6 +221,9 @@ impl TransactionManager {
                             // Copy-on-write: clone frame data into local buffer
                             let mut merged_data = [0u8; 4096];
                             merged_data.copy_from_slice(latest_frame.as_slice());
+
+                            // Release read-only committed frame
+                            bm.unpin_page(&fh, *page_idx, latest_frame);
 
                             // Apply all our row modifications to the local buffer
                             for row_mod in mods {
@@ -233,12 +236,18 @@ impl TransactionManager {
                                 }
                             }
 
-                            // Write merged data back to frame under the per-page lock
-                            latest_frame.as_mut_slice().copy_from_slice(&merged_data);
+                            // Pin our own uncommitted version (created during execution)
+                            // and write the merged data through the buffer manager API.
+                            let our_frame = bm.pin_page(
+                                std::sync::Arc::clone(&fh),
+                                *page_idx,
+                                tx,
+                            )?;
+                            our_frame.as_mut_slice().copy_from_slice(&merged_data);
 
                             // Log the merged page to WAL
-                            bm.log_page_update(*file_id, *page_idx, latest_frame.as_slice())?;
-                            bm.unpin_page(&fh, *page_idx, latest_frame);
+                            bm.log_page_update(*file_id, *page_idx, our_frame.as_slice())?;
+                            bm.unpin_page(&fh, *page_idx, our_frame);
                         }
                     }
                 }
