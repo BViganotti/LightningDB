@@ -1,11 +1,13 @@
 use crate::storage::file_handle::FileHandle;
 use crate::{LightningError, Result};
+use lru::LruCache;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rayon::prelude::*;
 use std::collections::VecDeque;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -60,7 +62,7 @@ struct BufferPool {
     clock_ptr: usize,
     capacity: usize,
     wal: Option<Arc<crate::storage::WAL>>,
-    page_locks: HashMap<(u64, u64), Arc<Mutex<()>>>,
+    page_locks: LruCache<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
     dirty_count: AtomicU64,
     /// Free candidate queue: slot indices whose pin_count dropped to 0.
@@ -102,6 +104,7 @@ impl BufferManager {
                 });
             }
 
+            let lock_cap = NonZeroUsize::new(shard_capacity.max(1024)).unwrap();
             shards.push(RwLock::new(BufferPool {
                 page_to_slots: HashMap::with_capacity(shard_capacity),
                 file_handles: HashMap::new(),
@@ -109,7 +112,7 @@ impl BufferManager {
                 clock_ptr: 0,
                 capacity: shard_capacity,
                 wal: wal.as_ref().map(|w| Arc::clone(w)),
-                page_locks: HashMap::new(),
+                page_locks: LruCache::new(lock_cap),
                 shutdown: AtomicBool::new(false),
                 dirty_count: AtomicU64::new(0),
                 free_candidates: VecDeque::new(),
@@ -139,8 +142,7 @@ impl BufferManager {
 
     fn get_page_lock(&self, pool: &mut BufferPool, key: (u64, u64)) -> Arc<Mutex<()>> {
         pool.page_locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .get_or_insert(key, || Arc::new(Mutex::new(())))
             .clone()
     }
 
@@ -703,11 +705,16 @@ impl BufferManager {
 
             if pool.clock_ptr == start_ptr {
                 if all_uncommitted {
-                    return Err(LightningError::Internal(
-                        "Buffer pool exhausted: all unpinned pages are dirty with uncommitted data".into(),
-                    ));
+                    return Err(LightningError::Internal(format!(
+                        "Buffer pool exhausted (capacity={}): all pages are dirty with uncommitted data. \
+                         Commit or rollback transactions to free pages",
+                        pool.capacity,
+                    )));
                 }
-                return Err(LightningError::Internal("Buffer pool exhausted".into()));
+                return Err(LightningError::Internal(format!(
+                    "Buffer pool exhausted (capacity={}). Increase buffer_pool_size in SystemConfig",
+                    pool.capacity,
+                )));
             }
         }
     }
