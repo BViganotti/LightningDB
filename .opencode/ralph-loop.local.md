@@ -4,53 +4,58 @@ iteration: 0
 maxIterations: 500
 ---
 
-YOU MUST FIX ALL 184 AUDIT ISSUES found in AUDIT_FULL_REPORT.md in the worktree at /Users/bviga/Developement/new_research/research/lightning-fixes
+Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Developement/new_research/research/lightning-fixes` on branch `audit-fixes-v2`, following strict priority order from P0 (critical) → P1 (high) → P2 (medium) → P3 (low). Push to `origin/audit-fixes-v2` after EACH fix.
 
 ## CRITICAL RULES
-1. NEVER SIMPLIFY CODE — every fix must be production-grade. No half-measures, no stubs, no "TODO remain".
-2. Read the ACTUAL file before editing. Always use Read tool first, then Edit.
-3. After EVERY fix, verify by running: `cargo build 2>&1 | head -50` from /Users/bviga/Developement/new_research/research/lightning-fixes
-4. After build succeeds, commit with a descriptive message and push: `git add -A && git commit -m "fix(area): description" && git push origin audit-fixes-v2`
-5. One issue per commit. Small focused commits.
+- NEVER SIMPLIFY CODE under any circumstances. Every fix must be production-grade.
+- Read the actual file before editing. Do NOT hallucinate or guess code.
+- After every fix: `cargo build` from worktree root, then `git add -A && git commit -m "fix(severity): description" && git push origin audit-fixes-v2`
+- One issue per commit. Small focused commits only.
+- Only output `<promise>DONE</promise>` when ALL 177 issues are fixed, built, committed, and pushed.
 
-## FIX ORDER (strictly follow this priority):
-### P0 — CRITICAL (fix these first, one at a time, commit+push each)
-1. Cypher injection in fusion.rs/memory.rs — convert ALL format!() queries to parameterized $param syntax
-2. HNSW random_level() — fix RNG seeding, use persistent thread-local RNG
-3. Inverted index data race — change read lock to write lock on tantivy writer
-4. Trigram index unsorted posting lists — sort after insert or use BTreeSet
-5. Bitpacking byte path — add bit-clearing before OR
-6. Hash index resize race — add exclusive access to resize
-7. analyzer_test.rs compilation — fix syntax errors in all test functions
-8. is_read_only() in inherent impl — move ALL 7 operators to trait impl
-9. Dangling tempdir in hash_join_test.rs — bind TempDir to variable
-10. WAL CRC not verified — compare computed_crc vs stored_crc
-11. Unsafe frame mutation in transaction_manager.rs — add safe Frame API
-12. CDC thread lock blocking I/O — clone subscriber list before I/O
-13. WASM sandbox — add fuel metering timeout
-14. WASM path traversal — validate against allowed directories
-15. Copy path validation — check copy_base_dir
-16. Buffer cache incoherence after direct file write — evict pages
-17. Prefix-match undo table deletion — use exact match
-18. Projection pushdown variable corruption — don't set var to ""
-19. Projection pushdown empty required_indices — all columns if no Projection
-20. CountRelTable wrong table type — check table type from catalog
-21. Index pushdown RecursiveJoin mask — preserve existing mask_id
-22. LogicalPlan set_child Join/Union — fix child assignment
-23. DML MERGE index lookup — use only PK column
-24. Limit operator race — single atomic fetch_add
-25. Cross Join data loss — propagate concat_batches error
-26. Unwind O(R²) evaluation — cache expression evaluation
-27. ALP brute force 209 combinations — optimize search
-28. WAL unbounded growth — add rotation/truncation
-29. C FFI dangling pointers — use Arc for handles
-30. MemoryStore expand() loads all edges — push down to CSR
-31. O(k×n) consolidation — use LSH batching
-32. Permissive CORS — restrict origins
-33. Unbounded batch/entity sizes — add limits
-34. SSE connection limits — add semaphore
-35. Blocking recv without timeout — add tokio::time::timeout
-36. Error info disclosure — sanitize error responses
+## ALREADY FIXED (skip these)
+1. Cypher injection in fusion.rs — parameterized all queries
+2. HNSW random_level() — thread-local persistent RNG
+3. AllShortestPaths dst_var discarded — logical_plan.rs + physical_plan.rs
+4. RecursiveJoin variable positions — physical_plan.rs collect_variable_positions
+5. Evaluator.rs MutableArrayData → arrow::compute::interleave for Arrow 58
+6. Hash join broken while loop from stash — restored else/probe branches
+7. target/ removed from git tracking + .gitignore
 
-## COMPLETION SIGNAL
-Only output `<promise>DONE</promise>` when ALL 184 issues in AUDIT_FULL_REPORT.md are fixed, verified with cargo build, committed, and pushed.
+## P0 REMAINING (fix first — in this order)
+1. `crates/lightning-core/src/storage/index/inverted_index.rs:73,91,114` — read lock → write lock on tantivy writer
+2. `crates/lightning-core/src/storage/index/trigram_index.rs:207-238` — unsorted posting lists cause binary_search misses
+3. `crates/lightning-core/src/storage/compression/bitpacking.rs:73-86` — byte path doesn't clear target bits before OR
+4. `crates/lightning-core/src/storage/compression/analyzer_test.rs:9,20,31,44,55` — syntax errors (spurious `analyze_integer_chunk(` prefix)
+5. `crates/lightning-core/src/storage/index/hash_index.rs:92-148` — resize race (header updated before zeroing)
+6. `crates/lightning-core/src/processor/operators/dml.rs + copy.rs` — is_read_only() in inherent impl not trait impl (7+ operators)
+7. `crates/lightning-core/src/storage/wal.rs:495` — WAL CRC computed but never compared
+8. `crates/lightning-core/tests/hash_join_test.rs:57` — dangling tempdir use-after-free
+9. `crates/lightning-core/src/memory.rs:1047-1051,1268-1275` — remaining cypher injection sites
+10. `crates/lightning-core/src/planner/binder.rs:562-597` — COPY TO/FROM path validation against copy_base_dir
+11. `crates/lightning-core/src/cdc.rs:86-108` — CDC thread holds lock during blocking I/O
+12. `crates/lightning-core/src/transaction/transaction_manager.rs:232-246` — unsafe pointer mutation bypasses buffer manager
+13. `crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write
+14. `crates/lightning-core/src/optimizer/projection_pushdown.rs:96` — variable corruption (sets var to "")
+15. `crates/lightning-core/src/optimizer/projection_pushdown.rs:346-349` — empty required_indices prunes all columns
+16. `crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse
+17. `crates/lightning-core/src/optimizer/order_by_pushdown.rs:37-41` — generic catch-all doesn't recurse
+18. `crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type
+19. `crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed
+20. `crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child
+21. `crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys
+22. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
+23. `crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss
+24. `crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation
+25. `crates/lightning-core/src/storage/database_header.rs:21` — MAGIC number comment
+
+## P1-P3 Issues
+Fix P0 first, then continue through HIGH (section 2), MEDIUM (section 3), and LOW (section 4) issues in order.
+
+## Workflow Per Fix
+1. Read the file at the specified line range
+2. Understand the bug and design the fix
+3. Apply the fix using the Edit tool
+4. Build with `cargo build` 
+5. Commit + push with descriptive message
+6. Output `<promise>DONE</promise>` only at the very end when ALL issues fixed
