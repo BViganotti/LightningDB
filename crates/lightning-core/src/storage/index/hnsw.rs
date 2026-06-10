@@ -2,9 +2,14 @@ use crate::storage::buffer_manager::BufferManager;
 use crate::storage::file_handle::FileHandle;
 use crate::Result;
 use parking_lot::RwLock;
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::sync::Arc;
+
+thread_local! {
+    static RNG_STATE: RefCell<u64> = const { RefCell::new(12345) };
+}
 
 const HNSW_MAGIC: [u8; 4] = *b"HNSW";
 const HNSW_VERSION: u8 = 0x01;
@@ -125,10 +130,12 @@ impl HnswIndex {
 
     fn random_level(&self) -> usize {
         let ml = (self.config.M as f64).ln();
-        let mut rng: u64 = 12345;
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let u = (rng >> 33) as f64 / (1u64 << 31) as f64;
-        (-u.ln() * ml) as usize
+        RNG_STATE.with(|state| {
+            let mut rng = state.borrow_mut();
+            *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u = (*rng >> 33) as f64 / (1u64 << 31) as f64;
+            (-u.ln() * ml) as usize
+        })
     }
 
     /// Greedy search on a single layer, starting from `entry`.
