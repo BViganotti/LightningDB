@@ -492,7 +492,7 @@ impl LogicalPlanner {
                             crate::planner::binder::BoundMatchElement::AllShortestPaths {
                                 rel_table_name,
                                 src_var,
-                                dst_var: _,
+                                dst_var,
                                 path_var,
                                 max_depth,
                             } => {
@@ -500,7 +500,7 @@ impl LogicalPlanner {
                                     child: Box::new(plan),
                                     rel_table_name,
                                     src_var_name: src_var,
-                                    dst_var_name: path_var.clone(),
+                                    dst_var_name: dst_var,
                                     path_var_name: path_var,
                                     max_depth,
                                 };
