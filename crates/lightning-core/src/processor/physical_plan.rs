@@ -705,14 +705,14 @@ impl PhysicalPlanner {
             }
             LogicalOperator::RecursiveJoin {
                 child,
-                src_var,
+                dst_node_table,
                 dst_var,
                 ..
             } => {
                 let child_cols = self.collect_variable_positions(child, start_col, positions)?;
-                positions.insert(src_var.clone(), start_col);
-                positions.insert(dst_var.clone(), start_col + 1);
-                Ok(child_cols + 2)
+                let dst_cols = self.get_table_num_columns(dst_node_table);
+                positions.insert(dst_var.clone(), start_col + child_cols);
+                Ok(child_cols + dst_cols)
             }
             LogicalOperator::Projection(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
@@ -854,6 +854,9 @@ impl PhysicalPlanner {
             | LogicalOperator::Accumulate(child)
             | LogicalOperator::Profile(child)
             | LogicalOperator::Explain(child) => self.compute_subtree_num_cols(child),
+            LogicalOperator::RecursiveJoin { child, dst_node_table, .. } => {
+                self.compute_subtree_num_cols(child) + self.get_table_num_columns(dst_node_table)
+            }
             LogicalOperator::AllShortestPaths { .. } => 3,
             _ => 0,
         }
