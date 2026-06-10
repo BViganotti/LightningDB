@@ -92,12 +92,52 @@ impl HashIndex {
     /// Resize the hash index to double its current bucket count.
     /// Collects all active entries, reinitializes the table with
     /// twice the bucket count, and rehashes every entry.
+    /// Header is updated LAST to prevent concurrent lookups (which do
+    /// NOT hold the resize lock) from reading garbage bucket pages.
     pub fn resize(&self, bm: &BufferManager, tx: &crate::transaction::transaction_manager::Transaction) -> Result<()> {
         let _lock = self.resize_lock.lock();
         let entries = self.collect_all_entries(bm, tx)?;
-        let new_buckets = self.num_buckets.load(std::sync::atomic::Ordering::Acquire) * 2;
+        let old_buckets = self.num_buckets.load(std::sync::atomic::Ordering::Acquire);
+        let new_buckets = old_buckets * 2;
 
-        // Update header with new bucket count
+        // 1. Create new bucket pages (pre-zeroed) for the additional capacity
+        let needed_pages = 1 + new_buckets;
+        while self.file_handle.get_num_pages() < needed_pages {
+            let idx = self.file_handle.add_new_page()?;
+            let frame = bm.create_new_version(Arc::clone(self.fh()), idx, tx)?;
+            unsafe {
+                let zero8 = 0u64.to_le_bytes();
+                zero8.as_ptr().copy_to(frame.as_ptr(), 8);
+                zero8.as_ptr().copy_to(frame.as_ptr().add(8), 8);
+            }
+            bm.log_page_update(self.file_handle.file_id, idx, frame.as_slice())?;
+            bm.unpin_page(self.fh(), idx, frame);
+        }
+
+        // 2. Zero out ALL bucket pages (old + new) before updating header
+        //    so concurrent lookups never see stale entries in wrong buckets
+        for page_idx in 1..=new_buckets {
+            let frame = bm.create_new_version(Arc::clone(self.fh()), page_idx, tx)?;
+            let ptr = frame.as_ptr();
+            unsafe {
+                ptr.write_bytes(0, PAGE_SIZE);
+                let zero8 = 0u64.to_le_bytes();
+                zero8.as_ptr().copy_to(ptr, 8);
+                zero8.as_ptr().copy_to(ptr.add(8), 8);
+            }
+            bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;
+            bm.unpin_page(self.fh(), page_idx, frame);
+        }
+
+        // 3. Update the in-memory count so insert_internal uses new_buckets
+        self.num_buckets.store(new_buckets, std::sync::atomic::Ordering::Release);
+
+        // 4. Re-insert all collected entries (uses local new_buckets, not header)
+        for (hash, key, row_id) in &entries {
+            self.insert_internal(bm, *hash, key, *row_id, tx)?;
+        }
+
+        // 5. Update header LAST — all pages are zeroed and entries re-inserted
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -114,40 +154,6 @@ impl HashIndex {
         header_data[0..8].copy_from_slice(&new_buckets.to_le_bytes());
         self.file_handle.write_page(HEADER_PAGE_IDX, &header_data)?;
 
-        // Ensure enough pages exist for all new buckets
-        let needed_pages = 1 + new_buckets;
-        while self.file_handle.get_num_pages() < needed_pages {
-            let idx = self.file_handle.add_new_page()?;
-            let frame = bm.create_new_version(Arc::clone(self.fh()), idx, tx)?;
-            unsafe {
-                let zero8 = 0u64.to_le_bytes();
-                zero8.as_ptr().copy_to(frame.as_ptr(), 8);
-                zero8.as_ptr().copy_to(frame.as_ptr().add(8), 8);
-            }
-            bm.log_page_update(self.file_handle.file_id, idx, frame.as_slice())?;
-            bm.unpin_page(self.fh(), idx, frame);
-        }
-
-        // Zero out all initial bucket pages (reset overflow links and entry counts)
-        for page_idx in 1..=new_buckets {
-            let frame = bm.create_new_version(Arc::clone(self.fh()), page_idx, tx)?;
-            let ptr = frame.as_ptr();
-            unsafe {
-                ptr.write_bytes(0, PAGE_SIZE);
-                let zero8 = 0u64.to_le_bytes();
-                zero8.as_ptr().copy_to(ptr, 8);
-                zero8.as_ptr().copy_to(ptr.add(8), 8);
-            }
-            bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;
-            bm.unpin_page(self.fh(), page_idx, frame);
-        }
-
-        // Re-insert all collected entries into the resized table
-        for (hash, key, row_id) in &entries {
-            self.insert_internal(bm, *hash, key, *row_id, tx)?;
-        }
-
-        self.num_buckets.store(new_buckets, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
