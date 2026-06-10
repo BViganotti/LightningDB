@@ -169,7 +169,7 @@ impl IndexPushDown {
                 dst_node_table,
                 dst_var,
                 bounds,
-                ..
+                mask_id,
             } => {
                 let pushed_child = self.apply_recursive(*child)?;
                 Ok(LogicalOperator::RecursiveJoin {
@@ -180,7 +180,7 @@ impl IndexPushDown {
                     dst_node_table,
                     dst_var,
                     bounds,
-                    mask_id: None,
+                    mask_id,
                 })
             }
             LogicalOperator::Unwind(child, expr, alias) => Ok(LogicalOperator::Unwind(

@@ -1,19 +1,23 @@
+use crate::catalog::Catalog;
 use crate::optimizer::Rule;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::aggregate::AggregateFunction;
 use crate::Result;
+use parking_lot::RwLock;
+use std::sync::Arc;
 
-pub struct CountRelTableOptimizer;
-
-impl Default for CountRelTableOptimizer {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct CountRelTableOptimizer {
+    catalog: Arc<RwLock<Catalog>>,
 }
 
 impl CountRelTableOptimizer {
-    pub fn new() -> Self {
-        Self
+    pub fn new(catalog: Arc<RwLock<Catalog>>) -> Self {
+        Self { catalog }
+    }
+
+    fn is_rel_table(&self, table_name: &str) -> bool {
+        let cat = self.catalog.read();
+        cat.get_rel_table(table_name).is_some()
     }
 
     fn rewrite(&self, op: LogicalOperator) -> Result<LogicalOperator> {
@@ -26,30 +30,21 @@ impl CountRelTableOptimizer {
             } => {
                 let pushed_child = self.rewrite(*child)?;
 
-                // Check if it's a simple COUNT(*) aggregate
                 if group_by_cols.is_empty() && aggregates.len() == 1 {
                     let (func, _) = &aggregates[0];
                     if *func == AggregateFunction::Count {
-                        // Pattern: Aggregate(Count) -> Join(Join(Scan(Node), Scan(Rel)), Scan(Node))
-                        // Or: Aggregate(Count) -> Scan(Rel)
-
                         match &pushed_child {
                             LogicalOperator::Scan(rel_table, rel_alias, _, _, _) => {
-                                // Simple case: MATCH ()-[r:REL]->() RETURN count(r)
-                                // We can optimize if it's a relationship table.
-                                // In lightning, we don't easily know if a table is REL or NODE here without catalog access.
-                                // However, for parity, we assume the optimizer is registered where it can make this decision.
-                                // If it's a REL Scan with no filters and no properties, it's a candidate.
-                                return Ok(LogicalOperator::CountRelTable {
-                                    rel_table: rel_table.clone(),
-                                    bound_table: String::new(), // Generic count if no bound
-                                    direction: crate::parser::ast::Direction::Right,
-                                    alias: rel_alias.clone(),
-                                });
+                                if self.is_rel_table(rel_table) {
+                                    return Ok(LogicalOperator::CountRelTable {
+                                        rel_table: rel_table.clone(),
+                                        bound_table: String::new(),
+                                        direction: crate::parser::ast::Direction::Right,
+                                        alias: rel_alias.clone(),
+                                    });
+                                }
                             }
                             LogicalOperator::Join(left, right, _) => {
-                                // Case: MATCH (a)-[r:REL]->(b) RETURN count(*)
-                                // This matches the 3-table join pattern planned in logical_plan.rs
                                 if let LogicalOperator::Join(inner_left, inner_right, _) =
                                     left.as_ref()
                                 {
@@ -60,12 +55,14 @@ impl CountRelTableOptimizer {
                                     ) =
                                         (inner_left.as_ref(), inner_right.as_ref(), right.as_ref())
                                     {
-                                        return Ok(LogicalOperator::CountRelTable {
-                                            rel_table: r_table.clone(),
-                                            bound_table: a_table.clone(),
-                                            direction: crate::parser::ast::Direction::Right,
-                                            alias: r_alias.clone(),
-                                        });
+                                        if self.is_rel_table(r_table) {
+                                            return Ok(LogicalOperator::CountRelTable {
+                                                rel_table: r_table.clone(),
+                                                bound_table: a_table.clone(),
+                                                direction: crate::parser::ast::Direction::Right,
+                                                alias: r_alias.clone(),
+                                            });
+                                        }
                                     }
                                 }
                             }
