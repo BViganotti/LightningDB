@@ -270,6 +270,12 @@ impl Rule for JoinReordering {
             LogicalOperator::Sort(child, items) => {
                 Ok(LogicalOperator::Sort(Box::new(self.apply(*child)?), items))
             }
+            LogicalOperator::Limit(child, limit) => {
+                Ok(LogicalOperator::Limit(Box::new(self.apply(*child)?), limit))
+            }
+            LogicalOperator::Skip(child, skip) => {
+                Ok(LogicalOperator::Skip(Box::new(self.apply(*child)?), skip))
+            }
             _ => Ok(op),
         }
     }
