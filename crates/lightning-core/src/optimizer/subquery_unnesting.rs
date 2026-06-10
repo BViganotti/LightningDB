@@ -27,22 +27,27 @@ impl SubqueryUnnesting {
                 let left_rewritten = self.rewrite(*left)?;
                 let right_rewritten = self.rewrite(*right)?;
 
-                // Typical decorrelation:
-                // If the join condition is true (Cartesian) and it's a Subquery on the right
-                if let LogicalOperator::Subquery(_sub_child) = &right_rewritten {
-                    // Check for correlation in sub_child (variables from left used in sub_child)
-                    let mut left_vars = HashSet::new();
-                    left_rewritten.get_variables(&mut left_vars);
+                match right_rewritten {
+                    LogicalOperator::Subquery(sub_child) => {
+                        let mut left_vars = HashSet::new();
+                        left_rewritten.get_variables(&mut left_vars);
 
-                    // In a real unnester, we'd search sub_child for any PropertyLookup referring to left_vars.
-                    // For now, we perform a basic SemiJoin conversion if possible.
+                        let processed_sub_child = self.rewrite(*sub_child)?;
+
+                        Ok(LogicalOperator::Join(
+                            Box::new(left_rewritten),
+                            Box::new(LogicalOperator::Subquery(Box::new(processed_sub_child))),
+                            cond,
+                        ))
+                    }
+                    other => {
+                        Ok(LogicalOperator::Join(
+                            Box::new(left_rewritten),
+                            Box::new(other),
+                            cond,
+                        ))
+                    }
                 }
-
-                Ok(LogicalOperator::Join(
-                    Box::new(left_rewritten),
-                    Box::new(right_rewritten),
-                    cond,
-                ))
             }
             LogicalOperator::SemiJoin(left, right, cond, is_anti) => {
                 let left_rewritten = self.rewrite(*left)?;
