@@ -5,8 +5,8 @@ use crate::{LightningError, Result};
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray,
 };
-use arrow::array::MutableArrayData;
-use arrow::compute::cast;
+
+use arrow::compute::{cast, interleave};
 use arrow::compute::kernels::boolean::{and, not, or};
 use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -502,16 +502,18 @@ impl ExpressionEvaluator {
                 for (_, then_arr) in &evaluated {
                     sources.push(then_arr.clone());
                 }
-                let else_idx = sources.len();
                 if let Some(ref arr) = else_arr {
                     sources.push(arr.clone());
+                } else if !sources.is_empty() {
+                    sources.push(arrow::array::new_null_array(sources[0].data_type(), num_rows));
+                } else {
+                    return Err(LightningError::Internal("CASE WHEN without any branches".into()));
                 }
+                let else_idx = sources.len() - 1;
 
-                let source_datas: Vec<arrow::data::ArrayData> =
-                    sources.iter().map(|a| a.to_data()).collect();
-                let source_refs: Vec<&arrow::data::ArrayData> = source_datas.iter().collect();
-                let mut mutable = MutableArrayData::new(source_refs, false, num_rows);
-
+                // Build interleave indices: for each output row, pick (source_array_idx, row_idx)
+                let source_refs: Vec<&dyn Array> = sources.iter().map(|a| a.as_ref()).collect();
+                let mut indices: Vec<(usize, usize)> = Vec::with_capacity(num_rows);
                 for i in 0..num_rows {
                     let mut matched = false;
                     for (j, mask) in match_masks.iter().enumerate() {
@@ -520,22 +522,18 @@ impl ExpressionEvaluator {
                             .downcast_ref::<BooleanArray>()
                             .ok_or_else(|| LightningError::Internal("CASE WHEN must be boolean".into()))?;
                         if !bool_mask.is_null(i) && bool_mask.value(i) {
-                            mutable.extend(j, i, i + 1);
+                            indices.push((j, i));
                             matched = true;
                             break;
                         }
                     }
                     if !matched {
-                        if else_arr.is_some() {
-                            mutable.extend(else_idx, i, i + 1);
-                        } else {
-                            mutable.extend_nulls(1);
-                        }
+                        indices.push((else_idx, i));
                     }
                 }
-
-                let result_data = mutable.finish();
-                let result_arr = arrow::array::make_array(result_data);
+                // Use arrow::compute::interleave which replaces the removed MutableArrayData
+                let result_arr = interleave(&source_refs, &indices)
+                    .map_err(|e| LightningError::Internal(format!("CASE interleave failed: {e}")))?;
                 Ok(result_arr)
             }
             BoundExpression::Parameter(name) => {
