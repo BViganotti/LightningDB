@@ -1,5 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -12,6 +13,7 @@ pub struct SharedLimit {
 pub struct PhysicalLimit {
     child: Box<dyn PhysicalOperator>,
     shared: Arc<SharedLimit>,
+    mutex: Mutex<()>,
 }
 
 impl PhysicalLimit {
@@ -22,6 +24,7 @@ impl PhysicalLimit {
                 count: AtomicUsize::new(0),
                 limit,
             }),
+            mutex: Mutex::new(()),
         }
     }
 }
@@ -33,6 +36,7 @@ impl PhysicalOperator for PhysicalLimit {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
+        let _guard = self.mutex.lock();
         match self.child.get_next(database, tx, params)? {
             Some(chunk) => {
                 let batch = &chunk.batch;
@@ -65,6 +69,7 @@ impl PhysicalOperator for PhysicalLimit {
         Box::new(Self {
             child: self.child.clone_box(),
             shared: self.shared.clone(),
+            mutex: Mutex::new(()),
         })
     }
 }

@@ -17,6 +17,9 @@ pub struct PhysicalUnwind {
     current_row_idx: usize,
     current_list: Option<ArrayRef>, // This is the list for the current row
     current_list_idx: usize,
+
+    // Cache the expression result for the current chunk to avoid O(R²) re-evaluation
+    cached_eval: Option<ArrayRef>,
 }
 
 impl PhysicalUnwind {
@@ -33,6 +36,7 @@ impl PhysicalUnwind {
             current_row_idx: 0,
             current_list: None,
             current_list_idx: 0,
+            cached_eval: None,
         }
     }
 }
@@ -52,6 +56,7 @@ impl PhysicalOperator for PhysicalUnwind {
                         self.current_row_idx = 0;
                         self.current_list = None;
                         self.current_list_idx = 0;
+                        self.cached_eval = None;
                     }
                     None => return Ok(None),
                 }
@@ -66,14 +71,18 @@ impl PhysicalOperator for PhysicalUnwind {
             }
 
             if self.current_list.is_none() {
-                let eval_res = ExpressionEvaluator::evaluate(
-                    &self.expression,
-                    Some(&chunk.batch),
-                    params,
-                    chunk.num_rows(),
-                    &database.function_registry,
-                    database,
-                )?;
+                // Cache the expression result once per chunk to avoid O(R²) re-evaluation
+                if self.cached_eval.is_none() {
+                    self.cached_eval = Some(ExpressionEvaluator::evaluate(
+                        &self.expression,
+                        Some(&chunk.batch),
+                        params,
+                        chunk.num_rows(),
+                        &database.function_registry,
+                        database,
+                    )?);
+                }
+                let eval_res = self.cached_eval.as_ref().unwrap();
 
                 // Check if it's a list
                 if let Some(lists) = eval_res.as_list_opt::<i32>() {
@@ -147,6 +156,7 @@ impl PhysicalOperator for PhysicalUnwind {
             current_row_idx: 0,
             current_list: None,
             current_list_idx: 0,
+            cached_eval: None,
         })
     }
 }

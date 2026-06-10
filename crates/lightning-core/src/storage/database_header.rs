@@ -18,7 +18,7 @@ impl Default for DatabaseHeader {
 }
 
 impl DatabaseHeader {
-    pub const MAGIC: [u8; 8] = *b"LIGHTNIG"; // Misspelled just like Ladybug (wait, no, let's use LIGHTNIN)
+    pub const MAGIC: [u8; 8] = *b"LIGHTNIN";
     pub const VERSION: u32 = 1;
 
     pub fn new() -> Self {
