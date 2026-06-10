@@ -271,6 +271,15 @@ impl TransactionManager {
                 version_info.commit_row(*row_id, commit_ts);
             }
 
+            // Flush all dirty committed frames to disk so subsequent scans
+            // can read from files instead of relying on buffer pool alone.
+            // DML operators (e.g. PhysicalCreateRel) write data to buffer
+            // pool frames via batch_append_values, which never writes to
+            // the data files. Without this flush, a scan that uses the
+            // direct file read path (scan_primitive_direct) will see
+            // empty pages and produce zero rows.
+            bm.flush_all();
+
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
 

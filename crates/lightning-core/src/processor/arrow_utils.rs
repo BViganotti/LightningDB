@@ -193,41 +193,57 @@ pub fn append_raw_to_builder(
     data: &[u8],
     logical_type: &LogicalType,
 ) -> Result<()> {
+    let required = match logical_type {
+        LogicalType::Int64 | LogicalType::Uint64 | LogicalType::Node(_) | LogicalType::Double | LogicalType::Timestamp => 8usize,
+        LogicalType::Int32 | LogicalType::Date => 4,
+        LogicalType::Bool => 1,
+        LogicalType::String => 1usize.saturating_add(std::cmp::min(data.first().copied().unwrap_or(0) as usize, 63)),
+        LogicalType::List(_) => 0,
+        _ => return Err(LightningError::Internal("Type not supported for raw append".into())),
+    };
+    if data.len() < required {
+        return Err(LightningError::Internal(format!(
+            "append_raw_to_builder: expected at least {required} bytes for {logical_type:?}, got {}",
+            data.len()
+        )));
+    }
     match logical_type {
         LogicalType::Int64 => {
-            let b = builder.as_any_mut().downcast_mut::<Int64Builder>().expect("type mismatch: expected Arrow type");
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+            let b = builder.as_any_mut().downcast_mut::<Int64Builder>()
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Int64 Arrow type".into()))?;
+            b.append_value(i64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Int64 from raw data".into()))?));
         }
         LogicalType::Int32 => {
-            let b = builder.as_any_mut().downcast_mut::<Int32Builder>().expect("type mismatch: expected Arrow type");
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().expect("infallible: fixed-size array conversion")));
+            let b = builder.as_any_mut().downcast_mut::<Int32Builder>()
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Int32 Arrow type".into()))?;
+            b.append_value(i32::from_le_bytes(data[..4].try_into().map_err(|_| LightningError::Internal("failed to read Int32 from raw data".into()))?));
         }
         LogicalType::Uint64 | LogicalType::Node(_) => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<UInt64Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected UInt64 Arrow type".into()))?;
+            b.append_value(u64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read UInt64 from raw data".into()))?));
         }
         LogicalType::Double => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<Float64Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(f64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Float64 Arrow type".into()))?;
+            b.append_value(f64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Double from raw data".into()))?));
         }
         LogicalType::Bool => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<BooleanBuilder>()
-                .expect("type mismatch: expected Arrow type");
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Boolean Arrow type".into()))?;
             b.append_value(data[0] != 0);
         }
         LogicalType::String => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<StringBuilder>()
-                .expect("type mismatch: expected Arrow type");
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected String Arrow type".into()))?;
             let len = if data[0] == 255 { 63 } else { data[0] as usize };
             let actual_len = std::cmp::min(len, 63);
             b.append_value(std::str::from_utf8(&data[1..1 + actual_len]).unwrap_or(""));
@@ -236,15 +252,15 @@ pub fn append_raw_to_builder(
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<TimestampMicrosecondBuilder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Timestamp Arrow type".into()))?;
+            b.append_value(i64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Timestamp from raw data".into()))?));
         }
         LogicalType::Date => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<Date32Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Date32 Arrow type".into()))?;
+            b.append_value(i32::from_le_bytes(data[..4].try_into().map_err(|_| LightningError::Internal("failed to read Date from raw data".into()))?));
         }
         LogicalType::List(_) => {
             // Lists (like embeddings) are variable-length and not suitable for raw append

@@ -152,7 +152,12 @@ impl HashJoin {
             shared.num_active_builders += 1;
         }
 
+        tracing::debug!("HashJoin::build starting: right_key_idx={}", self.right_key_idx);
+        let mut total_build_rows = 0;
+        let mut build_chunk_count = 0;
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
+            build_chunk_count += 1;
+            total_build_rows += chunk.num_rows();
             let batch = chunk.batch;
             let mut shared = self.shared_build.write();
 
@@ -210,6 +215,11 @@ impl HashJoin {
             }
             shared.build_chunks.push(batch);
         }
+
+        tracing::debug!(
+            "HashJoin::build done: {} chunks, {} rows, right_key_idx={}",
+            build_chunk_count, total_build_rows, self.right_key_idx
+        );
 
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
@@ -284,8 +294,14 @@ impl PhysicalOperator for HashJoin {
                 self.current_left_chunk = self.left.get_next(database, tx, params)?;
                 self.left_row_idx = 0;
                 if self.current_left_chunk.is_none() {
+                    tracing::debug!("HashJoin::get_next: left child exhausted, returning None");
                     return Ok(None);
                 }
+                tracing::debug!(
+                    "HashJoin::get_next: got left chunk with {} rows, {} cols",
+                    self.current_left_chunk.as_ref().unwrap().num_rows(),
+                    self.current_left_chunk.as_ref().unwrap().batch.num_columns()
+                );
             }
 
             let left_batch = &self.current_left_chunk.as_ref().expect("required handle not present").batch;
@@ -305,85 +321,17 @@ impl PhysicalOperator for HashJoin {
                         for build_idx in 0..n {
                             left_indices.push(self.left_row_idx as u32);
                             right_indices.push(Some(build_idx as u32));
-                            if left_indices.len() >= 1024 {
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    // Find matches using specialized or generic hash table
-                    let matches_ref = match left_key_col.data_type() {
-                        DataType::UInt64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<UInt64Array>()
-                                .expect("hash join probe: UInt64 key");
-                            if arr.is_null(self.left_row_idx) {
-                                None
-                            } else {
-                                shared.u64_hash_table.get(&arr.value(self.left_row_idx))
-                            }
-                        }
-                        DataType::Int64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<Int64Array>()
-                                .expect("hash join probe: Int64 key");
-                            if arr.is_null(self.left_row_idx) {
-                                None
-                            } else {
-                                shared
-                                    .u64_hash_table
-                                    .get(&(arr.value(self.left_row_idx) as u64))
-                            }
-                        }
-                        _ => {
-                            let key = Value::from_arrow(left_key_col, self.left_row_idx);
-                            shared.hash_table.get(&key)
-                        }
-                    };
-
-                    match self.join_type {
-                        JoinType::Inner => {
-                            if let Some(m) = matches_ref {
-                                for &build_idx in m {
-                                    left_indices.push(self.left_row_idx as u32);
-                                    right_indices.push(Some(build_idx as u32));
-                                    if left_indices.len() >= 1024 {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        JoinType::LeftOuter => {
-                            if let Some(m) = matches_ref {
-                                for &build_idx in m {
-                                    left_indices.push(self.left_row_idx as u32);
-                                    right_indices.push(Some(build_idx as u32));
-                                    if left_indices.len() >= 1024 {
-                                        break;
-                                    }
-                                }
-                            } else {
-                                left_indices.push(self.left_row_idx as u32);
-                                right_indices.push(None);
-                            }
-                        }
-                        JoinType::LeftSemi => {
-                            if matches_ref.is_some() {
-                                left_indices.push(self.left_row_idx as u32);
-                            }
-                        }
-                        JoinType::LeftAnti => {
-                            if matches_ref.is_none() {
-                                left_indices.push(self.left_row_idx as u32);
-                            }
-                        }
-                    }
-                }
-
-                if left_indices.len() < 1024 {
-                    self.left_row_idx += 1;
+                if left_indices.len() >= 1024 {
+                    break;
                 }
             }
 
             if !left_indices.is_empty() {
+                tracing::debug!(
+                    "HashJoin::get_next: found {} matches from {} left rows",
+                    left_indices.len(),
+                    left_num_rows
+                );
                 let left_indices_arr = UInt32Array::from(left_indices.clone());
 
                 let mut final_columns = Vec::new();

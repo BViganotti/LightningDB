@@ -213,14 +213,33 @@ impl Value {
                 ))
             }
             Value::List(l) => {
-                // Simplified: assume all elements in the list are the same type for this scalar list
-                let mut builders = Vec::new();
-                for _row in 0..num_elements {
-                    builders.push(l.clone());
+                if l.is_empty() || num_elements == 0 {
+                    return Arc::new(arrow::array::NullArray::new(num_elements));
                 }
-                // This is complex to build properly here without the element type.
-                // For now, let's keep it simple or implement as needed.
-                Arc::new(arrow::array::NullArray::new(num_elements))
+                let first_arr = l[0].to_arrow(1);
+                let elem_data_type = first_arr.data_type().clone();
+                let elem_arrays: Vec<ArrayRef> = l.iter()
+                    .map(|v| {
+                        let arr = v.to_arrow(1);
+                        if arr.data_type() != &elem_data_type {
+                            arrow::compute::kernels::cast::cast(&arr, &elem_data_type)
+                                .unwrap_or_else(|_| arrow::array::new_null_array(&elem_data_type, 1))
+                        } else {
+                            arr
+                        }
+                    })
+                    .collect();
+                let elem_refs: Vec<&dyn arrow::array::Array> =
+                    elem_arrays.iter().map(|a| a.as_ref()).collect();
+                let flat = arrow::compute::concat(&elem_refs)
+                    .unwrap_or_else(|_| arrow::array::new_null_array(&elem_data_type, l.len()));
+                let raw_offsets: Vec<i32> = (0..=num_elements as i32)
+                    .map(|i| i * l.len() as i32)
+                    .collect();
+                let offset_buf =
+                    arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(raw_offsets));
+                let field = Arc::new(arrow::datatypes::Field::new("item", elem_data_type, true));
+                Arc::new(arrow::array::ListArray::new(field, offset_buf, flat, None))
             }
             _ => Arc::new(arrow::array::NullArray::new(num_elements)),
         }

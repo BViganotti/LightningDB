@@ -36,7 +36,7 @@ impl Optimizer {
             rules: vec![
                 Box::new(subquery_unnesting::SubqueryUnnesting::new()),
                 Box::new(filter_pushdown::FilterPushDown::new()),
-                Box::new(index_pushdown::IndexPushDown::new(cat2)),
+                // Box::new(index_pushdown::IndexPushDown::new(cat2)),
                 Box::new(join_reordering::JoinReordering::new(cat1)),
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
