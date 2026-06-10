@@ -1454,6 +1454,7 @@ impl Column {
                 }
                 bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
                 self.null_fh.write_page(page_idx, &null_page_buf)?;
+                bm.evict_pages_for_file(self.null_fh.file_id, page_idx, 1);
                 i = page_i;
             }
         } else {
@@ -1663,11 +1664,10 @@ impl Column {
         self.fh
             .write_bytes_at(write_offset, &raw_bytes[..bytes_to_write])?;
 
-        if skip_modified_rows {
-            let data_first_page = write_offset / PAGE_SIZE as u64;
-            let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
-            bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
-        }
+        // Invalidate buffer manager cache for affected pages
+        let data_first_page = write_offset / PAGE_SIZE as u64;
+        let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
+        bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
 
         if !skip_modified_rows && !self.name.starts_with('_') {
             self.version_info
@@ -1844,14 +1844,12 @@ impl Column {
         self.fh.write_bytes_at(write_offset, &data_vec)?;
 
         // Invalidate buffer manager cache for affected pages
-        if skip_modified_rows {
-            let data_first_page = write_offset / PAGE_SIZE as u64;
-            let data_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
-            bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
-            let null_first_page = start_row_id / 4096;
-            let null_num_pages = (num_rows as u64).div_ceil(4096);
-            bm.evict_pages_for_file(self.null_fh.file_id, null_first_page, null_num_pages);
-        }
+        let data_first_page = write_offset / PAGE_SIZE as u64;
+        let data_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
+        bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
+        let null_first_page = start_row_id / 4096;
+        let null_num_pages = (num_rows as u64).div_ceil(4096);
+        bm.evict_pages_for_file(self.null_fh.file_id, null_first_page, null_num_pages);
 
         // 3. Batch version tracking (skip if bulk mode - handled by transaction)
         if !skip_modified_rows && !self.name.starts_with('_') {

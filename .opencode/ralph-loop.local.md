@@ -33,20 +33,20 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 8. ~~`crates/lightning-core/src/memory.rs:1047-1051,1268-1275` — remaining cypher injection sites~~ (FIXED)
 9. ~~`crates/lightning-core/src/planner/binder.rs:562-597` — COPY TO/FROM path validation against copy_base_dir~~ (FIXED)
 10. ~~`crates/lightning-core/src/cdc.rs:86-108` — CDC thread holds lock during blocking I/O~~ (FIXED)
-11. `crates/lightning-core/src/transaction/transaction_manager.rs:232-246` — unsafe pointer mutation bypasses buffer manager
-13. `crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write
-14. `crates/lightning-core/src/optimizer/projection_pushdown.rs:96` — variable corruption (sets var to "")
-15. `crates/lightning-core/src/optimizer/projection_pushdown.rs:346-349` — empty required_indices prunes all columns
-16. `crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse
-17. `crates/lightning-core/src/optimizer/order_by_pushdown.rs:37-41` — generic catch-all doesn't recurse
-18. `crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type
-19. `crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed
-20. `crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child
-21. `crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys
-22. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
-23. `crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss
-24. `crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation
-25. `crates/lightning-core/src/storage/database_header.rs:21` — MAGIC number comment
+11. ~~`crates/lightning-core/src/transaction/transaction_manager.rs:232-246` — unsafe pointer mutation bypasses buffer manager~~ (FIXED)
+12. `crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write
+13. `crates/lightning-core/src/optimizer/projection_pushdown.rs:96` — variable corruption (sets var to "")
+14. `crates/lightning-core/src/optimizer/projection_pushdown.rs:346-349` — empty required_indices prunes all columns
+15. `crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse
+16. `crates/lightning-core/src/optimizer/order_by_pushdown.rs:37-41` — generic catch-all doesn't recurse
+17. `crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type
+18. `crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed
+19. `crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child
+20. `crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys
+21. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
+22. `crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss
+23. `crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation
+24. `crates/lightning-core/src/storage/database_header.rs:21` — MAGIC number comment
 
 ## P1-P3 Issues
 Fix P0 first, then continue through HIGH (section 2), MEDIUM (section 3), and LOW (section 4) issues in order.
