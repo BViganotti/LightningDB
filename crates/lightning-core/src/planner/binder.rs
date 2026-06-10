@@ -1112,12 +1112,12 @@ impl<'a> Binder<'a> {
             Clause::Remove(rem) => {
                 let mut assignments = Vec::new();
                 for (variable, property_key) in &rem.properties {
-                    let (properties, offset, table_name) =
+                    let (properties, offset, table_name, _table_kind) =
                         self.get_table_properties(variable)?;
                     let mut prop_idx = None;
                     for (i, prop) in properties.iter().enumerate() {
                         if prop.name == *property_key {
-                            prop_idx = Some(i + offset);
+                            prop_idx = Some(offset + i);
                             break;
                         }
                     }
@@ -1140,12 +1140,12 @@ impl<'a> Binder<'a> {
             Clause::Set(set) => {
                 let mut assignments = Vec::new();
                 for assign in &set.assignments {
-                    let (properties, offset, table_name) =
+                    let (properties, offset, table_name, _table_kind) =
                         self.get_table_properties(&assign.variable)?;
                     let mut prop_idx = None;
                     for (i, prop) in properties.iter().enumerate() {
                         if prop.name == assign.property_key {
-                            prop_idx = Some(i + offset);
+                            prop_idx = Some(offset + i);
                             break;
                         }
                     }
@@ -1316,11 +1316,14 @@ impl<'a> Binder<'a> {
                 ))
             }
             Expression::PropertyLookup(var, prop_name) => {
-                let (properties, _, table_name) = self.get_table_properties(var)?;
-                let column_offset = self.column_offsets.get(var).copied().unwrap_or(0);
+                let (properties, column_offset, table_name, _table_kind) = self.get_table_properties(var)?;
 
                 for (i, prop) in properties.iter().enumerate() {
                     if &prop.name == prop_name {
+                        // Catalog already includes _id at index 0 for node tables,
+                        // and _src/_dst for rel tables. The physical scan outputs
+                        // columns in catalog-property order, so the index directly
+                        // maps to the scan output column.
                         return Ok(BoundExpression::PropertyLookup(
                             var.clone(),
                             column_offset + i,
@@ -1650,11 +1653,12 @@ impl<'a> Binder<'a> {
         &mut self,
         assign: &PropertyAssignment,
     ) -> Result<BoundPropertyAssignment> {
-        let (properties, offset, table_name) = self.get_table_properties(&assign.variable)?;
+        let (properties, offset, table_name, _table_kind) =
+            self.get_table_properties(&assign.variable)?;
         let mut prop_idx = None;
         for (i, prop) in properties.iter().enumerate() {
             if prop.name == assign.property_key {
-                prop_idx = Some(i + offset);
+                prop_idx = Some(offset + i);
                 break;
             }
         }
@@ -1675,19 +1679,19 @@ impl<'a> Binder<'a> {
     fn get_table_properties(
         &self,
         variable: &str,
-    ) -> Result<(&[crate::catalog::PropertyDefinition], usize, String)> {
+    ) -> Result<(&[crate::catalog::PropertyDefinition], usize, String, u8)> {
         let binding = self
             .variables
             .get(variable)
             .ok_or_else(|| LightningError::Query(format!("Variable {variable} not found")))?;
 
-        let (props, _kind) = self.catalog.get_table_properties(&binding.table_name)
+        let (props, table_kind) = self.catalog.get_table_properties(&binding.table_name)
             .ok_or_else(|| LightningError::Query(format!(
                 "Table {} not found for variable {}",
                 binding.table_name, variable
             )))?;
         let offset = self.column_offsets.get(variable).copied().unwrap_or(0);
-        Ok((props, offset, binding.table_name.clone()))
+        Ok((props, offset, binding.table_name.clone(), table_kind))
     }
 
     fn bind_data_type(&self, data_type: &crate::parser::ast::DataType) -> LogicalType {
