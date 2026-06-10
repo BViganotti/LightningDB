@@ -35,7 +35,7 @@ fn test_semi_mask_filtering() {
             table,
             "u".to_string(),
             db.buffer_manager.clone(),
-            4, u64::MAX // Total rows, read_ts
+            4,
         ).unwrap();
         
         let mut mask = lightning_core::processor::operators::SemiMask::new();

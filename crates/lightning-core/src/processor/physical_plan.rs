@@ -762,7 +762,9 @@ impl PhysicalPlanner {
                 } else {
                     let cat = self.db.catalog.read();
                     if let Some(t) = cat.get_node_table(table_name) {
-                        Ok(t.properties.len())
+                        // IndexScan includes the internal _id column in its physical
+                        // output (same as Scan), so the column count must match.
+                        Ok(t.properties.len() + 1)
                     } else if let Some(t) = cat.get_rel_table(table_name) {
                         Ok(t.properties.len())
                     } else {
@@ -803,6 +805,16 @@ impl PhysicalPlanner {
     fn compute_subtree_num_cols(&self, op: &LogicalOperator) -> usize {
         match op {
             LogicalOperator::Scan(table_name, ..) => self.get_table_num_columns(table_name),
+            LogicalOperator::IndexScan(table_name, ..) => {
+                let cat = self.db.catalog.read();
+                if let Some(t) = cat.get_node_table(table_name) {
+                    t.properties.len() + 1
+                } else if let Some(t) = cat.get_rel_table(table_name) {
+                    t.properties.len()
+                } else {
+                    0
+                }
+            }
             LogicalOperator::Join(left, right, ..) => {
                 self.compute_subtree_num_cols(left) + self.compute_subtree_num_cols(right)
             }
@@ -838,19 +850,74 @@ impl PhysicalPlanner {
 
         match join_cond {
             BoundExpression::Comparison(left_expr, ComparisonOperator::Equal, right_expr) => {
-                let left_key = self.resolve_key_index(left_expr, &left_positions, "left")?;
-                let right_key = self.resolve_key_index(right_expr, &right_positions, "right")?;
+                let (left_key, right_key) =
+                    self.resolve_join_key_pair(left_expr, right_expr, &left_positions, &right_positions)?;
                 Ok((left_key, right_key))
             }
             BoundExpression::Comparison(left_expr, ComparisonOperator::NotEqual, right_expr) => {
-                let left_key = self.resolve_key_index(left_expr, &left_positions, "left")?;
-                let right_key = self.resolve_key_index(right_expr, &right_positions, "right")?;
+                let (left_key, right_key) =
+                    self.resolve_join_key_pair(left_expr, right_expr, &left_positions, &right_positions)?;
                 Ok((left_key, right_key))
             }
             _ => {
                 tracing::warn!("Join condition is not a comparison expression, falling back to cross join");
                 Ok((0, 0))
             }
+        }
+    }
+
+    /// Resolve join key indices handling potential left/right swapping from join reordering.
+    /// After JoinReordering swaps subtrees based on cardinality, the join condition's
+    /// expression sides may not correspond to the actual left/right children. This method
+    /// detects which variable each expression references and maps to the correct side.
+    fn resolve_join_key_pair(
+        &self,
+        expr_a: &BoundExpression,
+        expr_b: &BoundExpression,
+        left_positions: &std::collections::HashMap<String, usize>,
+        right_positions: &std::collections::HashMap<String, usize>,
+    ) -> Result<(usize, usize)> {
+        let a_in_left = self.expr_belongs_to_side(expr_a, left_positions);
+        let b_in_left = self.expr_belongs_to_side(expr_b, left_positions);
+        let a_in_right = self.expr_belongs_to_side(expr_a, right_positions);
+        let b_in_right = self.expr_belongs_to_side(expr_b, right_positions);
+
+        let (left_key_expr, right_key_expr) = if a_in_left && b_in_right {
+            (expr_a, expr_b)
+        } else if b_in_left && a_in_right {
+            (expr_b, expr_a)
+        } else {
+            // Fallback: try a_in_left first
+            if a_in_left {
+                (expr_a, expr_b)
+            } else {
+                (expr_b, expr_a)
+            }
+        };
+
+        let left_key = self.resolve_key_index(left_key_expr, left_positions, "left")?;
+        let right_key = self.resolve_key_index(right_key_expr, right_positions, "right")?;
+        Ok((left_key, right_key))
+    }
+
+    fn expr_belongs_to_side(
+        &self,
+        expr: &BoundExpression,
+        positions: &std::collections::HashMap<String, usize>,
+    ) -> bool {
+        match expr {
+            BoundExpression::PropertyLookup(var, _, _) => positions.contains_key(var),
+            BoundExpression::Comparison(left, _, right)
+            | BoundExpression::Arithmetic(left, _, right)
+            | BoundExpression::Logical(left, _, right) => {
+                self.expr_belongs_to_side(left, positions)
+                    || self.expr_belongs_to_side(right, positions)
+            }
+            BoundExpression::Not(inner) => self.expr_belongs_to_side(inner, positions),
+            BoundExpression::Function(_, args, _) => {
+                args.iter().any(|a| self.expr_belongs_to_side(a, positions))
+            }
+            _ => false,
         }
     }
 

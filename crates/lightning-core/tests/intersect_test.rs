@@ -90,7 +90,6 @@ fn test_intersect_operator() {
         "e1".to_string(),
         db.buffer_manager.clone(),
         5,
-        100,
     ).unwrap());
     // Build 2: Scan Follows
     let scan2 = Box::new(PhysicalScan::new(
@@ -98,7 +97,6 @@ fn test_intersect_operator() {
         "e2".to_string(),
         db.buffer_manager.clone(),
         5,
-        100,
     ).unwrap());
 
     // Probe side: provides [(0, 1)] (one row, two columns: a=0, b=1)
