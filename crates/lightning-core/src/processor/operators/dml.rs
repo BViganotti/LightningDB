@@ -769,6 +769,11 @@ impl PhysicalOperator for PhysicalCreateRel {
                     if !rows.is_empty() {
                         self.table
                             .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
+                        // Flush the table's write buffer to persist column data.
+                        // Without this, buffered data is held only in the cloned
+                        // Table handle and lost when the operator finishes —
+                        // column files stay empty and column scans see nothing.
+                        self.table.flush_pending(&self.buffer_manager, tx)?;
                         self.shared_state
                             .total_affected
                             .fetch_add(rows.len() as u64, Ordering::SeqCst);

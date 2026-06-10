@@ -1,3 +1,4 @@
+use crate::parser::ast::ComparisonOperator;
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::PhysicalOperator;
@@ -166,13 +167,28 @@ impl PhysicalPlanner {
                 ))
             }
             LogicalOperator::Join(left, right, join_cond) => {
-                let planned_left = self.plan(*left)?;
-                let planned_right = self.plan(*right)?;
-                let is_cross_join = matches!(
+                // Log the join structure
+                let left_vars = self.compute_variable_positions(&*left).unwrap_or_default();
+                let right_vars = self.compute_variable_positions(&*right).unwrap_or_default();
+                let left_ncols = self.compute_subtree_num_cols(&*left);
+                let right_ncols = self.compute_subtree_num_cols(&*right);
+                tracing::warn!(
+                    "PHYSICAL_PLAN: JOIN left_vars={:?} left_ncols={} right_vars={:?} right_ncols={}",
+                    left_vars, left_ncols, right_vars, right_ncols
+                );
+                let (left_key, right_key) = if matches!(
                     join_cond,
                     BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
-                );
-                if is_cross_join {
+                ) {
+                    (0, 0)
+                } else {
+                    let keys = self.extract_join_keys(&join_cond, &*left, &*right)?;
+                    tracing::warn!("PHYSICAL_PLAN: join keys left={} right={}", keys.0, keys.1);
+                    keys
+                };
+                let planned_left = self.plan(*left)?;
+                let planned_right = self.plan(*right)?;
+                if (left_key, right_key) == (0, 0) {
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new_cross_join(
                             planned_left,
@@ -184,8 +200,8 @@ impl PhysicalPlanner {
                         crate::processor::operators::hash_join::HashJoin::new(
                             planned_left,
                             planned_right,
-                            0,
-                            0,
+                            left_key,
+                            right_key,
                         ),
                     ))
                 }
@@ -612,8 +628,13 @@ impl PhysicalPlanner {
     fn get_table_num_columns(&self, table_name: &str) -> usize {
         let cat = self.db.catalog.read();
         if let Some(node_table) = cat.get_node_table(table_name) {
-            node_table.properties.len()
+            // +1 for the internal _id column that the storage engine silently
+            // prepends to every node table scan. The catalog only tracks
+            // user-defined columns (DDL), not internal columns.
+            node_table.properties.len() + 1
         } else if let Some(rel_table) = cat.get_rel_table(table_name) {
+            // Rel tables have _src and _dst prepended by add_rel_table into
+            // the properties list, so no adjustment needed.
             rel_table.properties.len()
         } else {
             2
@@ -776,6 +797,78 @@ impl PhysicalPlanner {
             | LogicalOperator::Checkpoint
             | LogicalOperator::Vacuum
             | LogicalOperator::SingleRow => Ok(0),
+        }
+    }
+
+    fn compute_subtree_num_cols(&self, op: &LogicalOperator) -> usize {
+        match op {
+            LogicalOperator::Scan(table_name, ..) => self.get_table_num_columns(table_name),
+            LogicalOperator::Join(left, right, ..) => {
+                self.compute_subtree_num_cols(left) + self.compute_subtree_num_cols(right)
+            }
+            LogicalOperator::Filter(child, ..)
+            | LogicalOperator::Projection(child, ..)
+            | LogicalOperator::Sort(child, ..)
+            | LogicalOperator::Limit(child, ..)
+            | LogicalOperator::TopK(child, ..)
+            | LogicalOperator::Aggregate { child, .. }
+            | LogicalOperator::SemiMasker(child, ..)
+            | LogicalOperator::Flatten(child)
+            | LogicalOperator::Accumulate(child)
+            | LogicalOperator::Profile(child)
+            | LogicalOperator::Explain(child) => self.compute_subtree_num_cols(child),
+            _ => 0,
+        }
+    }
+
+    /// Extract the column indices for hash join keys from the join condition.
+    /// Computes variable positions for each child subtree independently,
+    /// giving correct column indices relative to each side's output batch.
+    fn extract_join_keys(
+        &self,
+        join_cond: &BoundExpression,
+        left_op: &LogicalOperator,
+        right_op: &LogicalOperator,
+    ) -> Result<(usize, usize)> {
+        let mut left_positions = std::collections::HashMap::new();
+        self.collect_variable_positions(left_op, 0, &mut left_positions)?;
+
+        let mut right_positions = std::collections::HashMap::new();
+        self.collect_variable_positions(right_op, 0, &mut right_positions)?;
+
+        match join_cond {
+            BoundExpression::Comparison(left_expr, ComparisonOperator::Equal, right_expr) => {
+                let left_key = self.resolve_key_index(left_expr, &left_positions, "left")?;
+                let right_key = self.resolve_key_index(right_expr, &right_positions, "right")?;
+                Ok((left_key, right_key))
+            }
+            BoundExpression::Comparison(left_expr, ComparisonOperator::NotEqual, right_expr) => {
+                let left_key = self.resolve_key_index(left_expr, &left_positions, "left")?;
+                let right_key = self.resolve_key_index(right_expr, &right_positions, "right")?;
+                Ok((left_key, right_key))
+            }
+            _ => {
+                tracing::warn!("Join condition is not a comparison expression, falling back to cross join");
+                Ok((0, 0))
+            }
+        }
+    }
+
+    fn resolve_key_index(
+        &self,
+        expr: &BoundExpression,
+        positions: &std::collections::HashMap<String, usize>,
+        side: &str,
+    ) -> Result<usize> {
+        match expr {
+            BoundExpression::PropertyLookup(var, idx, _) => {
+                let base = positions.get(var).copied().unwrap_or(0);
+                Ok(base + idx)
+            }
+            _ => Err(LightningError::Internal(format!(
+                "{} join key must be a PropertyLookup",
+                side,
+            ))),
         }
     }
 
