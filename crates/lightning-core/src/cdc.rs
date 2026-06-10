@@ -100,6 +100,9 @@ impl CdcManager {
                                     }
                                 }
                                 Some(WALRecord::Commit { .. }) => {}
+                                Some(WALRecord::Corrupt { msg }) => {
+                                    log::warn!("CDC detected corrupt WAL record: {}", msg);
+                                }
                                 None => break,
                             }
                         }

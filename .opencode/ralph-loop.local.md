@@ -28,7 +28,6 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 3. `crates/lightning-core/src/storage/compression/bitpacking.rs:73-86` — byte path doesn't clear target bits before OR
 4. `crates/lightning-core/src/storage/compression/analyzer_test.rs:9,20,31,44,55` — syntax errors (spurious `analyze_integer_chunk(` prefix)
 5. `crates/lightning-core/src/storage/index/hash_index.rs:92-148` — resize race (header updated before zeroing)
-6. `crates/lightning-core/src/processor/operators/dml.rs + copy.rs` — is_read_only() in inherent impl not trait impl (7+ operators)
 7. `crates/lightning-core/src/storage/wal.rs:495` — WAL CRC computed but never compared
 8. `crates/lightning-core/tests/hash_join_test.rs:57` — dangling tempdir use-after-free
 9. `crates/lightning-core/src/memory.rs:1047-1051,1268-1275` — remaining cypher injection sites
