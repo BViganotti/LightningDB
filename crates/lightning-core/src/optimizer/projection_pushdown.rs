@@ -93,7 +93,6 @@ impl ProjectionPushDown {
                     v.sort();
                     if let Some(pos) = v.iter().position(|&i| i == *idx) {
                         *idx = pos;
-                        *var = "".to_string(); // Mark as remapped
                     }
                 }
             }

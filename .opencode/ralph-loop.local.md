@@ -34,7 +34,7 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 9. ~~`crates/lightning-core/src/planner/binder.rs:562-597` — COPY TO/FROM path validation against copy_base_dir~~ (FIXED)
 10. ~~`crates/lightning-core/src/cdc.rs:86-108` — CDC thread holds lock during blocking I/O~~ (FIXED)
 11. ~~`crates/lightning-core/src/transaction/transaction_manager.rs:232-246` — unsafe pointer mutation bypasses buffer manager~~ (FIXED)
-12. `crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write
+12. ~~`crates/lightning-core/src/storage/column.rs:1663-1669,1844-1854,1454-1456` — buffer cache incoherence after direct file write~~ (FIXED)
 13. `crates/lightning-core/src/optimizer/projection_pushdown.rs:96` — variable corruption (sets var to "")
 14. `crates/lightning-core/src/optimizer/projection_pushdown.rs:346-349` — empty required_indices prunes all columns
 15. `crates/lightning-core/src/optimizer/agg_key_dependency_optimizer.rs:96-105` — generic catch-all doesn't recurse
