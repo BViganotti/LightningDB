@@ -212,7 +212,7 @@ impl TransactionManager {
                                     "deadlock detected while acquiring page merge lock".into()
                                 ))?;
 
-                            // Pin the latest committed version INSIDE the lock
+                            // Pin the latest committed version INSIDE the lock to get source data
                             let latest_frame = bm.pin_latest_committed(
                                 std::sync::Arc::clone(&fh),
                                 *page_idx,
@@ -222,32 +222,32 @@ impl TransactionManager {
                             let mut merged_data = [0u8; 4096];
                             merged_data.copy_from_slice(latest_frame.as_slice());
 
+                            // Release read-only committed frame
+                            bm.unpin_page(&fh, *page_idx, latest_frame);
+
                             // Apply all our row modifications to the local buffer
                             for row_mod in mods {
                                 let es = row_mod.element_size;
                                 let vpp = 4096 / es as u64;
                                 let offset_in_page = (row_mod.row_id % vpp) as usize * es;
                                 if offset_in_page + es <= 4096 {
-                                    // SAFETY: Writing to local buffer with checked bounds
-                                    unsafe {
-                                        std::ptr::copy_nonoverlapping(
-                                            row_mod.row_data.as_ptr(),
-                                            merged_data.as_mut_ptr().add(offset_in_page),
-                                            es,
-                                        );
-                                    }
+                                    merged_data[offset_in_page..offset_in_page + es]
+                                        .copy_from_slice(&row_mod.row_data[..es]);
                                 }
                             }
 
-                            // Write merged data back to frame under the per-page lock
-                            // SAFETY: Under per-page merge lock, exclusive write access
-                            unsafe {
-                                *latest_frame.data.get() = merged_data;
-                            }
+                            // Pin our own uncommitted version (created during execution)
+                            // and write the merged data through the buffer manager API.
+                            let our_frame = bm.pin_page(
+                                std::sync::Arc::clone(&fh),
+                                *page_idx,
+                                tx,
+                            )?;
+                            our_frame.as_mut_slice().copy_from_slice(&merged_data);
 
                             // Log the merged page to WAL
-                            bm.log_page_update(*file_id, *page_idx, latest_frame.as_slice())?;
-                            bm.unpin_page(&fh, *page_idx, latest_frame);
+                            bm.log_page_update(*file_id, *page_idx, our_frame.as_slice())?;
+                            bm.unpin_page(&fh, *page_idx, our_frame);
                         }
                     }
                 }
@@ -270,6 +270,15 @@ impl TransactionManager {
             for (version_info, row_id) in modified_rows.iter() {
                 version_info.commit_row(*row_id, commit_ts);
             }
+
+            // Flush all dirty committed frames to disk so subsequent scans
+            // can read from files instead of relying on buffer pool alone.
+            // DML operators (e.g. PhysicalCreateRel) write data to buffer
+            // pool frames via batch_append_values, which never writes to
+            // the data files. Without this flush, a scan that uses the
+            // direct file read path (scan_primitive_direct) will see
+            // empty pages and produce zero rows.
+            bm.flush_all();
 
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);

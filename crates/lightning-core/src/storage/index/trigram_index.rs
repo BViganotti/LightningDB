@@ -205,14 +205,19 @@ impl TrigramIndex {
     }
 
     /// Insert a single value into the index.
+    /// Posting lists are maintained in sorted order for binary_search correctness
+    /// in `intersect_sorted_lists`. The list.last() fast-path catches the common
+    /// case of monotonically increasing row_ids, with binary_search as the
+    /// authoritative dedup check for out-of-order inserts.
     pub fn insert(&self, row_id: u64, value: &str) {
         {
             let trigrams = Self::extract_trigrams(value);
             let mut map = self.trigrams.write();
             for tri in trigrams {
                 let list = map.entry(tri).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
@@ -221,8 +226,9 @@ impl TrigramIndex {
             let mut map = self.bigrams.write();
             for bi in bigrams {
                 let list = map.entry(bi).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
@@ -231,8 +237,9 @@ impl TrigramIndex {
             let mut map = self.unigrams.write();
             for u in unigrams {
                 let list = map.entry(u).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
+                    list.sort_unstable();
                 }
             }
         }
@@ -241,6 +248,8 @@ impl TrigramIndex {
     /// Batch insert multiple (row_id, value) pairs.
     /// Ensures all posting lists remain sorted for binary search operations.
     /// Updates index statistics for adaptive query planning.
+    /// Uses binary_search for authoritative dedup since lists are sorted at
+    /// the start of each batch (from prior insert/insert_batch calls).
     pub fn insert_batch(&self, entries: &[(u64, &str)]) {
         let entry_count = entries.len() as u64;
         let mut trigram_count = 0u64;
@@ -256,7 +265,7 @@ impl TrigramIndex {
             trigram_count += tris.len() as u64;
             for tri in tris {
                 let list = tri_map.entry(tri).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
                 }
             }
@@ -265,7 +274,7 @@ impl TrigramIndex {
             bigram_count += bis.len() as u64;
             for bi in bis {
                 let list = bi_map.entry(bi).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
                 }
             }
@@ -274,7 +283,7 @@ impl TrigramIndex {
             unigram_count += unis.len() as u64;
             for u in unis {
                 let list = uni_map.entry(u).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) {
+                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
                     list.push(row_id);
                 }
             }

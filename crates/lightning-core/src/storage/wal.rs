@@ -426,6 +426,11 @@ impl WAL {
     /// Returns an iterator that yields parsed records until EOF or error.
     /// If `offset` is past the end of the file (e.g., after truncation),
     /// returns an empty iterator.
+    /// Maximum bytes to read from the WAL in a single `read_records_from` call.
+    /// If the remaining WAL is larger, callers should loop by passing the
+    /// iterator's `absolute_pos()` as the next offset.
+    const MAX_WAL_READ_SIZE: usize = 64 * 1024 * 1024; // 64 MB
+
     pub fn read_records_from(&self, offset: u64) -> Result<WALRecordIter> {
         let mut file = self.file.lock();
         let file_len = file.metadata()?.len();
@@ -442,7 +447,8 @@ impl WAL {
 
         file.seek(SeekFrom::Start(start))?;
         let remaining = (file_len - start) as usize;
-        let mut buf = vec![0u8; remaining];
+        let to_read = remaining.min(Self::MAX_WAL_READ_SIZE);
+        let mut buf = vec![0u8; to_read];
         file.read_exact(&mut buf)?;
         drop(file);
 
@@ -492,7 +498,17 @@ impl WALRecordIter {
                     digest.update(&file_id.to_le_bytes());
                     digest.update(&page_idx.to_le_bytes());
                     digest.update(&data);
-                    let _computed_crc = digest.finalize();
+                    let computed_crc = digest.finalize();
+                    if computed_crc != stored_crc {
+                        return Some(WALRecord::Corrupt {
+                            msg: format!(
+                                "CRC mismatch at offset {}: computed {:08x} != stored {:08x}",
+                                self.base_offset + self.pos as u64,
+                                computed_crc,
+                                stored_crc
+                            ),
+                        });
+                    }
 
                     let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
 
@@ -539,6 +555,9 @@ pub enum WALRecord {
     },
     Commit {
         tx_id: u64,
+    },
+    Corrupt {
+        msg: String,
     },
 }
 

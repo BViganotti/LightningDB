@@ -1,6 +1,6 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::Result;
-use arrow::array::{Array, ArrayRef, Int64Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, Int64Array, UInt64Array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::{Condvar, Mutex, RwLock};
@@ -152,7 +152,12 @@ impl HashJoin {
             shared.num_active_builders += 1;
         }
 
+        tracing::debug!("HashJoin::build starting: right_key_idx={}", self.right_key_idx);
+        let mut total_build_rows = 0;
+        let mut build_chunk_count = 0;
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
+            build_chunk_count += 1;
+            total_build_rows += chunk.num_rows();
             let batch = chunk.batch;
             let mut shared = self.shared_build.write();
 
@@ -210,6 +215,11 @@ impl HashJoin {
             }
             shared.build_chunks.push(batch);
         }
+
+        tracing::debug!(
+            "HashJoin::build done: {} chunks, {} rows, right_key_idx={}",
+            build_chunk_count, total_build_rows, self.right_key_idx
+        );
 
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
@@ -284,15 +294,21 @@ impl PhysicalOperator for HashJoin {
                 self.current_left_chunk = self.left.get_next(database, tx, params)?;
                 self.left_row_idx = 0;
                 if self.current_left_chunk.is_none() {
+                    tracing::debug!("HashJoin::get_next: left child exhausted, returning None");
                     return Ok(None);
                 }
+                tracing::debug!(
+                    "HashJoin::get_next: got left chunk with {} rows, {} cols",
+                    self.current_left_chunk.as_ref().unwrap().num_rows(),
+                    self.current_left_chunk.as_ref().unwrap().batch.num_columns()
+                );
             }
 
             let left_batch = &self.current_left_chunk.as_ref().expect("required handle not present").batch;
             let left_num_rows = left_batch.num_rows();
 
-            let mut left_indices = Vec::with_capacity(1024);
-            let mut right_indices = Vec::with_capacity(1024);
+            let mut left_indices: Vec<u64> = Vec::with_capacity(1024);
+            let mut right_indices: Vec<Option<u64>> = Vec::with_capacity(1024);
 
             let left_key_col = left_batch.column(self.left_key_idx);
 
@@ -303,8 +319,8 @@ impl PhysicalOperator for HashJoin {
                     if !shared.build_chunks.is_empty() {
                         let n = shared.build_chunks[0].num_rows();
                         for build_idx in 0..n {
-                            left_indices.push(self.left_row_idx as u32);
-                            right_indices.push(Some(build_idx as u32));
+                            left_indices.push(self.left_row_idx as u64);
+                            right_indices.push(Some(build_idx as u64));
                             if left_indices.len() >= 1024 {
                                 break;
                             }
@@ -343,8 +359,8 @@ impl PhysicalOperator for HashJoin {
                         JoinType::Inner => {
                             if let Some(m) = matches_ref {
                                 for &build_idx in m {
-                                    left_indices.push(self.left_row_idx as u32);
-                                    right_indices.push(Some(build_idx as u32));
+                                    left_indices.push(self.left_row_idx as u64);
+                                    right_indices.push(Some(build_idx as u64));
                                     if left_indices.len() >= 1024 {
                                         break;
                                     }
@@ -354,25 +370,25 @@ impl PhysicalOperator for HashJoin {
                         JoinType::LeftOuter => {
                             if let Some(m) = matches_ref {
                                 for &build_idx in m {
-                                    left_indices.push(self.left_row_idx as u32);
-                                    right_indices.push(Some(build_idx as u32));
+                                    left_indices.push(self.left_row_idx as u64);
+                                    right_indices.push(Some(build_idx as u64));
                                     if left_indices.len() >= 1024 {
                                         break;
                                     }
                                 }
                             } else {
-                                left_indices.push(self.left_row_idx as u32);
+                                left_indices.push(self.left_row_idx as u64);
                                 right_indices.push(None);
                             }
                         }
                         JoinType::LeftSemi => {
                             if matches_ref.is_some() {
-                                left_indices.push(self.left_row_idx as u32);
+                                left_indices.push(self.left_row_idx as u64);
                             }
                         }
                         JoinType::LeftAnti => {
                             if matches_ref.is_none() {
-                                left_indices.push(self.left_row_idx as u32);
+                                left_indices.push(self.left_row_idx as u64);
                             }
                         }
                     }
@@ -384,7 +400,12 @@ impl PhysicalOperator for HashJoin {
             }
 
             if !left_indices.is_empty() {
-                let left_indices_arr = UInt32Array::from(left_indices.clone());
+                tracing::debug!(
+                    "HashJoin::get_next: found {} matches from {} left rows",
+                    left_indices.len(),
+                    left_num_rows
+                );
+                let left_indices_arr = UInt64Array::from(left_indices.clone());
 
                 let mut final_columns = Vec::new();
                 let mut final_fields = Vec::new();
@@ -414,7 +435,7 @@ impl PhysicalOperator for HashJoin {
                         }
                     } else if shared.build_chunks.len() == 1 {
                         // Single chunk: direct take (fast path)
-                        let right_indices_arr = UInt32Array::from(right_indices);
+                        let right_indices_arr = UInt64Array::from(right_indices);
                         let build_batch = &shared.build_chunks[0];
                         for i in 0..build_batch.num_columns() {
                             let col = build_batch.column(i);
@@ -434,7 +455,7 @@ impl PhysicalOperator for HashJoin {
                         let num_cols = chunks[0].num_columns();
 
                         // Group (left_index, right_index) by chunk
-                        let mut chunk_rows: Vec<Vec<(u32, u32)>> =
+                        let mut chunk_rows: Vec<Vec<(u64, u64)>> =
                             vec![Vec::new(); chunks.len()];
                         for (i, g) in right_indices.iter().enumerate() {
                             if let Some(global_idx) = g {
@@ -444,7 +465,7 @@ impl PhysicalOperator for HashJoin {
                                     Ok(pos) => pos,
                                     Err(pos) => pos.saturating_sub(1),
                                 };
-                                let local = *global_idx - offsets[ci] as u32;
+                                let local = *global_idx - offsets[ci] as u64;
                                 chunk_rows[ci].push((left_indices[i], local));
                             }
                         }
@@ -456,8 +477,8 @@ impl PhysicalOperator for HashJoin {
                                 if rows.is_empty() {
                                     continue;
                                 }
-                                let local_indices: Vec<u32> = rows.iter().map(|(_, r)| *r).collect();
-                                let idx_arr = UInt32Array::from(local_indices);
+                                let local_indices: Vec<u64> = rows.iter().map(|(_, r)| *r).collect();
+                                let idx_arr = UInt64Array::from(local_indices);
                                 partial.push(arrow::compute::take(
                                     chunks[ci].column(col_idx),
                                     &idx_arr,

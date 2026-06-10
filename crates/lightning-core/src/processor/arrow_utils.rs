@@ -9,6 +9,24 @@ use arrow::datatypes::{DataType, Field, TimeUnit};
 use lightning_types::LogicalType;
 use std::sync::Arc;
 
+macro_rules! downcast_ref_array {
+    ($array:expr, $ty:ty) => {
+        $array
+            .as_any()
+            .downcast_ref::<$ty>()
+            .ok_or_else(|| LightningError::Internal("type mismatch: expected Arrow type".into()))?
+    };
+}
+
+macro_rules! downcast_builder {
+    ($builder:expr, $ty:ty) => {
+        $builder
+            .as_any_mut()
+            .downcast_mut::<$ty>()
+            .ok_or_else(|| LightningError::Internal("type mismatch: expected Arrow type".into()))?
+    };
+}
+
 pub fn logical_type_to_arrow_type(t: &LogicalType) -> DataType {
     match t {
         LogicalType::Int64 => DataType::Int64,
@@ -41,47 +59,26 @@ pub fn logical_type_to_arrow_type(t: &LogicalType) -> DataType {
 }
 
 pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> Result<()> {
+    macro_rules! downcast_append_null {
+        ($builder:expr, $ty:ty) => {{
+            $builder
+                .as_any_mut()
+                .downcast_mut::<$ty>()
+                .ok_or_else(|| {
+                    LightningError::Internal("type mismatch: expected Arrow type".into())
+                })?
+                .append_null();
+        }};
+    }
     match t {
-        DataType::Int64 => builder
-            .as_any_mut()
-            .downcast_mut::<Int64Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Int32 => builder
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::UInt64 => builder
-            .as_any_mut()
-            .downcast_mut::<UInt64Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Float64 => builder
-            .as_any_mut()
-            .downcast_mut::<Float64Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Boolean => builder
-            .as_any_mut()
-            .downcast_mut::<BooleanBuilder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Utf8 => builder
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Date32 => builder
-            .as_any_mut()
-            .downcast_mut::<Date32Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
-        DataType::Timestamp(_, _) => builder
-            .as_any_mut()
-            .downcast_mut::<TimestampMicrosecondBuilder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
+        DataType::Int64 => downcast_append_null!(builder, Int64Builder),
+        DataType::Int32 => downcast_append_null!(builder, Int32Builder),
+        DataType::UInt64 => downcast_append_null!(builder, UInt64Builder),
+        DataType::Float64 => downcast_append_null!(builder, Float64Builder),
+        DataType::Boolean => downcast_append_null!(builder, BooleanBuilder),
+        DataType::Utf8 => downcast_append_null!(builder, StringBuilder),
+        DataType::Date32 => downcast_append_null!(builder, Date32Builder),
+        DataType::Timestamp(_, _) => downcast_append_null!(builder, TimestampMicrosecondBuilder),
         DataType::List(ref inner) => {
             // For List types, handle null append based on inner type
             match inner.data_type() {
@@ -89,7 +86,9 @@ pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> R
                     builder
                         .as_any_mut()
                         .downcast_mut::<arrow::array::ListBuilder<arrow::array::Float32Builder>>()
-                        .expect("type mismatch: expected Arrow type")
+                        .ok_or_else(|| {
+                            LightningError::Internal("type mismatch: expected Arrow type".into())
+                        })?
                         .append_null();
                 }
                 DataType::Null => {
@@ -105,11 +104,7 @@ pub fn append_null_to_builder(builder: &mut dyn ArrayBuilder, t: &DataType) -> R
                 }
             }
         }
-        DataType::Float32 => builder
-            .as_any_mut()
-            .downcast_mut::<arrow::array::Float32Builder>()
-            .expect("type mismatch: expected Arrow type")
-            .append_null(),
+        DataType::Float32 => downcast_append_null!(builder, arrow::array::Float32Builder),
         _ => {
             return Err(LightningError::Internal(format!(
                 "Unsupported type for append_null_to_builder: {t:?}"
@@ -128,20 +123,17 @@ pub fn append_value_to_builder(
         Value::Null => append_null_to_builder(builder, &logical_type_to_arrow_type(t)),
         _ => match t {
             LogicalType::Int64 => {
-                let b = builder.as_any_mut().downcast_mut::<Int64Builder>().expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, Int64Builder);
                 b.append_value(val.as_number() as i64);
                 Ok(())
             }
             LogicalType::Int32 => {
-                let b = builder.as_any_mut().downcast_mut::<Int32Builder>().expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, Int32Builder);
                 b.append_value(val.as_number() as i32);
                 Ok(())
             }
             LogicalType::Uint64 | LogicalType::Node(_) => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<UInt64Builder>()
-                    .expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, UInt64Builder);
                 match val {
                     Value::Node(id) => b.append_value(*id),
                     Value::Number(n) => b.append_value(*n as u64),
@@ -150,18 +142,12 @@ pub fn append_value_to_builder(
                 Ok(())
             }
             LogicalType::Double => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<Float64Builder>()
-                    .expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, Float64Builder);
                 b.append_value(val.as_number());
                 Ok(())
             }
             LogicalType::String => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<StringBuilder>()
-                    .expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, StringBuilder);
                 if let Value::String(s) = val {
                     b.append_value(s);
                 } else {
@@ -170,10 +156,7 @@ pub fn append_value_to_builder(
                 Ok(())
             }
             LogicalType::Bool => {
-                let b = builder
-                    .as_any_mut()
-                    .downcast_mut::<BooleanBuilder>()
-                    .expect("type mismatch: expected Arrow type");
+                let b = downcast_builder!(builder, BooleanBuilder);
                 if let Value::Boolean(bv) = val {
                     b.append_value(*bv);
                 } else {
@@ -193,58 +176,77 @@ pub fn append_raw_to_builder(
     data: &[u8],
     logical_type: &LogicalType,
 ) -> Result<()> {
+    let required = match logical_type {
+        LogicalType::Int64 | LogicalType::Uint64 | LogicalType::Node(_) | LogicalType::Double | LogicalType::Timestamp => 8usize,
+        LogicalType::Int32 | LogicalType::Date => 4,
+        LogicalType::Bool => 1,
+        LogicalType::String => 1usize.saturating_add(std::cmp::min(data.first().copied().unwrap_or(0) as usize, 63)),
+        LogicalType::List(_) => 0,
+        _ => return Err(LightningError::Internal("Type not supported for raw append".into())),
+    };
+    if data.len() < required {
+        return Err(LightningError::Internal(format!(
+            "append_raw_to_builder: expected at least {required} bytes for {logical_type:?}, got {}",
+            data.len()
+        )));
+    }
     match logical_type {
         LogicalType::Int64 => {
-            let b = builder.as_any_mut().downcast_mut::<Int64Builder>().expect("type mismatch: expected Arrow type");
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+            let b = builder.as_any_mut().downcast_mut::<Int64Builder>()
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Int64 Arrow type".into()))?;
+            b.append_value(i64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Int64 from raw data".into()))?));
         }
         LogicalType::Int32 => {
-            let b = builder.as_any_mut().downcast_mut::<Int32Builder>().expect("type mismatch: expected Arrow type");
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().expect("infallible: fixed-size array conversion")));
+            let b = builder.as_any_mut().downcast_mut::<Int32Builder>()
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Int32 Arrow type".into()))?;
+            b.append_value(i32::from_le_bytes(data[..4].try_into().map_err(|_| LightningError::Internal("failed to read Int32 from raw data".into()))?));
         }
         LogicalType::Uint64 | LogicalType::Node(_) => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<UInt64Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected UInt64 Arrow type".into()))?;
+            b.append_value(u64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read UInt64 from raw data".into()))?));
         }
         LogicalType::Double => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<Float64Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(f64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Float64 Arrow type".into()))?;
+            b.append_value(f64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Double from raw data".into()))?));
         }
         LogicalType::Bool => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<BooleanBuilder>()
-                .expect("type mismatch: expected Arrow type");
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Boolean Arrow type".into()))?;
             b.append_value(data[0] != 0);
         }
         LogicalType::String => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<StringBuilder>()
-                .expect("type mismatch: expected Arrow type");
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected String Arrow type".into()))?;
             let len = if data[0] == 255 { 63 } else { data[0] as usize };
             let actual_len = std::cmp::min(len, 63);
-            b.append_value(std::str::from_utf8(&data[1..1 + actual_len]).unwrap_or(""));
+            b.append_value(
+                std::str::from_utf8(&data[1..1 + actual_len])
+                    .map_err(|e| LightningError::Internal(format!("Invalid UTF-8 in String data: {e}")))?,
+            );
         }
         LogicalType::Timestamp => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<TimestampMicrosecondBuilder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(i64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Timestamp Arrow type".into()))?;
+            b.append_value(i64::from_le_bytes(data[..8].try_into().map_err(|_| LightningError::Internal("failed to read Timestamp from raw data".into()))?));
         }
         LogicalType::Date => {
             let b = builder
                 .as_any_mut()
                 .downcast_mut::<Date32Builder>()
-                .expect("type mismatch: expected Arrow type");
-            b.append_value(i32::from_le_bytes(data[0..4].try_into().expect("infallible: fixed-size array conversion")));
+                .ok_or_else(|| LightningError::Internal("type mismatch: expected Date32 Arrow type".into()))?;
+            b.append_value(i32::from_le_bytes(data[..4].try_into().map_err(|_| LightningError::Internal("failed to read Date from raw data".into()))?));
         }
         LogicalType::List(_) => {
             // Lists (like embeddings) are variable-length and not suitable for raw append
@@ -260,36 +262,36 @@ pub fn append_raw_to_builder(
     Ok(())
 }
 
-pub fn from_arrow(array: &ArrayRef, i: usize) -> Value {
+pub fn from_arrow(array: &ArrayRef, i: usize) -> Result<Value> {
     if array.is_null(i) {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     match array.data_type() {
         DataType::Float64 => {
-            let a = array.as_any().downcast_ref::<Float64Array>().expect("type mismatch: expected Arrow type");
-            Value::Number(a.value(i))
+            let a = downcast_ref_array!(array, Float64Array);
+            Ok(Value::Number(a.value(i)))
         }
         DataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>().expect("type mismatch: expected Arrow type");
-            Value::String(a.value(i).to_string())
+            let a = downcast_ref_array!(array, StringArray);
+            Ok(Value::String(a.value(i).to_string()))
         }
         DataType::Boolean => {
-            let a = array.as_any().downcast_ref::<BooleanArray>().expect("type mismatch: expected Arrow type");
-            Value::Boolean(a.value(i))
+            let a = downcast_ref_array!(array, BooleanArray);
+            Ok(Value::Boolean(a.value(i)))
         }
         DataType::UInt64 => {
-            let a = array.as_any().downcast_ref::<UInt64Array>().expect("type mismatch: expected Arrow type");
-            Value::Node(a.value(i))
+            let a = downcast_ref_array!(array, UInt64Array);
+            Ok(Value::Node(a.value(i)))
         }
         DataType::Int64 => {
-            let a = array.as_any().downcast_ref::<Int64Array>().expect("type mismatch: expected Arrow type");
-            Value::Number(a.value(i) as f64)
+            let a = downcast_ref_array!(array, Int64Array);
+            Ok(Value::Number(a.value(i) as f64))
         }
         DataType::Int32 => {
-            let a = array.as_any().downcast_ref::<Int32Array>().expect("type mismatch: expected Arrow type");
-            Value::Number(a.value(i) as f64)
+            let a = downcast_ref_array!(array, Int32Array);
+            Ok(Value::Number(a.value(i) as f64))
         }
-        _ => Value::Null,
+        _ => Ok(Value::Null),
     }
 }
 
@@ -304,71 +306,44 @@ pub fn append_to_builder(
     }
     match array.data_type() {
         DataType::Int64 => {
-            let a = array.as_any().downcast_ref::<Int64Array>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<Int64Builder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, Int64Array);
+            let b = downcast_builder!(builder, Int64Builder);
+            b.append_value(a.value(idx));
         }
         DataType::Int32 => {
-            let a = array.as_any().downcast_ref::<Int32Array>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<Int32Builder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, Int32Array);
+            let b = downcast_builder!(builder, Int32Builder);
+            b.append_value(a.value(idx));
         }
         DataType::UInt64 => {
-            let a = array.as_any().downcast_ref::<UInt64Array>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<UInt64Builder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, UInt64Array);
+            let b = downcast_builder!(builder, UInt64Builder);
+            b.append_value(a.value(idx));
         }
         DataType::Float64 => {
-            let a = array.as_any().downcast_ref::<Float64Array>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<Float64Builder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, Float64Array);
+            let b = downcast_builder!(builder, Float64Builder);
+            b.append_value(a.value(idx));
         }
         DataType::Boolean => {
-            let a = array.as_any().downcast_ref::<BooleanArray>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<BooleanBuilder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, BooleanArray);
+            let b = downcast_builder!(builder, BooleanBuilder);
+            b.append_value(a.value(idx));
         }
         DataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<StringBuilder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, StringArray);
+            let b = downcast_builder!(builder, StringBuilder);
+            b.append_value(a.value(idx));
         }
         DataType::Date32 => {
-            let a = array.as_any().downcast_ref::<Date32Array>().expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<Date32Builder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, Date32Array);
+            let b = downcast_builder!(builder, Date32Builder);
+            b.append_value(a.value(idx));
         }
         DataType::Timestamp(_, _) => {
-            let a = array
-                .as_any()
-                .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
-                .expect("type mismatch: expected Arrow type");
-            builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-                .expect("type mismatch: expected Arrow type")
-                .append_value(a.value(idx));
+            let a = downcast_ref_array!(array, arrow::array::TimestampMicrosecondArray);
+            let b = downcast_builder!(builder, TimestampMicrosecondBuilder);
+            b.append_value(a.value(idx));
         }
         _ => {
             return Err(LightningError::Internal(format!(

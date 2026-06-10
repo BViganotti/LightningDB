@@ -2,7 +2,7 @@ use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::index::csr::CSRIndex;
 use crate::Database;
 use crate::Result;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 pub struct PhysicalASP {
@@ -18,8 +18,7 @@ pub struct PhysicalASP {
     chunk_row_idx: usize,
     results: VecDeque<DataChunk>,
     bfs_queue: VecDeque<u64>,
-    bfs_visited: HashSet<u64>,
-    bfs_distance: Vec<u32>,
+    bfs_distance: HashMap<u64, u32>,
     bfs_src_id: u64,
     bfs_depth: u32,
     bfs_phase: BFSPhase,
@@ -52,8 +51,7 @@ impl PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_visited: HashSet::new(),
-            bfs_distance: Vec::new(),
+            bfs_distance: HashMap::new(),
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,
@@ -74,35 +72,26 @@ impl PhysicalASP {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.bfs_queue.clear();
-        self.bfs_visited.clear();
         self.bfs_distance.clear();
-        if src_id as usize >= self.bfs_distance.len() {
-            self.bfs_distance.resize(src_id as usize + 1, u32::MAX);
-        }
         self.bfs_queue.push_back(src_id);
-        self.bfs_visited.insert(src_id);
-        self.bfs_distance[src_id as usize] = 0;
+        self.bfs_distance.insert(src_id, 0);
         self.bfs_src_id = src_id;
 
         while let Some(current) = self.bfs_queue.pop_front() {
-            let dist = self.bfs_distance[current as usize];
+            let dist = self.bfs_distance[&current];
             if dist >= self.max_depth {
                 continue;
             }
 
             let mut neighbors = Vec::new();
             csr.for_each_neighbor(bm, current, tx, |n| {
-                if !self.bfs_visited.contains(&n) {
+                if !self.bfs_distance.contains_key(&n) {
                     neighbors.push(n);
                 }
             })?;
 
             for neighbor in neighbors {
-                self.bfs_visited.insert(neighbor);
-                if neighbor as usize >= self.bfs_distance.len() {
-                    self.bfs_distance.resize(neighbor as usize + 1, u32::MAX);
-                }
-                self.bfs_distance[neighbor as usize] = dist + 1;
+                self.bfs_distance.insert(neighbor, dist + 1);
                 self.bfs_queue.push_back(neighbor);
             }
         }
@@ -115,8 +104,8 @@ impl PhysicalASP {
         let mut dst_ids = Vec::new();
         let mut distances = Vec::new();
 
-        for (dst_id, &dist) in self.bfs_distance.iter().enumerate() {
-            if dist != u32::MAX && dst_id as u64 != src_id {
+        for (&dst_id, &dist) in self.bfs_distance.iter() {
+            if dst_id != src_id {
                 src_ids.push(src_id as f64);
                 dst_ids.push(dst_id as f64);
                 distances.push(dist as f64);
@@ -225,8 +214,7 @@ impl PhysicalOperator for PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_visited: HashSet::new(),
-            bfs_distance: Vec::new(),
+            bfs_distance: HashMap::new(),
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,

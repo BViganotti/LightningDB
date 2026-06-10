@@ -5,11 +5,12 @@ use crate::Result;
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct FileHandle {
     pub file_id: u64,
+    pub path: PathBuf,
     file: Arc<File>,
     num_pages: RwLock<u64>,
     pub(crate) page_states: RwLock<Vec<PageState>>,
@@ -48,6 +49,7 @@ impl FileHandle {
 
         Ok(Self {
             file_id,
+            path: path.to_path_buf(),
             file: Arc::new(file),
             num_pages: RwLock::new(num_pages),
             page_states: RwLock::new(page_states),
@@ -57,17 +59,23 @@ impl FileHandle {
 
     pub fn read_page(&self, page_idx: u64, buffer: &mut [u8]) -> Result<()> {
         let offset = page_idx * PAGE_SIZE as u64;
-        let file_len = self.get_file_size();
 
-        if offset >= file_len {
-            buffer.fill(0);
-            return Ok(());
-        }
+        let result = self.file.read_at(&mut buffer[..PAGE_SIZE], offset);
+        let bytes_read = match result {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                buffer.fill(0);
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(crate::LightningError::Internal(format!(
+                    "read_page failed: {e}"
+                )));
+            }
+        };
 
-        let to_read = std::cmp::min(PAGE_SIZE as u64, file_len - offset) as usize;
-        self.file.read_exact_at(&mut buffer[..to_read], offset)?;
-        if to_read < PAGE_SIZE {
-            buffer[to_read..].fill(0);
+        if bytes_read < PAGE_SIZE {
+            buffer[bytes_read..PAGE_SIZE].fill(0);
         }
 
         Ok(())
@@ -76,17 +84,23 @@ impl FileHandle {
     pub fn read_pages(&self, start_page: u64, num_pages: u64, buffer: &mut [u8]) -> Result<()> {
         let offset = start_page * PAGE_SIZE as u64;
         let expected_bytes = (num_pages as usize) * PAGE_SIZE;
-        let file_len = self.get_file_size();
 
-        if offset >= file_len {
-            buffer[..expected_bytes].fill(0);
-            return Ok(());
-        }
+        let result = self.file.read_at(&mut buffer[..expected_bytes], offset);
+        let bytes_read = match result {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                buffer[..expected_bytes].fill(0);
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(crate::LightningError::Internal(format!(
+                    "read_pages failed: {e}"
+                )));
+            }
+        };
 
-        let to_read = std::cmp::min(expected_bytes as u64, file_len - offset) as usize;
-        self.file.read_exact_at(&mut buffer[..to_read], offset)?;
-        if to_read < expected_bytes {
-            buffer[to_read..expected_bytes].fill(0);
+        if bytes_read < expected_bytes {
+            buffer[bytes_read..expected_bytes].fill(0);
         }
 
         Ok(())

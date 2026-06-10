@@ -52,7 +52,30 @@ impl TopKOptimizer {
                 dependent_group_by_cols,
                 aggregates,
             }),
-            _ => Ok(plan),
+            LogicalOperator::Join(left, right, cond) => {
+                Ok(LogicalOperator::Join(
+                    Box::new(self.push_down(*left)?),
+                    Box::new(self.push_down(*right)?),
+                    cond,
+                ))
+            }
+            LogicalOperator::Union(left, right, is_all) => {
+                Ok(LogicalOperator::Union(
+                    Box::new(self.push_down(*left)?),
+                    Box::new(self.push_down(*right)?),
+                    is_all,
+                ))
+            }
+            _ => {
+                let child_opt = plan.get_child().map(|c| c.clone());
+                if let Some(child) = child_opt {
+                    let mut plan_clone = plan.clone();
+                    plan_clone.set_child(self.push_down(child)?);
+                    Ok(plan_clone)
+                } else {
+                    Ok(plan)
+                }
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::processor::Value;
+use crate::storage::column::Column;
 use parking_lot::Mutex;
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum UndoRecord {
@@ -83,15 +84,16 @@ impl UndoBuffer {
                     // See 0.1.1/0.1.2 for eviction safety guarantee.
                 }
                 UndoRecord::CreateNodeTable(name) => {
+                    // Delete data files BEFORE removing from storage manager
+                    // so we can enumerate exact column paths from the table definition
+                    Self::cleanup_table_files(db, &name);
                     db.catalog.write().remove_table(&name);
                     db.storage_manager.write().remove_table(&name);
-                    // Delete data files so a subsequent CREATE doesn't inherit stale data
-                    Self::cleanup_table_files(&db._path, &name);
                 }
                 UndoRecord::CreateRelTable(name) => {
+                    Self::cleanup_table_files(db, &name);
                     db.catalog.write().remove_table(&name);
                     db.storage_manager.write().remove_table(&name);
-                    Self::cleanup_table_files(&db._path, &name);
                 }
                 UndoRecord::DropTable(name, entry) => {
                     let mut catalog = db.catalog.write();
@@ -227,26 +229,57 @@ impl UndoBuffer {
         self.records.lock().clear();
     }
 
-    /// Delete all data files associated with a table.
-    /// Called during rollback of CREATE TABLE to prevent stale files
-    /// from corrupting a subsequent CREATE with the same name.
-    fn cleanup_table_files(db_path: &Path, table_name: &str) {
-        if let Ok(entries) = std::fs::read_dir(db_path) {
-            let prefix = table_name.to_lowercase();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                    let lower = filename.to_lowercase();
-                    if lower.starts_with(&prefix)
-                        && (lower.ends_with(".lbug") || lower.ends_with(".lbug.shadow"))
-                    {
-                        let _ = std::fs::remove_file(&path);
-                    }
-                }
+    /// Collect all file paths from a column hierarchy recursively.
+    fn collect_column_paths(columns: &[Column], paths: &mut Vec<PathBuf>) {
+        for col in columns {
+            paths.push(col.fh.path.clone());
+            paths.push(col.null_fh.path.clone());
+            if let Some(ref overflow_fh) = col.overflow_fh {
+                paths.push(overflow_fh.path.clone());
             }
+            Self::collect_column_paths(&col.child_columns, paths);
         }
+    }
+
+    /// Delete all data files associated with a table using exact paths
+    /// from the storage manager. Called during rollback of CREATE TABLE
+    /// to prevent stale files from corrupting a subsequent CREATE.
+    /// Must be called BEFORE remove_table so the column list is available.
+    fn cleanup_table_files(db: &crate::Database, table_name: &str) {
+        let mut paths_to_delete: Vec<PathBuf> = Vec::new();
+
+        // Collect exact file paths from the storage manager's table definition
+        let storage = db.storage_manager.read();
+        if let Some(table) = storage
+            .node_tables
+            .get(table_name)
+            .or_else(|| storage.rel_tables.get(table_name))
+        {
+            Self::collect_column_paths(&table.columns, &mut paths_to_delete);
+        }
+        if storage.fwd_csr.contains_key(table_name) {
+            paths_to_delete.push(db._path.join(format!("{table_name}_fwd_offset.lbug")));
+            paths_to_delete.push(db._path.join(format!("{table_name}_fwd_adj.lbug")));
+        }
+        if storage.bwd_csr.contains_key(table_name) {
+            paths_to_delete.push(db._path.join(format!("{table_name}_bwd_offset.lbug")));
+            paths_to_delete.push(db._path.join(format!("{table_name}_bwd_adj.lbug")));
+        }
+        if storage.vector_indexes.contains_key(table_name) {
+            paths_to_delete.push(db._path.join(format!("{table_name}_vector.lbug")));
+        }
+        if storage.indexes.contains_key(table_name) {
+            paths_to_delete.push(db._path.join(format!("{table_name}_pk_index.lbug")));
+        }
+        drop(storage);
+
+        // Delete only the exact files known to belong to this table
+        for path in &paths_to_delete {
+            let _ = std::fs::remove_file(path);
+        }
+
         // Also try to remove the FTS directory
-        let fts_dir = db_path.join(format!("{}_fts", table_name));
+        let fts_dir = db._path.join(format!("{}_fts", table_name));
         let _ = std::fs::remove_dir_all(&fts_dir);
     }
 }

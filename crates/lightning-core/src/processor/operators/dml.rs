@@ -72,6 +72,9 @@ impl PhysicalCreate {
 }
 
 impl PhysicalOperator for PhysicalCreate {
+    fn is_read_only(&self) -> bool {
+        false
+    }
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -289,11 +292,11 @@ impl PhysicalSet {
         }
     }
 
+}
+impl PhysicalOperator for PhysicalSet {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalSet {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -513,11 +516,11 @@ impl PhysicalDelete {
         }
     }
 
+}
+impl PhysicalOperator for PhysicalDelete {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalDelete {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -525,6 +528,8 @@ impl PhysicalOperator for PhysicalDelete {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
+            // Collect all deleted node IDs upfront to batch the detach phase
+            let mut deleted_ids: Vec<u64> = Vec::new();
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let num_rows = chunk.num_rows();
                 for i in 0..num_rows {
@@ -532,56 +537,9 @@ impl PhysicalOperator for PhysicalDelete {
                         Value::Node(id) => id,
                         _ => continue,
                     };
+                    deleted_ids.push(id);
                     self.undo_buffer
                         .push(UndoRecord::DeleteNode(self.table.name.clone(), id));
-
-                    if self.detach {
-                        let cat = database.catalog.read();
-                        let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
-                        drop(cat);
-                        for rel_name in &rel_tables {
-                            let storage = database.storage_manager.read();
-                            if let Some(rel_table) = storage.get_table(rel_name) {
-                                let bm = &self.buffer_manager;
-                                if let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM") {
-                                    if let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO") {
-                                        let num_rel_rows = {
-                                            let cat2 = database.catalog.read();
-                                            cat2.get_rel_table(rel_name)
-                                                .map(|t| t.num_rows)
-                                                .unwrap_or(0)
-                                        };
-                                        if num_rel_rows == 0 { continue; }
-                                        let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
-                                        let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
-                                        for row_idx in 0..num_rel_rows as usize {
-                                            let from_val = match Value::from_arrow(&from_arr, row_idx) {
-                                                Value::Node(id) => id,
-                                                _ => continue,
-                                            };
-                                            let to_val = match Value::from_arrow(&to_arr, row_idx) {
-                                                Value::Node(id) => id,
-                                                _ => continue,
-                                            };
-                                            if from_val == id || to_val == id {
-                                                for col in &rel_table.columns {
-                                                    col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
-                                                }
-                                                // Notify CSR indexes of the deleted edge
-                                                let storage_guard = database.storage_manager.read();
-                                                if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
-                                                    fwd.delete_edge(from_val, to_val);
-                                                }
-                                                if let Some(bwd) = storage_guard.bwd_csr.get(rel_name) {
-                                                    bwd.delete_edge(to_val, from_val);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
 
                     for col in &self.table.columns {
                         col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
@@ -606,6 +564,52 @@ impl PhysicalOperator for PhysicalDelete {
                 self.shared_state
                     .total_affected
                     .fetch_add(num_rows as u64, Ordering::SeqCst);
+            }
+            // Batch detach: scan each relationship table once for all deleted IDs
+            if self.detach && !deleted_ids.is_empty() {
+                let deleted_set: std::collections::HashSet<u64> =
+                    deleted_ids.into_iter().collect();
+                let cat = database.catalog.read();
+                let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
+                drop(cat);
+                for rel_name in &rel_tables {
+                    let storage = database.storage_manager.read();
+                    let Some(rel_table) = storage.get_table(rel_name) else { continue };
+                    let bm = &self.buffer_manager;
+                    let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM") else { continue };
+                    let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO") else { continue };
+                    let num_rel_rows = {
+                        let cat2 = database.catalog.read();
+                        cat2.get_rel_table(rel_name)
+                            .map(|t| t.num_rows)
+                            .unwrap_or(0)
+                    };
+                    if num_rel_rows == 0 { continue; }
+                    let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                    let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                    for row_idx in 0..num_rel_rows as usize {
+                        let from_val = match Value::from_arrow(&from_arr, row_idx) {
+                            Value::Node(id) => id,
+                            _ => continue,
+                        };
+                        let to_val = match Value::from_arrow(&to_arr, row_idx) {
+                            Value::Node(id) => id,
+                            _ => continue,
+                        };
+                        if deleted_set.contains(&from_val) || deleted_set.contains(&to_val) {
+                            for col in &rel_table.columns {
+                                col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
+                            }
+                            let storage_guard = database.storage_manager.read();
+                            if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
+                                fwd.delete_edge(from_val, to_val);
+                            }
+                            if let Some(bwd) = storage_guard.bwd_csr.get(rel_name) {
+                                bwd.delete_edge(to_val, from_val);
+                            }
+                        }
+                    }
+                }
             }
             // Update catalog cardinality
             let total = self.shared_state.total_affected.load(Ordering::SeqCst);
@@ -696,11 +700,11 @@ impl PhysicalCreateRel {
             tx_id,
         }
     }
+}
+impl PhysicalOperator for PhysicalCreateRel {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalCreateRel {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -842,6 +846,7 @@ pub struct PhysicalMerge {
     on_match_assignments: Vec<BoundPropertyAssignment>,
     buffer_manager: Arc<BufferManager>,
     undo_buffer: Arc<UndoBuffer>,
+    child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
     shared_state: Arc<SharedDMLState>,
     tx_id: u64,
     read_ts: u64,
@@ -856,6 +861,7 @@ impl PhysicalMerge {
         on_match_assignments: Vec<BoundPropertyAssignment>,
         buffer_manager: Arc<BufferManager>,
         undo_buffer: Arc<UndoBuffer>,
+        child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
         tx_id: u64,
         read_ts: u64,
         _current_num_rows: u64,
@@ -868,6 +874,7 @@ impl PhysicalMerge {
             on_match_assignments,
             buffer_manager,
             undo_buffer,
+            child,
             shared_state: Arc::new(SharedDMLState {
                 total_affected: AtomicU64::new(0),
                 results_returned: AtomicU64::new(0),
@@ -878,11 +885,11 @@ impl PhysicalMerge {
             read_ts,
         }
     }
+}
+impl PhysicalOperator for PhysicalMerge {
     fn is_read_only(&self) -> bool {
         false
     }
-}
-impl PhysicalOperator for PhysicalMerge {
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -890,146 +897,157 @@ impl PhysicalOperator for PhysicalMerge {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
-            // 1. Try to find existing node
-            let mut existing_id = None;
-            let index_opt = database.storage_manager.read().get_index(&self.table_name);
-
-            // Check if we can do an index lookup based on the pattern properties
-            if let Some(index) = index_opt {
-                for (_idx, expr) in &self.pattern.properties {
-                    if let Ok(val_array) = ExpressionEvaluator::evaluate(
-                        expr,
-                        None,
-                        params,
-                        1,
-                        &database.function_registry,
-                        database,
-                    ) {
-                        let pk_val = Value::from_arrow(&val_array, 0);
-                        if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
-                            existing_id = Some(id);
-                            break;
-                        }
-                    }
+            let chunks: Vec<Option<DataChunk>> = if let Some(ref mut child) = self.child {
+                let mut acc = Vec::new();
+                while let Some(chunk) = child.get_next(database, tx, params)? {
+                    acc.push(Some(chunk));
                 }
-            }
-
-            if let Some(id) = existing_id {
-                // MATCH case: Apply on_match_assignments
-                for assign in &self.on_match_assignments {
-                    let v = ExpressionEvaluator::evaluate(
-                        &assign.expression,
-                        None,
-                        params,
-                        1,
-                        &database.function_registry,
-                        database,
-                    )?;
-                    let old_val = self.table.columns[assign.property_idx].get_value(
-                        &self.buffer_manager,
-                        id,
-                        tx,
-                    )?;
-                    self.undo_buffer.push(UndoRecord::UpdateColumn(
-                        self.table.name.clone(),
-                        id,
-                        old_val,
-                    ));
-                    self.table.columns[assign.property_idx].append_value(
-                        &self.buffer_manager,
-                        &Value::from_arrow(&v, 0),
-                        id,
-                        tx,
-                    )?;
-                }
-                self.shared_state
-                    .total_affected
-                    .fetch_add(0, Ordering::SeqCst);
+                acc
             } else {
-                // CREATE case
-                let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
-                let mut row_data = vec![Value::Null; self.table.columns.len()];
-                row_data[0] = Value::Node(next_id);
+                vec![None]
+            };
 
-                for (idx, expr) in &self.pattern.properties {
-                    let v = ExpressionEvaluator::evaluate(
-                        expr,
-                        None,
-                        params,
-                        1,
-                        &database.function_registry,
-                        database,
-                    )?;
-                    row_data[*idx] = Value::from_arrow(&v, 0);
-                }
-                for assign in &self.on_create_assignments {
-                    let v = ExpressionEvaluator::evaluate(
-                        &assign.expression,
-                        None,
-                        params,
-                        1,
-                        &database.function_registry,
-                        database,
-                    )?;
-                    row_data[assign.property_idx] = Value::from_arrow(&v, 0);
-                }
+            for chunk_opt in &chunks {
+                let num_rows = chunk_opt.as_ref().map(|c| c.num_rows()).unwrap_or(1);
+                let batch_ref = chunk_opt.as_ref().map(|c| &c.batch);
 
-                self.table
-                    .append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                let prop_arrays: Vec<arrow::array::ArrayRef> = self.pattern.properties
+                    .iter()
+                    .map(|(_, expr)| {
+                        ExpressionEvaluator::evaluate(
+                            expr,
+                            batch_ref,
+                            params,
+                            num_rows,
+                            &database.function_registry,
+                            database,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
-                let storage = database.storage_manager.read();
+                for row_idx in 0..num_rows {
+                    let mut existing_id = None;
+                    let index_opt = database.storage_manager.read().get_index(&self.table_name);
 
-                // 1. Primary Key Index
-                if let Some(index) = storage.get_index(&self.table_name) {
-                    if let Some(pk_name) = database
-                        .catalog
-                        .read()
-                        .get_node_table(&self.table_name)
-                        .and_then(|t| t.primary_key.as_ref())
-                    {
-                        for (idx, _) in self
-                            .table
-                            .columns
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, c)| &c.name == pk_name)
-                        {
-                            index.insert(&self.buffer_manager, &row_data[idx], next_id, tx)?;
+                    if let Some(index) = index_opt {
+                        // Only use _id (primary key, column 0) for index lookup.
+                        // Using all pattern properties would match on any single
+                        // property instead of requiring all to match.
+                        if let Some(&(first_idx, _)) = self.pattern.properties.first() {
+                            if first_idx == 0 {
+                                let pk_val = Value::from_arrow(&prop_arrays[0], row_idx);
+                                if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
+                                    existing_id = Some(id);
+                                }
+                            }
                         }
                     }
-                }
 
-                // 2. Full-Text Search Index — index all string columns
-                if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
-                    let text_fields: Vec<(String, &str)> = self.table.columns.iter()
-                        .filter_map(|col| {
-                            let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
-                            row_data.get(idx).and_then(|v| match v {
-                                Value::String(s) => Some((col.name.clone(), s.as_str())),
-                                _ => None,
-                            })
-                        })
-                        .collect();
-                    if !text_fields.is_empty() {
-                        if let Err(e) = fts.insert_multi_field(next_id, &text_fields) {
-                            tracing::error!("FTS insert_multi_field error during merge: {}", e);
+                    if let Some(id) = existing_id {
+                        for assign in &self.on_match_assignments {
+                            let v = ExpressionEvaluator::evaluate(
+                                &assign.expression,
+                                batch_ref,
+                                params,
+                                num_rows,
+                                &database.function_registry,
+                                database,
+                            )?;
+                            let old_val = self.table.columns[assign.property_idx].get_value(
+                                &self.buffer_manager,
+                                id,
+                                tx,
+                            )?;
+                            self.undo_buffer.push(UndoRecord::UpdateColumn(
+                                self.table.name.clone(),
+                                id,
+                                old_val,
+                            ));
+                            self.table.columns[assign.property_idx].append_value(
+                                &self.buffer_manager,
+                                &Value::from_arrow(&v, row_idx),
+                                id,
+                                tx,
+                            )?;
                         }
-                        if let Err(e) = fts.commit() {
-                            tracing::error!("FTS commit error during merge: {}", e);
+                        self.shared_state
+                            .total_affected
+                            .fetch_add(0, Ordering::SeqCst);
+                    } else {
+                        let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                        let mut row_data = vec![Value::Null; self.table.columns.len()];
+                        row_data[0] = Value::Node(next_id);
+
+                        for (i, (idx, _)) in self.pattern.properties.iter().enumerate() {
+                            row_data[*idx] = Value::from_arrow(&prop_arrays[i], row_idx);
+                        }
+                        for assign in &self.on_create_assignments {
+                            let v = ExpressionEvaluator::evaluate(
+                                &assign.expression,
+                                batch_ref,
+                                params,
+                                num_rows,
+                                &database.function_registry,
+                                database,
+                            )?;
+                            row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
+                        }
+
+                        self.table
+                            .append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+
+                        let storage = database.storage_manager.read();
+
+                        if let Some(index) = storage.get_index(&self.table_name) {
+                            if let Some(pk_name) = database
+                                .catalog
+                                .read()
+                                .get_node_table(&self.table_name)
+                                .and_then(|t| t.primary_key.as_ref())
+                            {
+                                for (idx, _) in self
+                                    .table
+                                    .columns
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, c)| &c.name == pk_name)
+                                {
+                                    index.insert(&self.buffer_manager, &row_data[idx], next_id, tx)?;
+                                }
+                            }
+                        }
+
+                        if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
+                            let text_fields: Vec<(String, &str)> = self.table.columns.iter()
+                                .filter_map(|col| {
+                                    let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                                    row_data.get(idx).and_then(|v| match v {
+                                        Value::String(s) => Some((col.name.clone(), s.as_str())),
+                                        _ => None,
+                                    })
+                                })
+                                .collect();
+                            if !text_fields.is_empty() {
+                                if let Err(e) = fts.insert_multi_field(next_id, &text_fields) {
+                                    tracing::error!("FTS insert_multi_field error during merge: {}", e);
+                                }
+                                if let Err(e) = fts.commit() {
+                                    tracing::error!("FTS commit error during merge: {}", e);
+                                }
+                            }
+                        }
+
+                        self.undo_buffer
+                            .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
+                        self.shared_state
+                            .total_affected
+                            .fetch_add(1, Ordering::SeqCst);
+
+                        let mut cat = database.catalog.write();
+                        if let Some(t) = cat.get_node_table_mut(&self.table_name) {
+                            t.num_rows += 1;
                         }
                     }
-                }
-
-                self.undo_buffer
-                    .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
-                self.shared_state
-                    .total_affected
-                    .fetch_add(1, Ordering::SeqCst);
-
-                // Update catalog cardinality
-                let mut cat = database.catalog.write();
-                if let Some(t) = cat.get_node_table_mut(&self.table_name) {
-                    t.num_rows += 1;
                 }
             }
         }
@@ -1063,13 +1081,10 @@ impl PhysicalOperator for PhysicalMerge {
             on_match_assignments: self.on_match_assignments.clone(),
             buffer_manager: self.buffer_manager.clone(),
             undo_buffer: self.undo_buffer.clone(),
+            child: self.child.as_ref().map(|c| c.clone_box()),
             shared_state: self.shared_state.clone(),
             tx_id: self.tx_id,
             read_ts: self.read_ts,
         })
-    }
-
-    fn is_read_only(&self) -> bool {
-        false
     }
 }

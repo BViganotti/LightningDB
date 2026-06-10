@@ -1,0 +1,1640 @@
+{
+  "node_tables": {
+    "LspCache": {
+      "name": "LspCache",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "file_path",
+          "type_": "String"
+        },
+        {
+          "name": "file_hash",
+          "type_": "String"
+        },
+        {
+          "name": "updated_at",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "file_path",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "EnrichmentProgress": {
+      "name": "EnrichmentProgress",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "workspace_id",
+          "type_": "String"
+        },
+        {
+          "name": "enrichment_type",
+          "type_": "String"
+        },
+        {
+          "name": "files_processed",
+          "type_": "Int64"
+        },
+        {
+          "name": "total_files",
+          "type_": "Int64"
+        },
+        {
+          "name": "status",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "workspace_id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Message": {
+      "name": "Message",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "Int64"
+        },
+        {
+          "name": "conversation_id",
+          "type_": "String"
+        },
+        {
+          "name": "role",
+          "type_": "String"
+        },
+        {
+          "name": "content",
+          "type_": "String"
+        },
+        {
+          "name": "tool_calls",
+          "type_": "String"
+        },
+        {
+          "name": "tool_call_id",
+          "type_": "String"
+        },
+        {
+          "name": "timestamp",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "WatcherStats": {
+      "name": "WatcherStats",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "Int64"
+        },
+        {
+          "name": "last_update",
+          "type_": "String"
+        },
+        {
+          "name": "files_processed",
+          "type_": "Int64"
+        },
+        {
+          "name": "duration_ms",
+          "type_": "Int64"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Workspace": {
+      "name": "Workspace",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "name",
+          "type_": "String"
+        },
+        {
+          "name": "root_path",
+          "type_": "String"
+        },
+        {
+          "name": "last_indexed_at",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 1,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 2,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 1,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 1,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 1,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": {
+              "String": "/Users/bviga/Developement/new_research/research/lightning/."
+            },
+            "max": {
+              "String": "/Users/bviga/Developement/new_research/research/lightning/."
+            },
+            "null_count": 0,
+            "num_values": 2,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": [
+              {
+                "min": {
+                  "String": "/Users/bviga/Developement/new_research/research/lightning/."
+                },
+                "max": {
+                  "String": "/Users/bviga/Developement/new_research/research/lightning/."
+                }
+              }
+            ]
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 1,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "FileHash": {
+      "name": "FileHash",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "file_path",
+          "type_": "String"
+        },
+        {
+          "name": "hash",
+          "type_": "String"
+        },
+        {
+          "name": "workspace_id",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 1,
+      "primary_key": "file_path",
+      "constraints": [],
+      "stats": {
+        "cardinality": 1,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Conversation": {
+      "name": "Conversation",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "title",
+          "type_": "String"
+        },
+        {
+          "name": "workspace_id",
+          "type_": "String"
+        },
+        {
+          "name": "created_at",
+          "type_": "Timestamp"
+        },
+        {
+          "name": "updated_at",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "CodeNode": {
+      "name": "CodeNode",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "workspace_id",
+          "type_": "String"
+        },
+        {
+          "name": "node_type",
+          "type_": "String"
+        },
+        {
+          "name": "name",
+          "type_": "String"
+        },
+        {
+          "name": "file_path",
+          "type_": "String"
+        },
+        {
+          "name": "start_line",
+          "type_": "Int64"
+        },
+        {
+          "name": "start_col",
+          "type_": "Int64"
+        },
+        {
+          "name": "end_line",
+          "type_": "Int64"
+        },
+        {
+          "name": "docstring",
+          "type_": "String"
+        },
+        {
+          "name": "signature",
+          "type_": "String"
+        },
+        {
+          "name": "source_hash",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 1935,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 2085,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 2035,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Settings": {
+      "name": "Settings",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "key",
+          "type_": "String"
+        },
+        {
+          "name": "value",
+          "type_": "String"
+        },
+        {
+          "name": "updated_at",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "key",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Log": {
+      "name": "Log",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "Int64"
+        },
+        {
+          "name": "level",
+          "type_": "String"
+        },
+        {
+          "name": "target",
+          "type_": "String"
+        },
+        {
+          "name": "message",
+          "type_": "String"
+        },
+        {
+          "name": "fields",
+          "type_": "String"
+        },
+        {
+          "name": "timestamp",
+          "type_": "Timestamp"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Telemetry": {
+      "name": "Telemetry",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "tool_name",
+          "type_": "String"
+        },
+        {
+          "name": "arguments",
+          "type_": "String"
+        },
+        {
+          "name": "result",
+          "type_": "String"
+        },
+        {
+          "name": "duration_ms",
+          "type_": "Int64"
+        },
+        {
+          "name": "timestamp",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "Observation": {
+      "name": "Observation",
+      "properties": [
+        {
+          "name": "_id",
+          "type_": "Uint64"
+        },
+        {
+          "name": "id",
+          "type_": "String"
+        },
+        {
+          "name": "content",
+          "type_": "String"
+        },
+        {
+          "name": "is_stale",
+          "type_": "Bool"
+        },
+        {
+          "name": "created_at",
+          "type_": "String"
+        }
+      ],
+      "num_rows": 0,
+      "primary_key": "id",
+      "constraints": [],
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    }
+  },
+  "rel_tables": {
+    "LspImplements": {
+      "name": "LspImplements",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "HasMessage": {
+      "name": "HasMessage",
+      "from_table": "Conversation",
+      "to_table": "Message",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": [
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          },
+          {
+            "min": null,
+            "max": null,
+            "null_count": 0,
+            "num_values": 0,
+            "distinct_count": 0,
+            "compression_meta": null,
+            "compression_ratio": null,
+            "page_bounds": []
+          }
+        ]
+      }
+    },
+    "LspTypeDefines": {
+      "name": "LspTypeDefines",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "Contains": {
+      "name": "Contains",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "ObservedAt": {
+      "name": "ObservedAt",
+      "from_table": "Observation",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "PreciseDefines": {
+      "name": "PreciseDefines",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "EnvContracts": {
+      "name": "EnvContracts",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "ScipRefs": {
+      "name": "ScipRefs",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "Extends": {
+      "name": "Extends",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "ImplicitCouples": {
+      "name": "ImplicitCouples",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "LspDefines": {
+      "name": "LspDefines",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "Imports": {
+      "name": "Imports",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 325,
+        "column_stats": []
+      }
+    },
+    "ApiContracts": {
+      "name": "ApiContracts",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "Calls": {
+      "name": "Calls",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 5685,
+        "column_stats": []
+      }
+    },
+    "Implements": {
+      "name": "Implements",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "BelongsTo": {
+      "name": "BelongsTo",
+      "from_table": "CodeNode",
+      "to_table": "Workspace",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "PreciseRefs": {
+      "name": "PreciseRefs",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "LspRefs": {
+      "name": "LspRefs",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "CrossRepos": {
+      "name": "CrossRepos",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "References": {
+      "name": "References",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    },
+    "LspCalls": {
+      "name": "LspCalls",
+      "from_table": "CodeNode",
+      "to_table": "CodeNode",
+      "properties": [
+        {
+          "name": "_src",
+          "type_": "Uint64"
+        },
+        {
+          "name": "_dst",
+          "type_": "Uint64"
+        }
+      ],
+      "num_rows": 0,
+      "stats": {
+        "cardinality": 0,
+        "column_stats": []
+      }
+    }
+  },
+  "sequences": {},
+  "macros": {}
+}

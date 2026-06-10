@@ -1,4 +1,5 @@
-use crate::parser::ast::ComparisonOperator;
+use crate::parser::ast::{ArithmeticOperator, ComparisonOperator, Literal};
+use crate::parser::ast::LogicalOperator as BoolOperator;
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::PhysicalOperator;
@@ -14,6 +15,11 @@ pub struct PhysicalPlanner {
     pub tx_id: u64,
     pub undo_buffer: Arc<UndoBuffer>,
     pub masks: HashMap<String, Arc<RwLock<crate::processor::operators::semi_mask::SemiMask>>>,
+    /// Binder-computed column offsets (variable name → starting column)
+    /// for each variable. Used to remap PropertyLookup indices in projection
+    /// items after optimizer transforms (e.g. join reordering) alter the
+    /// physical column layout.
+    pub binder_column_offsets: std::collections::HashMap<String, usize>,
 }
 
 impl PhysicalPlanner {
@@ -29,6 +35,7 @@ impl PhysicalPlanner {
             tx_id,
             undo_buffer,
             masks: HashMap::new(),
+            binder_column_offsets: std::collections::HashMap::new(),
         }
     }
 
@@ -151,18 +158,45 @@ impl PhysicalPlanner {
                 }
                 Ok(Box::new(scan))
             }
-            LogicalOperator::Filter(child, expr) => {
+            LogicalOperator::Filter(child, mut expr) => {
+                // Remap PropertyLookup indices in filter expressions to match
+                // the physical plan layout (same rationale as Projection).
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
+                Self::remap_property_lookup(
+                    &mut expr,
+                    &child_positions,
+                    &self.binder_column_offsets,
+                );
+                tracing::debug!(
+                    "FILTER child_positions={:?} expr={:?}",
+                    child_positions,
+                    expr
+                );
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(
                     crate::processor::operators::filter::PhysicalFilter::new(planned_child, expr),
                 ))
             }
             LogicalOperator::Projection(child, items) => {
+                // Compute physical variable positions from the unplanned child
+                // before consuming it. These are needed to remap PropertyLookup
+                // indices from binder-relative to physical-plan-relative offsets.
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
+
+                let mut remapped = items;
+                for item in &mut remapped {
+                    Self::remap_property_lookup(
+                        &mut item.expression,
+                        &child_positions,
+                        &self.binder_column_offsets,
+                    );
+                }
+
                 Ok(Box::new(
                     crate::processor::operators::projection::PhysicalProjection::new(
                         planned_child,
-                        items,
+                        remapped,
                     ),
                 ))
             }
@@ -591,7 +625,7 @@ impl PhysicalPlanner {
                 on_create_assignments,
                 on_match_assignments,
             } => {
-                let _planned_child = self.plan(*child)?;
+                let planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
                 let table = storage.get_table(&pattern.table_name).ok_or_else(|| {
                     crate::LightningError::Internal(format!("Table '{}' not found for MERGE", pattern.table_name))
@@ -613,6 +647,7 @@ impl PhysicalPlanner {
                         on_match_assignments,
                         self.db.buffer_manager.clone(),
                         self.undo_buffer.clone(),
+                        Some(planned_child),
                         self.tx_id,
                         self.read_ts,
                         effective_num_rows,
@@ -628,10 +663,10 @@ impl PhysicalPlanner {
     fn get_table_num_columns(&self, table_name: &str) -> usize {
         let cat = self.db.catalog.read();
         if let Some(node_table) = cat.get_node_table(table_name) {
-            // +1 for the internal _id column that the storage engine silently
-            // prepends to every node table scan. The catalog only tracks
-            // user-defined columns (DDL), not internal columns.
-            node_table.properties.len() + 1
+            // add_node_table already prepends _id into the properties list,
+            // so properties.len() includes _id + user columns — matching the
+            // storage table's column count exactly.
+            node_table.properties.len()
         } else if let Some(rel_table) = cat.get_rel_table(table_name) {
             // Rel tables have _src and _dst prepended by add_rel_table into
             // the properties list, so no adjustment needed.
@@ -671,14 +706,14 @@ impl PhysicalPlanner {
             }
             LogicalOperator::RecursiveJoin {
                 child,
-                src_var,
+                dst_node_table,
                 dst_var,
                 ..
             } => {
                 let child_cols = self.collect_variable_positions(child, start_col, positions)?;
-                positions.insert(src_var.clone(), start_col);
-                positions.insert(dst_var.clone(), start_col + 1);
-                Ok(child_cols + 2)
+                let dst_cols = self.get_table_num_columns(dst_node_table);
+                positions.insert(dst_var.clone(), start_col + child_cols);
+                Ok(child_cols + dst_cols)
             }
             LogicalOperator::Projection(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
@@ -743,8 +778,11 @@ impl PhysicalPlanner {
                 }
                 Ok(col_offset - start_col)
             }
-            LogicalOperator::AllShortestPaths { child, .. } => {
-                self.collect_variable_positions(child, start_col, positions)
+            LogicalOperator::AllShortestPaths { src_var_name, dst_var_name, path_var_name, .. } => {
+                positions.insert(src_var_name.clone(), start_col);
+                positions.insert(dst_var_name.clone(), start_col + 1);
+                positions.insert(path_var_name.clone(), start_col + 2);
+                Ok(3)
             }
             LogicalOperator::Merge { child, .. } => {
                 self.collect_variable_positions(child, start_col, positions)
@@ -829,6 +867,10 @@ impl PhysicalPlanner {
             | LogicalOperator::Accumulate(child)
             | LogicalOperator::Profile(child)
             | LogicalOperator::Explain(child) => self.compute_subtree_num_cols(child),
+            LogicalOperator::RecursiveJoin { child, dst_node_table, .. } => {
+                self.compute_subtree_num_cols(child) + self.get_table_num_columns(dst_node_table)
+            }
+            LogicalOperator::AllShortestPaths { .. } => 3,
             _ => 0,
         }
     }
@@ -850,13 +892,15 @@ impl PhysicalPlanner {
 
         match join_cond {
             BoundExpression::Comparison(left_expr, ComparisonOperator::Equal, right_expr) => {
-                let (left_key, right_key) =
-                    self.resolve_join_key_pair(left_expr, right_expr, &left_positions, &right_positions)?;
+                let (left_key, right_key) = self.resolve_join_key_pair(
+                    left_expr, right_expr, &left_positions, &right_positions,
+                )?;
                 Ok((left_key, right_key))
             }
             BoundExpression::Comparison(left_expr, ComparisonOperator::NotEqual, right_expr) => {
-                let (left_key, right_key) =
-                    self.resolve_join_key_pair(left_expr, right_expr, &left_positions, &right_positions)?;
+                let (left_key, right_key) = self.resolve_join_key_pair(
+                    left_expr, right_expr, &left_positions, &right_positions,
+                )?;
                 Ok((left_key, right_key))
             }
             _ => {
@@ -887,7 +931,6 @@ impl PhysicalPlanner {
         } else if b_in_left && a_in_right {
             (expr_b, expr_a)
         } else {
-            // Fallback: try a_in_left first
             if a_in_left {
                 (expr_a, expr_b)
             } else {
@@ -921,6 +964,8 @@ impl PhysicalPlanner {
         }
     }
 
+    /// Resolve a PropertyLookup expression to its column index, checking
+    /// both left and right variable positions.
     fn resolve_key_index(
         &self,
         expr: &BoundExpression,
@@ -929,8 +974,13 @@ impl PhysicalPlanner {
     ) -> Result<usize> {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
-                let base = positions.get(var).copied().unwrap_or(0);
-                Ok(base + idx)
+                if let Some(base) = positions.get(var) {
+                    return Ok(base + idx);
+                }
+                Err(LightningError::Internal(format!(
+                    "{} join key variable '{}' not found in either subtree",
+                    side, var,
+                )))
             }
             _ => Err(LightningError::Internal(format!(
                 "{} join key must be a PropertyLookup",
@@ -939,12 +989,310 @@ impl PhysicalPlanner {
         }
     }
 
+    /// Recursively walk a BoundExpression tree and remap all PropertyLookup
+    /// index values from binder-relative offsets to physical-plan-relative offsets.
+    ///
+    /// The binder assigns each MATCH variable a sequential starting column (e.g.
+    /// a=0, r=11, b=16). PropertyLookup indices embed these offsets:
+    ///   `idx = binder_column_offsets[var] + property_index_in_table`
+    ///
+    /// After optimizer transforms (join reordering, etc.), the physical column
+    /// layout may place variables at different positions. This function reads
+    /// the CHILD operator's variable positions and corrects each lookup:
+    ///   `new_idx = child_phys_positions[var] + property_index_in_table`
+    ///            = child_phys_positions[var] + (idx - binder_column_offsets[var])
+    fn remap_property_lookup(
+        expr: &mut BoundExpression,
+        child_phys_positions: &std::collections::HashMap<String, usize>,
+        binder_column_offsets: &std::collections::HashMap<String, usize>,
+    ) {
+        match expr {
+            BoundExpression::PropertyLookup(var, idx, _) => {
+                let binder_base = binder_column_offsets.get(var).copied().unwrap_or(0);
+                let phys_base = child_phys_positions.get(var).copied().unwrap_or(binder_base);
+                let prop_index = idx.saturating_sub(binder_base);
+                *idx = phys_base + prop_index;
+            }
+            BoundExpression::Variable(..)
+            | BoundExpression::Literal(_)
+            | BoundExpression::Parameter(_)
+            | BoundExpression::NextVal(_) => {}
+            BoundExpression::Not(inner) => {
+                Self::remap_property_lookup(inner, child_phys_positions, binder_column_offsets);
+            }
+            BoundExpression::Arithmetic(left, _, right)
+            | BoundExpression::Comparison(left, _, right)
+            | BoundExpression::Logical(left, _, right) => {
+                Self::remap_property_lookup(left, child_phys_positions, binder_column_offsets);
+                Self::remap_property_lookup(right, child_phys_positions, binder_column_offsets);
+            }
+            BoundExpression::Function(_, args, _) | BoundExpression::List(args, _) => {
+                for arg in args {
+                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets);
+                }
+            }
+            BoundExpression::Case {
+                expression,
+                when_then,
+                else_expression,
+                ..
+            } => {
+                if let Some(e) = expression {
+                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets);
+                }
+                for (w, t) in when_then {
+                    Self::remap_property_lookup(w, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(t, child_phys_positions, binder_column_offsets);
+                }
+                if let Some(e) = else_expression {
+                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets);
+                }
+            }
+            BoundExpression::Aggregate(_, args, _) => {
+                for arg in args {
+                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets);
+                }
+            }
+            BoundExpression::Lambda(_, body) => {
+                Self::remap_property_lookup(body, child_phys_positions, binder_column_offsets);
+            }
+            BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => {
+                // These contain match clauses, not expressions — nothing to remap
+            }
+            BoundExpression::Map(items, _) => {
+                for (_, val) in items {
+                    Self::remap_property_lookup(val, child_phys_positions, binder_column_offsets);
+                }
+            }
+        }
+    }
+
     pub fn plan_expression(
         &self,
-        _op: &LogicalOperator,
-        _expr: &BoundExpression,
+        op: &LogicalOperator,
+        expr: &BoundExpression,
     ) -> Result<BoundExpression> {
-        Ok(_expr.clone())
+        // 1. Recursively plan child expressions (bottom-up)
+        let expr = self.plan_expression_children(op, expr)?;
+        // 2. Apply simplification / constant folding
+        Ok(self.simplify_expression(expr))
+    }
+
+    /// Recursively walk the expression tree and plan child sub-expressions first.
+    fn plan_expression_children(
+        &self,
+        op: &LogicalOperator,
+        expr: &BoundExpression,
+    ) -> Result<BoundExpression> {
+        match expr {
+            BoundExpression::Arithmetic(left, arith_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Number(a)),
+                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                {
+                    let result = match arith_op {
+                        ArithmeticOperator::Add => a + b,
+                        ArithmeticOperator::Subtract => a - b,
+                        ArithmeticOperator::Multiply => a * b,
+                        ArithmeticOperator::Divide => {
+                            if *b == 0.0 {
+                                return Err(LightningError::Internal(
+                                    "Division by zero in constant expression".into(),
+                                ));
+                            }
+                            a / b
+                        }
+                        ArithmeticOperator::Modulo => a % b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Number(result)));
+                }
+                Ok(BoundExpression::Arithmetic(Box::new(l), *arith_op, Box::new(r)))
+            }
+            BoundExpression::Comparison(left, cmp_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Number(a)),
+                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                {
+                    let result = match cmp_op {
+                        ComparisonOperator::Equal => a == b,
+                        ComparisonOperator::NotEqual => a != b,
+                        ComparisonOperator::LessThan => a < b,
+                        ComparisonOperator::LessThanOrEqual => a <= b,
+                        ComparisonOperator::GreaterThan => a > b,
+                        ComparisonOperator::GreaterThanOrEqual => a >= b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                if let (BoundExpression::Literal(Literal::String(a)),
+                        BoundExpression::Literal(Literal::String(b))) = (&l, &r)
+                {
+                    let result = match cmp_op {
+                        ComparisonOperator::Equal => a == b,
+                        ComparisonOperator::NotEqual => a != b,
+                        _ => false,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                Ok(BoundExpression::Comparison(Box::new(l), *cmp_op, Box::new(r)))
+            }
+            BoundExpression::Logical(left, log_op, right) => {
+                let l = self.plan_expression(op, left)?;
+                let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Boolean(a)),
+                        BoundExpression::Literal(Literal::Boolean(b))) = (&l, &r)
+                {
+                    let result = match log_op {
+                        BoolOperator::And => *a && *b,
+                        BoolOperator::Or => *a || *b,
+                        BoolOperator::Xor => *a ^ *b,
+                        _ => false,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
+                Ok(BoundExpression::Logical(Box::new(l), *log_op, Box::new(r)))
+            }
+            BoundExpression::Not(inner) => {
+                let inner = self.plan_expression(op, inner)?;
+                if let BoundExpression::Not(inner_inner) = &inner {
+                    return Ok(*inner_inner.clone());
+                }
+                if let BoundExpression::Literal(Literal::Boolean(b)) = &inner {
+                    return Ok(BoundExpression::Literal(Literal::Boolean(!b)));
+                }
+                Ok(BoundExpression::Not(Box::new(inner)))
+            }
+            BoundExpression::Function(name, args, return_type) => {
+                let mut planned_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    planned_args.push(self.plan_expression(op, arg)?);
+                }
+                Ok(BoundExpression::Function(name.clone(), planned_args, return_type.clone()))
+            }
+            BoundExpression::List(items, t) => {
+                let mut planned = Vec::with_capacity(items.len());
+                for item in items {
+                    planned.push(self.plan_expression(op, item)?);
+                }
+                Ok(BoundExpression::List(planned, t.clone()))
+            }
+            BoundExpression::Case { expression, when_then, else_expression, return_type } => {
+                let expr = expression
+                    .as_ref()
+                    .map(|e| self.plan_expression(op, e))
+                    .transpose()?;
+                let mut planned_when_then = Vec::with_capacity(when_then.len());
+                for (w, t) in when_then {
+                    let w = self.plan_expression(op, w)?;
+                    let t = self.plan_expression(op, t)?;
+                    planned_when_then.push((w, t));
+                }
+                let else_expr = else_expression
+                    .as_ref()
+                    .map(|e| self.plan_expression(op, e))
+                    .transpose()?;
+                Ok(BoundExpression::Case {
+                    expression: expr.map(Box::new),
+                    when_then: planned_when_then,
+                    else_expression: else_expr.map(Box::new),
+                    return_type: return_type.clone(),
+                })
+            }
+            BoundExpression::Map(items, t) => {
+                let mut planned = Vec::with_capacity(items.len());
+                for (k, v) in items {
+                    planned.push((k.clone(), self.plan_expression(op, v)?));
+                }
+                Ok(BoundExpression::Map(planned, t.clone()))
+            }
+            BoundExpression::Aggregate(name, args, filter) => {
+                let mut planned = Vec::with_capacity(args.len());
+                for arg in args {
+                    planned.push(self.plan_expression(op, arg)?);
+                }
+                Ok(BoundExpression::Aggregate(name.clone(), planned, filter.clone()))
+            }
+            BoundExpression::Lambda(var, body) => {
+                let body = self.plan_expression(op, body)?;
+                Ok(BoundExpression::Lambda(var.clone(), Box::new(body)))
+            }
+            BoundExpression::Literal(_)
+            | BoundExpression::Variable(_, _)
+            | BoundExpression::PropertyLookup(_, _, _)
+            | BoundExpression::Parameter(_)
+            | BoundExpression::NextVal(_)
+            | BoundExpression::Exists(_)
+            | BoundExpression::CountSubquery(_) => Ok(expr.clone()),
+        }
+    }
+
+    /// Apply algebraic simplification rules (predicate simplification, etc.)
+    fn simplify_expression(&self, expr: BoundExpression) -> BoundExpression {
+        match expr {
+            // NOT (a > b) → a <= b
+            BoundExpression::Not(inner) => match *inner {
+                BoundExpression::Comparison(a, ComparisonOperator::GreaterThan, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::LessThanOrEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::GreaterThanOrEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::LessThan, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::LessThan, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::GreaterThanOrEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::LessThanOrEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::GreaterThan, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::Equal, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::NotEqual, b)
+                }
+                BoundExpression::Comparison(a, ComparisonOperator::NotEqual, b) => {
+                    BoundExpression::Comparison(a, ComparisonOperator::Equal, b)
+                }
+                BoundExpression::Not(inner_inner) => self.simplify_expression(*inner_inner),
+                other => BoundExpression::Not(Box::new(self.simplify_expression(other))),
+            },
+            // Logical short-circuit: x AND true → x, x OR false → x, etc.
+            BoundExpression::Logical(left, op, right) => {
+                let l = self.simplify_expression(*left);
+                let r = self.simplify_expression(*right);
+                match (&l, op, &r) {
+                    (BoundExpression::Literal(Literal::Boolean(true)), BoolOperator::And, _) => r,
+                    (_, BoolOperator::And, BoundExpression::Literal(Literal::Boolean(true))) => l,
+                    (BoundExpression::Literal(Literal::Boolean(false)), BoolOperator::And, _) => {
+                        BoundExpression::Literal(Literal::Boolean(false))
+                    }
+                    (_, BoolOperator::And, BoundExpression::Literal(Literal::Boolean(false))) => {
+                        BoundExpression::Literal(Literal::Boolean(false))
+                    }
+                    (BoundExpression::Literal(Literal::Boolean(false)), BoolOperator::Or, _) => r,
+                    (_, BoolOperator::Or, BoundExpression::Literal(Literal::Boolean(false))) => l,
+                    (BoundExpression::Literal(Literal::Boolean(true)), BoolOperator::Or, _) => {
+                        BoundExpression::Literal(Literal::Boolean(true))
+                    }
+                    (_, BoolOperator::Or, BoundExpression::Literal(Literal::Boolean(true))) => {
+                        BoundExpression::Literal(Literal::Boolean(true))
+                    }
+                    _ => BoundExpression::Logical(Box::new(l), op, Box::new(r)),
+                }
+            }
+            BoundExpression::Arithmetic(l, op, r) => {
+                let l = self.simplify_expression(*l);
+                let r = self.simplify_expression(*r);
+                BoundExpression::Arithmetic(Box::new(l), op, Box::new(r))
+            }
+            BoundExpression::Comparison(l, op, r) => {
+                let l = self.simplify_expression(*l);
+                let r = self.simplify_expression(*r);
+                BoundExpression::Comparison(Box::new(l), op, Box::new(r))
+            }
+            BoundExpression::Function(name, args, return_type) => {
+                let args: Vec<_> = args.into_iter().map(|a| self.simplify_expression(a)).collect();
+                BoundExpression::Function(name, args, return_type)
+            }
+            other => other,
+        }
     }
 
     fn extract_trigram_candidates(

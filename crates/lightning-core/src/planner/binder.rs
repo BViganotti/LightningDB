@@ -4,12 +4,14 @@ use crate::LightningError;
 use crate::Result;
 use lightning_types::LogicalType;
 use std::collections::HashMap;
+use std::path::Component;
 
 #[derive(Debug, Clone)]
 pub struct BoundQuery {
     pub union_queries: Vec<BoundUnionQuery>,
     pub is_explain: bool,
     pub is_profile: bool,
+    pub column_offsets: HashMap<String, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +392,7 @@ impl<'a> Binder<'a> {
             union_queries,
             is_explain: query.is_explain,
             is_profile: query.is_profile,
+            column_offsets: self.column_offsets.clone(),
         })
     }
 
@@ -571,6 +574,15 @@ impl<'a> Binder<'a> {
                         "Table {table_name} not found"
                     )));
                 }
+                // Validate path at bind time to reject traversal attacks early
+                let path = std::path::Path::new(file_path);
+                for component in path.components() {
+                    if let Component::ParentDir = component {
+                        return Err(LightningError::Config(format!(
+                            "COPY FROM path '{}' contains '..' traversal", file_path
+                        )));
+                    }
+                }
                 Ok(BoundStatement::CopyFrom {
                     table_name: table_name.clone(),
                     file_path: file_path.clone(),
@@ -588,6 +600,15 @@ impl<'a> Binder<'a> {
                     return Err(LightningError::Query(format!(
                         "Table {table_name} not found"
                     )));
+                }
+                // Validate path at bind time to reject traversal attacks early
+                let path = std::path::Path::new(file_path);
+                for component in path.components() {
+                    if let Component::ParentDir = component {
+                        return Err(LightningError::Config(format!(
+                            "COPY TO path '{}' contains '..' traversal", file_path
+                        )));
+                    }
                 }
                 Ok(BoundStatement::CopyTo {
                     table_name: table_name.clone(),

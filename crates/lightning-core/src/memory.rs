@@ -1043,13 +1043,15 @@ impl MemoryStore {
         if visited.is_empty() { return Ok(Vec::new()); }
 
         // Look up entities by _id
-        let ids: Vec<String> = visited.iter().map(|id| id.to_string()).collect();
+        if visited.is_empty() { return Ok(Vec::new()); }
+        let ids: Vec<Value> = visited.iter().map(|&id| Value::Number(id as f64)).collect();
         let lookup = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
-             RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until",
-            ids.join(", ")
+            "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+             RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until"
         );
-        match self.conn.execute(&lookup, None) {
+        let mut params = std::collections::HashMap::new();
+        params.insert("ids".to_string(), Value::List(ids));
+        match self.conn.execute(&lookup, Some(params)) {
             Ok(r) => Ok(self.batches_to_entities(&r.batches)),
             Err(_) => Ok(Vec::new()),
         }
@@ -1265,15 +1267,16 @@ impl MemoryStore {
         if internal_ids.is_empty() {
             return Vec::new();
         }
-        let ids: Vec<String> = internal_ids.iter().map(|id| format!("{}", *id as f64)).collect();
+        let ids: Vec<Value> = internal_ids.iter().map(|&id| Value::Number(id as f64)).collect();
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+            "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until",
-            ids.join(", ")
+             e.valid_from, e.valid_until"
         );
-        if let Ok(res) = self.conn.execute(&query, None) {
+        let mut params = std::collections::HashMap::new();
+        params.insert("ids".to_string(), Value::List(ids));
+        if let Ok(res) = self.conn.execute(&query, Some(params)) {
             self.batches_to_entities(&res.batches)
         } else {
             Vec::new()

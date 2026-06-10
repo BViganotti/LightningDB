@@ -208,6 +208,30 @@ impl FilterPushDown {
         }
     }
 
+    fn split_conjuncts(expr: BoundExpression) -> Vec<BoundExpression> {
+        match expr {
+            BoundExpression::Logical(left, crate::parser::ast::LogicalOperator::And, right) => {
+                let mut left_conjuncts = Self::split_conjuncts(*left);
+                let mut right_conjuncts = Self::split_conjuncts(*right);
+                left_conjuncts.append(&mut right_conjuncts);
+                left_conjuncts
+            }
+            other => vec![other],
+        }
+    }
+
+    fn rebuild_conjuncts(conjuncts: Vec<BoundExpression>) -> Option<BoundExpression> {
+        conjuncts
+            .into_iter()
+            .reduce(|acc, conjunct| {
+                BoundExpression::Logical(
+                    Box::new(acc),
+                    crate::parser::ast::LogicalOperator::And,
+                    Box::new(conjunct),
+                )
+            })
+    }
+
     fn push_down(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
         match plan {
             LogicalOperator::Filter(child, condition) => {
@@ -246,28 +270,49 @@ impl FilterPushDown {
                         let mut right_vars = HashSet::new();
                         Self::provided_variables(&right, &mut right_vars);
 
-                        let can_push_left = condition_vars.is_subset(&left_vars);
-                        let can_push_right = condition_vars.is_subset(&right_vars);
+                        let conjuncts = Self::split_conjuncts(condition);
+                        let mut left_pushable = Vec::new();
+                        let mut right_pushable = Vec::new();
+                        let mut remaining = Vec::new();
 
-                        if can_push_left {
-                            let new_left = LogicalOperator::Filter(left, condition);
-                            Ok(LogicalOperator::Join(
-                                Box::new(self.push_down(new_left)?),
-                                right,
-                                join_cond,
-                            ))
-                        } else if can_push_right {
-                            let new_right = LogicalOperator::Filter(right, condition);
-                            Ok(LogicalOperator::Join(
-                                left,
-                                Box::new(self.push_down(new_right)?),
-                                join_cond,
-                            ))
+                        for conjunct in conjuncts {
+                            let mut conjunct_vars = HashSet::new();
+                            Self::extract_variables(&conjunct, &mut conjunct_vars);
+
+                            if conjunct_vars.is_subset(&left_vars) {
+                                left_pushable.push(conjunct);
+                            } else if conjunct_vars.is_subset(&right_vars) {
+                                right_pushable.push(conjunct);
+                            } else {
+                                remaining.push(conjunct);
+                            }
+                        }
+
+                        let left = if let Some(left_cond) =
+                            Self::rebuild_conjuncts(left_pushable)
+                        {
+                            Box::new(
+                                self.push_down(LogicalOperator::Filter(left, left_cond))?,
+                            )
                         } else {
-                            Ok(LogicalOperator::Filter(
-                                Box::new(LogicalOperator::Join(left, right, join_cond)),
-                                condition,
-                            ))
+                            left
+                        };
+
+                        let right = if let Some(right_cond) =
+                            Self::rebuild_conjuncts(right_pushable)
+                        {
+                            Box::new(
+                                self.push_down(LogicalOperator::Filter(right, right_cond))?,
+                            )
+                        } else {
+                            right
+                        };
+
+                        let join = LogicalOperator::Join(left, right, join_cond);
+                        if let Some(remaining_cond) = Self::rebuild_conjuncts(remaining) {
+                            Ok(LogicalOperator::Filter(Box::new(join), remaining_cond))
+                        } else {
+                            Ok(join)
                         }
                     }
                     LogicalOperator::Intersect {
