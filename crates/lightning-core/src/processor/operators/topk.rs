@@ -76,15 +76,16 @@ impl PhysicalOperator for PhysicalTopK {
             let indices: ArrayRef = if n > k * 2 {
                 // Bounded top-K: extract sort values, use select_nth_unstable
                 // O(N) partition + O(K log K) final sort instead of O(N log N).
-                let mut rows: Vec<(Vec<Value>, u64)> = (0..n)
-                    .map(|i| {
-                        let keys: Vec<Value> = sort_arrays
-                            .iter()
-                            .map(|arr| Value::from_arrow(arr, i))
-                            .collect();
-                        (keys, i as u64)
-                    })
-                    .collect();
+                let num_sort_keys = sort_arrays.len();
+                // Pre-allocated buffer for sort key construction, reused across rows
+                let mut key_buf = vec![Value::Null; num_sort_keys];
+                let mut rows: Vec<(Vec<Value>, u64)> = Vec::with_capacity(n);
+                for i in 0..n {
+                    for (j, arr) in sort_arrays.iter().enumerate() {
+                        key_buf[j] = Value::from_arrow(arr, i);
+                    }
+                    rows.push((key_buf.clone(), i as u64));
+                }
 
                 let kk = k.min(rows.len());
                 if kk == 0 {
