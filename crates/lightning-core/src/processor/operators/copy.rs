@@ -455,4 +455,8 @@ impl PhysicalCopy {
         RecordBatch::try_new(Arc::new(schema.clone()), columns)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }

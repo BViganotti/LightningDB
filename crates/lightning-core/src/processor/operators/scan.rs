@@ -24,7 +24,6 @@ pub struct PhysicalScan {
     pub mask: Option<Arc<RwLock<super::semi_mask::SemiMask>>>,
     pub mask_column_idx: Option<usize>,
     pub projected_idxs: Option<Vec<usize>>,
-    pub read_ts: u64,
     pub cached_schema: Arc<RwLock<Option<Arc<arrow::datatypes::Schema>>>>,
     pub filter_cached_schema: Arc<RwLock<Option<Arc<arrow::datatypes::Schema>>>>,
     pub pushdown_filter: Option<BoundExpression>,
@@ -51,7 +50,6 @@ impl PhysicalScan {
         variable: String,
         bm: Arc<BufferManager>,
         num_rows: u64,
-        read_ts: u64,
     ) -> Result<Self> {
         if table.columns.is_empty() {
             return Err(LightningError::Internal(format!(
@@ -77,7 +75,6 @@ impl PhysicalScan {
             mask: None,
             mask_column_idx: None,
             projected_idxs: None,
-            read_ts,
             cached_schema: Arc::new(RwLock::new(None)),
             filter_cached_schema: Arc::new(RwLock::new(None)),
             pushdown_filter: None,

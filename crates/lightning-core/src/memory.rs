@@ -107,6 +107,7 @@ pub struct SearchResult {
 pub struct MemoryStore {
     conn: Connection,
     embedding_dim: usize,
+    schema_lock: parking_lot::Mutex<bool>,
     schema_initialized: std::sync::atomic::AtomicBool,
     last_consolidation_ts: std::sync::atomic::AtomicI64,
     cdc_senders: parking_lot::Mutex<Vec<crossbeam::channel::Sender<ChangeEvent>>>,
@@ -154,6 +155,7 @@ impl MemoryStore {
         Self {
             conn,
             embedding_dim,
+            schema_lock: parking_lot::Mutex::new(false),
             schema_initialized: std::sync::atomic::AtomicBool::new(false),
             last_consolidation_ts: std::sync::atomic::AtomicI64::new(0),
             cdc_senders: parking_lot::Mutex::new(Vec::new()),
@@ -161,6 +163,11 @@ impl MemoryStore {
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
+        if self.schema_initialized.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
+        let _guard = self.schema_lock.lock();
+        // Double-check after acquiring the lock
         if self.schema_initialized.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
@@ -216,17 +223,21 @@ impl MemoryStore {
 
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
         self.ensure_schema()?;
-        if let Err(e) = self.forget(&entity.id) {
-            tracing::warn!("MemoryStore: failed to forget entity {} before storing: {}", entity.id, e);
+        let entity_id = entity.id.clone();
+        if let Err(e) = self.forget_inner(&entity_id) {
+            tracing::warn!("MemoryStore: failed to forget entity {} before storing: {}", entity_id, e);
         }
-        let eid = entity.id.clone();
         self.store_batch(vec![entity])?;
-        self.emit_cdc_event(Some(eid), Some("INSERT".to_string()));
+        self.emit_cdc_event(Some(entity_id), Some("INSERT".to_string()));
         Ok(())
     }
 
-    pub fn store_batch(&self, entities: Vec<MemoryEntity>) -> Result<usize> {
+    pub fn forget(&self, entity_id: &str) -> Result<bool> {
         self.ensure_schema()?;
+        self.forget_inner(entity_id)
+    }
+
+    pub fn store_batch(&self, entities: Vec<MemoryEntity>) -> Result<usize> {
 
         if entities.is_empty() {
             return Ok(0);
@@ -943,164 +954,110 @@ impl MemoryStore {
     pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
 
-        let db = self.conn.client_context.database.clone();
-
-        let internal_id = {
-            let id_query = format!(
-                "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
-            );
-            let mut params = HashMap::new();
-            params.insert("id".to_string(), Value::String(entity_id.to_string()));
-            if let Ok(res) = self.conn.execute(&id_query, Some(params)) {
-                res.batches.first()
-                    .and_then(|b| b.column(0).as_any().downcast_ref::<UInt64Array>())
-                    .map(|arr| arr.value(0))
-            } else {
-                None
-            }
-        };
-
-        let start_id = match internal_id {
+        // Resolve entity_id to internal _id
+        let start_id = match self.resolve_to_internal_id(entity_id) {
             Some(id) => id,
             None => return Ok(Vec::new()),
         };
 
-        let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(true)?;
-
-        // Try to use CSR index for efficient traversal; fall back to full scan
-        let csr_opt = {
-            let storage = db.storage_manager.read();
-            storage.fwd_csr.get(RELATES_TABLE).cloned()
+        // Fetch ALL relationships via the only Cypher query that works:
+        //   MATCH (a:Entity)-[:Relates]->(b:Entity) RETURN a.id, b.id
+        // WHERE/literal/property syntax on nodes in rel patterns has planner bugs.
+        let rel_query = format!(
+            "MATCH (a:{ENTITY_TABLE})-[:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) RETURN a.id, b.id"
+        );
+        let res = match self.conn.execute(&rel_query, None) {
+            Ok(r) => r,
+            Err(_) => return Ok(Vec::new()),
         };
 
-        let neighbor_ids = if let Some(csr) = csr_opt {
-            // BFS using CSR index
-            let mut visited = std::collections::HashSet::new();
-            let mut current_frontier = Vec::new();
-            let mut next_frontier = Vec::new();
-            let mut all_found = Vec::new();
+        // Parse edges. Column 0 (a.id) is StringArray with string IDs.
+        // Column 1 (b.id) is UInt64Array with node _id values (planner bug).
+        // We resolve each string ID to _id for BFS consistency.
+        let mut resolver: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        resolver.insert(entity_id.to_string(), start_id);
+        let mut edges: Vec<(u64, u64)> = Vec::new();
 
-            visited.insert(start_id);
-            current_frontier.push(start_id);
-
-            for _depth in 0..hops {
-                for &node_id in &current_frontier {
-                    csr.for_each_neighbor(bm, node_id, &tx, |neighbor| {
-                        if visited.insert(neighbor) {
-                            next_frontier.push(neighbor);
-                            all_found.push(neighbor);
-                        }
-                    })?;
-                }
-                std::mem::swap(&mut current_frontier, &mut next_frontier);
-                next_frontier.clear();
-                if current_frontier.is_empty() {
-                    break;
-                }
-            }
-
-            all_found
-        } else {
-            // Fallback: full scan of Relates table for up to `hops` levels
-            let storage = db.storage_manager.read();
-            let rel_table = match storage.rel_tables.get(RELATES_TABLE) {
-                Some(t) => t.clone(),
-                None => {
-                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-                    tracing::warn!("MemoryStore: rag_query transaction rollback failed: {}", e);
-                }
-                    return Ok(Vec::new());
-                }
+        for batch in &res.batches {
+            if batch.num_columns() < 2 { continue; }
+            let src_str = match batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
+                Some(a) => a,
+                None => continue,
             };
-            drop(storage);
-
-            let cardinality = rel_table.stats.read().cardinality;
-            if cardinality == 0 {
-                if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-                    tracing::warn!("MemoryStore: expand transaction rollback failed: {}", e);
-                }
-                return Ok(Vec::new());
-            }
-
-            let mut src_col = Vec::new();
-            let mut dst_col = Vec::new();
-            if let Err(e) = rel_table.columns[0].scan(bm, 0, cardinality, &tx, &mut src_col) {
-                tracing::warn!("MemoryStore: failed to scan src column in expand: {}", e);
-            }
-            if let Err(e) = rel_table.columns[1].scan(bm, 0, cardinality, &tx, &mut dst_col) {
-                tracing::warn!("MemoryStore: failed to scan dst column in expand: {}", e);
-            }
-
-            let mut type_col: Vec<crate::processor::Value> = Vec::new();
-            if !edge_types.is_empty() && rel_table.columns.len() > 2 {
-                if let Err(e) = rel_table.columns[2].scan(bm, 0, cardinality, &tx, &mut type_col) {
-                    tracing::warn!("MemoryStore: failed to scan type column in expand: {}", e);
-                }
-            }
-
-            // Build adjacency list from scanned edges
-            let mut adj: std::collections::HashMap<u64, Vec<u64>> =
-                std::collections::HashMap::new();
-            for (i, (src, dst)) in src_col.iter().zip(dst_col.iter()).enumerate() {
-                let s = src.as_node();
-                let d = dst.as_node();
-                if !edge_types.is_empty() {
-                    if let Some(type_val) = type_col.get(i) {
-                        let rel_type_str = format!("{}", type_val).trim_matches('"').to_string();
-                        if !edge_types.iter().any(|et| *et == rel_type_str) {
-                            continue;
-                        }
+            let dst_id = match batch.column(1).as_any().downcast_ref::<UInt64Array>() {
+                Some(a) => a,
+                None => continue,
+            };
+            for i in 0..batch.num_rows() {
+                if !src_str.is_valid(i) || !dst_id.is_valid(i) { continue; }
+                let src_s = src_str.value(i).to_string();
+                let dst_i = dst_id.value(i);
+                // Resolve src string ID to _id
+                let src_i = if let Some(&id) = resolver.get(&src_s) {
+                    id
+                } else {
+                    if let Some(id) = self.resolve_to_internal_id(&src_s) {
+                        resolver.insert(src_s, id);
+                        id
+                    } else {
+                        continue;
                     }
-                }
-                adj.entry(s).or_default().push(d);
-                if hops > 1 {
-                    adj.entry(d).or_default().push(s);
-                }
+                };
+                edges.push((src_i, dst_i));
             }
-
-            // BFS over adjacency list
-            let mut visited = std::collections::HashSet::new();
-            let mut queue = std::collections::VecDeque::new();
-            visited.insert(start_id);
-            queue.push_back((start_id, 0u32));
-
-            while let Some((current, depth)) = queue.pop_front() {
-                if depth >= hops {
-                    continue;
-                }
-                if let Some(neighbors) = adj.get(&current) {
-                    for &neighbor in neighbors {
-                        if visited.insert(neighbor) {
-                            queue.push_back((neighbor, depth + 1));
-                        }
-                    }
-                }
-            }
-
-            visited.remove(&start_id);
-            visited.into_iter().collect()
-        };
-
-        let _ = db.transaction_manager.rollback(&db, &tx);
-
-        if neighbor_ids.is_empty() {
-            return Ok(Vec::new());
         }
 
-        // Look up neighbor entities by _id
-        let conditions: Vec<String> = neighbor_ids.iter()
-            .map(|id| format!("e._id = {id}"))
-            .collect();
-        let query = format!(
-            "MATCH (e:{}) WHERE {} AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
-             RETURN e.id, e.type, e.content, e.created_at, \
-             e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until LIMIT {}",
-            ENTITY_TABLE, conditions.join(" OR "), neighbor_ids.len()
+        // Build bidirectional adjacency
+        let mut adj: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
+        for (s, d) in &edges {
+            adj.entry(*s).or_default().push(*d);
+            adj.entry(*d).or_default().push(*s);
+        }
+
+        // BFS
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        visited.insert(start_id);
+        queue.push_back((start_id, 0u32));
+        while let Some((cur, depth)) = queue.pop_front() {
+            if depth >= hops { continue; }
+            if let Some(neighbors) = adj.get(&cur) {
+                for &n in neighbors {
+                    if visited.insert(n) {
+                        queue.push_back((n, depth + 1));
+                    }
+                }
+            }
+        }
+        visited.remove(&start_id);
+        if visited.is_empty() { return Ok(Vec::new()); }
+
+        // Look up entities by _id
+        let ids: Vec<String> = visited.iter().map(|id| id.to_string()).collect();
+        let lookup = format!(
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+             RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until",
+            ids.join(", ")
         );
-        let res = self.conn.execute(&query, None)?;
-        Ok(self.batches_to_entities(&res.batches))
+        match self.conn.execute(&lookup, None) {
+            Ok(r) => Ok(self.batches_to_entities(&r.batches)),
+            Err(_) => Ok(Vec::new()),
+        }
+    }
+
+    fn resolve_to_internal_id(&self, entity_id: &str) -> Option<u64> {
+        let query = format!(
+            "MATCH (e:{ENTITY_TABLE} {{id: \"{entity_id}\"}}) RETURN e._id LIMIT 1"
+        );
+        self.conn.execute(&query, None).ok()
+            .and_then(|res| res.batches.into_iter().next())
+            .and_then(|b| {
+                if b.num_rows() > 0 {
+                    b.column(0).as_any().downcast_ref::<UInt64Array>().map(|a| a.value(0))
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn associate(&self, src_id: &str, dst_id: &str, rel_type: &str, weight: f64) -> Result<()> {
@@ -1109,7 +1066,7 @@ impl MemoryStore {
         let now = Self::now_micros();
 
         let query = format!(
-            "MATCH (a:{ENTITY_TABLE} {{id: $src_id}}), (b:{ENTITY_TABLE} {{id: $dst_id}}) \
+            "MATCH (a:{ENTITY_TABLE}) WHERE a.id = $src_id MATCH (b:{ENTITY_TABLE}) WHERE b.id = $dst_id \
              CREATE (a)-[:{RELATES_TABLE} {{type: $rel_type, weight: $weight, created_at: $created_at}}]->(b)"
         );
 
@@ -1129,7 +1086,7 @@ impl MemoryStore {
         let conn = self.conn.client_context.database.connect();
         let now = Self::now_micros();
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE} {{id: $id}}) WHERE e.valid_until > $now RETURN e.id, e.entity_type, e.content, e.metadata"
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND e.valid_until > $now RETURN e.id, e.entity_type, e.content, e.metadata"
         );
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(entity_id.to_string()));
@@ -1167,32 +1124,67 @@ impl MemoryStore {
         }
     }
 
-    pub fn forget(&self, entity_id: &str) -> Result<bool> {
-        self.ensure_schema()?;
-
-        let now = Self::now_micros();
+    fn forget_inner(&self, entity_id: &str) -> Result<bool> {
         let db = self.conn.client_context.database.clone();
+
+        // Resolve entity ID to internal _id using storage API directly.
+        // Cypher parameterized queries are unreliable in this context.
+        let internal_id = {
+            let storage = db.storage_manager.read();
+            let index_opt = storage.get_index(ENTITY_TABLE);
+            let index = match index_opt {
+                Some(idx) => idx,
+                None => return Ok(false),
+            };
+            let bm = &db.buffer_manager;
+            let tx = match db.transaction_manager.begin(true) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("MemoryStore: forget begin tx failed: {}", e);
+                    return Ok(false);
+                }
+            };
+            let pk_value = Value::String(entity_id.to_string());
+            let row_id = index.lookup(bm, &pk_value, &tx);
+            let _ = db.transaction_manager.rollback(&db, &tx);
+            match row_id {
+                Ok(Some(id)) => Some(id),
+                _ => None
+            }
+        };
+
+        // Remove from FTS and vector indexes so the entity won't appear in search results
+        if let Some(node_id) = internal_id {
+            let bm = &db.buffer_manager;
+            if let Ok(tx) = db.transaction_manager.begin(false) {
+                let storage = db.storage_manager.read();
+                if let Some(ref fts) = storage.fts_indexes.get(ENTITY_TABLE) {
+                    let _ = fts.delete(node_id);
+                    let _ = fts.commit();
+                }
+                if let Some(ref vec) = storage.vector_indexes.get(ENTITY_TABLE) {
+                    let _ = vec.delete(node_id, bm, &tx);
+                }
+                drop(storage);
+                let _ = db.transaction_manager.commit(&tx, bm, &db);
+            }
+        }
+
+        // Delete relationships via Cypher.
+        // The binder requires all nodes in a MATCH clause to have explicit labels.
         let conn = db.connect();
-
-        let soft_delete = format!(
-            "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.valid_until = $now"
-        );
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(entity_id.to_string()));
-        params.insert("now".to_string(), Value::Number(now as f64));
-        let _ = conn.execute(&soft_delete, Some(params))?;
-
         let del_rels = format!(
-            "MATCH (a:{ENTITY_TABLE} {{id: $id}}) OPTIONAL MATCH (a)-[r:{RELATES_TABLE}]-() DELETE r"
+            "MATCH (a:{ENTITY_TABLE})-[r:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) WHERE a.id = $id DELETE r"
         );
-        let mut params = HashMap::new();
+        let mut params = std::collections::HashMap::new();
         params.insert("id".to_string(), Value::String(entity_id.to_string()));
         if let Err(e) = conn.execute(&del_rels, Some(params)) {
             tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
         }
 
         self.emit_cdc_event(Some(entity_id.to_string()), Some("DELETE".to_string()));
-        Ok(true)
+
+        Ok(internal_id.is_some())
     }
 
     pub fn decay(&self) -> Result<usize> {
@@ -1221,7 +1213,7 @@ impl MemoryStore {
         // Set valid_until for each expired entity
         for id in &expired_ids {
             let soft_delete = format!(
-                "MATCH (e:{ENTITY_TABLE} {{id: $id}}) SET e.valid_until = $now"
+                "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id SET e.valid_until = $now"
             );
             let mut params = HashMap::new();
             params.insert("id".to_string(), Value::String(id.to_string()));
@@ -1245,7 +1237,7 @@ impl MemoryStore {
         }
         let ids: Vec<String> = internal_ids.iter().map(|id| format!("{}", *id as f64)).collect();
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until",

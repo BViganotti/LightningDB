@@ -53,6 +53,10 @@ impl PhysicalVacuum {
             executed: false,
         }
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }
 
 impl PhysicalOperator for PhysicalVacuum {
@@ -75,5 +79,9 @@ impl PhysicalOperator for PhysicalVacuum {
             db: self.db.clone(),
             executed: self.executed,
         })
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
     }
 }

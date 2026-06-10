@@ -60,7 +60,6 @@ impl PhysicalPlanner {
                     var.clone(),
                     self.db.buffer_manager.clone(),
                     effective_num_rows,
-                    self.read_ts,
                 )?;
                 if let Some((mask_id, col_idx)) = mask_info {
                     let mask = self

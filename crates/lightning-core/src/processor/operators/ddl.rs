@@ -699,4 +699,8 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
             executed: Arc::clone(&self.executed),
         })
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }

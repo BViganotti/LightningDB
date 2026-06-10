@@ -288,6 +288,10 @@ impl PhysicalSet {
             tx_id,
         }
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }
 impl PhysicalOperator for PhysicalSet {
     fn get_next(
@@ -508,6 +512,10 @@ impl PhysicalDelete {
             detach,
         }
     }
+
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }
 impl PhysicalOperator for PhysicalDelete {
     fn get_next(
@@ -688,6 +696,9 @@ impl PhysicalCreateRel {
             tx_id,
         }
     }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 }
 impl PhysicalOperator for PhysicalCreateRel {
     fn get_next(
@@ -861,6 +872,9 @@ impl PhysicalMerge {
             tx_id,
             read_ts,
         }
+    }
+    fn is_read_only(&self) -> bool {
+        false
     }
 }
 impl PhysicalOperator for PhysicalMerge {
@@ -1048,5 +1062,9 @@ impl PhysicalOperator for PhysicalMerge {
             tx_id: self.tx_id,
             read_ts: self.read_ts,
         })
+    }
+
+    fn is_read_only(&self) -> bool {
+        false
     }
 }
