@@ -67,23 +67,26 @@ impl CdcManager {
             let mut last_positions: Vec<u64> = Vec::new();
 
             while inner.running.load(Ordering::Relaxed) {
-                let subs = inner.subscribers.lock();
-                if subs.is_empty() {
-                    drop(subs);
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    continue;
-                }
-
-                if last_positions.len() != subs.len() {
-                    last_positions.resize(subs.len(), 0);
-                    for (i, entry) in subs.iter().enumerate() {
-                        if i >= last_positions.len() || last_positions[i] == 0 {
-                            last_positions[i] = entry.start_offset;
+                // Snapshot subscribers under lock, then release before I/O
+                let snapshot: Vec<(Sender<CdcEvent>, u64)> = {
+                    let subs = inner.subscribers.lock();
+                    if subs.is_empty() {
+                        drop(subs);
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        continue;
+                    }
+                    if last_positions.len() != subs.len() {
+                        last_positions.resize(subs.len(), 0);
+                        for (i, entry) in subs.iter().enumerate() {
+                            if i >= last_positions.len() || last_positions[i] == 0 {
+                                last_positions[i] = entry.start_offset;
+                            }
                         }
                     }
-                }
+                    subs.iter().map(|e| (e.tx.clone(), e.start_offset)).collect()
+                };
 
-                for (i, entry) in subs.iter().enumerate() {
+                for (i, (tx, _)) in snapshot.iter().enumerate() {
                     let offset = last_positions[i];
                     if let Ok(mut iter) = wal.read_records_from(offset) {
                         loop {
@@ -95,8 +98,8 @@ impl CdcManager {
                                         file_id,
                                         page_idx,
                                     };
-                                    if entry.tx.try_send(event.clone()).is_err() {
-                                        let _ = entry.tx.send(event);
+                                    if tx.try_send(event.clone()).is_err() {
+                                        let _ = tx.send(event);
                                     }
                                 }
                                 Some(WALRecord::Commit { .. }) => {}
@@ -109,7 +112,6 @@ impl CdcManager {
                         last_positions[i] = iter.absolute_pos();
                     }
                 }
-                drop(subs);
 
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
