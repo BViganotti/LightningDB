@@ -42,7 +42,7 @@ Fix ALL audit issues (177 total) in the lightning codebase at `/Users/bviga/Deve
 17. ~~`crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:37-43` — wrong table type~~ (FIXED — added is_rel_table catalog check)
 18. ~~`crates/lightning-core/src/optimizer/index_pushdown.rs:183` — RecursiveJoin mask_id destroyed~~ (FIXED)
 19. ~~`crates/lightning-core/src/planner/logical_plan.rs:220-228` — set_child drops Join/Union right child~~ (FIXED)
-20. `crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys
+20. ~~`crates/lightning-core/src/processor/operators/dml.rs:929-935` — MERGE uses all properties as index keys~~ (FIXED)
 21. `crates/lightning-core/src/processor/operators/limit_skip.rs:36-60` — limit race condition
 22. `crates/lightning-core/src/processor/operators/cross_join.rs:76-84,198` — cross join data loss
 23. `crates/lightning-core/src/processor/operators/unwind.rs:69-76` — O(R²) evaluation
