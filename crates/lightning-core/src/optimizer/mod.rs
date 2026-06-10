@@ -56,11 +56,11 @@ impl Optimizer {
     pub fn optimize(&self, mut plan: LogicalOperator) -> Result<LogicalOperator> {
         let max_iters = 5;
         for _iter in 0..max_iters {
-            let before = plan.node_count();
+            let before = format!("{:?}", plan);
             for rule in &self.rules {
                 plan = rule.apply(plan)?;
             }
-            if plan.node_count() == before {
+            if format!("{:?}", plan) == before {
                 break;
             }
         }
