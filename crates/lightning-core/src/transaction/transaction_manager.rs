@@ -228,22 +228,13 @@ impl TransactionManager {
                                 let vpp = 4096 / es as u64;
                                 let offset_in_page = (row_mod.row_id % vpp) as usize * es;
                                 if offset_in_page + es <= 4096 {
-                                    // SAFETY: Writing to local buffer with checked bounds
-                                    unsafe {
-                                        std::ptr::copy_nonoverlapping(
-                                            row_mod.row_data.as_ptr(),
-                                            merged_data.as_mut_ptr().add(offset_in_page),
-                                            es,
-                                        );
-                                    }
+                                    merged_data[offset_in_page..offset_in_page + es]
+                                        .copy_from_slice(&row_mod.row_data[..es]);
                                 }
                             }
 
                             // Write merged data back to frame under the per-page lock
-                            // SAFETY: Under per-page merge lock, exclusive write access
-                            unsafe {
-                                *latest_frame.data.get() = merged_data;
-                            }
+                            latest_frame.as_mut_slice().copy_from_slice(&merged_data);
 
                             // Log the merged page to WAL
                             bm.log_page_update(*file_id, *page_idx, latest_frame.as_slice())?;
