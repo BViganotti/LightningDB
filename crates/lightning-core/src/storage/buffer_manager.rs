@@ -469,39 +469,60 @@ impl BufferManager {
                 cand
             };
 
-            // Phase 2: acquire WRITE lock only to mutate candidates
-            if candidates.is_empty() {
-                continue;
-            }
-            let mut pool = shard.write();
-            for &i in &candidates {
-                // Re-check conditions under write lock (slot may have changed)
-                let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
-                let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                if pin_count == 0 && version != 0 && version < min_active_ts
-                    && version & UNCOMMITTED_BIT == 0
-                {
-                    if pool.slots[i].dirty {
-                        if let Some((fid, pid)) = pool.slots[i].key {
-                            if let Some(fh) = pool.file_handles.get(&fid) {
-                                fh.write_page(pid, pool.slots[i].frame.as_slice())?;
+            // Phase 2: collect dirty pages that need flushing
+            let mut to_flush: Vec<(Arc<FileHandle>, u64, Vec<u8>)> = Vec::new();
+            let mut to_cleanup: Vec<usize> = Vec::new();
+            {
+                let pool = shard.read();
+                for &i in &candidates {
+                    let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if pin_count == 0 && version != 0 && version < min_active_ts
+                        && version & UNCOMMITTED_BIT == 0
+                    {
+                        if pool.slots[i].dirty {
+                            if let Some((fid, pid)) = pool.slots[i].key {
+                                if let Some(fh) = pool.file_handles.get(&fid) {
+                                    let data = pool.slots[i].frame.as_slice().to_vec();
+                                    to_flush.push((Arc::clone(fh), pid, data));
+                                }
                             }
                         }
+                        to_cleanup.push(i);
                     }
-                    if let Some(key) = pool.slots[i].key {
-                        if let Some(slots) = pool.page_to_slots.get_mut(&key) {
-                            slots.retain(|&idx| idx != i);
+                }
+            } // release read lock
+
+            // Phase 3: perform I/O outside any shard lock
+            for (fh, pid, data) in &to_flush {
+                fh.write_page(*pid, data)?;
+            }
+
+            // Phase 4: acquire WRITE lock to update slot state
+            if !to_cleanup.is_empty() {
+                let mut pool = shard.write();
+                for &i in &to_cleanup {
+                    // Re-check conditions under write lock (slot may have changed)
+                    let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
+                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                    if pin_count == 0 && version != 0 && version < min_active_ts
+                        && version & UNCOMMITTED_BIT == 0
+                    {
+                        if let Some(key) = pool.slots[i].key {
+                            if let Some(slots) = pool.page_to_slots.get_mut(&key) {
+                                slots.retain(|&idx| idx != i);
+                            }
                         }
+                        pool.slots[i].key = None;
+                        pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                        if pool.slots[i].dirty {
+                            pool.dirty_count.fetch_sub(1, Ordering::Release);
+                        }
+                        pool.slots[i].dirty = false;
+                        pool.slots[i].referenced = false;
+                        pool.free_candidates.push_back(i);
+                        total_reclaimed += 1;
                     }
-                    pool.slots[i].key = None;
-                    pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
-                    if pool.slots[i].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
-                    }
-                    pool.slots[i].dirty = false;
-                    pool.slots[i].referenced = false;
-                    pool.free_candidates.push_back(i);
-                    total_reclaimed += 1;
                 }
             }
         }

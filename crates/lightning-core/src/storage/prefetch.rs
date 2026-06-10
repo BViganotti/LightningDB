@@ -1,5 +1,6 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Tracks page access patterns and predicts future page accesses using
 /// multi-order Markov chains with time-decayed weights and automatic
@@ -19,8 +20,8 @@ pub struct PrefetchTracker {
     /// Decay factor applied to existing transitions (0.0-1.0). Higher = faster decay.
     decay_factor: f64,
     /// Prediction accuracy tracking
-    predictions_made: RwLock<u64>,
-    predictions_hit: RwLock<u64>,
+    predictions_made: AtomicU64,
+    predictions_hit: AtomicU64,
     auto_confidence: RwLock<f64>,
     min_confidence: f64,
 }
@@ -42,8 +43,8 @@ impl PrefetchTracker {
             min_observations: 3,
             max_transitions_per_page: 16,
             decay_factor: 0.05,
-            predictions_made: RwLock::new(0),
-            predictions_hit: RwLock::new(0),
+            predictions_made: AtomicU64::new(0),
+            predictions_hit: AtomicU64::new(0),
             auto_confidence: RwLock::new(0.3),
             min_confidence: 0.3,
         }
@@ -148,29 +149,27 @@ impl PrefetchTracker {
 
     /// Report whether a previous prediction was correct (the predicted page was accessed).
     pub fn report_prediction_result(&self, was_hit: bool) {
-        let mut made = self.predictions_made.write();
-        *made += 1;
+        let made = self.predictions_made.fetch_add(1, Ordering::Release);
         if was_hit {
-            let mut hit = self.predictions_hit.write();
-            *hit += 1;
+            self.predictions_hit.fetch_add(1, Ordering::Release);
         }
         // Auto-tune confidence every 100 predictions
-        if *made >= 100 {
-            let hit_rate = if *made > 0 {
-                *self.predictions_hit.read() as f64 / *made as f64
+        if made >= 99 {
+            // Atomically snapshot and reset both counters
+            self.predictions_made.store(0, Ordering::Release);
+            let hit_total = self.predictions_hit.swap(0, Ordering::Release);
+            let made_total = made + 1;
+            let hit_rate = if made_total > 0 {
+                hit_total as f64 / made_total as f64
             } else {
                 0.0
             };
             let mut conf = self.auto_confidence.write();
-            // If hit rate is high, we can be more selective (raise confidence)
-            // If hit rate is low, we should be less selective (lower confidence)
             if hit_rate > 0.7 && *conf < 0.8 {
                 *conf += 0.05;
             } else if hit_rate < 0.3 && *conf > 0.1 {
                 *conf -= 0.05;
             }
-            *made = 0;
-            *self.predictions_hit.write() = 0;
         }
     }
 
