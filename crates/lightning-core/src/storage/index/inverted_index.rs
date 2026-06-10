@@ -70,7 +70,7 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let writer = self.writer.read();
+        let writer = self.writer.write();
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
@@ -88,7 +88,7 @@ impl InvertedIndex {
         &self,
         docs: &[(u64, Vec<(String, &str)>)],
     ) -> Result<()> {
-        let writer = self.writer.read();
+        let writer = self.writer.write();
         for (node_id, fields) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
@@ -111,7 +111,7 @@ impl InvertedIndex {
         node_id: u64,
         fields: &[(String, &str)],
     ) -> Result<()> {
-        let writer = self.writer.read();
+        let writer = self.writer.write();
         let mut doc = TantivyDocument::default();
         doc.add_u64(self.id_field, node_id);
         for (field_name, text) in fields {
