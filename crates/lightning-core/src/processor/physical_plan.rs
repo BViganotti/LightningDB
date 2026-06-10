@@ -777,8 +777,11 @@ impl PhysicalPlanner {
                 }
                 Ok(col_offset - start_col)
             }
-            LogicalOperator::AllShortestPaths { child, .. } => {
-                self.collect_variable_positions(child, start_col, positions)
+            LogicalOperator::AllShortestPaths { src_var_name, dst_var_name, path_var_name, .. } => {
+                positions.insert(src_var_name.clone(), start_col);
+                positions.insert(dst_var_name.clone(), start_col + 1);
+                positions.insert(path_var_name.clone(), start_col + 2);
+                Ok(3)
             }
             LogicalOperator::Merge { child, .. } => {
                 self.collect_variable_positions(child, start_col, positions)
@@ -851,6 +854,7 @@ impl PhysicalPlanner {
             | LogicalOperator::Accumulate(child)
             | LogicalOperator::Profile(child)
             | LogicalOperator::Explain(child) => self.compute_subtree_num_cols(child),
+            LogicalOperator::AllShortestPaths { .. } => 3,
             _ => 0,
         }
     }
