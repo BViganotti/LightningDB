@@ -87,7 +87,7 @@ impl CardinalityEstimator {
                     s1 + s2 - (s1 * s2)
                 }
                 AstLogicalOperator::Not => {
-                    unreachable!("Not should be BoundExpression::Not, not LogicalOperator::Not")
+                    0.5 // Fallback selectivity for Not
                 }
                 AstLogicalOperator::Xor => {
                     let s1 = self.estimate_selectivity(left, child);
