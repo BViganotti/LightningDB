@@ -123,7 +123,7 @@ impl PhysicalOperator for PhysicalCall {
                 Ok(Some(Self::proc_db_relationship_types(database)?))
             }
             "db.schema" | "db_schema" => Ok(Some(Self::proc_db_schema(database)?)),
-            _ => Err(crate::LightningError::Internal(format!(
+            _ => Err(crate::LightningError::Query(format!(
                 "Procedure {} not found",
                 self.call.procedure_name
             ))),
