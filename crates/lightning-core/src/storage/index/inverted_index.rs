@@ -184,11 +184,12 @@ impl InvertedIndex {
             let retrieved_doc: TantivyDocument = searcher
                 .doc(doc_address)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-            let node_id = retrieved_doc
+            if let Some(node_id) = retrieved_doc
                 .get_first(self.id_field)
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            results.push((node_id, score));
+            {
+                results.push((node_id, score));
+            }
         }
 
         Ok(results)

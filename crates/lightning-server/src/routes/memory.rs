@@ -32,7 +32,10 @@ fn now_micros() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
-        .unwrap_or(0)
+        .unwrap_or_else(|e| {
+            tracing::warn!("SystemTime before UNIX_EPOCH: {e}");
+            0
+        })
 }
 
 pub async fn store_handler(

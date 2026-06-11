@@ -4,8 +4,6 @@ use crate::storage::file_handle::FileHandle;
 use crate::LightningError;
 use crate::Result;
 use parking_lot::Mutex;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -47,12 +45,12 @@ impl HashIndex {
         let num_buckets = if is_new {
             initial_buckets.max(1)
         } else {
-            // Read existing bucket count from header
-            let header_data = std::fs::read(path)?;
-            if header_data.len() >= 8 {
-                let mut bytes = [0u8; 8];
-                bytes.copy_from_slice(&header_data[0..8]);
-                u64::from_le_bytes(bytes).max(1)
+            // Read existing bucket count from header (first 8 bytes only)
+            let mut header_data = [0u8; 8];
+            use std::io::Read;
+            let mut f = std::fs::File::open(path)?;
+            if f.read_exact(&mut header_data).is_ok() {
+                u64::from_le_bytes(header_data).max(1)
             } else {
                 initial_buckets.max(1)
             }
@@ -246,18 +244,59 @@ impl HashIndex {
     }
 
     fn compute_hash(val: &Value) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        match val {
-            Value::Number(n) => n.to_bits().hash(&mut hasher),
-            Value::String(s) => s.hash(&mut hasher),
-            Value::Boolean(b) => b.hash(&mut hasher),
-            Value::Node(id) | Value::Relationship(id) => id.hash(&mut hasher),
-            Value::Date(d) => d.hash(&mut hasher),
-            Value::Timestamp(t) => t.hash(&mut hasher),
-            Value::Null => 0u64.hash(&mut hasher),
-            _ => format!("{val:?}").hash(&mut hasher),
+        use std::hash::Hash;
+        let hash = match val {
+            Value::Number(n) => n.to_bits(),
+            Value::String(s) => {
+                let mut h = 0u64;
+                for chunk in s.as_bytes().chunks(8) {
+                    let mut buf = [0u8; 8];
+                    buf[..chunk.len()].copy_from_slice(chunk);
+                    h = h.wrapping_mul(6364136223846793005).wrapping_add(u64::from_le_bytes(buf));;
+                }
+                h
+            }
+            Value::Boolean(b) => *b as u64,
+            Value::Node(id) | Value::Relationship(id) => *id,
+            Value::Date(d) => *d as u64,
+            Value::Timestamp(t) => *t as u64,
+            Value::Null => 0u64,
+            Value::Path(vals) => {
+                let mut h: u64 = 0x6b821c9b;
+                for v in vals {
+                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                }
+                h
+            }
+            Value::List(vals) => {
+                let mut h: u64 = 0x37e9c8a3;
+                for v in vals {
+                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                }
+                h
+            }
+            Value::Struct(fields) => {
+                let mut h: u64 = 0x1429c4e7;
+                for (name, v) in fields {
+                    for chunk in name.as_bytes().chunks(8) {
+                        let mut buf = [0u8; 8];
+                        buf[..chunk.len()].copy_from_slice(chunk);
+                        h = h.wrapping_mul(6364136223846793005).wrapping_add(u64::from_le_bytes(buf));
+                    }
+                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                }
+                h
+            }
+            Value::Map(entries) => {
+                let mut h: u64 = 0x9e3a1c7d;
+                for (k, v) in entries {
+                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(k));
+                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                }
+                h
+            }
         };
-        hasher.finish() & !DELETED_BIT
+        hash & !DELETED_BIT
     }
     fn serialize_value(val: &Value, buf: &mut [u8]) -> Result<()> {
         match val {

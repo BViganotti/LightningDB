@@ -425,7 +425,11 @@ impl Catalog {
     pub fn next_val(&mut self, name: &str) -> Option<u64> {
         if let Some(seq) = self.sequences.get_mut(name) {
             let res = seq.next_val;
-            seq.next_val += seq.increment as u64;
+            if seq.increment >= 0 {
+                seq.next_val = seq.next_val.saturating_add(seq.increment as u64);
+            } else {
+                seq.next_val = seq.next_val.saturating_sub(seq.increment.unsigned_abs());
+            }
             Some(res)
         } else {
             None
