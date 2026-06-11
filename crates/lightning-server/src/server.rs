@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use lightning::memory::MemoryStore;
 use lightning::Database;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::compression::CompressionLayer;
 use tracing::Level;
@@ -83,6 +83,37 @@ impl Server {
     pub async fn run(self) {
         let state = self.state;
 
+        // Build CORS layer from configured allowed origins.
+        // Defaults to localhost-only when no --cors-allowed-origins is specified.
+        let cors_layer = if state.config.cors_allowed_origins.is_empty() {
+            CorsLayer::permissive()
+        } else {
+            let origins: Vec<axum::http::HeaderValue> = state
+                .config
+                .cors_allowed_origins
+                .iter()
+                .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
+                .collect();
+            if origins.is_empty() {
+                CorsLayer::permissive()
+            } else {
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(origins))
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::PUT,
+                        axum::http::Method::DELETE,
+                        axum::http::Method::OPTIONS,
+                    ])
+                    .allow_headers([
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::header::AUTHORIZATION,
+                        axum::http::header::HeaderName::from_static("x-request-id"),
+                    ])
+            }
+        };
+
         let app = Router::new()
             // Health
             .route("/health", get(routes::health::health_handler))
@@ -118,26 +149,53 @@ impl Server {
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                     .on_response(DefaultOnResponse::new().level(Level::INFO)),
             )
-            .layer(CorsLayer::permissive())
+            .layer(cors_layer)
             .layer(CompressionLayer::new())
             .with_state(state.clone());
 
         let addr = format!("{}:{}", state.config.host, state.config.port);
         tracing::info!(
-            "Lightning server starting on {} (read_only={}, buffer_pool_mb={})",
+            "Lightning server starting on {} (read_only={}, buffer_pool_mb={}, tls={})",
             addr,
             state.config.read_only,
             state.config.buffer_pool_size / (1024 * 1024),
+            state.config.tls_enabled,
         );
 
-        let listener = tokio::net::TcpListener::bind(&addr)
-            .await
-            .expect("Failed to bind address");
+        if state.config.tls_enabled {
+            let cert_path = state
+                .config
+                .tls_cert
+                .as_ref()
+                .expect("tls_cert required when tls_enabled=true");
+            let key_path = state
+                .config
+                .tls_key
+                .as_ref()
+                .expect("tls_key required when tls_enabled=true");
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .expect("Server exited with error");
+            let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
+                .await
+                .expect("Failed to configure TLS");
+
+            let addr: std::net::SocketAddr = format!("{}:{}", state.config.host, state.config.port)
+                .parse()
+                .expect("Invalid address");
+
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(app.into_make_service())
+                .await
+                .expect("Server exited with error");
+        } else {
+            let listener = tokio::net::TcpListener::bind(&addr)
+                .await
+                .expect("Failed to bind address");
+
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .expect("Server exited with error");
+        }
 
         tracing::info!("Shutdown complete");
     }
