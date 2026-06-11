@@ -1,14 +1,17 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::Request;
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use lightning::memory::MemoryStore;
 use lightning::Database;
+use parking_lot::Mutex;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::compression::CompressionLayer;
@@ -16,23 +19,59 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::Level;
 
 use crate::config::ServerConfig;
-use crate::extract::RequestIdExtension;
+use crate::extract::{ConnectionPool, RequestIdExtension};
 use crate::routes;
+
+struct RateLimiter {
+    buckets: Mutex<HashMap<String, (u32, Instant)>>,
+    max_requests: u32,
+    window: Duration,
+}
+
+impl RateLimiter {
+    fn new(max_requests: u32, window_secs: u64) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            max_requests,
+            window: Duration::from_secs(window_secs),
+        }
+    }
+
+    fn check(&self, key: &str) -> bool {
+        let mut buckets = self.buckets.lock();
+        let now = Instant::now();
+        let entry = buckets.entry(key.to_string()).or_insert((0, now));
+        if now.duration_since(entry.1) > self.window {
+            *entry = (1, now);
+            true
+        } else if entry.0 < self.max_requests {
+            entry.0 += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 pub struct AppState {
     pub db: Arc<Database>,
     pub store: Arc<MemoryStore>,
     pub config: ServerConfig,
     pub request_counter: AtomicU64,
+    pub connection_pool: ConnectionPool,
+    rate_limiter: RateLimiter,
 }
 
 impl AppState {
     pub fn new(db: Database, store: MemoryStore, config: ServerConfig) -> Self {
+        let db_arc = Arc::new(db);
         Self {
-            db: Arc::new(db),
+            db: Arc::clone(&db_arc),
             store: Arc::new(store),
             config,
             request_counter: AtomicU64::new(0),
+            connection_pool: ConnectionPool::new(Arc::clone(&db_arc)),
+            rate_limiter: RateLimiter::new(100, 1), // 100 req/sec per IP
         }
     }
 }
@@ -44,6 +83,8 @@ impl Clone for AppState {
             store: Arc::clone(&self.store),
             config: self.config.clone(),
             request_counter: AtomicU64::new(self.request_counter.load(Ordering::Relaxed)),
+            connection_pool: ConnectionPool::new(Arc::clone(&self.db)),
+            rate_limiter: RateLimiter::new(100, 1),
         }
     }
 }
@@ -80,6 +121,31 @@ impl Server {
         Self {
             state: Arc::new(state),
         }
+    }
+
+    async fn rate_limit_middleware(
+        state: axum::extract::State<Arc<AppState>>,
+        req: Request,
+        next: Next,
+    ) -> Response {
+        // Rate limit by client IP
+        let client_ip = match req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            Some(ip) => ip.to_string(),
+            None => req.extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|ci| ci.0.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        };
+
+        if !state.rate_limiter.check(&client_ip) {
+            let mut resp = (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
+            resp.headers_mut().insert(
+                header::RETRY_AFTER,
+                header::HeaderValue::from_static("1"),
+            );
+            return resp;
+        }
+        next.run(req).await
     }
 
     pub async fn run(self) {
@@ -196,6 +262,10 @@ impl Server {
             .layer(cors_layer)
             .layer(CompressionLayer::new())
             .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max body
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                Self::rate_limit_middleware,
+            ))
             .with_state(state.clone());
 
         let addr = format!("{}:{}", state.config.host, state.config.port);

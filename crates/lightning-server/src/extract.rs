@@ -12,6 +12,20 @@ use crate::server::AppState;
 
 pub struct DbConnection(pub lightning::Connection);
 
+pub struct ConnectionPool {
+    db: Arc<lightning::Database>,
+}
+
+impl ConnectionPool {
+    pub fn new(db: Arc<lightning::Database>) -> Self {
+        Self { db }
+    }
+
+    pub fn acquire(&self) -> lightning::Connection {
+        self.db.connect()
+    }
+}
+
 impl<S> FromRequestParts<S> for DbConnection
 where
     S: Send + Sync,
@@ -24,8 +38,7 @@ where
         state: &S,
     ) -> Result<Self, Self::Rejection> {
         let app_state = Arc::<AppState>::from_ref(state);
-        let conn = app_state.db.connect();
-        Ok(DbConnection(conn))
+        Ok(DbConnection(app_state.connection_pool.acquire()))
     }
 }
 
