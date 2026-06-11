@@ -69,6 +69,10 @@ impl PhysicalOperator for PhysicalUnwindDedup {
                 continue;
             }
 
+            if indices_to_keep.len() == num_rows {
+                return Ok(Some(DataChunk { batch }));
+            }
+
             let indices = UInt32Array::from(indices_to_keep);
             let mut columns = Vec::new();
             for i in 0..batch.num_columns() {
