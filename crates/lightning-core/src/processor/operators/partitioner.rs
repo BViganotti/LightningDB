@@ -1,10 +1,13 @@
-use crate::processor::{DataChunk, PhysicalOperator, Value};
+use crate::processor::{DataChunk, PhysicalOperator};
+use crate::Value;
 use crate::Result;
-use arrow::array::UInt32Builder;
+use arrow::array::*;
 use arrow::compute::take;
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub struct PartitionedState {
@@ -36,6 +39,67 @@ impl PhysicalPartitioner {
         }
     }
 
+    fn hash_row(column: &dyn Array, row: usize) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match column.data_type() {
+            DataType::UInt8 => {
+                let arr = column.as_any().downcast_ref::<UInt8Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::UInt16 => {
+                let arr = column.as_any().downcast_ref::<UInt16Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::UInt32 => {
+                let arr = column.as_any().downcast_ref::<UInt32Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::UInt64 => {
+                let arr = column.as_any().downcast_ref::<UInt64Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Int8 => {
+                let arr = column.as_any().downcast_ref::<Int8Array>().unwrap();
+                if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Int16 => {
+                let arr = column.as_any().downcast_ref::<Int16Array>().unwrap();
+                if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Int32 => {
+                let arr = column.as_any().downcast_ref::<Int32Array>().unwrap();
+                if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Int64 => {
+                let arr = column.as_any().downcast_ref::<Int64Array>().unwrap();
+                if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Float32 => {
+                let arr = column.as_any().downcast_ref::<Float32Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).to_bits().hash(&mut hasher); }
+            }
+            DataType::Float64 => {
+                let arr = column.as_any().downcast_ref::<Float64Array>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).to_bits().hash(&mut hasher); }
+            }
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                let arr = column.as_any().downcast_ref::<StringArray>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            DataType::Boolean => {
+                let arr = column.as_any().downcast_ref::<BooleanArray>().unwrap();
+                if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
+            }
+            _ => {
+                // Fallback: hash raw bytes
+                let data = column.to_data();
+                let byte_slice = data.buffers().iter().flat_map(|b| b.as_slice()).cloned().collect::<Vec<_>>();
+                byte_slice.hash(&mut hasher);
+            }
+        }
+        std::hash::Hasher::finish(&hasher)
+    }
+
     fn partition_batch(&self, batch: RecordBatch) -> Result<()> {
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -49,13 +113,12 @@ impl PhysicalPartitioner {
             ));
         }
 
-        // 1. Calculate partition for each row
+        let key_column = batch.column(self.key_idx);
+
+        // 1. Calculate partition for each row using column-based hashing
         for i in 0..num_rows {
-            let key = Value::from_arrow(batch.column(self.key_idx), i);
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::Hash;
-            key.hash(&mut hasher);
-            let p_idx = (std::hash::Hasher::finish(&hasher) as usize) % self.state.num_partitions;
+            let hash = Self::hash_row(key_column, i);
+            let p_idx = (hash as usize) % self.state.num_partitions;
             partition_indices[p_idx].append_value(i as u32);
         }
 
