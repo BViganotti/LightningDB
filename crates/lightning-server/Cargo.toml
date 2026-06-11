@@ -33,3 +33,4 @@ arrow = { workspace = true }
 thiserror = { workspace = true }
 mime = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }

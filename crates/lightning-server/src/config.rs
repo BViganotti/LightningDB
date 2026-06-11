@@ -53,6 +53,11 @@ pub struct CliArgs {
     /// Path to TLS key file
     #[arg(long, env = "LIGHTNING_TLS_KEY")]
     pub tls_key: Option<PathBuf>,
+
+    /// Comma-separated list of allowed CORS origins (e.g. "http://localhost:3000,https://app.example.com").
+    /// If not set, defaults to allowing only localhost origins.
+    #[arg(long, env = "LIGHTNING_CORS_ORIGINS")]
+    pub cors_allowed_origins: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,11 +74,29 @@ pub struct ServerConfig {
     pub tls_cert: Option<PathBuf>,
     pub tls_key: Option<PathBuf>,
     pub startup_time: std::time::Instant,
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl ServerConfig {
     pub fn from_args(args: &CliArgs) -> Self {
         let buffer_pool_size = (args.buffer_pool_mb as u64) * 1024 * 1024;
+        let cors_allowed_origins = args
+            .cors_allowed_origins
+            .as_ref()
+            .map(|s| {
+                s.split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                vec![
+                    "http://localhost:3000".to_string(),
+                    "http://localhost:8080".to_string(),
+                    "http://127.0.0.1:3000".to_string(),
+                    "http://127.0.0.1:8080".to_string(),
+                ]
+            });
         Self {
             host: args.host.clone(),
             port: args.port,
@@ -87,6 +110,7 @@ impl ServerConfig {
             tls_cert: args.tls_cert.clone(),
             tls_key: args.tls_key.clone(),
             startup_time: std::time::Instant::now(),
+            cors_allowed_origins,
         }
     }
 
