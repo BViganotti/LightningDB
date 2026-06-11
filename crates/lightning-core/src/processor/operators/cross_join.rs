@@ -4,11 +4,12 @@ use arrow::datatypes::{FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub struct SharedCrossJoinBuild {
     pub right_chunks: Vec<DataChunk>,
-    pub build_done: bool,
+    pub build_done: AtomicBool,
     pub right_schema: Option<Arc<Schema>>,
     pub num_active_builders: usize,
 }
@@ -36,7 +37,7 @@ impl PhysicalCrossJoin {
             right,
             shared_build: Arc::new(RwLock::new(SharedCrossJoinBuild {
                 right_chunks: Vec::new(),
-                build_done: false,
+                build_done: AtomicBool::new(false),
                 right_schema: None,
                 num_active_builders: 0,
             })),
@@ -57,7 +58,7 @@ impl PhysicalCrossJoin {
     ) -> Result<()> {
         {
             let mut shared = self.shared_build.write();
-            if shared.build_done {
+            if shared.build_done.load(Ordering::Acquire) {
                 return Ok(());
             }
             shared.num_active_builders += 1;
@@ -65,7 +66,7 @@ impl PhysicalCrossJoin {
 
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
             let mut shared = self.shared_build.write();
-            if shared.build_done {
+            if shared.build_done.load(Ordering::Acquire) {
                 break;
             }
             if shared.right_schema.is_none() {
@@ -90,7 +91,7 @@ impl PhysicalCrossJoin {
                     }
                 }
             }
-            shared.build_done = true;
+            shared.build_done.store(true, Ordering::Release);
             let mut done = self.build_mutex.lock();
             *done = true;
             self.build_cv.notify_all();
@@ -115,7 +116,7 @@ impl PhysicalOperator for PhysicalCrossJoin {
     ) -> Result<Option<DataChunk>> {
         {
             let shared = self.shared_build.read();
-            if !shared.build_done {
+            if !shared.build_done.load(Ordering::Acquire) {
                 drop(shared);
                 self.build(database, tx, params)?;
             }
