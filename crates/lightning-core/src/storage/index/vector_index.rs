@@ -42,6 +42,7 @@ pub struct VectorIndex {
     pub(crate) file_handle: Arc<FileHandle>,
     dimension: usize,
     page_header_size: usize,
+    node_index: parking_lot::Mutex<std::collections::HashMap<u64, usize>>,
 }
 
 impl VectorIndex {
@@ -50,6 +51,7 @@ impl VectorIndex {
             file_handle,
             dimension,
             page_header_size: 0,
+            node_index: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -58,30 +60,24 @@ impl VectorIndex {
     }
 
     // --- SIMD-accelerated dot product ---
-    // Uses NEON on ARM64, AVX2/SSE on x86_64, falls back to scalar
+    // Uses runtime detection (is_x86_feature_detected!, NEON on aarch64)
     fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-        {
-            if a.len() >= 4 {
-                // SAFETY: SAFETY: NEON SIMD dot product reads from valid f32 slices; bounds-checked by the caller's `a.len() >= 4` guard.
-                return unsafe { Self::neon_dot(a, b) };
-            }
+        #[cfg(target_arch = "aarch64")]
+        if a.len() >= 4 && std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: NEON SIMD dot product reads from valid f32 slices; bounds-checked by the caller's `a.len() >= 4` guard.
+            return unsafe { Self::neon_dot(a, b) };
         }
-        #[cfg(target_feature = "avx2")]
-        {
-            if a.len() >= 8 {
-                // SAFETY: SAFETY: AVX2 dot product with bounds guard `a.len() >= 8`.
-                return unsafe { Self::avx2_dot(a, b) };
-            }
+        #[cfg(target_arch = "x86_64")]
+        if a.len() >= 8 && std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 dot product with bounds guard `a.len() >= 8`.
+            return unsafe { Self::avx2_dot(a, b) };
         }
-        #[cfg(target_feature = "sse")]
-        {
-            if a.len() >= 4 {
-                // SAFETY: SAFETY: SSE dot product with bounds guard `a.len() >= 4`.
-                return unsafe { Self::sse_dot(a, b) };
-            }
+        #[cfg(target_arch = "x86_64")]
+        if a.len() >= 4 && std::arch::is_x86_feature_detected!("sse") {
+            // SAFETY: SSE dot product with bounds guard `a.len() >= 4`.
+            return unsafe { Self::sse_dot(a, b) };
         }
-        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+        a.iter().zip(b.iter()).map(|(x, y)| *x as f64 * *y as f64).sum::<f64>() as f32
     }
 
     /// ARM64 NEON SIMD dot product: processes 4 f32 values per iteration
@@ -212,7 +208,9 @@ impl VectorIndex {
         let total_new = vectors.len();
 
         for (node_id, vec) in vectors {
-            let inv_norm = 1.0 / (vec.iter().map(|v| v * v).sum::<f32>().sqrt() + 1e-10);
+            // Accumulate in f64 to avoid overflow for large f32 values
+            let norm_sq: f64 = vec.iter().map(|v| *v as f64 * *v as f64).sum();
+            let inv_norm = 1.0 / (norm_sq.sqrt() as f32 + 1e-10);
             let page_idx = VI_DATA_START_PAGE + (next_entry_idx / eps) as u64;
             let slot_in_page = next_entry_idx % eps;
 
@@ -416,31 +414,34 @@ impl VectorIndex {
             return Ok(false);
         }
 
-        let mut found_idx = None;
-        for entry_idx in 0..num_entries {
-            let page_idx = VI_DATA_START_PAGE + (entry_idx / eps) as u64;
-            let slot_in_page = entry_idx % eps;
-            let offset = slot_in_page * entry_bytes;
+        // Use node_index for O(1) lookup instead of O(n) scan.
+        // Rebuild the index on cache miss (e.g., after entries change).
+        let found_idx: usize = {
+            let mut index = self.node_index.lock();
+            if index.len() != num_entries {
+                index.clear();
+                index.reserve(num_entries);
+                for entry_idx in 0..num_entries {
+                    let page_idx = VI_DATA_START_PAGE + (entry_idx / eps) as u64;
+                    let slot_in_page = entry_idx % eps;
+                    let offset = slot_in_page * entry_bytes;
 
-            let frame = bm.pin_page(Arc::clone(&self.file_handle), page_idx, tx)?;
-            let stored_id = u64::from_le_bytes(
-                frame.as_slice()[offset..offset + 8]
-                    .try_into()
-                    .expect("node_id is 8 bytes"),
-            );
-            bm.unpin_page(&self.file_handle, page_idx, frame);
-
-            if stored_id == node_id {
-                found_idx = Some(entry_idx);
-                break;
+                    let frame = bm.pin_page(Arc::clone(&self.file_handle), page_idx, tx)?;
+                    let stored_id = u64::from_le_bytes(
+                        frame.as_slice()[offset..offset + 8]
+                            .try_into()
+                            .map_err(|_| crate::LightningError::Internal("invalid node_id bytes".into()))?,
+                    );
+                    bm.unpin_page(&self.file_handle, page_idx, frame);
+                    index.insert(stored_id, entry_idx);
+                }
             }
-        }
-
-        let found_idx = match found_idx {
-            Some(idx) => idx,
-            None => return Ok(false),
-        };
-
+            match index.get(&node_id).copied() {
+                Some(idx) => idx,
+                None => return Ok(false),
+            }
+        }; // drop index lock
+        
         if found_idx + 1 < num_entries {
             let last_idx = num_entries - 1;
             let src_page = VI_DATA_START_PAGE + (last_idx / eps) as u64;

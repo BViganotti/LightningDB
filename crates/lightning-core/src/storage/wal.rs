@@ -222,10 +222,11 @@ impl WAL {
         commit_record.extend_from_slice(&checksum.to_le_bytes());
         commit_record.extend_from_slice(&tx_id.to_le_bytes());
 
-        // Write commit record and flush while holding file lock (fast path)
-        // Then capture the raw fd for sync_all outside the lock.
+        // Write commit record and flush while holding file lock (fast path).
+        // Obtain the raw fd under the lock, then release before sync_all()
+        // so concurrent WAL writers are NOT blocked during the slow fsync call.
         #[cfg(unix)]
-        let raw_fd: Option<std::os::raw::c_int> = {
+        let sync_fd = {
             use std::os::unix::io::AsRawFd;
             let mut file = self.file.lock();
             if !commit_record.is_empty() {
@@ -233,25 +234,24 @@ impl WAL {
             }
             Self::align_position(&mut file)?;
             file.flush()?;
-            Some(file.as_raw_fd())
-        }; // release file lock before sync_all
+            file.as_raw_fd()
+        };
         #[cfg(not(unix))]
-        let raw_fd: Option<std::os::raw::c_int> = {
+        {
             let mut file = self.file.lock();
             if !commit_record.is_empty() {
                 file.write_all(&commit_record)?;
             }
             Self::align_position(&mut file)?;
             file.flush()?;
-            None
-        };
+        }
 
-        // sync_all() WITHOUT holding the file lock to avoid blocking all WAL writers.
-        // Use the raw fd obtained under the lock — it remains valid as long as the file exists.
+        // sync_all() WITHOUT holding the file lock.
+        // The raw fd remains valid as long as the WAL file is not closed/reopened.
         if self.sync_mode == SyncMode::Normal {
             #[cfg(unix)]
-            if let Some(fd) = raw_fd {
-                let ret = unsafe { libc::fsync(fd) };
+            {
+                let ret = unsafe { libc::fsync(sync_fd) };
                 if ret != 0 {
                     return Err(std::io::Error::last_os_error().into());
                 }

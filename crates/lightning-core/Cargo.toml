@@ -17,6 +17,7 @@ log.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true
+libc = "0.2"
 arrow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

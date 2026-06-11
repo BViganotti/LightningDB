@@ -75,7 +75,9 @@ impl PartialOrd for Candidate {
 }
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance.partial_cmp(&other.distance).unwrap_or(std::cmp::Ordering::Equal)
+        // NaN distances are sorted as Greater (pushes them to the end of the heap)
+        // instead of Equal which would corrupt heap ordering.
+        self.distance.partial_cmp(&other.distance).unwrap_or(std::cmp::Ordering::Greater)
     }
 }
 
@@ -197,6 +199,19 @@ impl HnswIndex {
     }
 
     pub fn insert(&self, id: u64, embedding: Vec<f32>) {
+        // Check if node already exists — silently overwriting would corrupt the graph
+        {
+            let nodes = self.nodes.read();
+            if (id as usize) < nodes.len() && nodes[id as usize].id == id {
+                // Node exists: update embedding in-place without rebuilding neighbor links
+                let mut embeddings = self.embeddings.write();
+                if (id as usize) < embeddings.len() {
+                    embeddings[id as usize] = embedding;
+                }
+                return;
+            }
+        }
+
         let level = self.random_level();
 
         // Phase A: Write node data and prepare entry point

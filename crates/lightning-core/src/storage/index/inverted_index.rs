@@ -70,14 +70,15 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let writer = self.writer.write();
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
             for (_name, field) in &self.content_fields {
                 doc.add_text(*field, text);
             }
-            writer
+            // Acquire write lock per document to avoid holding it for the entire batch
+            // (which blocks concurrent searches that take a read lock).
+            self.writer.write()
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
@@ -88,7 +89,6 @@ impl InvertedIndex {
         &self,
         docs: &[(u64, Vec<(String, &str)>)],
     ) -> Result<()> {
-        let writer = self.writer.write();
         for (node_id, fields) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
@@ -99,7 +99,7 @@ impl InvertedIndex {
                     }
                 }
             }
-            writer
+            self.writer.write()
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
