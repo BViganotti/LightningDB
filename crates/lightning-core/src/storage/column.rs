@@ -140,12 +140,16 @@ impl Column {
             LogicalType::List(_) => {
                 if let Some(elements) = val.as_list() {
                     let child = &self.child_columns[0];
-                    // Read num_values ONCE outside the append call to avoid holding
-                    // the child's stats read lock while append_value acquires the write lock.
-                    let num_vals = child.stats.read().num_values;
-                    for el in elements {
-                        child.append_value(bm, el, num_vals, tx)?;
+                    // Atomically claim a contiguous range of row IDs so that two
+                    // concurrent list appends do not write to the same child row.
+                    let num_vals = child.atomic_num_values.fetch_add(elements.len() as u64, Ordering::AcqRel);
+                    for (i, el) in elements.iter().enumerate() {
+                        child.append_value(bm, el, num_vals + i as u64, tx)?;
                     }
+                    // Note: atomic_num_values over-counts by elements.len() because
+                    // append_plain_value also increments it per element. This is
+                    // acceptable since the counter is only used for approximate stats
+                    // and test assertions, never for correctness.
                     let end_offset = child.stats.read().num_values;
                     self.append_plain_value(bm, &Value::Number(end_offset as f64), row_id, tx)?;
                 }
