@@ -886,25 +886,21 @@ impl ExpressionEvaluator {
 
         // Batch: concatenate ALL element values into one array, evaluate ONCE
         let mut element_lens: Vec<usize> = Vec::with_capacity(num_elements);
-        let mut value_refs: Vec<&dyn Array> = Vec::new();
+        let mut owned_values: Vec<ArrayRef> = Vec::new();
         for i in 0..num_elements {
             let v = list_arr.value(i);
             element_lens.push(v.len());
             if !v.is_empty() {
-                value_refs.push(v.as_ref());
+                owned_values.push(v);
             }
         }
+        let value_refs: Vec<&dyn Array> = owned_values.iter().map(|a| a.as_ref()).collect();
 
         let result_arr = if value_refs.is_empty() {
             arrow::array::new_null_array(&arrow::datatypes::DataType::Boolean, 0)
         } else {
-            let concat_all = if value_refs.len() == 1 {
-                // SAFETY: safe to clone Arc
-                value_refs[0].slice(0, value_refs[0].len())
-            } else {
-                arrow::compute::concat(&value_refs)
-                    .map_err(|e| LightningError::Internal(e.to_string()))?
-            };
+            let concat_all = arrow::compute::concat(&value_refs)
+                .map_err(|e| LightningError::Internal(e.to_string()))?;
             let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
             let batch = RecordBatch::try_new(schema, vec![concat_all])?;
             Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?
@@ -982,27 +978,22 @@ impl ExpressionEvaluator {
 
         // Collect all values into one array
         let mut element_orig_lens: Vec<usize> = Vec::with_capacity(num_elements);
-        let mut all_value_refs: Vec<&dyn Array> = Vec::new();
         let mut owned_values: Vec<ArrayRef> = Vec::new();
         for i in 0..num_elements {
             let v = list_arr.value(i);
             element_orig_lens.push(v.len());
             if !v.is_empty() {
-                all_value_refs.push(v.as_ref());
                 owned_values.push(v);
             }
         }
+        let value_refs: Vec<&dyn Array> = owned_values.iter().map(|a| a.as_ref()).collect();
 
         // Evaluate the transform ONCE on concatenated values
-        let (result_arr, empty_result) = if owned_values.is_empty() {
+        let (result_arr, empty_result) = if value_refs.is_empty() {
             (arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0), true)
         } else {
-            let concat_all = if owned_values.len() == 1 {
-                owned_values.remove(0)
-            } else {
-                arrow::compute::concat(&all_value_refs)
-                    .map_err(|e| LightningError::Internal(e.to_string()))?
-            };
+            let concat_all = arrow::compute::concat(&value_refs)
+                .map_err(|e| LightningError::Internal(e.to_string()))?;
             let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
             let batch = RecordBatch::try_new(schema, vec![concat_all])?;
             (Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?, false)

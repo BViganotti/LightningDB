@@ -107,27 +107,6 @@ impl Catalog {
         }
     }
 
-    fn get_node_table_mut(&mut self, name: &str) -> Option<&mut NodeTableCatalogEntry> {
-        self.node_tables.get_mut(name)
-    }
-
-    fn get_rel_table_mut(&mut self, name: &str) -> Option<&mut RelTableCatalogEntry> {
-        self.rel_tables.get_mut(name)
-    }
-
-    fn get_table_mut(&mut self, name: &str) -> Result<&mut dyn TableLike, crate::LightningError> {
-        if self.node_tables.contains_key(name) {
-            Ok(self.node_tables.get_mut(name).unwrap() as &mut dyn TableLike)
-        } else if self.rel_tables.contains_key(name) {
-            Ok(self.rel_tables.get_mut(name).unwrap() as &mut dyn TableLike)
-        } else {
-            Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                name
-            )))
-        }
-    }
-
     fn is_builtin_column(name: &str) -> bool {
         matches!(name, "_id" | "_src" | "_dst")
     }
