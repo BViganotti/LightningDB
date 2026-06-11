@@ -1280,7 +1280,7 @@ impl FunctionRegistry {
         );
 
         // Define SQRT, LOG, LN, EXP, SIN, COS, TAN
-        for name in &["SQRT", "LOG", "LN", "EXP", "SIN", "COS", "TAN"] {
+        for name in &["SQRT", "LOG", "LN", "EXP", "SIN", "COS", "TAN", "ACOS", "ASIN", "ATAN", "COT", "SIGN"] {
             let func_name = name.to_string();
             scalar_functions.insert(
                 func_name.clone(),
@@ -1310,6 +1310,11 @@ impl FunctionRegistry {
                             "SIN" => unary(n_arr, |n: f64| n.sin()),
                             "COS" => unary(n_arr, |n: f64| n.cos()),
                             "TAN" => unary(n_arr, |n: f64| n.tan()),
+                            "ACOS" => unary(n_arr, |n: f64| n.acos()),
+                            "ASIN" => unary(n_arr, |n: f64| n.asin()),
+                            "ATAN" => unary(n_arr, |n: f64| n.atan()),
+                            "COT" => unary(n_arr, |n: f64| 1.0 / n.tan()),
+                            "SIGN" => unary(n_arr, |n: f64| n.signum()),
                             _ => unreachable!(),
                         };
                         Ok(Arc::new(result))
@@ -2732,56 +2737,8 @@ impl FunctionRegistry {
             ),
         );
 
-        // Define ACOS, ASIN, ATAN, COT, SIGN
-        for name in &["ACOS", "ASIN", "ATAN", "COT", "SIGN"] {
-            let func_name = name.to_string();
-            scalar_functions.insert(
-                func_name.clone(),
-                ScalarFunction::new(
-                    func_name,
-                    Arc::new(move |args, num_rows| {
-                        if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
-                        }
-                        let n_arg =
-                            arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
-                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                        let n_arr = n_arg
-                            .as_any()
-                            .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
-                        let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            if n_arr.is_null(i) {
-                                results.append_null();
-                                continue;
-                            }
-                            let n = n_arr.value(i);
-                            let res = match *name {
-                                "ACOS" => n.acos(),
-                                "ASIN" => n.asin(),
-                                "ATAN" => n.atan(),
-                                "COT" => 1.0 / n.tan(),
-                                "SIGN" => {
-                                    if n > 0.0 {
-                                        1.0
-                                    } else if n < 0.0 {
-                                        -1.0
-                                    } else {
-                                        0.0
-                                    }
-                                }
-                                _ => unreachable!(),
-                            };
-                            results.append_value(res);
-                        }
-                        Ok(Arc::new(results.finish()))
-                    }),
-                ),
-            );
-        }
+        // ACOS, ASIN, ATAN, COT, SIGN are now vectorized above
+        // using Arrow unary kernels instead of per-row loops.
 
         // Define TO_HEX, FROM_HEX
         scalar_functions.insert(
