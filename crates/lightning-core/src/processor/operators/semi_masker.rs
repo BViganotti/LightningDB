@@ -40,12 +40,15 @@ impl PhysicalOperator for PhysicalSemiMasker {
             let column = batch.column(self.column_idx);
 
             if let Some(offsets) = column.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                let mut mask = self.mask.write();
-                let _initial_len = mask.len();
+                let mut values = Vec::with_capacity(offsets.len());
                 for i in 0..offsets.len() {
                     if !Array::is_null(offsets, i) {
-                        mask.insert(offsets.value(i));
+                        values.push(offsets.value(i));
                     }
+                }
+                let mut mask = self.mask.write();
+                for v in values {
+                    mask.insert(v);
                 }
             } else {
                 return Err(crate::LightningError::Internal(format!(
