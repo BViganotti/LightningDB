@@ -47,6 +47,7 @@ wat = "1.248.0"
 # trampoline could be considered if the WASM surface shrinks in the future.
 # Risk: if 2.0.0 final ships breaking changes, the beta pin may lag behind.
 wasmi = "2.0.0-beta.2"
+rand = "0.8"
 
 [dev-dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }

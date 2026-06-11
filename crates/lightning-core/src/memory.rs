@@ -764,10 +764,26 @@ impl MemoryStore {
 
         // Compare each NEW entity against ALL existing entities (including other new ones).
         // This is O(new * total) instead of O(total²) for full re-processing.
+        // To prevent O(n²) blowup on large datasets, we limit comparisons per entity
+        // using random sampling when the entity count exceeds max_comparisons_per_entity.
+        use rand::seq::SliceRandom;
+        let use_sampling = cfg.max_comparisons_per_entity > 0 && n > cfg.max_comparisons_per_entity;
+        let mut rng = rand::thread_rng();
+
         for &new_i in &new_entities {
             let i = all.iter().position(|e| e.id == new_i.id).unwrap_or(0);
-            for j in 0..n {
-                if i == j { continue; }
+
+            // Build the comparison set: either all entities or a random sample
+            let compare_indices: Vec<usize> = if use_sampling {
+                let mut indices: Vec<usize> = (0..n).filter(|&j| j != i).collect();
+                indices.shuffle(&mut rng);
+                indices.truncate(cfg.max_comparisons_per_entity);
+                indices
+            } else {
+                (0..n).filter(|&j| j != i).collect()
+            };
+
+            for &j in &compare_indices {
                     let jaccard = minhash_similarity(&signatures[i], &signatures[j]);
 
                     if jaccard > cfg.similarity_threshold {
@@ -1324,6 +1340,11 @@ pub struct ConsolidationConfig {
     pub contradiction_jaccard_max: f64,
     pub contradiction_cosine_min: f64,
     pub contradiction_length_sim_min: f64,
+    /// Maximum number of existing entities to compare each new entity against.
+    /// When the entity count exceeds this threshold, a random sample is used
+    /// to bound the O(n�) comparison cost. 0 means unlimited (all-vs-all).
+    /// Default 5000 limits 100K new entities to ~500M comparisons vs ~10B.
+    pub max_comparisons_per_entity: usize,
 }
 
 impl Default for ConsolidationConfig {
@@ -1333,6 +1354,7 @@ impl Default for ConsolidationConfig {
             contradiction_jaccard_max: 0.15,
             contradiction_cosine_min: 0.7,
             contradiction_length_sim_min: 0.8,
+            max_comparisons_per_entity: 5000,
         }
     }
 }
