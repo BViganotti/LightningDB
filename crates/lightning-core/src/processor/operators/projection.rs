@@ -1,11 +1,10 @@
-use crate::planner::binder::{BoundExpression, BoundProjectionItem};
+use crate::planner::binder::BoundProjectionItem;
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator};
 use crate::Result;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct PhysicalProjection {
@@ -28,27 +27,38 @@ impl PhysicalOperator for PhysicalProjection {
     ) -> Result<Option<DataChunk>> {
         if let Some(chunk) = self.child.get_next(database, tx, params)? {
             let num_rows = chunk.num_rows();
-            let mut projected_columns: Vec<ArrayRef> = Vec::new();
-            let mut fields: Vec<Field> = Vec::new();
-            let mut expr_cache: HashMap<u64, ArrayRef> = HashMap::new();
+            let num_items = self.items.len();
+            let mut projected_columns: Vec<ArrayRef> = Vec::with_capacity(num_items);
+            let mut fields: Vec<Field> = Vec::with_capacity(num_items);
+            let mut evaluated: Vec<Option<ArrayRef>> = vec![None; num_items];
 
-            for item in &self.items {
-                let expr_hash = expression_hash(&item.expression);
-                let array = if let Some(cached) = expr_cache.get(&expr_hash) {
-                    cached.clone()
-                } else {
-                    let arr = ExpressionEvaluator::evaluate(
-                        &item.expression,
-                        Some(&chunk.batch),
-                        params,
-                        num_rows,
-                        &database.function_registry,
-                        database,
-                    )?;
-                    expr_cache.insert(expr_hash, arr.clone());
-                    arr
-                };
-                fields.push(Field::new(&item.alias, array.data_type().clone(), true));
+            let expr_debugs: Vec<String> = self.items
+                .iter()
+                .map(|item| format!("{:?}", item.expression))
+                .collect();
+            for i in 0..num_items {
+                if evaluated[i].is_some() {
+                    continue;
+                }
+                let arr = ExpressionEvaluator::evaluate(
+                    &self.items[i].expression,
+                    Some(&chunk.batch),
+                    params,
+                    num_rows,
+                    &database.function_registry,
+                    database,
+                )?;
+                evaluated[i] = Some(arr.clone());
+                for j in (i + 1)..num_items {
+                    if expr_debugs[j] == expr_debugs[i] {
+                        evaluated[j] = Some(arr.clone());
+                    }
+                }
+            }
+
+            for i in 0..num_items {
+                let array = evaluated[i].clone().unwrap();
+                fields.push(Field::new(&self.items[i].alias, array.data_type().clone(), true));
                 projected_columns.push(array);
             }
 
@@ -75,11 +85,4 @@ impl PhysicalOperator for PhysicalProjection {
     fn set_partition(&mut self, index: usize, total: usize) {
         self.child.set_partition(index, total);
     }
-}
-
-fn expression_hash(expr: &BoundExpression) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    expr.hash(&mut hasher);
-    hasher.finish()
 }
