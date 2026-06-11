@@ -26,9 +26,7 @@ pub struct PhysicalASP {
 
 enum BFSPhase {
     Idle,
-    Init,
-    Processing,
-    Done,
+    Active,
 }
 
 impl PhysicalASP {
@@ -153,19 +151,18 @@ impl PhysicalOperator for PhysicalASP {
 
         loop {
             // Load next chunk from child if needed
-            if self.current_chunk.is_none() && !matches!(self.bfs_phase, BFSPhase::Processing) {
+            if self.current_chunk.is_none() {
                 self.current_chunk = self.child.get_next(database, tx, params)?;
                 self.chunk_row_idx = 0;
-                self.bfs_phase = BFSPhase::Init;
+                self.bfs_phase = BFSPhase::Active;
                 if self.current_chunk.is_none() {
                     return Ok(None);
                 }
             }
 
             if let Some(ref chunk) = self.current_chunk {
-                // Process all source nodes in this chunk, or finish BFS for the current one
                 match self.bfs_phase {
-                    BFSPhase::Init | BFSPhase::Done => {
+                    BFSPhase::Active => {
                         if self.chunk_row_idx < chunk.num_rows() {
                             let col = chunk.batch.column(0);
                             let src_id = match Value::from_arrow(col, self.chunk_row_idx) {
@@ -180,7 +177,6 @@ impl PhysicalOperator for PhysicalASP {
                                 let result_chunk = self.build_chunk_for_source(src_id);
                                 if result_chunk.batch.num_rows() > 0 {
                                     self.results.push_back(result_chunk);
-                                    // Return the first built chunk
                                     if let Some(res) = self.results.pop_front() {
                                         return Ok(Some(res));
                                     }
@@ -190,9 +186,6 @@ impl PhysicalOperator for PhysicalASP {
                             self.current_chunk = None;
                             self.bfs_phase = BFSPhase::Idle;
                         }
-                    }
-                    BFSPhase::Processing => {
-                        self.bfs_phase = BFSPhase::Done;
                     }
                     BFSPhase::Idle => {
                         self.current_chunk = None;

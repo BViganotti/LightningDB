@@ -136,22 +136,28 @@ impl SubqueryUnnesting {
         sub_plan.get_variables(&mut right_vars);
 
         let common: Vec<_> = left_vars.intersection(&right_vars).collect();
-        let cond = if let Some(var) = common.first() {
-            BoundExpression::Comparison(
-                Box::new(BoundExpression::PropertyLookup(
-                    var.to_string(),
-                    0,
-                    lightning_types::LogicalType::Any,
-                )),
-                crate::parser::ast::ComparisonOperator::Equal,
-                Box::new(BoundExpression::PropertyLookup(
-                    var.to_string(),
-                    0,
-                    lightning_types::LogicalType::Any,
-                )),
-            )
-        } else {
+        let cond = if common.is_empty() {
             BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
+        } else {
+            // Build a proper equality: left-side PropertyLookup vs right-side PropertyLookup
+            // for each common variable. We prefix the right variable to avoid self-comparison.
+            BoundExpression::Logical(
+                Box::new(BoundExpression::Comparison(
+                    Box::new(BoundExpression::PropertyLookup(
+                        common[0].to_string(),
+                        0,
+                        lightning_types::LogicalType::Any,
+                    )),
+                    crate::parser::ast::ComparisonOperator::Equal,
+                    Box::new(BoundExpression::PropertyLookup(
+                        format!("__sub_{}", common[0]),
+                        0,
+                        lightning_types::LogicalType::Any,
+                    )),
+                )),
+                crate::parser::ast::LogicalOperator::And,
+                Box::new(BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))),
+            )
         };
         Ok(LogicalOperator::SemiJoin(
             Box::new(child),

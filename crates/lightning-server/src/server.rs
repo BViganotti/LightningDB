@@ -138,7 +138,7 @@ impl Server {
             .route("/health", get(routes::health::health_handler))
             // Query
             .route("/v1/query", post(routes::query::query_handler))
-            .route("/v1/query/stream", get(routes::query::query_stream_handler))
+            .route("/v1/query/stream", post(routes::query::query_stream_handler))
             // Memory
             .route("/v1/memory/store", post(routes::memory::store_handler))
             .route("/v1/memory/store-batch", post(routes::memory::store_batch_handler))

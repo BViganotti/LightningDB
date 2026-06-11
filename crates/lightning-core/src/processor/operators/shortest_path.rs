@@ -71,9 +71,11 @@ impl PhysicalShortestPath {
             .filter_map(|n| storage.bwd_csr.get(n))
             .collect();
 
-        for depth in 0..self.max_depth {
-            // Expand from source (forward)
-            if !q_src.is_empty() {
+        let mut src_depth = 0u32;
+        let mut dst_depth = 0u32;
+        loop {
+            // Expand from source (forward) — one level at a time
+            if src_depth < self.max_depth && !q_src.is_empty() {
                 for _ in 0..q_src.len() {
                     let curr = q_src.pop_front()
                         .expect("BFS source queue should not be empty during iteration");
@@ -97,6 +99,11 @@ impl PhysicalShortestPath {
                         }
                     }
                 }
+                src_depth += 1;
+            }
+
+            if src_depth + dst_depth >= self.max_depth || q_src.is_empty() && q_dst.is_empty() {
+                break;
             }
 
             // Expand from destination (backward)
@@ -124,8 +131,10 @@ impl PhysicalShortestPath {
                         }
                     }
                 }
+                dst_depth += 1;
             }
-            if depth * 2 >= self.max_depth {
+
+            if q_src.is_empty() && q_dst.is_empty() {
                 break;
             }
         }

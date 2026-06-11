@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 pub struct GDSFrontier {
     nodes: Vec<AtomicU32>,
-    active_nodes: Vec<u32>,
+    active_nodes: std::sync::Mutex<Vec<u32>>,
 }
 
 impl GDSFrontier {
@@ -14,7 +14,7 @@ impl GDSFrontier {
         }
         Self {
             nodes,
-            active_nodes: Vec::new(),
+            active_nodes: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -24,9 +24,13 @@ impl GDSFrontier {
 
     pub fn visit(&self, node_id: usize, distance: u32) -> bool {
         // Returns true if we successfully visited for the first time
-        self.nodes[node_id]
+        let first_visit = self.nodes[node_id]
             .compare_exchange(u32::MAX, distance, Ordering::SeqCst, Ordering::Relaxed)
-            .is_ok()
+            .is_ok();
+        if first_visit {
+            self.active_nodes.lock().unwrap().push(node_id as u32);
+        }
+        first_visit
     }
 
     pub fn get_distance(&self, node_id: usize) -> u32 {
@@ -34,10 +38,10 @@ impl GDSFrontier {
     }
 
     pub fn clear(&mut self) {
-        for &node_id in &self.active_nodes {
+        let active = std::mem::take(&mut *self.active_nodes.lock().unwrap());
+        for &node_id in &active {
             self.nodes[node_id as usize].store(u32::MAX, Ordering::Relaxed);
         }
-        self.active_nodes.clear();
     }
 }
 
