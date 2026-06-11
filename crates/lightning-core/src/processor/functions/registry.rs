@@ -1,5 +1,5 @@
 use crate::processor::functions::ScalarFunction;
-use arrow::array::Array;
+use arrow::array::{Array, ArrayRef};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
