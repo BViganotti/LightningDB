@@ -1020,7 +1020,7 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
     if ps[1].as_rule() == Rule::comparison_operator {
         return Ok(Expression::Comparison(
             Box::new(parse_term(ps[0].clone())?),
-            parse_comparison_operator(ps[1].clone()),
+            parse_comparison_operator(ps[1].clone())?,
             Box::new(parse_term(ps[2].clone())?),
         ));
     } else if ps[1].as_rule() == Rule::string_predicate {
@@ -1110,7 +1110,7 @@ fn parse_term(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Arithmetic(
             Box::new(e),
-            parse_arithmetic_operator(ps[i].clone()),
+            parse_arithmetic_operator(ps[i].clone())?,
             Box::new(parse_factor(ps[i + 1].clone())?),
         );
     }
@@ -1127,7 +1127,7 @@ fn parse_factor(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserErro
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Arithmetic(
             Box::new(e),
-            parse_arithmetic_operator(ps[i].clone()),
+            parse_arithmetic_operator(ps[i].clone())?,
             Box::new(parse_atom(ps[i + 1].clone())?),
         );
     }
@@ -1135,7 +1135,8 @@ fn parse_factor(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserErro
 }
 
 /// Legacy arithmetic parser for flat `arithmetic_expr` grammar.
-/// Kept for reference but no longer used with the new term/factor grammar.
+/// Kept to maintain compatibility with older PEG grammar rules.
+#[allow(dead_code)]
 fn parse_arithmetic(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
@@ -1145,7 +1146,7 @@ fn parse_arithmetic(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Arithmetic(
             Box::new(e),
-            parse_arithmetic_operator(ps[i].clone()),
+            parse_arithmetic_operator(ps[i].clone())?,
             Box::new(parse_atom(ps[i + 1].clone())?),
         );
     }
@@ -1378,26 +1379,30 @@ fn parse_literal(p: pest::iterators::Pair<Rule>) -> Result<Literal, ParserError>
     }
 }
 
-fn parse_comparison_operator(p: pest::iterators::Pair<Rule>) -> ComparisonOperator {
+fn parse_comparison_operator(p: pest::iterators::Pair<Rule>) -> Result<ComparisonOperator, ParserError> {
     match p.as_str() {
-        "=" => ComparisonOperator::Equal,
-        "!=" | "<>" => ComparisonOperator::NotEqual,
-        "<" => ComparisonOperator::LessThan,
-        "<=" => ComparisonOperator::LessThanOrEqual,
-        ">" => ComparisonOperator::GreaterThan,
-        ">=" => ComparisonOperator::GreaterThanOrEqual,
-        _ => unreachable!(),
+        "=" => Ok(ComparisonOperator::Equal),
+        "!=" | "<>" => Ok(ComparisonOperator::NotEqual),
+        "<" => Ok(ComparisonOperator::LessThan),
+        "<=" => Ok(ComparisonOperator::LessThanOrEqual),
+        ">" => Ok(ComparisonOperator::GreaterThan),
+        ">=" => Ok(ComparisonOperator::GreaterThanOrEqual),
+        other => Err(ParserError::Internal(format!(
+            "Unknown comparison operator: {:?}", other
+        ))),
     }
 }
 
-fn parse_arithmetic_operator(p: pest::iterators::Pair<Rule>) -> ArithmeticOperator {
+fn parse_arithmetic_operator(p: pest::iterators::Pair<Rule>) -> Result<ArithmeticOperator, ParserError> {
     match p.as_str() {
-        "+" => ArithmeticOperator::Add,
-        "-" => ArithmeticOperator::Subtract,
-        "*" => ArithmeticOperator::Multiply,
-        "/" => ArithmeticOperator::Divide,
-        "%" => ArithmeticOperator::Modulo,
-        other => panic!("unexpected arithmetic operator: {:?}", other),
+        "+" => Ok(ArithmeticOperator::Add),
+        "-" => Ok(ArithmeticOperator::Subtract),
+        "*" => Ok(ArithmeticOperator::Multiply),
+        "/" => Ok(ArithmeticOperator::Divide),
+        "%" => Ok(ArithmeticOperator::Modulo),
+        other => Err(ParserError::Internal(format!(
+            "Unknown arithmetic operator: {:?}", other
+        ))),
     }
 }
 
