@@ -5,6 +5,7 @@ use crate::Database;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub enum DDLAction {
     CreateNode {
         name: String,
@@ -600,107 +601,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
-            action: match &self.action {
-                DDLAction::CreateNode {
-                    name,
-                    columns,
-                    primary_key,
-                    if_not_exists,
-                } => DDLAction::CreateNode {
-                    name: name.clone(),
-                    columns: columns.clone(),
-                    primary_key: primary_key.clone(),
-                    if_not_exists: *if_not_exists,
-                },
-                DDLAction::CreateRel {
-                    name,
-                    from_table,
-                    to_table,
-                    columns,
-                    if_not_exists,
-                } => DDLAction::CreateRel {
-                    name: name.clone(),
-                    from_table: from_table.clone(),
-                    to_table: to_table.clone(),
-                    columns: columns.clone(),
-                    if_not_exists: *if_not_exists,
-                },
-                DDLAction::DropTable(name, if_exists) => {
-                    DDLAction::DropTable(name.clone(), *if_exists)
-                }
-                DDLAction::CreateSequence {
-                    name,
-                    start_with,
-                    increment_by,
-                } => DDLAction::CreateSequence {
-                    name: name.clone(),
-                    start_with: *start_with,
-                    increment_by: *increment_by,
-                },
-                DDLAction::CreateMacro { name, params, body } => DDLAction::CreateMacro {
-                    name: name.clone(),
-                    params: params.clone(),
-                    body: body.clone(),
-                },
-                DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
-                    DDLAction::AlterAddColumn {
-                        table_name: table_name.clone(),
-                        col_name: col_name.clone(),
-                        data_type: data_type.clone(),
-                    }
-                }
-                DDLAction::AlterDropColumn { table_name, col_name } => {
-                    DDLAction::AlterDropColumn {
-                        table_name: table_name.clone(),
-                        col_name: col_name.clone(),
-                    }
-                }
-                DDLAction::AlterRenameTable { old_name, new_name } => {
-                    DDLAction::AlterRenameTable {
-                        old_name: old_name.clone(),
-                        new_name: new_name.clone(),
-                    }
-                }
-                DDLAction::AlterRenameColumn { table_name, old_name, new_name } => {
-                    DDLAction::AlterRenameColumn {
-                        table_name: table_name.clone(),
-                        old_name: old_name.clone(),
-                        new_name: new_name.clone(),
-                    }
-                }
-                DDLAction::CreateConstraint {
-                    name,
-                    table_name,
-                    property,
-                } => DDLAction::CreateConstraint {
-                    name: name.clone(),
-                    table_name: table_name.clone(),
-                    property: property.clone(),
-                },
-                DDLAction::DropConstraint(name) => DDLAction::DropConstraint(name.clone()),
-                DDLAction::CreateIndex {
-                    name,
-                    table_name,
-                    property,
-                } => DDLAction::CreateIndex {
-                    name: name.clone(),
-                    table_name: table_name.clone(),
-                    property: property.clone(),
-                },
-                DDLAction::DropIndex(name) => DDLAction::DropIndex(name.clone()),
-                DDLAction::CreateVectorIndex {
-                    table_name,
-                    metric,
-                    dimension,
-                } => DDLAction::CreateVectorIndex {
-                    table_name: table_name.clone(),
-                    metric: metric.clone(),
-                    dimension: *dimension,
-                },
-                DDLAction::CreateFtsIndex { table_name } => DDLAction::CreateFtsIndex {
-                    table_name: table_name.clone(),
-                },
-            },
+            action: self.action.clone(),
             db: self.db.clone(),
             undo_buffer: self.undo_buffer.clone(),
             executed: Arc::clone(&self.executed),
