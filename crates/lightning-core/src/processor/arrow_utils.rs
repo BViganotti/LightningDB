@@ -458,6 +458,10 @@ pub fn values_to_array(values: &[Value], data_type: &DataType) -> ArrayRef {
                 })
                 .unwrap_or_else(|e| e)
         }
+        _ => Arc::new(arrow::array::NullArray::new(values.len())),
+    }
+}
+        _ => arrow::array::new_null_array(data_type, values.len()),
     }
 }
 

@@ -307,7 +307,7 @@ impl FunctionRegistry {
                     let casted_args: Vec<ArrayRef> = args.iter()
                         .map(|arg| {
                             if arg.data_type() == &target_type {
-                                arg.clone()
+                                Ok(arg.clone())
                             } else {
                                 arrow::compute::cast(arg, &target_type)
                                     .map_err(|e| crate::LightningError::Internal(e.to_string()))
