@@ -140,42 +140,39 @@ impl PhysicalOperator for NWayMerge {
             .unwrap_or_else(|| Arc::new(arrow::datatypes::Schema::empty()));
         let num_cols = schema.fields().len();
 
-        // Pre-compute sort key values for each child as Vec<Value>
-        let mut child_sort_keys: Vec<Vec<Vec<Value>>> = Vec::with_capacity(num_children);
-        for child_idx in 0..num_children {
-            let batch = &child_data[child_idx];
-            if batch.num_rows() == 0 {
-                child_sort_keys.push(Vec::new());
-                continue;
-            }
-            let mut keys: Vec<Vec<Value>> = Vec::with_capacity(self.order_by.len());
-            for item in &self.order_by {
-                let array = ExpressionEvaluator::evaluate(
-                    &item.expression,
-                    Some(batch),
-                    params,
-                    batch.num_rows(),
-                    &database.function_registry,
-                    database,
-                )?;
-                let vals: Vec<Value> = (0..batch.num_rows())
-                    .map(|i| Value::from_arrow(&array, i))
-                    .collect();
-                keys.push(vals);
-            }
-            child_sort_keys.push(keys);
-        }
-
-        // K-way merge using a BinaryHeap — O(N log K) instead of O(N×K)
+        // K-way merge using a BinaryHeap — O(N log K) instead of O(N×K).
+        // Compute sort keys on-demand during the merge to avoid materializing
+        // all sort keys upfront (saves O(rows × order_by.len()) memory).
         let mut cursors: Vec<usize> = vec![0; num_children];
         let mut out_arrays: Vec<Vec<Value>> = vec![Vec::with_capacity(total_rows); num_cols];
+
+        // Pre-compute sort key arrays once per child (columnar, not row-by-row)
+        let mut child_key_arrays: Vec<Vec<Option<(ArrayRef, &BoundOrderByItem)>>> = Vec::with_capacity(num_children);
+        for child_idx in 0..num_children {
+            let batch = &child_data[child_idx];
+            let mut key_arrays = Vec::with_capacity(self.order_by.len());
+            if batch.num_rows() > 0 {
+                for item in &self.order_by {
+                    let array = ExpressionEvaluator::evaluate(
+                        &item.expression,
+                        Some(batch),
+                        params,
+                        batch.num_rows(),
+                        &database.function_registry,
+                        database,
+                    )?;
+                    key_arrays.push(Some((array, item)));
+                }
+            }
+            child_key_arrays.push(key_arrays);
+        }
 
         let mut heap = BinaryHeap::with_capacity(num_children);
         for child_idx in 0..num_children {
             if cursors[child_idx] < child_data[child_idx].num_rows() {
-                let keys: Vec<Value> = child_sort_keys[child_idx]
+                let keys: Vec<Value> = child_key_arrays[child_idx]
                     .iter()
-                    .map(|col| col[cursors[child_idx]].clone())
+                    .map(|opt| opt.as_ref().map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx])).unwrap_or(Value::Null))
                     .collect();
                 heap.push(HeapEntry { keys, child_idx });
             }
@@ -188,9 +185,9 @@ impl PhysicalOperator for NWayMerge {
             }
             cursors[child_idx] += 1;
             if cursors[child_idx] < child_data[child_idx].num_rows() {
-                let keys: Vec<Value> = child_sort_keys[child_idx]
+                let keys: Vec<Value> = child_key_arrays[child_idx]
                     .iter()
-                    .map(|col| col[cursors[child_idx]].clone())
+                    .map(|opt| opt.as_ref().map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx])).unwrap_or(Value::Null))
                     .collect();
                 heap.push(HeapEntry { keys, child_idx });
             }

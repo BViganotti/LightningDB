@@ -119,74 +119,59 @@ impl PhysicalOperator for PhysicalIntersect {
 
                 while self.probe_row_idx < num_rows {
                     let mut out_rows = Vec::new();
-                    {
-                        let mut matches_per_ht = Vec::new();
-                        let mut min_size = usize::MAX;
-                        let mut smallest_idx = 0;
-                        let mut possible = true;
+                    // Acquire each hash table lock one at a time and release before the next,
+                    // avoiding holding ALL locks simultaneously (which blocks concurrent builds).
+                    // Copy the smallest match set to a local HashSet for O(1) .contains().
+                    let mut matches_sets: Vec<Vec<Value>> = Vec::new();
+                    let mut smallest_idx = 0usize;
+                    let mut min_size = usize::MAX;
+                    let mut possible = true;
 
-                        // Acquire locks in strict index order (0, 1, 2, ...) to prevent deadlock.
-                        // Lock ordering: always build_hts[0], build_hts[1], ...
-                        // Build phase (PhysicalIntersect::build) acquires write locks in the same order.
-                        let ht_read_locks: Vec<_> = {
-                            let mut guards = Vec::with_capacity(self.build_hts.len());
-                            for ht in self.build_hts.iter() {
-                                guards.push(ht.read());
-                            }
-                            guards
+                    for (i, ht) in self.build_hts.iter().enumerate() {
+                        let key = Value::from_arrow(
+                            batch.column(self.probe_key_indices[i]),
+                            self.probe_row_idx,
+                        );
+                        let matches = {
+                            let guard = ht.read();
+                            guard.get(&key).cloned()
                         };
-
-                        for (i, ht) in ht_read_locks.iter().enumerate() {
-                            let key = Value::from_arrow(
-                                batch.column(self.probe_key_indices[i]),
-                                self.probe_row_idx,
-                            );
-                            if let Some(matches) = ht.get(&key) {
-                                if matches.is_empty() {
-                                    possible = false;
-                                    break;
-                                }
-                                if matches.len() < min_size {
-                                    min_size = matches.len();
+                        match matches {
+                            Some(m) if !m.is_empty() => {
+                                if m.len() < min_size {
+                                    min_size = m.len();
                                     smallest_idx = i;
                                 }
-                                matches_per_ht.push(matches);
-                            } else {
+                                matches_sets.push(m);
+                            }
+                            _ => {
                                 possible = false;
                                 break;
                             }
                         }
+                    }
 
-                        if possible
-                            && matches_per_ht.len() == self.build_hts.len()
-                            && !matches_per_ht.is_empty()
-                        {
-                            let base_matches = matches_per_ht[smallest_idx];
+                    if possible && matches_sets.len() == self.build_hts.len() {
+                        let base = matches_sets[smallest_idx].clone();
+                        // Convert other match sets to HashSet for O(1) .contains()
+                        let other_sets: Vec<std::collections::HashSet<Value>> = matches_sets
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| *i != smallest_idx)
+                            .map(|(_, m)| m.iter().cloned().collect())
+                            .collect();
 
-                            for candidate_val in base_matches {
-
-                                let mut in_all = true;
-                                for (i, matches) in matches_per_ht.iter().enumerate() {
-                                    if i == smallest_idx {
-                                        continue;
-                                    }
-                                    if !matches.contains(candidate_val) {
-                                        in_all = false;
-                                        break;
-                                    }
+                        for candidate_val in &base {
+                            if other_sets.iter().all(|s| s.contains(candidate_val)) {
+                                let mut out_row = Vec::with_capacity(num_cols + 1);
+                                for col_idx in 0..num_cols {
+                                    out_row.push(Value::from_arrow(
+                                        batch.column(col_idx),
+                                        self.probe_row_idx,
+                                    ));
                                 }
-
-                                if in_all {
-                                    let mut out_row = Vec::with_capacity(num_cols + 1);
-                                    for col_idx in 0..num_cols {
-                                        out_row.push(Value::from_arrow(
-                                            batch.column(col_idx),
-                                            self.probe_row_idx,
-                                        ));
-                                    }
-                                    out_row.push(candidate_val.clone());
-                                    out_rows.push(out_row);
-                                }
+                                out_row.push(candidate_val.clone());
+                                out_rows.push(out_row);
                             }
                         }
                     }

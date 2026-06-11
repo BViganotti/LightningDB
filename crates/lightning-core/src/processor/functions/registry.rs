@@ -1563,8 +1563,19 @@ impl FunctionRegistry {
                                 crate::processor::Value::List(l),
                                 crate::processor::Value::Number(idx),
                             ) => {
-                                let idx = idx as usize;
-                                if idx < l.len() {
+                                let len = l.len();
+                                // Handle negative index (Python/JS-style: -1 = last element)
+                                let idx = if idx >= 0.0 {
+                                    idx as usize
+                                } else {
+                                    let neg = (-idx) as usize;
+                                    if neg > len {
+                                        usize::MAX // will be caught by bounds check
+                                    } else {
+                                        len - neg
+                                    }
+                                };
+                                if idx < len {
                                     results.push(l[idx].clone());
                                 } else {
                                     results.push(crate::processor::Value::Null);

@@ -182,8 +182,10 @@ impl PhysicalOperator for PhysicalASP {
                             if self.cached_csr.is_none() {
                                 self.cached_csr = self.get_csr(database, tx);
                             }
-                            if let Some(ref csr) = self.cached_csr {
-                                self.run_bfs(csr, src_id, bm, tx)?;
+                            // Clone the CSR Arc to avoid borrow conflict with self.run_bfs
+                            let csr = self.cached_csr.clone();
+                            if let Some(csr) = csr {
+                                self.run_bfs(&csr, src_id, bm, tx)?;
                                 let result_chunk = self.build_chunk_for_source(src_id);
                                 if result_chunk.batch.num_rows() > 0 {
                                     self.results.push_back(result_chunk);
@@ -222,6 +224,7 @@ impl PhysicalOperator for PhysicalASP {
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,
+            cached_csr: None,
         })
     }
 }

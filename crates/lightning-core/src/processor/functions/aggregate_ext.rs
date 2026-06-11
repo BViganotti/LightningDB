@@ -323,11 +323,11 @@ impl AggregateFunction for CollectDistinct {
     fn name(&self) -> &str { "COLLECT_DISTINCT" }
     fn update(&mut self, values: &[ArrayRef], row_indices: &[usize]) -> Result<()> {
         if values.is_empty() { return Ok(()); }
-        for i in row_indices { if !values[0].is_null(*i) { self.values.insert(format!("{:?}", Value::from_arrow(&values[0], *i))); } }
+        for i in row_indices { if !values[0].is_null(*i) { self.values.insert(Value::from_arrow(&values[0], *i).to_string()); } }
         Ok(())
     }
     fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
-        for i in 0..values.len() { if !values.is_null(i) { self.values.insert(format!("{:?}", Value::from_arrow(values, i))); } }
+        for i in 0..values.len() { if !values.is_null(i) { self.values.insert(Value::from_arrow(values, i).to_string()); } }
         Ok(())
     }
     fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
