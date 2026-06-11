@@ -59,8 +59,9 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 Some(c) => c,
                 None => return Ok(None),
             };
+            let num_dst_cols = self.dst_table.columns.len();
             let mut final_columns: Vec<Vec<Value>> =
-                vec![Vec::new(); chunk.batch.num_columns() + 1 + self.dst_table.columns.len() - 1];
+                vec![Vec::new(); chunk.batch.num_columns() + 1 + num_dst_cols.saturating_sub(1)];
 
             // Adjacency lookup mechanism
             let storage = database.storage_manager.read();

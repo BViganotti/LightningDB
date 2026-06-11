@@ -305,11 +305,11 @@ impl AggregateFunction for Avg {
         Ok(())
     }
     fn finalize(&self) -> Result<Value> {
-        Ok(Value::Number(if self.count == 0 {
-            0.0
+        if self.count == 0 {
+            Ok(Value::Null)
         } else {
-            self.sum / self.count as f64
-        }))
+            Ok(Value::Number(self.sum / self.count as f64))
+        }
     }
     fn clone_box(&self) -> Box<dyn AggregateFunction> {
         Box::new(Self {

@@ -7,7 +7,7 @@ use arrow::compute::{lexsort_to_indices, take, SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Maximum number of rows to sort in-memory before switching to external sort.
@@ -17,7 +17,7 @@ const MAX_SORT_MEMORY_ROWS: usize = 10_000_000;
 pub struct SharedSort {
     pub batches: Vec<RecordBatch>,
     pub sorted_result: Option<RecordBatch>,
-    pub num_active_collectors: AtomicUsize,
+    pub sort_started: AtomicBool,
     pub results_returned: AtomicUsize,
 }
 
@@ -37,7 +37,7 @@ impl PhysicalSort {
             shared: Arc::new(RwLock::new(SharedSort {
                 batches: Vec::new(),
                 sorted_result: None,
-                num_active_collectors: AtomicUsize::new(0),
+                sort_started: AtomicBool::new(false),
                 results_returned: AtomicUsize::new(0),
             })),
             sort_done: Arc::new((Mutex::new(false), Condvar::new())),
@@ -58,80 +58,92 @@ impl PhysicalSort {
 
         {
             let mut shared = self.shared.write();
-            shared.num_active_collectors.fetch_add(1, Ordering::SeqCst);
             shared.batches.extend(local_batches);
-            shared.num_active_collectors.fetch_sub(1, Ordering::SeqCst);
-
-            // If we are the last one, perform the sort
-            if shared.num_active_collectors.load(Ordering::SeqCst) == 0 {
-                if shared.batches.is_empty() {
-                    return Ok(());
-                }
-
-                let schema = shared.batches[0].schema();
-                let mut columns = Vec::new();
-                for i in 0..schema.fields().len() {
-                    let arrays: Vec<&dyn arrow::array::Array> = shared
-                        .batches
-                        .iter()
-                        .map(|b| b.column(i).as_ref())
-                        .collect();
-                    let big_array = arrow::compute::concat(&arrays)
-                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    columns.push(big_array);
-                }
-                let big_batch = RecordBatch::try_new(schema.clone(), columns)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-                let total_rows = big_batch.num_rows();
-                if total_rows > MAX_SORT_MEMORY_ROWS {
-                    return Err(LightningError::Internal(format!(
-                        "Sort of {} rows exceeds in-memory limit of {}. Use ORDER BY ... LIMIT to reduce rows, or increase MAX_SORT_MEMORY_ROWS.",
-                        total_rows, MAX_SORT_MEMORY_ROWS
-                    )));
-                }
-                let mut sort_columns = Vec::new();
-                for item in &self.order_by {
-                    let array = ExpressionEvaluator::evaluate(
-                        &item.expression,
-                        Some(&big_batch),
-                        params,
-                        total_rows,
-                        &database.function_registry,
-                        database,
-                    )?;
-                    sort_columns.push(SortColumn {
-                        values: array,
-                        options: Some(SortOptions {
-                            descending: item.descending,
-                            nulls_first: true,
-                        }),
-                    });
-                }
-
-                let indices = lexsort_to_indices(&sort_columns, None)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-                let sorted_columns_res: std::result::Result<Vec<_>, arrow::error::ArrowError> =
-                    big_batch
-                        .columns()
-                        .iter()
-                        .map(|col| take(col.as_ref(), &indices, None))
-                        .collect();
-
-                let sorted_columns = sorted_columns_res
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-                let result = RecordBatch::try_new(schema, sorted_columns)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-                shared.sorted_result = Some(result);
-                shared.batches.clear(); // Free memory
-                let (ref lock, ref cvar) = &*self.sort_done;
-                *lock.lock() = true;
-                cvar.notify_all();
-            }
         }
+
+        if self
+            .shared
+            .read()
+            .sort_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let schema;
+        let big_batch;
+        let total_rows;
+        {
+            let shared = self.shared.read();
+            if shared.batches.is_empty() {
+                return Ok(());
+            }
+            schema = shared.batches[0].schema();
+            let mut columns = Vec::new();
+            for i in 0..schema.fields().len() {
+                let arrays: Vec<&dyn arrow::array::Array> = shared
+                    .batches
+                    .iter()
+                    .map(|b| b.column(i).as_ref())
+                    .collect();
+                let big_array = arrow::compute::concat(&arrays)
+                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                columns.push(big_array);
+            }
+            big_batch = RecordBatch::try_new(schema.clone(), columns)
+                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+            total_rows = big_batch.num_rows();
+        }
+        if total_rows > MAX_SORT_MEMORY_ROWS {
+            return Err(LightningError::Internal(format!(
+                "Sort of {} rows exceeds in-memory limit of {}. Use ORDER BY ... LIMIT to reduce rows, or increase MAX_SORT_MEMORY_ROWS.",
+                total_rows, MAX_SORT_MEMORY_ROWS
+            )));
+        }
+        let mut sort_columns = Vec::new();
+        for item in &self.order_by {
+            let array = ExpressionEvaluator::evaluate(
+                &item.expression,
+                Some(&big_batch),
+                params,
+                total_rows,
+                &database.function_registry,
+                database,
+            )?;
+            sort_columns.push(SortColumn {
+                values: array,
+                options: Some(SortOptions {
+                    descending: item.descending,
+                    nulls_first: true,
+                }),
+            });
+        }
+
+        let indices = lexsort_to_indices(&sort_columns, None)
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+
+        let sorted_columns_res: std::result::Result<Vec<_>, arrow::error::ArrowError> =
+            big_batch
+                .columns()
+                .iter()
+                .map(|col| take(col.as_ref(), &indices, None))
+                .collect();
+
+        let sorted_columns = sorted_columns_res
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+
+        let result = RecordBatch::try_new(schema, sorted_columns)
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+
+        {
+            let mut shared = self.shared.write();
+            shared.sorted_result = Some(result);
+            shared.batches.clear();
+        }
+        let (ref lock, ref cvar) = &*self.sort_done;
+        *lock.lock() = true;
+        cvar.notify_all();
 
         Ok(())
     }
@@ -202,7 +214,7 @@ impl PhysicalOperator for PhysicalSort {
                 shared: Arc::new(::parking_lot::RwLock::new(SharedSort {
                     batches: Vec::new(),
                     sorted_result: None,
-                    num_active_collectors: ::std::sync::atomic::AtomicUsize::new(0),
+                    sort_started: ::std::sync::atomic::AtomicBool::new(false),
                     results_returned: ::std::sync::atomic::AtomicUsize::new(0),
                 })),
                 sort_done: Arc::new((::parking_lot::Mutex::new(false), ::parking_lot::Condvar::new())),

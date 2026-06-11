@@ -15,6 +15,8 @@ pub struct PhysicalPageRank {
     max_iterations: u32,
     output_var_name: String,
     node_id_idx: usize,
+    buffered_results: Option<Vec<DataChunk>>,
+    accumulated: bool,
 }
 
 impl PhysicalPageRank {
@@ -33,6 +35,8 @@ impl PhysicalPageRank {
             max_iterations,
             output_var_name,
             node_id_idx,
+            buffered_results: None,
+            accumulated: false,
         }
     }
 }
@@ -44,110 +48,144 @@ impl PhysicalOperator for PhysicalPageRank {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
-        if let Some(chunk) = self.child.get_next(database, tx, params)? {
-            let num_rows = chunk.num_rows();
-            let mut node_ids = Vec::with_capacity(num_rows);
-            let mut max_id = 0;
+        if let Some(mut buf) = self.buffered_results.take() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            let first = buf.remove(0);
+            self.buffered_results = Some(buf);
+            return Ok(Some(first));
+        }
 
+        if self.accumulated {
+            return Ok(None);
+        }
+
+        // Accumulate ALL chunks from child before computing PageRank
+        let mut all_chunks: Vec<DataChunk> = Vec::new();
+        let mut all_node_ids: Vec<u64> = Vec::new();
+
+        while let Some(chunk) = self.child.get_next(database, tx, params)? {
+            let num_rows = chunk.num_rows();
             for i in 0..num_rows {
                 let val = Value::from_arrow(chunk.batch.column(self.node_id_idx), i);
                 if let Value::Node(id) = val {
-                    node_ids.push(id);
-                    if id != u64::MAX && id > max_id {
-                        max_id = id;
-                    }
+                    all_node_ids.push(id);
                 } else {
-                    node_ids.push(u64::MAX);
+                    all_node_ids.push(u64::MAX);
                 }
             }
+            all_chunks.push(chunk);
+        }
 
-            let storage = database.storage_manager.read();
-            let bm = &database.buffer_manager;
+        self.accumulated = true;
 
-            let size = (max_id + 1) as usize;
-            let mut out_degrees = vec![0usize; size];
-            let mut pr_scores = vec![0.0f64; size];
-            let mut node_mask = fixedbitset::FixedBitSet::with_capacity(size);
+        if all_chunks.is_empty() {
+            return Ok(None);
+        }
 
-            for &id in &node_ids {
-                if id == u64::MAX {
-                    continue;
-                }
-                node_mask.insert(id as usize);
-                pr_scores[id as usize] = 1.0 / (num_rows as f64);
-
-                let mut degree = 0;
-                for rel in &self.rel_table_names {
-                    if let Some(csr) = storage.fwd_csr.get(rel) {
-                        let _ = csr.for_each_neighbor(bm, id, tx, |_| degree += 1);
-                    }
-                }
-                out_degrees[id as usize] = degree;
+        // Build sparse representation: only nodes present in the result set
+        let mut node_to_idx: HashMap<u64, usize> = HashMap::new();
+        let mut active_nodes: Vec<u64> = Vec::new();
+        for &nid in &all_node_ids {
+            if nid != u64::MAX && !node_to_idx.contains_key(&nid) {
+                node_to_idx.insert(nid, active_nodes.len());
+                active_nodes.push(nid);
             }
+        }
 
-            let csrs: Vec<_> = self
-                .rel_table_names
-                .iter()
-                .filter_map(|r| storage.fwd_csr.get(r))
-                .collect();
+        let num_nodes = active_nodes.len();
+        if num_nodes == 0 {
+            return Ok(Some(DataChunk {
+                batch: all_chunks.remove(0).batch,
+            }));
+        }
 
-            for _ in 0..self.max_iterations {
-                let mut next_scores = vec![0.0f64; size];
-                let mut dangling_sum = 0.0;
+        let storage = database.storage_manager.read();
+        let bm = &database.buffer_manager;
 
-                // Parallel contribution phase
-                let contributions: Vec<(usize, f64)> = node_mask
-                    .ones()
-                    .collect::<Vec<_>>()
-                    .par_iter()
-                    .flat_map(|&id| {
-                        let score = pr_scores[id];
-                        let degree = out_degrees[id];
-                        let mut local_contribs = Vec::new();
+        let mut out_degrees = vec![0usize; num_nodes];
+        let mut pr_scores = vec![0.0f64; num_nodes];
 
-                        if degree > 0 {
-                            let contrib = score / (degree as f64);
-                            for csr in &csrs {
-                                let _ = csr.for_each_neighbor(bm, id as u64, tx, |neighbor| {
-                                    local_contribs.push((neighbor as usize, contrib));
-                                });
-                            }
+        for (local_idx, &nid) in active_nodes.iter().enumerate() {
+            pr_scores[local_idx] = 1.0 / (num_nodes as f64);
+
+            let mut deg = 0;
+            for rel in &self.rel_table_names {
+                if let Some(csr) = storage.fwd_csr.get(rel) {
+                    let _ = csr.for_each_neighbor(bm, nid, tx, |_| deg += 1);
+                }
+            }
+            out_degrees[local_idx] = deg;
+        }
+
+        // Collect CSR references — lifetime tied to storage guard
+        let csrs: Vec<_> = self
+            .rel_table_names
+            .iter()
+            .filter_map(|r| storage.fwd_csr.get(r))
+            .collect();
+
+        for _ in 0..self.max_iterations {
+            let mut next_scores = vec![0.0f64; num_nodes];
+            let mut dangling_sum = 0.0;
+
+            let contributions: Vec<(u64, f64)> = (0..num_nodes)
+                .collect::<Vec<_>>()
+                .par_iter()
+                .flat_map(|&local_idx| {
+                    let nid = active_nodes[local_idx];
+                    let score = pr_scores[local_idx];
+                    let degree = out_degrees[local_idx];
+                    let mut local_contribs = Vec::new();
+
+                    if degree > 0 {
+                        let contrib = score / (degree as f64);
+                        for csr in &csrs {
+                            let _ = csr.for_each_neighbor(bm, nid, tx, |neighbor| {
+                                local_contribs.push((neighbor, contrib));
+                            });
                         }
-                        local_contribs
-                    })
-                    .collect();
-
-                for (nid, contrib) in contributions {
-                    if nid < size && node_mask.contains(nid) {
-                        next_scores[nid] += contrib;
                     }
-                }
-
-                // Collect dangling sum serially (fast enough)
-                for id in node_mask.ones() {
-                    if out_degrees[id] == 0 {
-                        dangling_sum += pr_scores[id];
-                    }
-                }
-
-                let teleport = (1.0 - self.damping_factor) / (num_rows as f64)
-                    + (self.damping_factor * dangling_sum) / (num_rows as f64);
-
-                for id in node_mask.ones() {
-                    pr_scores[id] = teleport + self.damping_factor * next_scores[id];
-                }
-            }
-
-            let final_scores: Vec<Option<f64>> = node_ids
-                .iter()
-                .map(|&id| {
-                    if id == u64::MAX {
-                        None
-                    } else {
-                        Some(pr_scores[id as usize])
-                    }
+                    local_contribs
                 })
                 .collect();
+
+            for (nid, contrib) in contributions {
+                if let Some(&local_idx) = node_to_idx.get(&nid) {
+                    next_scores[local_idx] += contrib;
+                }
+            }
+
+            for local_idx in 0..num_nodes {
+                if out_degrees[local_idx] == 0 {
+                    dangling_sum += pr_scores[local_idx];
+                }
+            }
+
+            let teleport = (1.0 - self.damping_factor) / (num_nodes as f64)
+                + (self.damping_factor * dangling_sum) / (num_nodes as f64);
+
+            for local_idx in 0..num_nodes {
+                pr_scores[local_idx] = teleport + self.damping_factor * next_scores[local_idx];
+            }
+        }
+
+        let mut chunk_start = 0usize;
+        let mut results = Vec::with_capacity(all_chunks.len());
+        for chunk in all_chunks.drain(..) {
+            let num_rows = chunk.num_rows();
+            let mut final_scores = Vec::with_capacity(num_rows);
+            for row_offset in 0..num_rows {
+                let nid = all_node_ids[chunk_start + row_offset];
+                let score = if nid == u64::MAX {
+                    None
+                } else {
+                    node_to_idx.get(&nid).map(|&local_idx| pr_scores[local_idx])
+                };
+                final_scores.push(score);
+            }
+            chunk_start += num_rows;
 
             let mut columns = chunk.batch.columns().to_vec();
             columns.push(Arc::new(Float64Array::from(final_scores)));
@@ -157,10 +195,12 @@ impl PhysicalOperator for PhysicalPageRank {
 
             let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-            return Ok(Some(DataChunk { batch }));
+            results.push(DataChunk { batch });
         }
-        Ok(None)
+
+        let first = results.remove(0);
+        self.buffered_results = Some(results);
+        Ok(Some(first))
     }
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
@@ -171,6 +211,8 @@ impl PhysicalOperator for PhysicalPageRank {
             max_iterations: self.max_iterations,
             output_var_name: self.output_var_name.clone(),
             node_id_idx: self.node_id_idx,
+            buffered_results: None,
+            accumulated: false,
         })
     }
 }

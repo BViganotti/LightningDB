@@ -142,8 +142,11 @@ impl CSRIndex {
     /// the base edge count (or when base has no edges but pending is non-empty).
     pub fn needs_compaction(&self) -> bool {
         let pending = self.pending_edges.read().len() as u64;
+        if pending == 0 {
+            return false;
+        }
         let base = self.base_edge_count.load(Ordering::Relaxed);
-        base > 0 && pending > base / 10
+        base == 0 || pending > base / 10
     }
 
     /// Compact the pending buffer into the base CSR by rebuilding

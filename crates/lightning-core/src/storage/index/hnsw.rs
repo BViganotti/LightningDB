@@ -264,8 +264,8 @@ impl HnswIndex {
                 }
             }
 
-            // Bidirectional connections: clone embeddings to avoid borrow conflicts
-            let emb_snapshot = self.embeddings.read().clone();
+            // Bidirectional connections: hold read lock on embeddings (no clone)
+            let emb = self.embeddings.read();
             for &neighbor_id in &neighbor_ids {
                 let mut nodes = self.nodes.write();
                 if let Some(neighbor) = nodes.get_mut(neighbor_id as usize) {
@@ -274,7 +274,7 @@ impl HnswIndex {
                         let max_for_layer = if lvl == 0 { self.config.M_max0 } else { self.config.M_max };
                         if neighbor.neighbors[lvl].len() > max_for_layer {
                             let dists: Vec<Candidate> = neighbor.neighbors[lvl].iter().map(|&nid| {
-                                let d = self.distance(&emb_snapshot[neighbor_id as usize], &emb_snapshot[nid as usize]);
+                                let d = self.distance(&emb[neighbor_id as usize], &emb[nid as usize]);
                                 Candidate { node_id: nid, distance: d }
                             }).collect();
                             let selected = self.select_neighbors_simple(&dists, max_for_layer);

@@ -238,9 +238,19 @@ impl Catalog {
                 new_name
             )));
         }
-        if let Some(mut entry) = self.node_tables.remove(old_name) {
+        if self.node_tables.contains_key(old_name) {
+            let mut entry = self.node_tables.remove(old_name).unwrap();
             entry.name = new_name.to_string();
             self.node_tables.insert(new_name.to_string(), entry);
+            // Update all relationship tables that reference the renamed node table
+            for rel_entry in self.rel_tables.values_mut() {
+                if rel_entry.from_table == old_name {
+                    rel_entry.from_table = new_name.to_string();
+                }
+                if rel_entry.to_table == old_name {
+                    rel_entry.to_table = new_name.to_string();
+                }
+            }
             Ok(())
         } else if let Some(mut entry) = self.rel_tables.remove(old_name) {
             entry.name = new_name.to_string();

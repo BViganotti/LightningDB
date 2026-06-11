@@ -3444,10 +3444,21 @@ impl FunctionRegistry {
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 36);
                     let mut state = (chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
-                        % 1_000_000_007;
+                        ^ 0x9e3779b97f4a7c15;
                     for _ in 0..num_rows {
-                        state = (state.wrapping_mul(1664525).wrapping_add(1013904223)) % 4294967296;
-                        let uuid = format!("{:08x}-4000-8000-{:012x}", state, state * 1024);
+                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        let a = (state >> 32) as u32;
+                        let b = state as u32;
+                        let c = (a.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u16;
+                        let d = (b.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u16;
+                        let uuid = format!(
+                            "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+                            a,
+                            (c >> 4) as u16,
+                            (c & 0x0fff) as u16,
+                            0x8000u16 | ((d >> 2) as u16 & 0x3fff),
+                            ((b as u64) << 32) | (a as u64)
+                        );
                         results.append_value(uuid);
                     }
                     Ok(Arc::new(results.finish()))
@@ -3463,6 +3474,8 @@ impl FunctionRegistry {
             "REGEXP_EXTRACT",
         ] {
             let func_name = name.to_string();
+            let re_cache: std::sync::Mutex<Option<(String, regex::Regex)>> =
+                std::sync::Mutex::new(None);
             scalar_functions.insert(
                 func_name.clone(),
                 ScalarFunction::new(
@@ -3482,8 +3495,24 @@ impl FunctionRegistry {
                                 crate::processor::Value::String(p),
                             ) = (s_val, p_val)
                             {
-                                let re = regex::Regex::new(&p)
-                                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                                let re = {
+                                    let mut cache = re_cache.lock().unwrap();
+                                    if let Some((ref cached_pat, ref cached_re)) = *cache {
+                                        if *cached_pat == p {
+                                            (*cached_re).clone()
+                                        } else {
+                                            let compiled = regex::Regex::new(&p)
+                                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                                            *cache = Some((p.clone(), compiled.clone()));
+                                            compiled
+                                        }
+                                    } else {
+                                        let compiled = regex::Regex::new(&p)
+                                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                                        *cache = Some((p.clone(), compiled.clone()));
+                                        compiled
+                                    }
+                                };
                                 match *name {
                                     "REGEXP_MATCH" => results
                                         .push(crate::processor::Value::Boolean(re.is_match(&s))),
