@@ -57,6 +57,17 @@ impl PhysicalScan {
                 table.name
             )));
         }
+        // Validate that node tables have _id as their first column.
+        // The entire scan system assumes column 0 is the internal row ID.
+        // If the schema is altered, this invariant must be maintained.
+        if table.columns[0].name != "_id" && table.columns[0].name != "_src" {
+            return Err(LightningError::Internal(format!(
+                "PhysicalScan::new: table '{}' first column is '{}', expected '_id' or '_src'. \
+                 Schema mismatch or unsupported table layout.",
+                table.name,
+                table.columns[0].name
+            )));
+        }
         let has_modifications = table.columns[0].version_info.has_modifications();
         let avg_element_size = table.columns.iter().map(|c| c.element_size()).max().unwrap_or(8);
         let num_columns = table.columns.len() as u64;
