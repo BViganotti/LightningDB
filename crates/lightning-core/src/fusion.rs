@@ -49,13 +49,30 @@ impl FusionApp {
         conn: &Connection,
         source_id: &str,
         target_id: &str,
-        _edge_types: &[&str],
+        edge_types: &[&str],
     ) -> Result<Vec<String>, crate::LightningError> {
+        // Validate and build relationship type filter
+        for et in edge_types {
+            if et.is_empty() || et.contains(|c: char| !c.is_alphanumeric() && c != '_') {
+                return Err(crate::LightningError::Internal(format!(
+                    "Invalid edge type: '{}' must be alphanumeric", et
+                )));
+            }
+        }
+        let edges = edge_types.join("|");
+        let rel_pattern = if edges.is_empty() {
+            "r".to_string()
+        } else {
+            format!("r:{edges}")
+        };
+
         let mut paths = Vec::new();
 
         // Simple direct connection check (forward direction)
         {
-            let q = "MATCH (s:CodeNode {id: $source_id})-[r]->(t:CodeNode {id: $target_id}) RETURN type(r) as rel_type".to_string();
+            let q = format!(
+                "MATCH (s:CodeNode {{id: $source_id}})-[{rel_pattern}]->(t:CodeNode {{id: $target_id}}) RETURN type(r) as rel_type"
+            );
             let mut params = HashMap::new();
             params.insert("source_id".to_string(), Value::String(source_id.to_string()));
             params.insert("target_id".to_string(), Value::String(target_id.to_string()));
@@ -71,7 +88,9 @@ impl FusionApp {
 
         // Also check reverse direction
         {
-            let q = "MATCH (t:CodeNode {id: $source_id})-[r]->(s:CodeNode {id: $target_id}) RETURN type(r) as rel_type".to_string();
+            let q = format!(
+                "MATCH (t:CodeNode {{id: $source_id}})-[{rel_pattern}]->(s:CodeNode {{id: $target_id}}) RETURN type(r) as rel_type"
+            );
             let mut params = HashMap::new();
             params.insert("source_id".to_string(), Value::String(target_id.to_string()));
             params.insert("target_id".to_string(), Value::String(source_id.to_string()));
