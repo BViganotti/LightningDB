@@ -247,15 +247,24 @@ impl PhysicalCopy {
                 continue;
             }
 
-            if start_col == 1 {
+            let normalized_batch = if start_col == 1 {
                 let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
                 let mut columns = vec![Arc::new(ids) as ArrayRef];
                 columns.extend(batch.columns().iter().cloned());
-                let new_batch = RecordBatch::try_new(table.get_schema(), columns)?;
-                table.bulk_append_batch(&database.buffer_manager, &new_batch, next_id, tx)?;
+                RecordBatch::try_new(table.get_schema(), columns)?
             } else {
-                table.bulk_append_batch(&database.buffer_manager, &batch, next_id, tx)?;
-            }
+                if table.get_schema().fields().len() == batch.schema().fields().len() + 1
+                    && table.columns.first().map(|c| c.name.as_str()) == Some("INTERNAL_ID")
+                {
+                    let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
+                    let mut columns = vec![Arc::new(ids) as ArrayRef];
+                    columns.extend(batch.columns().iter().cloned());
+                    RecordBatch::try_new(table.get_schema(), columns)?
+                } else {
+                    batch
+                }
+            };
+            table.bulk_append_batch(&database.buffer_manager, &normalized_batch, next_id, tx)?;
 
             // Write undo records so a rollback can revert the imported rows.
             // Batch all node IDs into a single undo buffer acquisition.
@@ -271,11 +280,17 @@ impl PhysicalCopy {
             total_added += num_rows as u64;
         }
 
-        database.storage_manager.read().rebuild_csr(
-            &self.table_name,
-            &database.buffer_manager,
-            tx,
-        )?;
+        // Use a temporary read lock scope so the lock is released before rebuild_csr
+        let has_table = {
+            database.storage_manager.read().get_table(&self.table_name).is_some()
+        };
+        if has_table {
+            database.storage_manager.read().rebuild_csr(
+                &self.table_name,
+                &database.buffer_manager,
+                tx,
+            )?;
+        }
 
         {
             let mut cat = database.catalog.write();
