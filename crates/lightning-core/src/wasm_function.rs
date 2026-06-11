@@ -265,6 +265,16 @@ impl WasmFunction {
                                 "WASM vector function requires exported 'memory'".into()
                             ))?;
 
+                        // Enforce a sandboxed memory region: only write exactly the input
+                        // bytes at offset 0, and never exceed that written region for output.
+                        // The WASM module must work within this exact allocation.
+                        let mem_size = mem.data(&store).len();
+                        let input_byte_len = num_rows * 4;
+                        if input_byte_len > mem_size {
+                            return Err(crate::LightningError::Internal(format!(
+                                "WASM: input size {} exceeds WASM memory size {}", input_byte_len, mem_size
+                            )));
+                        }
                         let input_bytes: Vec<u8> = (0..num_rows)
                             .flat_map(|i| input.value(i).to_le_bytes().into_iter())
                             .collect();
@@ -272,8 +282,7 @@ impl WasmFunction {
                         let num_elements = num_rows as i32;
                         {
                             let mem_data = mem.data_mut(&mut store);
-                            let write_len = input_bytes.len().min(mem_data.len());
-                            mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
+                            mem_data[..input_byte_len].copy_from_slice(&input_bytes);
                         }
 
                         let output_offset = func.call(&mut store, (write_offset, num_elements))
@@ -286,23 +295,27 @@ impl WasmFunction {
                                 crate::LightningError::Internal(msg)
                             })?;
 
+                        // Validate output offset before reading
                         let mut results = vec![f32::NAN; num_rows];
                         {
                             let mem_data = mem.data(&store);
                             let read_offset = output_offset as usize;
-                            let read_end = (read_offset + num_rows * 4).min(mem_data.len());
-                            let byte_count = read_end - read_offset;
-                            let valid_entries = byte_count / 4;
-                            for j in 0..valid_entries.min(num_rows) {
-                                let mut bytes = [0u8; 4];
-                                let start = read_offset + j * 4;
-                                if start + 4 <= mem_data.len() {
-                                    bytes.copy_from_slice(&mem_data[start..start + 4]);
-                                    results[j] = f32::from_le_bytes(bytes);
+                            // Clamp output range to the originally written region only
+                            if read_offset < mem_size && read_offset.saturating_add(num_rows * 4) <= mem_size {
+                                let read_end = read_offset + num_rows * 4;
+                                for j in 0..num_rows {
+                                    let start = read_offset + j * 4;
+                                    if start + 4 <= mem_size {
+                                        let mut bytes = [0u8; 4];
+                                        bytes.copy_from_slice(&mem_data[start..start + 4]);
+                                        results[j] = f32::from_le_bytes(bytes);
+                                    }
                                 }
                             }
                         }
 
+                        // Zero out the ENTIRE WASM linear memory after each invocation
+                        // to prevent data leakage between calls or after escape.
                         {
                             let mem_data = mem.data_mut(&mut store);
                             mem_data.fill(0);
@@ -331,18 +344,23 @@ impl WasmFunction {
                                 "WASM string function requires exported 'memory'".into()
                             ))?;
 
+                        let mem_size = mem.data(&store).len();
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
                             let input_str = format!("{}", Value::from_arrow(&args[0], i));
                             let input_bytes = input_str.as_bytes();
+                            let input_len = input_bytes.len();
+                            if input_len > mem_size {
+                                results.push(input_str);
+                                continue;
+                            }
                             let write_offset = 0i32;
                             {
                                 let mem_data = mem.data_mut(&mut store);
-                                let write_len = input_bytes.len().min(mem_data.len());
-                                mem_data[..write_len].copy_from_slice(&input_bytes[..write_len]);
+                                mem_data[..input_len].copy_from_slice(input_bytes);
                             }
 
-                            let output_offset = func.call(&mut store, (write_offset, input_bytes.len() as i32))
+                            let output_offset = func.call(&mut store, (write_offset, input_len as i32))
                                 .map_err(|e| {
                                     let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
                                         format!("WASM function '{}' timed out (fuel exhausted)", func_name)
@@ -352,19 +370,29 @@ impl WasmFunction {
                                     crate::LightningError::Internal(msg)
                                 })?;
 
+                            // Read output with sandbox bounds: only read within written region
                             let output = {
                                 let mem_data = mem.data(&store);
                                 let start = output_offset as usize;
-                                // Read until null byte or end of memory
-                                let end = mem_data[start..].iter()
-                                    .position(|&b| b == 0)
-                                    .map(|p| start + p)
-                                    .unwrap_or(start);
-                                String::from_utf8_lossy(&mem_data[start..end]).to_string()
+                                if start < mem_size {
+                                    let end = mem_data[start..].iter()
+                                        .position(|&b| b == 0)
+                                        .map(|p| start + p)
+                                        .unwrap_or(mem_size);
+                                    let clamped_end = end.min(mem_size);
+                                    if clamped_end > start {
+                                        String::from_utf8_lossy(&mem_data[start..clamped_end]).to_string()
+                                    } else {
+                                        String::new()
+                                    }
+                                } else {
+                                    String::new()
+                                }
                             };
                             results.push(output);
                         }
 
+                        // Zero out entire WASM memory after all rows
                         {
                             let mem_data = mem.data_mut(&mut store);
                             mem_data.fill(0);
