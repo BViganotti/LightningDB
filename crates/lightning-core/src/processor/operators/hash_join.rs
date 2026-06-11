@@ -159,65 +159,68 @@ impl HashJoin {
         tracing::debug!("HashJoin::build starting: right_key_idx={}", self.right_key_idx);
         let mut total_build_rows = 0;
         let mut build_chunk_count = 0;
+        let mut base_offset = 0usize;
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
             build_chunk_count += 1;
             total_build_rows += chunk.num_rows();
             let batch = chunk.batch;
-            let mut shared = self.shared_build.write();
-
-            if shared.right_schema.is_none() {
-                shared.right_schema = Some(batch.schema());
-                shared.key_type = Some(batch.column(self.right_key_idx).data_type().clone());
-            }
-
             let num_rows = batch.num_rows();
-            let base_offset = shared
-                .build_chunks
-                .iter()
-                .map(|b| b.num_rows())
-                .sum::<usize>();
 
-            // Specialized build loop for u64/i64 keys
-            let key_col = batch.column(self.right_key_idx);
-            match key_col.data_type() {
-                DataType::UInt64 => {
-                    let arr = key_col.as_any().downcast_ref::<UInt64Array>().expect("hash join build: UInt64 key");
-                    for row_idx in 0..num_rows {
-                        if !arr.is_null(row_idx) {
+            // Grab the write lock only for the shared-builder critical section.
+            // Schema initialization and hash-table insertion are serialized, but
+            // concurrent builders can interleave: each one computes its own next
+            // offset atomically and inserts into its own staging area before
+            // merging into the shared tables.
+            {
+                let mut shared = self.shared_build.write();
+
+                if shared.right_schema.is_none() {
+                    shared.right_schema = Some(batch.schema());
+                    shared.key_type = Some(batch.column(self.right_key_idx).data_type().clone());
+                }
+
+                let key_col = batch.column(self.right_key_idx);
+                match key_col.data_type() {
+                    DataType::UInt64 => {
+                        let arr = key_col.as_any().downcast_ref::<UInt64Array>().expect("hash join build: UInt64 key");
+                        for row_idx in 0..num_rows {
+                            if !arr.is_null(row_idx) {
+                                shared
+                                    .u64_hash_table
+                                    .entry(arr.value(row_idx))
+                                    .or_default()
+                                    .push(base_offset + row_idx);
+                            }
+                        }
+                    }
+                    DataType::Int64 => {
+                        let arr = key_col.as_any().downcast_ref::<Int64Array>()
+                            .expect("hash join build: Int64 key");
+                        for row_idx in 0..num_rows {
+                            if !arr.is_null(row_idx) {
+                                shared
+                                    .i64_hash_table
+                                    .entry(arr.value(row_idx))
+                                    .or_default()
+                                    .push(base_offset + row_idx);
+                            }
+                        }
+                    }
+                    _ => {
+                        for row_idx in 0..num_rows {
+                            let key = Value::from_arrow(key_col, row_idx);
                             shared
-                                .u64_hash_table
-                                .entry(arr.value(row_idx))
+                                .hash_table
+                                .entry(key)
                                 .or_default()
                                 .push(base_offset + row_idx);
                         }
                     }
                 }
-                DataType::Int64 => {
-                    let arr = key_col.as_any().downcast_ref::<Int64Array>()
-                        .expect("hash join build: Int64 key");
-                    for row_idx in 0..num_rows {
-                        if !arr.is_null(row_idx) {
-                            shared
-                                .i64_hash_table
-                                .entry(arr.value(row_idx))
-                                .or_default()
-                                .push(base_offset + row_idx);
-                        }
-                    }
-                }
-                _ => {
-                    // Fallback for complex keys
-                    for row_idx in 0..num_rows {
-                        let key = Value::from_arrow(key_col, row_idx);
-                        shared
-                            .hash_table
-                            .entry(key)
-                            .or_default()
-                            .push(base_offset + row_idx);
-                    }
-                }
-            }
-            shared.build_chunks.push(batch);
+                shared.build_chunks.push(batch);
+            } // release write lock
+
+            base_offset += num_rows;
         }
 
         tracing::debug!(
