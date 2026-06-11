@@ -871,6 +871,9 @@ impl PhysicalPlanner {
                 self.compute_subtree_num_cols(child) + self.get_table_num_columns(dst_node_table)
             }
             LogicalOperator::AllShortestPaths { .. } => 3,
+            LogicalOperator::Union(child, ..)
+            | LogicalOperator::Intersect { child, .. }
+            | LogicalOperator::SetOp { child, .. } => self.compute_subtree_num_cols(child),
             _ => 0,
         }
     }
