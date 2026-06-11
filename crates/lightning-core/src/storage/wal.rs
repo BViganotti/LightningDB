@@ -208,11 +208,9 @@ impl WAL {
             }
         };
 
-        let mut file = self.file.lock();
-
+        let mut commit_record = Vec::new();
         if let Some(ref data) = pending_data {
-            file.write_all(data)?;
-            Self::align_position(&mut file)?;
+            commit_record.extend_from_slice(data);
         }
 
         let mut digest = CRC32C.digest();
@@ -220,18 +218,51 @@ impl WAL {
         digest.update(&tx_id.to_le_bytes());
         let checksum = digest.finalize();
 
-        file.write_all(&[RECORD_TYPE_COMMIT])?;
-        file.write_all(&checksum.to_le_bytes())?;
-        file.write_all(&tx_id.to_le_bytes())?;
+        commit_record.extend_from_slice(&[RECORD_TYPE_COMMIT]);
+        commit_record.extend_from_slice(&checksum.to_le_bytes());
+        commit_record.extend_from_slice(&tx_id.to_le_bytes());
 
-        Self::align_position(&mut file)?;
+        // Write commit record and flush while holding file lock (fast path)
+        // Then capture the raw fd for sync_all outside the lock.
+        #[cfg(unix)]
+        let raw_fd: Option<std::os::raw::c_int> = {
+            use std::os::unix::io::AsRawFd;
+            let mut file = self.file.lock();
+            if !commit_record.is_empty() {
+                file.write_all(&commit_record)?;
+            }
+            Self::align_position(&mut file)?;
+            file.flush()?;
+            Some(file.as_raw_fd())
+        }; // release file lock before sync_all
+        #[cfg(not(unix))]
+        let raw_fd: Option<std::os::raw::c_int> = {
+            let mut file = self.file.lock();
+            if !commit_record.is_empty() {
+                file.write_all(&commit_record)?;
+            }
+            Self::align_position(&mut file)?;
+            file.flush()?;
+            None
+        };
 
-        file.flush()?;
+        // sync_all() WITHOUT holding the file lock to avoid blocking all WAL writers.
+        // Use the raw fd obtained under the lock — it remains valid as long as the file exists.
         if self.sync_mode == SyncMode::Normal {
-            file.sync_all()?;
+            #[cfg(unix)]
+            if let Some(fd) = raw_fd {
+                let ret = unsafe { libc::fsync(fd) };
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let file = self.file.lock();
+                file.sync_all()?;
+            }
         }
 
-        drop(file);
         self.committed_txs.lock().insert(tx_id);
         Ok(())
     }

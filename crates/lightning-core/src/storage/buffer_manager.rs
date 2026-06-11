@@ -456,41 +456,32 @@ impl BufferManager {
         let mut total_reclaimed = 0;
         for shard in &self.shards {
             // Phase 1: scan under READ lock to find candidates
-            let candidates: Vec<usize> = {
+            // Phase 1 & 2 combined under read lock: collect candidates + their keys
+            // Store the expected key alongside each candidate to detect reassignment.
+            struct CleanupCandidate {
+                slot_idx: usize,
+                expected_key: Option<(u64, u64)>,
+            }
+            let mut to_flush: Vec<(Arc<FileHandle>, u64, Vec<u8>)> = Vec::new();
+            let mut to_cleanup: Vec<CleanupCandidate> = Vec::new();
+            {
                 let pool = shard.read();
-                let mut cand = Vec::new();
                 for i in 0..pool.slots.len() {
                     let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                     let version = pool.slots[i].frame.version.load(Ordering::Acquire);
                     if pin_count == 0 && version != 0 && version < min_active_ts
                         && version & UNCOMMITTED_BIT == 0
                     {
-                        cand.push(i);
-                    }
-                }
-                cand
-            };
-
-            // Phase 2: collect dirty pages that need flushing
-            let mut to_flush: Vec<(Arc<FileHandle>, u64, Vec<u8>)> = Vec::new();
-            let mut to_cleanup: Vec<usize> = Vec::new();
-            {
-                let pool = shard.read();
-                for &i in &candidates {
-                    let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
-                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                    if pin_count == 0 && version != 0 && version < min_active_ts
-                        && version & UNCOMMITTED_BIT == 0
-                    {
+                        let key = pool.slots[i].key;
                         if pool.slots[i].dirty {
-                            if let Some((fid, pid)) = pool.slots[i].key {
+                            if let Some((fid, pid)) = key {
                                 if let Some(fh) = pool.file_handles.get(&fid) {
                                     let data = pool.slots[i].frame.as_slice().to_vec();
                                     to_flush.push((Arc::clone(fh), pid, data));
                                 }
                             }
                         }
-                        to_cleanup.push(i);
+                        to_cleanup.push(CleanupCandidate { slot_idx: i, expected_key: key });
                     }
                 }
             } // release read lock
@@ -501,14 +492,19 @@ impl BufferManager {
             }
 
             // Phase 4: acquire WRITE lock to update slot state
+            // Verify that the slot key hasn't changed since Phase 2 to prevent
+            // page_to_slots mapping corruption (TOCTOU race).
             if !to_cleanup.is_empty() {
                 let mut pool = shard.write();
-                for &i in &to_cleanup {
+                for c in &to_cleanup {
+                    let i = c.slot_idx;
                     // Re-check conditions under write lock (slot may have changed)
                     let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                     let version = pool.slots[i].frame.version.load(Ordering::Acquire);
                     if pin_count == 0 && version != 0 && version < min_active_ts
                         && version & UNCOMMITTED_BIT == 0
+                        // Verify key hasn't been reassigned since Phase 2
+                        && pool.slots[i].key == c.expected_key
                     {
                         if let Some(key) = pool.slots[i].key {
                             if let Some(slots) = pool.page_to_slots.get_mut(&key) {
@@ -845,17 +841,17 @@ impl BufferManager {
     /// Used by transaction commit to flush only modified pages instead of
     /// the entire buffer pool, avoiding unnecessary I/O spikes.
     pub fn flush_pages(&self, pages: &[(u64, u64)]) {
-        use std::collections::HashSet;
-        let mut by_shard: Vec<HashSet<(u64, u64)>> = vec![HashSet::new(); self.num_shards];
+        use std::collections::{HashMap, HashSet};
+        let mut by_shard: HashMap<usize, HashSet<(u64, u64)>> = HashMap::new();
         for &key in pages {
             let shard_idx = self.get_shard_idx(key);
-            by_shard[shard_idx].insert(key);
+            by_shard.entry(shard_idx).or_default().insert(key);
         }
-        for (shard_idx, target_keys) in by_shard.iter().enumerate() {
+        for (shard_idx, target_keys) in &by_shard {
             if target_keys.is_empty() {
                 continue;
             }
-            let mut pool = self.shards[shard_idx].write();
+            let mut pool = self.shards[*shard_idx].write();
             for i in 0..pool.slots.len() {
                 if pool.slots[i].dirty {
                     if let Some(key) = pool.slots[i].key {
