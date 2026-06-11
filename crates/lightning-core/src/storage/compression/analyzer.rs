@@ -133,7 +133,10 @@ impl CompressionAnalyzer {
                 }
             }
             (Value::Number(v1), Value::Number(v2)) => {
-                if *data_type == LogicalType::Int64 || *data_type == LogicalType::Int32 {
+                if matches!(*data_type,
+                    LogicalType::Int8 | LogicalType::Int16 | LogicalType::Int32 | LogicalType::Int64 |
+                    LogicalType::Uint8 | LogicalType::Uint16 | LogicalType::Uint32 | LogicalType::Uint64
+                ) {
                     let min_val = v1 as i64;
                     let max_val = v2 as i64;
                     let range = (max_val as i128 - min_val as i128) as u64;
