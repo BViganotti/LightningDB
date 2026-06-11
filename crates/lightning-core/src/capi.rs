@@ -148,8 +148,4 @@ pub extern "C" fn lightning_destroy_string(s: *mut c_char) {
     }
 }
 
-#[no_mangle]
-#[deprecated(note = "renamed to lightning_destroy_string")]
-pub extern "C" fn kuzu_destroy_string(s: *mut c_char) {
-    lightning_destroy_string(s)
-}
+

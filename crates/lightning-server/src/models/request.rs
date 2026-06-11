@@ -163,4 +163,6 @@ pub struct ConsolidateRequest {
     pub contradiction_cosine_min: Option<f64>,
     #[serde(default)]
     pub contradiction_length_sim_min: Option<f64>,
+    #[serde(default)]
+    pub max_comparisons_per_entity: Option<usize>,
 }
