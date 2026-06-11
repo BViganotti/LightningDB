@@ -412,22 +412,24 @@ ORDER BY n_mod".to_string();
             }
         }
 
-        // Bulk write back all ranks using a single parameterized UNWIND batch query
+        // Bulk write back all ranks using paired UNWIND on a list of {id, rank} structs.
+        // Each node gets its own computed rank — unlike the previous buggy approach
+        // where $ranks[0] was applied to every matched node, giving all nodes the same rank.
         if !all_ids.is_empty() {
-            let mut batch_ids: Vec<Value> = Vec::with_capacity(all_ids.len());
-            let mut batch_ranks: Vec<Value> = Vec::with_capacity(all_ids.len());
+            let mut updates: Vec<Value> = Vec::with_capacity(all_ids.len());
             for id in &all_ids {
                 if let Some(rank) = ranks.get(id) {
-                    batch_ids.push(Value::String(id.clone()));
-                    batch_ranks.push(Value::Number(*rank));
+                    updates.push(Value::Struct(vec![
+                        ("id".to_string(), Value::String(id.clone())),
+                        ("rank".to_string(), Value::Number(*rank)),
+                    ]));
                 }
             }
-            if !batch_ids.is_empty() {
-                let batch_update = "UNWIND $ids AS id WITH id MATCH (n:CodeNode {id: id}) \
-                     SET n.page_rank = $ranks[0]".to_string();
+            if !updates.is_empty() {
+                let batch_update = "UNWIND $updates AS row MATCH (n:CodeNode {id: row.id}) \
+                     SET n.page_rank = row.rank".to_string();
                 let mut params = HashMap::new();
-                params.insert("ids".to_string(), Value::List(batch_ids));
-                params.insert("ranks".to_string(), Value::List(batch_ranks));
+                params.insert("updates".to_string(), Value::List(updates));
                 let _ = conn.execute(&batch_update, Some(params));
             }
         }
