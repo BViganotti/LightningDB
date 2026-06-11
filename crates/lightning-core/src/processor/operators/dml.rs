@@ -804,7 +804,8 @@ impl PhysicalOperator for PhysicalCreateRel {
                 }
             }
             // Auto-build CSR indices after insert
-            database.storage_manager.read().mark_csr_stale(&self.table_name);
+            // Acquire write lock explicitly to avoid deadlock from read→write upgrade
+            database.storage_manager.write().mark_csr_stale(&self.table_name);
         }
         if self
             .shared_state

@@ -107,14 +107,17 @@ impl PhysicalOperator for PhysicalPageRank {
         let mut out_degrees = vec![0usize; num_nodes];
         let mut pr_scores = vec![0.0f64; num_nodes];
 
+        // Collect CSR references once, outside the per-node loop
+        let csrs: Vec<_> = self.rel_table_names.iter()
+            .filter_map(|r| storage.fwd_csr.get(r))
+            .collect();
+
         for (local_idx, &nid) in active_nodes.iter().enumerate() {
             pr_scores[local_idx] = 1.0 / (num_nodes as f64);
 
             let mut deg = 0;
-            for rel in &self.rel_table_names {
-                if let Some(csr) = storage.fwd_csr.get(rel) {
-                    let _ = csr.for_each_neighbor(bm, nid, tx, |_| deg += 1);
-                }
+            for csr in &csrs {
+                let _ = csr.for_each_neighbor(bm, nid, tx, |_| deg += 1);
             }
             out_degrees[local_idx] = deg;
         }

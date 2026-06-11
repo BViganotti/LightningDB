@@ -22,6 +22,7 @@ pub struct PhysicalASP {
     bfs_src_id: u64,
     bfs_depth: u32,
     bfs_phase: BFSPhase,
+    cached_csr: Option<Arc<CSRIndex>>,
 }
 
 enum BFSPhase {
@@ -53,9 +54,11 @@ impl PhysicalASP {
             bfs_src_id: 0,
             bfs_depth: 0,
             bfs_phase: BFSPhase::Idle,
+            cached_csr: None,
         }
     }
 
+    /// Get the CSR index, caching it so it's only fetched once per batch.
     fn get_csr(&self, database: &Database, tx: &crate::transaction::transaction_manager::Transaction) -> Option<Arc<CSRIndex>> {
         let sm = database.storage_manager.read();
         let _ = sm.ensure_csr_fresh(&self.rel_table_name, &database.buffer_manager, tx);
@@ -76,7 +79,10 @@ impl PhysicalASP {
         self.bfs_src_id = src_id;
 
         while let Some(current) = self.bfs_queue.pop_front() {
-            let dist = self.bfs_distance[&current];
+            let dist = match self.bfs_distance.get(&current) {
+                Some(&d) => d,
+                None => continue,
+            };
             if dist >= self.max_depth {
                 continue;
             }
@@ -172,8 +178,12 @@ impl PhysicalOperator for PhysicalASP {
                             };
                             self.chunk_row_idx += 1;
 
-                            if let Some(csr) = self.get_csr(database, tx) {
-                                self.run_bfs(&csr, src_id, bm, tx)?;
+                            // Cache CSR for the duration of processing this chunk
+                            if self.cached_csr.is_none() {
+                                self.cached_csr = self.get_csr(database, tx);
+                            }
+                            if let Some(ref csr) = self.cached_csr {
+                                self.run_bfs(csr, src_id, bm, tx)?;
                                 let result_chunk = self.build_chunk_for_source(src_id);
                                 if result_chunk.batch.num_rows() > 0 {
                                     self.results.push_back(result_chunk);
@@ -184,6 +194,7 @@ impl PhysicalOperator for PhysicalASP {
                             }
                         } else {
                             self.current_chunk = None;
+                            self.cached_csr = None;
                             self.bfs_phase = BFSPhase::Idle;
                         }
                     }

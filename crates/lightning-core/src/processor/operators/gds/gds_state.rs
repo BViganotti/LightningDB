@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 pub struct GDSFrontier {
-    nodes: Vec<AtomicU32>,
+    pub(crate) nodes: Vec<AtomicU32>,
     active_nodes: std::sync::Mutex<Vec<u32>>,
+    num_nodes: usize,
 }
 
 impl GDSFrontier {
@@ -15,17 +16,19 @@ impl GDSFrontier {
         Self {
             nodes,
             active_nodes: std::sync::Mutex::new(Vec::new()),
+            num_nodes,
         }
     }
 
     pub fn is_visited(&self, node_id: usize) -> bool {
-        self.nodes[node_id].load(Ordering::Relaxed) != u32::MAX
+        // Use Acquire to synchronize with the SeqCst store in visit()
+        self.nodes[node_id].load(Ordering::Acquire) != u32::MAX
     }
 
     pub fn visit(&self, node_id: usize, distance: u32) -> bool {
         // Returns true if we successfully visited for the first time
         let first_visit = self.nodes[node_id]
-            .compare_exchange(u32::MAX, distance, Ordering::SeqCst, Ordering::Relaxed)
+            .compare_exchange(u32::MAX, distance, Ordering::SeqCst, Ordering::Acquire)
             .is_ok();
         if first_visit {
             self.active_nodes.lock().unwrap().push(node_id as u32);
@@ -34,13 +37,14 @@ impl GDSFrontier {
     }
 
     pub fn get_distance(&self, node_id: usize) -> u32 {
-        self.nodes[node_id].load(Ordering::Relaxed)
+        self.nodes[node_id].load(Ordering::Acquire)
     }
 
     pub fn clear(&mut self) {
         let active = std::mem::take(&mut *self.active_nodes.lock().unwrap());
         for &node_id in &active {
-            self.nodes[node_id as usize].store(u32::MAX, Ordering::Relaxed);
+            // Use Release to ensure prior reads complete before clear is visible
+            self.nodes[node_id as usize].store(u32::MAX, Ordering::Release);
         }
     }
 }
@@ -62,8 +66,14 @@ impl GDSState {
 
     pub fn swap_frontiers(&mut self) {
         std::mem::swap(&mut self.current_frontier, &mut self.next_frontier);
-        if let Some(frontier) = Arc::get_mut(&mut self.next_frontier) {
-            frontier.clear();
+        // If Arc::get_mut fails (refcount > 1 due to clones),
+        // create a fresh frontier instead of silently skipping clear()
+        if Arc::get_mut(&mut self.next_frontier).is_none() {
+            let num_nodes = self.current_frontier.num_nodes;
+            self.next_frontier = Arc::new(GDSFrontier::new(num_nodes));
+        } else {
+            // SAFETY: just verified get_mut returns Some
+            Arc::get_mut(&mut self.next_frontier).unwrap().clear();
         }
         self.iteration += 1;
     }

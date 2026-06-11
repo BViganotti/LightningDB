@@ -68,15 +68,14 @@ impl LazyCatalog {
     }
 
     pub fn save_if_needed(&self, current_tx_count: u64) -> Result<()> {
-        let needs_save = self.is_dirty()
-            || (current_tx_count.saturating_sub(self.last_saved_tx_count.load(Ordering::Acquire))
-                >= CATALOG_SAVE_TX_INTERVAL);
+        let dirty = self.dirty.load(Ordering::Acquire);
+        let last_saved = self.last_saved_tx_count.load(Ordering::Acquire);
+        let tx_since_last_save = current_tx_count.saturating_sub(last_saved);
 
-        if !needs_save {
+        if !dirty && tx_since_last_save < CATALOG_SAVE_TX_INTERVAL {
             debug!(
                 "Catalog save skipped: dirty={}, tx_since_last_save={}",
-                self.is_dirty(),
-                current_tx_count.saturating_sub(self.last_saved_tx_count.load(Ordering::Acquire))
+                dirty, tx_since_last_save,
             );
             return Ok(());
         }
@@ -92,7 +91,19 @@ impl LazyCatalog {
     /// Save the catalog to disk using an already-acquired lock guard reference.
     /// The caller passes a reference to the locked Catalog, and this method uses
     /// it directly instead of acquiring its own lock.
+    /// Returns an error if the provided catalog reference does not match
+    /// this LazyCatalog's inner catalog (prevents saving a stale/foreign catalog).
     pub fn force_save_with_catalog(&self, catalog: &Catalog) -> Result<()> {
+        // Verify the catalog matches — we compare the pointer to the inner lock's data.
+        // This ensures we're not saving a stale/foreign catalog that bypasses dirty tracking.
+        let inner_guard = self.inner.read();
+        if !std::ptr::eq(catalog as *const Catalog, &*inner_guard as *const Catalog) {
+            return Err(crate::LightningError::Database(
+                "force_save_with_catalog: catalog reference does not match inner catalog".into()
+            ));
+        }
+        drop(inner_guard);
+
         let current = self.last_saved_tx_count.load(Ordering::Acquire);
         let path = match self.get_path() {
             Some(p) => p,

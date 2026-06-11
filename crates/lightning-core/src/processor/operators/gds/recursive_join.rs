@@ -57,7 +57,10 @@ impl PhysicalRecursiveJoin {
         let bm = &db.buffer_manager;
 
         let max_id = match storage.get_table(&self.dst_node_table) {
-            Some(t) => t.next_row_id.load(std::sync::atomic::Ordering::SeqCst),
+            Some(t) => {
+                let nid = t.next_row_id.load(std::sync::atomic::Ordering::SeqCst);
+                if nid == 0 { 1 } else { nid }
+            }
             None => {
                 return Err(crate::LightningError::Internal(format!(
                     "destination node table '{}' not found",
@@ -122,7 +125,30 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if self.src_col_idx.is_none() {
-            self.src_col_idx = Some(0);
+            // Determine src_col_idx from the src_var name by matching against child schema
+            if let Some(chunk) = self.child.get_next(database, tx, params)? {
+                let schema = chunk.batch.schema();
+                let idx = schema.fields().iter().position(|f| f.name() == &self.src_var);
+                self.src_col_idx = idx;
+                // Put the chunk back into output_buffer for processing
+                let src_idx = self.src_col_idx
+                    .ok_or_else(|| crate::LightningError::Internal(format!(
+                        "src_var '{}' not found in child schema", self.src_var
+                    )))?;
+                let num_rows = chunk.num_rows();
+                for i in 0..num_rows {
+                    let val = Value::from_arrow(chunk.batch.column(src_idx), i);
+                    if let Value::Node(id) = val {
+                        let bfs_results = self.execute_bfs(database, tx, id)?;
+                        for (dst, depth) in bfs_results {
+                            self.output_buffer.push_back((id, dst, depth));
+                        }
+                    }
+                }
+            } else {
+                self.exhausted_child = true;
+            }
+            // Fall through to check output_buffer below
         }
 
         while !self.exhausted_child && self.output_buffer.is_empty() {
