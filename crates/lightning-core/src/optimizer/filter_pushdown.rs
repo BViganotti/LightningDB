@@ -159,6 +159,10 @@ impl FilterPushDown {
                     vars.insert(var.clone());
                 }
             }
+            LogicalOperator::Union(left, right, _) => {
+                Self::provided_variables(left, vars);
+                Self::provided_variables(right, vars);
+            }
             LogicalOperator::Delete(child, ..)
             | LogicalOperator::Set(child, _)
             | LogicalOperator::Sort(child, _)
@@ -167,7 +171,6 @@ impl FilterPushDown {
             | LogicalOperator::Flatten(child)
             | LogicalOperator::UnwindDedup(child, _)
             | LogicalOperator::Merge { child, .. }
-            | LogicalOperator::Union(child, ..)
             | LogicalOperator::OptionalMatch(child, ..)
             | LogicalOperator::With(child, ..)
             | LogicalOperator::SemiJoin(child, ..)
