@@ -787,6 +787,46 @@ impl BufferManager {
         }
     }
 
+    /// Flush only the specific set of (file_id, page_idx) pairs.
+    /// Used by transaction commit to flush only modified pages instead of
+    /// the entire buffer pool, avoiding unnecessary I/O spikes.
+    pub fn flush_pages(&self, pages: &[(u64, u64)]) {
+        use std::collections::HashSet;
+        let mut by_shard: Vec<HashSet<(u64, u64)>> = vec![HashSet::new(); self.num_shards];
+        for &key in pages {
+            let shard_idx = self.get_shard_idx(key);
+            by_shard[shard_idx].insert(key);
+        }
+        for (shard_idx, target_keys) in by_shard.iter().enumerate() {
+            if target_keys.is_empty() {
+                continue;
+            }
+            let mut pool = self.shards[shard_idx].write();
+            for i in 0..pool.slots.len() {
+                if pool.slots[i].dirty {
+                    if let Some(key) = pool.slots[i].key {
+                        if target_keys.contains(&key) {
+                            let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                            if version & UNCOMMITTED_BIT != 0 {
+                                continue;
+                            }
+                            if let Some(fh) = pool.file_handles.get(&key.0) {
+                                if let Err(e) = fh.write_page(key.1, pool.slots[i].frame.as_slice()) {
+                                    tracing::error!("flush_pages: write error on page {} file {}: {}", key.1, key.0, e);
+                                } else {
+                                    if pool.slots[i].dirty {
+                                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                                    }
+                                    pool.slots[i].dirty = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn reset_referenced(&self) {
         for shard in &self.shards {
             let mut pool = shard.write();

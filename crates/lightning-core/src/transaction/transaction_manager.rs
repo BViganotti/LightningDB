@@ -251,6 +251,13 @@ impl TransactionManager {
                         }
                     }
                 }
+
+                // Clean up page merge locks for this transaction's modified pages
+                // to prevent unbounded growth of the page_merge_locks map.
+                let mut merge_locks = self.page_merge_locks.lock();
+                for ((file_id, page_idx), _mods) in &page_groups {
+                    merge_locks.remove(&(*file_id, *page_idx));
+                }
             }
 
             // Phase 2: Update timestamps for non-bulk pages
@@ -271,14 +278,17 @@ impl TransactionManager {
                 version_info.commit_row(*row_id, commit_ts);
             }
 
-            // Flush all dirty committed frames to disk so subsequent scans
-            // can read from files instead of relying on buffer pool alone.
-            // DML operators (e.g. PhysicalCreateRel) write data to buffer
-            // pool frames via batch_append_values, which never writes to
-            // the data files. Without this flush, a scan that uses the
-            // direct file read path (scan_primitive_direct) will see
-            // empty pages and produce zero rows.
-            bm.flush_all();
+            // Flush only the pages modified by this transaction to disk.
+            // Previously used flush_all() which wrote ALL dirty committed pages
+            // across all transactions, causing unnecessary I/O spikes under
+            // concurrent write load. Using the tx's modified_pages list ensures
+            // only this transaction's data is persisted.
+            {
+                let modified = tx.modified_pages.lock();
+                if !modified.is_empty() {
+                    bm.flush_pages(&modified);
+                }
+            }
 
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
