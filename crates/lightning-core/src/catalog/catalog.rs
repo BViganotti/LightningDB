@@ -111,6 +111,19 @@ impl Catalog {
         matches!(name, "_id" | "_src" | "_dst")
     }
 
+    fn get_table_mut(&mut self, table_name: &str) -> Result<&mut dyn TableLike, crate::LightningError> {
+        if let Some(node) = self.node_tables.get_mut(table_name) {
+            Ok(node as &mut dyn TableLike)
+        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
+            Ok(rel as &mut dyn TableLike)
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                table_name
+            )))
+        }
+    }
+
     pub fn add_column_to_table(
         &mut self,
         table_name: &str,
@@ -123,36 +136,18 @@ impl Catalog {
                 col_name
             )));
         }
-        if let Some(node) = self.node_tables.get_mut(table_name) {
-            if node.properties.iter().any(|p| p.name == col_name) {
-                return Err(crate::LightningError::Database(format!(
-                    "Column '{}' already exists in table '{}'",
-                    col_name, table_name
-                )));
-            }
-            node.properties.push(PropertyDefinition {
-                name: col_name,
-                type_: col_type,
-            });
-            Ok(())
-        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
-            if rel.properties.iter().any(|p| p.name == col_name) {
-                return Err(crate::LightningError::Database(format!(
-                    "Column '{}' already exists in table '{}'",
-                    col_name, table_name
-                )));
-            }
-            rel.properties.push(PropertyDefinition {
-                name: col_name,
-                type_: col_type,
-            });
-            Ok(())
-        } else {
-            Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                table_name
-            )))
+        let props = self.get_table_mut(table_name)?.properties_mut();
+        if props.iter().any(|p| p.name == col_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Column '{}' already exists in table '{}'",
+                col_name, table_name
+            )));
         }
+        props.push(PropertyDefinition {
+            name: col_name,
+            type_: col_type,
+        });
+        Ok(())
     }
 
     pub fn remove_column_from_table(
@@ -166,36 +161,17 @@ impl Catalog {
                 col_name
             )));
         }
-        if let Some(node) = self.node_tables.get_mut(table_name) {
-            let idx = node
-                .properties
-                .iter()
-                .position(|p| p.name == col_name)
-                .ok_or_else(|| {
-                    crate::LightningError::Database(format!(
-                        "Column '{}' not found in table '{}'",
-                        col_name, table_name
-                    ))
-                })?;
-            Ok(node.properties.remove(idx))
-        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
-            let idx = rel
-                .properties
-                .iter()
-                .position(|p| p.name == col_name)
-                .ok_or_else(|| {
-                    crate::LightningError::Database(format!(
-                        "Column '{}' not found in table '{}'",
-                        col_name, table_name
-                    ))
-                })?;
-            Ok(rel.properties.remove(idx))
-        } else {
-            Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                table_name
-            )))
-        }
+        let props = self.get_table_mut(table_name)?.properties_mut();
+        let idx = props
+            .iter()
+            .position(|p| p.name == col_name)
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!(
+                    "Column '{}' not found in table '{}'",
+                    col_name, table_name
+                ))
+            })?;
+        Ok(props.remove(idx))
     }
 
     pub fn rename_column_in_table(
@@ -209,50 +185,24 @@ impl Catalog {
                 "Cannot rename built-in column"
             )));
         }
-        if let Some(node) = self.node_tables.get_mut(table_name) {
-            if node.properties.iter().any(|p| p.name == new_name) {
-                return Err(crate::LightningError::Database(format!(
-                    "Column '{}' already exists in table '{}'",
-                    new_name, table_name
-                )));
-            }
-            let col = node
-                .properties
-                .iter_mut()
-                .find(|p| p.name == old_name)
-                .ok_or_else(|| {
-                    crate::LightningError::Database(format!(
-                        "Column '{}' not found in table '{}'",
-                        old_name, table_name
-                    ))
-                })?;
-            col.name = new_name.to_string();
-            Ok(())
-        } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
-            if rel.properties.iter().any(|p| p.name == new_name) {
-                return Err(crate::LightningError::Database(format!(
-                    "Column '{}' already exists in table '{}'",
-                    new_name, table_name
-                )));
-            }
-            let col = rel
-                .properties
-                .iter_mut()
-                .find(|p| p.name == old_name)
-                .ok_or_else(|| {
-                    crate::LightningError::Database(format!(
-                        "Column '{}' not found in table '{}'",
-                        old_name, table_name
-                    ))
-                })?;
-            col.name = new_name.to_string();
-            Ok(())
-        } else {
-            Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                table_name
-            )))
+        let props = self.get_table_mut(table_name)?.properties_mut();
+        if props.iter().any(|p| p.name == new_name) {
+            return Err(crate::LightningError::Database(format!(
+                "Column '{}' already exists in table '{}'",
+                new_name, table_name
+            )));
         }
+        let col = props
+            .iter_mut()
+            .find(|p| p.name == old_name)
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!(
+                    "Column '{}' not found in table '{}'",
+                    old_name, table_name
+                ))
+            })?;
+        col.name = new_name.to_string();
+        Ok(())
     }
 
     pub fn rename_table(
