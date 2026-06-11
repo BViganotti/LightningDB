@@ -2,6 +2,8 @@ use crate::processor::{DataChunk, PhysicalOperator};
 use crate::Result;
 use std::collections::VecDeque;
 
+const MAX_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
 pub struct PhysicalAccumulate {
     child: Box<dyn PhysicalOperator>,
     buffer: Option<VecDeque<DataChunk>>,
@@ -28,7 +30,14 @@ impl PhysicalOperator for PhysicalAccumulate {
         }
 
         let mut buffer = VecDeque::new();
+        let mut buffered_bytes = 0usize;
         while let Some(chunk) = self.child.get_next(database, tx, params)? {
+            let chunk_bytes = chunk.batch.get_array_memory_size();
+            if buffered_bytes + chunk_bytes > MAX_BUFFER_BYTES && !buffer.is_empty() {
+                buffer.push_front(chunk);
+                break;
+            }
+            buffered_bytes += chunk_bytes;
             buffer.push_back(chunk);
         }
         let result = buffer.pop_front();
