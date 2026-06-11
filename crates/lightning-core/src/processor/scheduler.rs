@@ -28,43 +28,35 @@ impl Scheduler {
         let (ch_tx, rx) = bounded(64);
         let params_arc = params.map(Arc::new);
 
-        // Try to parallelize blocking operators (Sort, Aggregate) into
-        // N parallel workers + a merge step.
         if self.num_threads > 1 && operator.is_parallel_safe() {
             if let Some(merged) = operator.try_parallelize(self.num_threads)? {
-                let mut op = merged;
-                loop {
-                    match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
-                        Ok(Some(chunk)) => {
-                            if ch_tx.send(Ok(chunk)).is_err() { break; }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            let _ = ch_tx.send(Err(e));
-                            break;
+                let db = Arc::clone(&database);
+                let tx_clone = Arc::clone(&tx);
+                let p_clone = params_arc.clone();
+                self.pool.spawn(move || {
+                    let mut op = merged;
+                    loop {
+                        match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
+                            Ok(Some(chunk)) => {
+                                if ch_tx.send(Ok(chunk)).is_err() {
+                                    tracing::warn!("Failed to send chunk from merged worker: receiver dropped");
+                                    break;
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(e) => {
+                                if ch_tx.send(Err(e)).is_err() {
+                                    tracing::warn!("Failed to send error from merged worker: receiver dropped");
+                                }
+                                break;
+                            }
                         }
                     }
-                }
+                });
                 drop(ch_tx);
                 return Ok(rx);
             }
-        }
 
-        if self.num_threads == 1 || !operator.is_parallel_safe() {
-            let mut op = operator;
-            loop {
-                match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
-                    Ok(Some(chunk)) => {
-                        if ch_tx.send(Ok(chunk)).is_err() { break; }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        let _ = ch_tx.send(Err(e));
-                        break;
-                    }
-                }
-            }
-        } else {
             for i in 0..self.num_threads {
                 let mut op = operator.clone_box();
                 op.set_partition(i, self.num_threads);
@@ -76,18 +68,38 @@ impl Scheduler {
                     match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
                         Ok(Some(chunk)) => {
                             if ch_tx.send(Ok(chunk)).is_err() {
+                                tracing::warn!("Failed to send chunk from worker {i}: receiver dropped");
                                 break;
                             }
                         }
                         Ok(None) => break,
                         Err(e) => {
                             if ch_tx.send(Err(e)).is_err() {
-                                tracing::warn!("Failed to send query error to channel");
+                                tracing::warn!("Failed to send error from worker {i}: receiver dropped");
                             }
                             break;
                         }
                     }
                 });
+            }
+        } else {
+            let mut op = operator;
+            loop {
+                match op.get_next(&database, &tx, params_arc.as_ref().map(|p| p.as_ref())) {
+                    Ok(Some(chunk)) => {
+                        if ch_tx.send(Ok(chunk)).is_err() {
+                            tracing::warn!("Failed to send chunk from single-threaded operator: receiver dropped");
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        if ch_tx.send(Err(e)).is_err() {
+                            tracing::warn!("Failed to send error from single-threaded operator: receiver dropped");
+                        }
+                        break;
+                    }
+                }
             }
         }
         drop(ch_tx);
