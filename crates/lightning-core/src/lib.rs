@@ -447,10 +447,17 @@ impl Database {
         let bm_clone = Arc::clone(&buffer_manager);
         let vacuum_interval_ms = std::cmp::max(100, config.vacuum_interval_ms);
         let vacuum_handle = std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(vacuum_interval_ms));
-            if bm_clone.is_shutting_down() {
-                bm_clone.flush_all();
-                break;
+            // Check shutdown flag at 100ms intervals regardless of configured interval
+            // so that Database::drop never blocks longer than 100ms on join.
+            let check_interval = std::cmp::min(vacuum_interval_ms, 100);
+            let mut elapsed = 0u64;
+            while elapsed < vacuum_interval_ms {
+                std::thread::sleep(std::time::Duration::from_millis(check_interval));
+                elapsed += check_interval;
+                if bm_clone.is_shutting_down() {
+                    bm_clone.flush_all();
+                    return;
+                }
             }
             let min_ts = tm_clone.get_min_active_read_ts();
             if let Err(e) = bm_clone.reclaim_expired_versions(min_ts) {

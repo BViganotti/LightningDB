@@ -667,6 +667,15 @@ mod tests {
     use crate::SystemConfig;
     use tempfile::tempdir;
 
+    fn small_db_config() -> SystemConfig {
+        SystemConfig {
+            buffer_pool_size: 64 * 1024 * 1024, // 64MB — small enough for tests
+            prefetch_enabled: false,
+            vacuum_interval_ms: 86_400_000_000, // very large: never runs during test
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_resize_bucket_count() {
         let dir = tempdir().expect("internal invariant violated");
@@ -683,13 +692,14 @@ mod tests {
     #[test]
     fn test_resize_updates_header() {
         let dir = tempdir().expect("internal invariant violated");
-        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
+        let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
         let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
+        index.resize(bm, &tx).expect("internal invariant violated");
 
         // Resize to 128
         index.resize(bm, &tx).expect("internal invariant violated");
@@ -712,7 +722,7 @@ mod tests {
     #[test]
     fn test_double_resize() {
         let dir = tempdir().expect("internal invariant violated");
-        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
+        let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
@@ -740,7 +750,7 @@ mod tests {
         let index = HashIndex::open_or_create_with_buckets(&path, 1).expect("internal invariant violated");
         assert_eq!(index.buckets(), 1);
 
-        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
+        let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let bm = &db.buffer_manager;
         let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
@@ -753,7 +763,7 @@ mod tests {
     #[test]
     fn test_entries_scan_all() {
         let dir = tempdir().expect("internal invariant violated");
-        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
+        let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
@@ -785,7 +795,7 @@ mod tests {
     #[test]
     fn test_entries_empty_index() {
         let dir = tempdir().expect("internal invariant violated");
-        let db = Database::new(dir.path(), SystemConfig::default()).expect("internal invariant violated");
+        let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
