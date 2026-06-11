@@ -572,13 +572,20 @@ impl BufferManager {
         let shard_idx = self.get_shard_idx(key);
         let pool = self.shards[shard_idx].read();
         if let Some(wal) = &pool.wal {
+            // Iterate ALL slots for this page to find the correct tx_id.
+            // Previously used slot_indices.first() which could pick the wrong
+            // version when multiple versions of the same page exist concurrently
+            // (e.g. during concurrent write transactions).
             let tx_id = if let Some(slot_indices) = pool.page_to_slots.get(&key) {
-                if let Some(&idx) = slot_indices.first() {
+                let mut best_id = 0u64;
+                for &idx in slot_indices.iter() {
                     let version = pool.slots[idx].frame.version.load(std::sync::atomic::Ordering::Acquire);
-                    version & !UNCOMMITTED_BIT
-                } else {
-                    0
+                    let candidate = version & !UNCOMMITTED_BIT;
+                    if candidate > best_id {
+                        best_id = candidate;
+                    }
                 }
+                best_id
             } else {
                 0
             };

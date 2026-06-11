@@ -565,7 +565,15 @@ impl Database {
             return Err(LightningError::Config("Database is opened as read-only".into()));
         }
         let validated = self.validate_wasm_path(wasm_path.as_ref())?;
-        let wasm_func = crate::wasm_function::WasmFunction::load(validated, func_name)?;
+        // Read the file immediately after validation (within the same scope)
+        // to eliminate the TOCTOU race between path validation and file I/O.
+        // The validated path is the canonical, sandboxed path.
+        let wat_bytes = std::fs::read(&validated)
+            .map_err(|e| LightningError::Database(format!(
+                "Failed to read WASM file '{}': {e}",
+                validated.display()
+            )))?;
+        let wasm_func = crate::wasm_function::WasmFunction::from_wat_bytes(wat_bytes, func_name)?;
         let scalar = wasm_func.to_scalar_function();
         self.function_registry.register_scalar(scalar);
         tracing::info!("Registered WASM function: {}", func_name);
