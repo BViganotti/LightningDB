@@ -103,7 +103,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                     }
 
                     if depth < self.bounds.1 {
-                        if let Some(index) = csr {
+                        if let Some(ref index) = csr {
                             let neighbors = index.get_neighbors(&self.bm, node_id, tx)?;
                             for neighbor_id in neighbors {
                                 if !visited.contains(&neighbor_id) {
