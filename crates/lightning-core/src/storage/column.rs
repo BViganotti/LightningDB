@@ -113,17 +113,10 @@ impl Column {
     }
 
     pub fn to_field(&self) -> Field {
-        // Reflect the column's NOT NULL constraint when available.
-        // Default to nullable=true for backward compatibility.
-        let nullable = self
-            .null_fh
-            .as_ref()
-            .map(|_| !self.not_null)
-            .unwrap_or(true);
         Field::new(
             &self.name,
             crate::processor::arrow_utils::logical_type_to_arrow_type(&self.data_type),
-            nullable,
+            true,
         )
     }
 
