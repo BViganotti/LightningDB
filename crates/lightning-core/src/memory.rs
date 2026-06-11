@@ -1174,28 +1174,55 @@ impl MemoryStore {
             let bm = &db.buffer_manager;
             if let Ok(tx) = db.transaction_manager.begin(false) {
                 let storage = db.storage_manager.read();
-                if let Some(ref fts) = storage.fts_indexes.get(ENTITY_TABLE) {
-                    let _ = fts.delete(node_id);
-                    let _ = fts.commit();
-                }
                 if let Some(ref vec) = storage.vector_indexes.get(ENTITY_TABLE) {
                     let _ = vec.delete(node_id, bm, &tx);
                 }
+                // Remove hash index entry so a subsequent store_batch won't see a stale _id
+                if let Some(ref idx) = storage.get_index(ENTITY_TABLE) {
+                    let pk_value = Value::String(entity_id.to_string());
+                    let _ = idx.delete(bm, &pk_value, node_id, &tx);
+                }
                 drop(storage);
-                let _ = db.transaction_manager.commit(&tx, bm, &db);
+
+                // Commit database transaction first (carries vec/idx changes)
+                if db.transaction_manager.commit(&tx, bm, &db).is_ok() {
+                    // THEN commit FTS index so readers never see an FTS doc pointing
+                    // to a stale or uncommitted node_id
+                    let storage = db.storage_manager.read();
+                    if let Some(ref fts) = storage.fts_indexes.get(ENTITY_TABLE) {
+                        let _ = fts.delete(node_id);
+                        let _ = fts.commit();
+                    }
+                }
+            }
+        }
+
+        // Soft-delete the row in the entity table so get() won't return stale data.
+        // Use Cypher SET to mark valid_until as now (expired).
+        let now = Self::now_micros();
+        let conn = db.connect();
+        let soft_delete = format!(
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) SET e.valid_until = $now"
+        );
+        {
+            let mut params = std::collections::HashMap::new();
+            params.insert("id".to_string(), Value::String(entity_id.to_string()));
+            params.insert("now".to_string(), Value::Number(now as f64));
+            if let Err(e) = conn.execute(&soft_delete, Some(params)) {
+                tracing::warn!("MemoryStore: failed to soft-delete entity {}: {}", entity_id, e);
             }
         }
 
         // Delete relationships via Cypher.
-        // The binder requires all nodes in a MATCH clause to have explicit labels.
-        let conn = db.connect();
         let del_rels = format!(
             "MATCH (a:{ENTITY_TABLE})-[r:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) WHERE a.id = $id DELETE r"
         );
-        let mut params = std::collections::HashMap::new();
-        params.insert("id".to_string(), Value::String(entity_id.to_string()));
-        if let Err(e) = conn.execute(&del_rels, Some(params)) {
-            tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
+        {
+            let mut params = std::collections::HashMap::new();
+            params.insert("id".to_string(), Value::String(entity_id.to_string()));
+            if let Err(e) = conn.execute(&del_rels, Some(params)) {
+                tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
+            }
         }
 
         self.emit_cdc_event(Some(entity_id.to_string()), Some("DELETE".to_string()));

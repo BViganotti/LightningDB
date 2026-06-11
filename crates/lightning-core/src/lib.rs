@@ -1551,57 +1551,6 @@ impl Connection {
             }
         }
 
-        // Index all string columns into FTS (one document per row with all column values)
-        if let Some(fts) = fts_opt {
-            let string_cols: Vec<usize> = table
-                .columns
-                .iter()
-                .enumerate()
-                .filter(|(col_idx, col)| {
-                    *col_idx < final_batch.num_columns()
-                        && col.data_type == lightning_types::LogicalType::String
-                })
-                .map(|(i, _)| i)
-                .collect();
-
-            if !string_cols.is_empty() {
-                let col_names: Vec<String> = string_cols.iter()
-                    .map(|&i| table.columns[i].name.clone())
-                    .collect();
-                let mut batch_docs: Vec<(u64, Vec<(String, &str)>)> = Vec::with_capacity(num_rows);
-                let mut fields: Vec<(String, &str)> = Vec::new();
-                for i in 0..num_rows {
-                    let node_id = start_id + i as u64;
-                    fields.clear();
-                    for (j, &col_idx) in string_cols.iter().enumerate() {
-                        let array = final_batch.column(col_idx);
-                        if let Some(str_arr) =
-                            array.as_any().downcast_ref::<arrow::array::StringArray>()
-                        {
-                            if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
-                                fields.push((col_names[j].clone(), str_arr.value(i)));
-                            }
-                        }
-                    }
-                    if !fields.is_empty() {
-                        batch_docs.push((node_id, std::mem::take(&mut fields)));
-                    }
-                }
-                if !batch_docs.is_empty() {
-                    if let Err(e) = fts.insert_multi_field_batch(&batch_docs) {
-                        tracing::warn!(
-                            "FTS insert_multi_field_batch error for table {}: {}",
-                            table_name,
-                            e
-                        );
-                    }
-                }
-                if let Err(e) = fts.commit() {
-                    tracing::warn!("FTS commit error: {}", e);
-                }
-            }
-        }
-
         // Index all FixedSizeList(Float32) columns as vector embeddings
         if let Some(vec_idx) = vec_opt {
             let idx_dim = vec_idx.dimension();
@@ -1642,6 +1591,58 @@ impl Connection {
 
         db.storage_manager.read().flush_all_pending(&bm, &tx)?;
         db.transaction_manager.commit(&tx, &bm, &db)?;
+
+        // Commit FTS index AFTER the database transaction so readers never see
+        // an FTS document pointing to an uncommitted node_id.
+        if let Some(fts) = fts_opt {
+            let string_cols: Vec<usize> = table
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(col_idx, col)| {
+                    *col_idx < final_batch.num_columns()
+                        && col.data_type == lightning_types::LogicalType::String
+                })
+                .map(|(i, _)| i)
+                .collect();
+
+            if !string_cols.is_empty() {
+                let col_names: Vec<String> = string_cols.iter()
+                    .map(|&i| table.columns[i].name.clone())
+                    .collect();
+                let mut batch_docs: Vec<(u64, Vec<(String, &str)>)> = Vec::with_capacity(num_rows);
+                let mut fields: Vec<(String, &str)> = Vec::new();
+                for i in 0..num_rows {
+                    let node_id = start_id + i as u64;
+                    fields.clear();
+                    for (j, &col_idx) in string_cols.iter().enumerate() {
+                        let array = final_batch.column(col_idx);
+                        if let Some(str_arr) =
+                            array.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
+                            if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
+                                fields.push((col_names[j].clone(), str_arr.value(i)));
+                            }
+                        }
+                    }
+                    if !fields.is_empty() {
+                        batch_docs.push((node_id, std::mem::take(&mut fields)));
+                    }
+                }
+                if !batch_docs.is_empty() {
+                    if let Err(e) = fts.insert_multi_field_batch(&batch_docs) {
+                        tracing::warn!(
+                            "FTS insert_multi_field_batch error for table {}: {}",
+                            table_name,
+                            e,
+                        );
+                    }
+                }
+                if let Err(e) = fts.commit() {
+                    tracing::warn!("FTS commit error: {}", e);
+                }
+            }
+        }
 
         // Update catalog with the new row count
         {
