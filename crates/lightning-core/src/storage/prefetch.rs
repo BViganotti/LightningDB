@@ -199,8 +199,10 @@ impl PrefetchTracker {
                 if total >= self.min_observations as f64 {
                     let mut scored: Vec<((u64, u64), f64)> = entries
                         .iter()
-                        .map(|(k, w)| (*k, *w / total))
-                        .filter(|(_, conf)| *conf >= min_confidence)
+                        .filter_map(|(k, w)| {
+                            let conf = *w as f64 / total;
+                            if conf >= min_confidence { Some((*k, conf)) } else { None }
+                        })
                         .collect();
                     if !scored.is_empty() {
                         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

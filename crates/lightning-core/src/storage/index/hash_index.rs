@@ -112,9 +112,9 @@ impl HashIndex {
             bm.unpin_page(self.fh(), idx, frame);
         }
 
-        // 2. Zero out ALL bucket pages (old + new) before updating header
-        //    so concurrent lookups never see stale entries in wrong buckets
-        for page_idx in 1..=new_buckets {
+        // 2. Zero out only the NEW bucket pages (old entries in existing pages
+        //    will be overwritten during re-insertion in step 3).
+        for page_idx in (old_buckets + 1)..=new_buckets {
             let frame = bm.create_new_version(Arc::clone(self.fh()), page_idx, tx)?;
             let ptr = frame.as_ptr();
             unsafe {

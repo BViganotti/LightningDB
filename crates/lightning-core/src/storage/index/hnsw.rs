@@ -87,6 +87,7 @@ pub struct HnswIndex {
     entry_point: RwLock<Option<u64>>,
     max_level: RwLock<usize>,
     embeddings: RwLock<Vec<Vec<f32>>>,
+    visited_pool: parking_lot::Mutex<std::collections::HashSet<u64>>,
 }
 
 impl HnswIndex {
@@ -97,6 +98,7 @@ impl HnswIndex {
             entry_point: RwLock::new(None),
             max_level: RwLock::new(0),
             embeddings: RwLock::new(Vec::new()),
+            visited_pool: parking_lot::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -152,8 +154,11 @@ impl HnswIndex {
         let nodes = self.nodes.read();
         let embeddings = self.embeddings.read();
 
-        let mut visited = std::collections::HashSet::new();
-        visited.insert(entry);
+        let mut visited_pool = self.visited_pool.lock();
+        visited_pool.clear();
+        visited_pool.insert(entry);
+        // Use a local scope to release visited_pool before other RwLock reads
+        let visited = &mut *visited_pool;
 
         let mut candidates = BinaryHeap::new();
         let mut results = BinaryHeap::new();
