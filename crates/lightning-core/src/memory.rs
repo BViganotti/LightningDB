@@ -951,8 +951,10 @@ impl MemoryStore {
         Ok(self.batches_to_entities(&res.batches))
     }
 
-    pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+    pub fn expand(&self, entity_id: &str, hops: u32, _edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
+
+        let db = self.conn.client_context.database.clone();
 
         // Resolve entity_id to internal _id
         let start_id = match self.resolve_to_internal_id(entity_id) {
@@ -960,90 +962,59 @@ impl MemoryStore {
             None => return Ok(Vec::new()),
         };
 
-        // Fetch ALL relationships via the only Cypher query that works:
-        //   MATCH (a:Entity)-[:Relates]->(b:Entity) RETURN a.id, b.id
-        // WHERE/literal/property syntax on nodes in rel patterns has planner bugs.
-        let rel_query = format!(
-            "MATCH (a:{ENTITY_TABLE})-[:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) RETURN a.id, b.id"
-        );
-        let res = match self.conn.execute(&rel_query, None) {
-            Ok(r) => r,
+        // Use the CSR index for efficient BFS instead of loading ALL
+        // relationships into memory via Cypher MATCH (which is O(E) memory).
+        // The CSR index stores adjacency in a compressed sparse row format
+        // and provides O(degree(node)) neighbor iteration.
+        let tx = match db.transaction_manager.begin(true) {
+            Ok(t) => t,
             Err(_) => return Ok(Vec::new()),
         };
+        let bm = &db.buffer_manager;
 
-        // Column 1 (b.id) is UInt64Array with node _id values (planner bug).
-        // We resolve each string ID to _id for BFS consistency.
-        let mut total_rows = 0usize;
-        let mut edges: Vec<(u64, u64)> = Vec::new();
-        let mut resolver: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        resolver.insert(entity_id.to_string(), start_id);
+        let fwd_csr = {
+            let storage = db.storage_manager.read();
+            storage.fwd_csr.get(RELATES_TABLE).map(Arc::clone)
+        };
+        let bwd_csr = {
+            let storage = db.storage_manager.read();
+            storage.bwd_csr.get(RELATES_TABLE).map(Arc::clone)
+        };
 
-        for batch in &res.batches {
-            if batch.num_columns() < 2 { continue; }
-            total_rows += batch.num_rows();
-            let src_str = match batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
-                Some(a) => a,
-                None => { tracing::warn!("MemoryStore: expand col0 not StringArray (type={:?})", batch.column(0).data_type()); continue; }
-            };
-            let dst_id = if let Some(arr) = batch.column(1).as_any().downcast_ref::<UInt64Array>() {
-                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).map(|i| arr.value(i)).collect::<Vec<_>>())
-            } else if let Some(arr) = batch.column(1).as_any().downcast_ref::<arrow::array::Int64Array>() {
-                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).map(|i| arr.value(i) as u64).collect::<Vec<_>>())
-            } else if let Some(arr) = batch.column(1).as_any().downcast_ref::<arrow::array::StringArray>() {
-                Some((0..arr.len()).filter(|&i| arr.is_valid(i)).filter_map(|i| arr.value(i).parse::<u64>().ok()).collect::<Vec<_>>())
-            } else {
-                tracing::warn!("MemoryStore: expand col1 type={:?}", batch.column(1).data_type());
-                None
-            };
-            let dst_ids = match dst_id { Some(v) => v, None => continue };
-            tracing::warn!("MemoryStore: expand parsed {} edges (col1={} values)", src_str.len(), dst_ids.len());
-            for i in 0..src_str.len().min(dst_ids.len()) {
-                if !src_str.is_valid(i) { continue; }
-                let src_s = src_str.value(i).to_string();
-                let dst_i = dst_ids[i];
-                // Resolve src string ID to _id
-                let src_i = if let Some(&id) = resolver.get(&src_s) {
-                    id
-                } else {
-                    if let Some(id) = self.resolve_to_internal_id(&src_s) {
-                        resolver.insert(src_s, id);
-                        id
-                    } else {
-                        continue;
-                    }
-                };
-                edges.push((src_i, dst_i));
-            }
-        }
-        tracing::warn!("MemoryStore: expand parsed {} edges from {} rows", edges.len(), total_rows);
-
-        // Build bidirectional adjacency
-        let mut adj: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
-        for (s, d) in &edges {
-            adj.entry(*s).or_default().push(*d);
-            adj.entry(*d).or_default().push(*s);
-        }
-
-        // BFS
+        // BFS using CSR indexes
         let mut visited = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::new();
         visited.insert(start_id);
         queue.push_back((start_id, 0u32));
+
         while let Some((cur, depth)) = queue.pop_front() {
             if depth >= hops { continue; }
-            if let Some(neighbors) = adj.get(&cur) {
-                for &n in neighbors {
+
+            // Iterate forward neighbors
+            if let Some(ref csr) = fwd_csr {
+                let _ = csr.for_each_neighbor(bm, cur, &tx, |n| {
                     if visited.insert(n) {
                         queue.push_back((n, depth + 1));
                     }
-                }
+                });
+            }
+
+            // Iterate backward neighbors (treat graph as undirected)
+            if let Some(ref csr) = bwd_csr {
+                let _ = csr.for_each_neighbor(bm, cur, &tx, |n| {
+                    if visited.insert(n) {
+                        queue.push_back((n, depth + 1));
+                    }
+                });
             }
         }
+
+        let _ = db.transaction_manager.rollback(&db, &tx);
+
         visited.remove(&start_id);
         if visited.is_empty() { return Ok(Vec::new()); }
 
         // Look up entities by _id
-        if visited.is_empty() { return Ok(Vec::new()); }
         let ids: Vec<Value> = visited.iter().map(|&id| Value::Number(id as f64)).collect();
         let lookup = format!(
             "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
