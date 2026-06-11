@@ -356,13 +356,17 @@ impl Drop for Transaction {
         if self.finalized.swap(true, Ordering::SeqCst) {
             return;
         }
-        if self.is_read_only {
-            return;
-        }
+
+        // Clean up read_ts tracking for ALL transaction types (read-only and write).
+        // Previously the early return for is_read_only caused a read_ts leak:
+        // the active_read_ts counter was never decremented, keeping a stale minimum
+        // timestamp that prevented vacuum from reclaiming old MVCC versions.
         if let Some(ref weak_mgr) = self.tx_mgr {
             if let Some(mgr) = weak_mgr.upgrade() {
-                mgr.active_tx_ids.write().remove(&self.tx_id);
                 mgr.remove_read_ts(self.read_ts);
+                if !self.is_read_only {
+                    mgr.active_tx_ids.write().remove(&self.tx_id);
+                }
             } else {
                 tracing::warn!(
                     "Transaction {} dropped without commit/rollback; \
@@ -371,6 +375,11 @@ impl Drop for Transaction {
                 );
             }
         }
+
+        if self.is_read_only {
+            return;
+        }
+
         if let Some(ref weak_bm) = self.bm {
             if let Some(bm) = weak_bm.upgrade() {
                 if let Err(e) = bm.rollback_versions(self.tx_id) {
