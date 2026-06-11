@@ -13,11 +13,19 @@ use crate::server::AppState;
 
 pub async fn query_handler(
     DbConnection(conn): DbConnection,
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     RequestId(request_id): RequestId,
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<ApiResponse<QueryResponse>>, AppError> {
     let start = std::time::Instant::now();
+
+    let query_str = req.query.clone();
+    let timeout_ms = if req.timeout_ms > 0 {
+        req.timeout_ms
+    } else {
+        state.config.query_timeout_ms.unwrap_or(30_000)
+    };
+    let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
     let params = req.params.map(|p| {
         p.into_iter()
@@ -25,11 +33,16 @@ pub async fn query_handler(
             .collect::<std::collections::HashMap<_, _>>()
     });
 
-    let result = if let Some(ts) = req.snapshot_ts {
-        conn.execute_at(&req.query, ts, params)
-    } else {
-        conn.execute(&req.query, params)
-    }
+    let result = tokio::time::timeout(timeout_dur, tokio::task::spawn_blocking(move || {
+        if let Some(ts) = req.snapshot_ts {
+            conn.execute_at(&req.query, ts, params)
+        } else {
+            conn.execute(&req.query, params)
+        }
+    }))
+    .await
+    .map_err(|_| AppError::Timeout(timeout_ms))?
+    .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(AppError::from)?;
 
     let typed = TypedQueryResult::from(result);
@@ -37,7 +50,7 @@ pub async fn query_handler(
 
     tracing::info!(
         request_id = %request_id,
-        query = %req.query,
+        query = %query_str,
         duration_ms = duration,
         num_rows = typed.num_rows,
         "Query executed"

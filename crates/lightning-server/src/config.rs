@@ -64,6 +64,10 @@ pub struct CliArgs {
     /// If not set, authentication is disabled (open access).
     #[arg(long, env = "LIGHTNING_AUTH_TOKEN")]
     pub auth_token: Option<String>,
+
+    /// Query timeout in milliseconds (default: 30000)
+    #[arg(long, default_value_t = 30000, env = "LIGHTNING_QUERY_TIMEOUT_MS")]
+    pub query_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +86,7 @@ pub struct ServerConfig {
     pub startup_time: std::time::Instant,
     pub cors_allowed_origins: Vec<String>,
     pub auth_token: Option<String>,
+    pub query_timeout_ms: Option<u64>,
 }
 
 impl ServerConfig {
@@ -119,6 +124,7 @@ impl ServerConfig {
             startup_time: std::time::Instant::now(),
             cors_allowed_origins,
             auth_token: args.auth_token.clone(),
+            query_timeout_ms: Some(args.query_timeout_ms),
         }
     }
 

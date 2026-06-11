@@ -11,7 +11,6 @@ pub struct QueryRequest {
     #[serde(default)]
     pub snapshot_ts: Option<u64>,
     #[serde(default = "default_timeout")]
-    #[allow(dead_code)]
     pub timeout_ms: u64,
 }
 
