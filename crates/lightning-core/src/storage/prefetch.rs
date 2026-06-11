@@ -62,17 +62,6 @@ impl PrefetchTracker {
         entries.retain(|(_, w)| *w > 0.01);
     }
 
-    fn remove_if_empty<K, V>(map: &mut HashMap<K, Vec<V>>, key: &K)
-    where
-        K: std::cmp::Eq + std::hash::Hash,
-    {
-        if let Some(v) = map.get(key) {
-            if v.is_empty() {
-                map.remove(key);
-            }
-        }
-    }
-
     fn record_transition(
         trans: &mut HashMap<(u64, u64), Vec<((u64, u64), f64)>>,
         from: (u64, u64),
@@ -93,15 +82,7 @@ impl PrefetchTracker {
         }
     }
 
-    // Flag to skip removing empty vectors where this isn't critical
-        for (_, w) in entries.iter_mut() {
-            *w *= 1.0 - decay;
-        }
-        // Remove entries that decayed below threshold
-        entries.retain(|(_, w)| *w > 0.01);
-    }
-
-    fn record_transition(
+    fn record_transition_1st(
         trans: &mut HashMap<(u64, u64), Vec<((u64, u64), f64)>>,
         from: (u64, u64),
         to: (u64, u64),
@@ -169,7 +150,7 @@ impl PrefetchTracker {
 
                 // Record 1st-order: prev → current
                 let mut trans1 = self.transitions_1st.write();
-                Self::record_transition(&mut *trans1, prev_key, key, decay, max_entries);
+                Self::record_transition_1st(&mut *trans1, prev_key, key, decay, max_entries);
 
                 // Record 2nd-order: (prev_prev, prev) → current
                 if window.len() >= 2 {

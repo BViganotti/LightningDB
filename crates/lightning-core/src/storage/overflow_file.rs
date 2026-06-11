@@ -1,6 +1,6 @@
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::file_handle::FileHandle;
-use crate::Result;
+use crate::{LightningError, Result};
 use std::sync::Arc;
 
 pub struct OverflowFile {
