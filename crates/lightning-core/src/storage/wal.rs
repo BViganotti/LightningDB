@@ -432,25 +432,29 @@ impl WAL {
     const MAX_WAL_READ_SIZE: usize = 64 * 1024 * 1024; // 64 MB
 
     pub fn read_records_from(&self, offset: u64) -> Result<WALRecordIter> {
-        let mut file = self.file.lock();
-        let file_len = file.metadata()?.len();
+        let (buf, start) = {
+            let mut file = self.file.lock();
+            let file_len = file.metadata()?.len();
 
-        let start = if offset < WAL_HEADER_SIZE as u64 {
-            WAL_HEADER_SIZE as u64
-        } else {
-            offset
+            let start = if offset < WAL_HEADER_SIZE as u64 {
+                WAL_HEADER_SIZE as u64
+            } else {
+                offset
+            };
+
+            if start >= file_len {
+                return Ok(WALRecordIter { buf: Vec::new(), pos: 0, base_offset: start });
+            }
+
+            file.seek(SeekFrom::Start(start))?;
+            let remaining = (file_len - start) as usize;
+            let to_read = remaining.min(Self::MAX_WAL_READ_SIZE);
+            let mut buf = vec![0u8; to_read];
+            file.read_exact(&mut buf)?;
+            drop(file);
+
+            (buf, start)
         };
-
-        if start >= file_len {
-            return Ok(WALRecordIter { buf: Vec::new(), pos: 0, base_offset: start });
-        }
-
-        file.seek(SeekFrom::Start(start))?;
-        let remaining = (file_len - start) as usize;
-        let to_read = remaining.min(Self::MAX_WAL_READ_SIZE);
-        let mut buf = vec![0u8; to_read];
-        file.read_exact(&mut buf)?;
-        drop(file);
 
         Ok(WALRecordIter { buf, pos: 0, base_offset: start })
     }

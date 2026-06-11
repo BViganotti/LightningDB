@@ -637,10 +637,14 @@ impl BufferManager {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
                             synced_fids.lock().insert(fid);
+                            // The shard write lock ensures exclusive access to this slot.
+                            // No concurrent writes to dirty or dirty_count can occur.
+                            // The frame's version is checked above: uncommitted frames
+                            // (UNCOMMITTED_BIT set) are skipped and not flushed here.
                             if pool.slots[i].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
-                    }
-                    pool.slots[i].dirty = false;
+                                pool.dirty_count.fetch_sub(1, Ordering::Release);
+                            }
+                            pool.slots[i].dirty = false;
                         }
                     }
                 }
