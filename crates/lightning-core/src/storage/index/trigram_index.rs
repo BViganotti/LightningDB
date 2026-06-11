@@ -265,7 +265,7 @@ impl TrigramIndex {
             trigram_count += tris.len() as u64;
             for tri in tris {
                 let list = tri_map.entry(tri).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
+                if !list.contains(&row_id) {
                     list.push(row_id);
                 }
             }
@@ -274,7 +274,7 @@ impl TrigramIndex {
             bigram_count += bis.len() as u64;
             for bi in bis {
                 let list = bi_map.entry(bi).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
+                if !list.contains(&row_id) {
                     list.push(row_id);
                 }
             }
@@ -283,7 +283,7 @@ impl TrigramIndex {
             unigram_count += unis.len() as u64;
             for u in unis {
                 let list = uni_map.entry(u).or_insert_with(Vec::new);
-                if list.last() != Some(&row_id) && list.binary_search(&row_id).is_err() {
+                if !list.contains(&row_id) {
                     list.push(row_id);
                 }
             }

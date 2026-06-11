@@ -144,6 +144,10 @@ impl Connection {
         Ok(())
     }
 
+    fn quote_ident(name: &str) -> String {
+        format!("\"{}\"", name.replace('"', "\"\""))
+    }
+
     /// Create a node table with the given schema.
     ///
     /// ```no_run
@@ -158,14 +162,15 @@ impl Connection {
         columns: &[(&str, &str)],
         primary_key: Option<&str>,
     ) -> Result<()> {
+        let quoted_table = Self::quote_ident(table_name);
         let cols: Vec<String> = columns
             .iter()
-            .map(|(name, typ)| format!("{name} {typ}"))
+            .map(|(name, typ)| format!("{} {}", Self::quote_ident(name), typ))
             .collect();
         let pk_clause = primary_key
-            .map(|pk| format!(", PRIMARY KEY ({pk})"))
+            .map(|pk| format!(", PRIMARY KEY ({})", Self::quote_ident(pk)))
             .unwrap_or_default();
-        let stmt = format!("CREATE NODE TABLE {table_name} ({}{pk_clause})", cols.join(", "));
+        let stmt = format!("CREATE NODE TABLE {quoted_table} ({}{pk_clause})", cols.join(", "));
         self.execute_ddl(&stmt)
     }
 
@@ -177,22 +182,25 @@ impl Connection {
         to_table: &str,
         columns: &[(&str, &str)],
     ) -> Result<()> {
+        let quoted_table = Self::quote_ident(table_name);
+        let quoted_from = Self::quote_ident(from_table);
+        let quoted_to = Self::quote_ident(to_table);
         let cols: Vec<String> = columns
             .iter()
-            .map(|(name, typ)| format!("{name} {typ}"))
+            .map(|(name, typ)| format!("{} {}", Self::quote_ident(name), typ))
             .collect();
         let extra = if cols.is_empty() {
             String::new()
         } else {
             format!(", {}", cols.join(", "))
         };
-        let stmt = format!("CREATE REL TABLE {table_name} (FROM {from_table} TO {to_table}{extra})");
+        let stmt = format!("CREATE REL TABLE {quoted_table} (FROM {quoted_from} TO {quoted_to}{extra})");
         self.execute_ddl(&stmt)
     }
 
     /// Drop a table by name.
     pub fn drop_table(&self, table_name: &str) -> Result<()> {
-        self.execute_ddl(&format!("DROP TABLE {table_name}"))
+        self.execute_ddl(&format!("DROP TABLE {}", Self::quote_ident(table_name)))
     }
 
     // ── Bulk Insert ─────────────────────────────────────────────────

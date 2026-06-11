@@ -239,10 +239,10 @@ impl Column {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<bool> {
-        let offset = (row_id % 4096) as usize;
+        let row_id_usize = row_id as usize;
         {
             let pending = self.pending_nulls.lock();
-            if let Some(&(_off, val)) = pending.iter().rev().find(|(off, _)| *off == offset) {
+            if let Some(&(_rid, val)) = pending.iter().rev().find(|(rid, _)| *rid == row_id_usize) {
                 return Ok(val != 0);
             }
         }
@@ -1264,8 +1264,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.dirty.store(true, Ordering::Release);
-        let offset = (row_id % 4096) as usize;
-        self.pending_nulls.lock().push((offset, if is_null { 1 } else { 0 }));
+        self.pending_nulls.lock().push((row_id as usize, if is_null { 1 } else { 0 }));
         Ok(())
     }
 
@@ -1282,9 +1281,10 @@ impl Column {
         }
         let mut by_page: std::collections::HashMap<u64, Vec<(usize, u8)>> =
             std::collections::HashMap::new();
-        for (offset, val) in &pending {
-            let page_idx = *offset as u64 / 4096;
-            by_page.entry(page_idx).or_default().push((*offset, *val));
+        for (row_id, val) in &pending {
+            let page_idx = *row_id as u64 / 4096;
+            let offset_in_page = *row_id % 4096;
+            by_page.entry(page_idx).or_default().push((offset_in_page, *val));
         }
         for (page_idx, entries) in &by_page {
             while self.null_fh.get_num_pages() <= *page_idx {
@@ -1294,7 +1294,7 @@ impl Column {
             unsafe {
                 let ptr = frame.as_ptr();
                 for (offset, val) in entries {
-                    *ptr.add(*offset % 4096) = *val;
+                    *ptr.add(*offset) = *val;
                 }
             }
             bm.log_page_update(self.null_fh.file_id, *page_idx, frame.as_slice())?;

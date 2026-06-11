@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub struct SharedBuildSide {
     pub hash_table: HashMap<Value, Vec<usize>>,
     pub u64_hash_table: HashMap<u64, Vec<usize>>,
+    pub i64_hash_table: HashMap<i64, Vec<usize>>,
     pub build_chunks: Vec<RecordBatch>,
     pub chunk_offsets: Vec<usize>,
     pub build_row_count: usize,
@@ -62,6 +63,7 @@ impl HashJoin {
             shared_build: Arc::new(RwLock::new(SharedBuildSide {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
+                i64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
@@ -91,6 +93,7 @@ impl HashJoin {
             shared_build: Arc::new(RwLock::new(SharedBuildSide {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
+                i64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
@@ -123,6 +126,7 @@ impl HashJoin {
             shared_build: Arc::new(RwLock::new(SharedBuildSide {
                 hash_table: HashMap::new(),
                 u64_hash_table: HashMap::new(),
+                i64_hash_table: HashMap::new(),
                 build_chunks: Vec::new(),
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
@@ -194,8 +198,8 @@ impl HashJoin {
                     for row_idx in 0..num_rows {
                         if !arr.is_null(row_idx) {
                             shared
-                                .u64_hash_table
-                                .entry(arr.value(row_idx) as u64)
+                                .i64_hash_table
+                                .entry(arr.value(row_idx))
                                 .or_default()
                                 .push(base_offset + row_idx);
                         }
@@ -345,8 +349,8 @@ impl PhysicalOperator for HashJoin {
                                 None
                             } else {
                                 shared
-                                    .u64_hash_table
-                                    .get(&(arr.value(self.left_row_idx) as u64))
+                                    .i64_hash_table
+                                    .get(&arr.value(self.left_row_idx))
                             }
                         }
                         _ => {

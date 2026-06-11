@@ -716,16 +716,14 @@ impl BufferManager {
     fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<usize> {
         // Fast path: pop a free candidate if available
         if let Some(idx) = pool.free_candidates.pop_front() {
-            if pool.slots[idx].key.is_none() && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0 {
-                if pool.slots[idx].dirty {
-                    if let Some((fid, pid)) = pool.slots[idx].key {
-                        if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
-                        }
-                    }
-                }
+            if pool.slots[idx].key.is_none()
+                && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0
+                && !pool.slots[idx].dirty
+            {
                 return Ok(idx);
             }
+            // Re-queue for normal clock eviction path
+            pool.free_candidates.push_back(idx);
         }
 
         // Retry loop: if eviction fails (all pages pinned), wait and retry.

@@ -64,7 +64,8 @@ async fn request_id_middleware(
     let mut response = next.run(req).await;
     response.headers_mut().insert(
         header::HeaderName::from_static("x-request-id"),
-        header::HeaderValue::from_str(&request_id).unwrap(),
+        header::HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| header::HeaderValue::from_static("fallback-request-id")),
     );
     response
 }

@@ -129,17 +129,10 @@ impl HashIndex {
             bm.unpin_page(self.fh(), page_idx, frame);
         }
 
-        // 3. Update the in-memory count so insert_internal uses new_buckets
-        self.num_buckets.store(new_buckets, std::sync::atomic::Ordering::Release);
-
-        // 4. Re-insert all collected entries (uses local new_buckets, not header)
-        for (hash, key, row_id) in &entries {
-            self.insert_internal(bm, *hash, key, *row_id, tx)?;
-        }
-
-        // 5. Update header LAST — all pages are zeroed and entries re-inserted.
-        //    Use create_new_version so the BM tracks the header as dirty and
-        //    checkpoint will flush it atomically with all bucket pages.
+        // 3. Update header BEFORE re-insertion — insert_internal reads bucket count
+        //    from the header page, NOT from self.num_buckets. If we delay this
+        //    update, entries get inserted at hash % old_buckets but lookups
+        //    (which also read the header) hash at new_buckets → all misses.
         let header_frame = bm.create_new_version(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -150,6 +143,14 @@ impl HashIndex {
         }
         bm.log_page_update(self.file_handle.file_id, HEADER_PAGE_IDX, header_frame.as_slice())?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
+
+        // 4. Update the in-memory count
+        self.num_buckets.store(new_buckets, std::sync::atomic::Ordering::Release);
+
+        // 5. Re-insert all collected entries (insert_internal reads header → new_buckets ✓)
+        for (hash, key, row_id) in &entries {
+            self.insert_internal(bm, *hash, key, *row_id, tx)?;
+        }
 
         Ok(())
     }

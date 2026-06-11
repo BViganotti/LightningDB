@@ -71,6 +71,19 @@ impl Alp {
             };
         }
         let tmp = val * Self::EXP_ARR[exp_idx as usize] / Self::FACTOR_ARR[fac_idx as usize];
+        if !tmp.is_finite() {
+            return if tmp.is_sign_positive() || tmp.is_nan() {
+                Self::POS_INF_SENTINEL
+            } else {
+                Self::NEG_INF_SENTINEL
+            };
+        }
+        if tmp >= i64::MAX as f64 {
+            return i64::MAX;
+        }
+        if tmp <= i64::MIN as f64 {
+            return i64::MIN;
+        }
         tmp.round() as i64
     }
 
