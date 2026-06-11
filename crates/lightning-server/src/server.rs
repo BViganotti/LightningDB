@@ -84,34 +84,52 @@ impl Server {
         let state = self.state;
 
         // Build CORS layer from configured allowed origins.
-        // Defaults to localhost-only when no --cors-allowed-origins is specified.
-        let cors_layer = if state.config.cors_allowed_origins.is_empty() {
-            CorsLayer::permissive()
+        // When no --cors-allowed-origins is specified, defaults to localhost-only.
+        // NEVER fall back to CorsLayer::permissive() — that allows any origin,
+        // which is a security risk for a database HTTP server.
+        let cors_allowed = if state.config.cors_allowed_origins.is_empty() {
+            vec![
+                "http://localhost:3000".to_string(),
+                "http://localhost:8080".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+                "http://127.0.0.1:8080".to_string(),
+            ]
         } else {
-            let origins: Vec<axum::http::HeaderValue> = state
-                .config
-                .cors_allowed_origins
-                .iter()
-                .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
-                .collect();
-            if origins.is_empty() {
-                CorsLayer::permissive()
-            } else {
-                CorsLayer::new()
-                    .allow_origin(AllowOrigin::list(origins))
-                    .allow_methods([
-                        axum::http::Method::GET,
-                        axum::http::Method::POST,
-                        axum::http::Method::PUT,
-                        axum::http::Method::DELETE,
-                        axum::http::Method::OPTIONS,
-                    ])
-                    .allow_headers([
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::header::AUTHORIZATION,
-                        axum::http::header::HeaderName::from_static("x-request-id"),
-                    ])
-            }
+            state.config.cors_allowed_origins.clone()
+        };
+        let origins: Vec<axum::http::HeaderValue> = cors_allowed
+            .iter()
+            .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
+            .collect();
+        let cors_layer = if origins.is_empty() {
+            // Only reachable if ALL configured origins failed to parse as HeaderValue.
+            // Log a warning and provide a restricted layer that allows nothing.
+            tracing::warn!("No valid CORS origins configured; CORS will deny all cross-origin requests");
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::predicate(|_origin, _parts| false))
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                ])
+        } else {
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::HeaderName::from_static("x-request-id"),
+                ])
         };
 
         let app = Router::new()

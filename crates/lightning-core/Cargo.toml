@@ -38,7 +38,10 @@ sha2 = { workspace = true }
 md-5 = { workspace = true }
 crc32fast = { workspace = true }
 crc = { workspace = true }
-tantivy = "0.26.0"
+# tantivy 0.26 — full-text search index for memory entities.
+# Pinned to the 0.26.x line. Upgrade to 0.27 after verifying the columnar
+# and tokenizer API surfaces are compatible.
+tantivy = "0.26"
 lru = "0.12.0"
 fixedbitset = "0.5.7"
 wat = "1.248.0"
