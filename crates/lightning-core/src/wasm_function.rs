@@ -86,6 +86,18 @@ impl WasmFunction {
         })
     }
 
+    /// Load a WASM function from pre-validated WAT source bytes.
+    /// This avoids the TOCTOU race between path validation and file reading.
+    /// Use this when the caller has already validated the file path and
+    /// read the content; the bytes are passed directly without re-opening.
+    pub fn from_wat_bytes(wat_bytes: Vec<u8>, func_name: &str) -> Result<Self> {
+        let wat_source = String::from_utf8(wat_bytes)
+            .map_err(|e| crate::LightningError::Database(format!(
+                "Failed to decode WAT bytes as UTF-8: {e}"
+            )))?;
+        Self::from_wat(&wat_source, func_name)
+    }
+
     /// Set a custom execution timeout in milliseconds.
     pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
