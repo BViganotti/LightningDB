@@ -275,14 +275,12 @@ impl BufferManager {
         let mut best_version: u64 = 0;
 
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
-            for &idx in slot_indices {
+            // Iterate in reverse to find the newest version first (matching pin_page behavior).
+            // A transaction may create multiple versions of the same page; the newest one
+            // contains all previous writes from this transaction.
+            for &idx in slot_indices.iter().rev() {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
 
-                // Row-level conflict detection: allow concurrent page versions.
-                // If another transaction has an uncommitted version of this page,
-                // we still create our own version. Row-level conflicts are detected
-                // by RowVersion::mark_row when two transactions modify the same row.
-                // On commit, per-row modifications are merged into the latest page.
                 if version == tx_id_marked {
                     best_version = version;
                     // SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The caller holds the shard write lock (acquired above at line 266), ensuring exclusive access to this slot.

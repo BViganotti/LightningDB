@@ -131,6 +131,8 @@ impl Column {
         let is_val_null = matches!(val, Value::Null);
         self.set_null(bm, row_id, is_val_null, tx)?;
         if is_val_null {
+            self.atomic_null_count.fetch_add(1, Ordering::Release);
+            self.atomic_num_values.fetch_add(1, Ordering::Release);
             return Ok(());
         }
         match &self.data_type {
@@ -2195,4 +2197,424 @@ impl Column {
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::buffer_manager::BufferManager;
+    use crate::storage::file_handle::FileHandle;
+    use crate::storage::row_version::RowVersion;
+    use crate::storage::wal::WAL;
+    use crate::transaction::TransactionManager;
+    use crate::SyncMode;
+    use lightning_types::LogicalType;
+    use std::sync::Arc;
+
+    fn setup_col(col_type: LogicalType, with_overflow: bool) -> (Column, Arc<BufferManager>, Arc<TransactionManager>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let data_path = dir.path().join("data.lbug");
+        let null_path = dir.path().join("null.lbug");
+        let data_fh = Arc::new(FileHandle::open(&data_path).unwrap());
+        let null_fh = Arc::new(FileHandle::open(&null_path).unwrap());
+        let wal = Arc::new(WAL::new(dir.path(), SyncMode::Normal).unwrap());
+        let tm = Arc::new(TransactionManager::new(Arc::clone(&wal)));
+        tm.set_self_weak(Arc::downgrade(&tm));
+        let bm = Arc::new(BufferManager::new(256, Some(wal), false, 0, 0.0));
+        let rv = Arc::new(RowVersion::new());
+
+        let overflow_fh = if with_overflow {
+            let overflow_path = dir.path().join("overflow.lbug");
+            Some(Arc::new(FileHandle::open(&overflow_path).unwrap()))
+        } else {
+            None
+        };
+
+        let col = Column::new(
+            "test_col".to_string(),
+            col_type,
+            null_fh,
+            data_fh,
+            overflow_fh,
+            rv,
+        );
+        (col, bm, tm, dir)
+    }
+
+    fn begin_tx(tm: &TransactionManager) -> Arc<crate::transaction::transaction_manager::Transaction> {
+        Arc::new(tm.begin(false).unwrap())
+    }
+
+    // --- Number types ---
+
+    #[test]
+    fn test_append_and_get_double() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(3.14159), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Number(3.14159));
+    }
+
+    #[test]
+    fn test_append_and_get_int64() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Int64, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(42.0), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Number(42.0));
+    }
+
+    #[test]
+    fn test_append_and_get_int32() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Int32, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(100.0), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Number(100.0));
+    }
+
+    #[test]
+    fn test_append_and_get_bool_true() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Bool, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Boolean(true), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_append_and_get_bool_false() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Bool, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Boolean(false), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Boolean(false));
+    }
+
+    #[test]
+    fn test_append_and_get_node() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Node(Vec::new()), false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Node(999), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Node(999));
+    }
+
+    #[test]
+    fn test_append_and_get_uint64_as_node() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Uint64, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Node(777), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Node(777));
+    }
+
+    #[test]
+    fn test_append_and_get_date() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Date, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Date(12345), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Date(12345));
+    }
+
+    #[test]
+    fn test_append_and_get_timestamp() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Timestamp, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Timestamp(9876543210), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Timestamp(9876543210));
+    }
+
+    // --- Null handling ---
+
+    #[test]
+    fn test_append_and_get_null() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Null, 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn test_is_null_after_append_null() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Null, 0, &tx).unwrap();
+        assert!(col.is_null(&bm, 0, &tx).unwrap());
+    }
+
+    #[test]
+    fn test_is_null_after_append_value() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(1.0), 0, &tx).unwrap();
+        assert!(!col.is_null(&bm, 0, &tx).unwrap());
+    }
+
+    #[test]
+    fn test_set_null_toggle() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(1.0), 0, &tx).unwrap();
+        assert!(!col.is_null(&bm, 0, &tx).unwrap());
+        col.set_null(&bm, 0, true, &tx).unwrap();
+        assert!(col.is_null(&bm, 0, &tx).unwrap());
+        col.set_null(&bm, 0, false, &tx).unwrap();
+        assert!(!col.is_null(&bm, 0, &tx).unwrap());
+    }
+
+    #[test]
+    fn test_flush_pending_nulls() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(1.0), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Null, 1, &tx).unwrap();
+        col.append_value(&bm, &Value::Number(3.0), 2, &tx).unwrap();
+        col.flush_pending_nulls(&bm, &tx).unwrap();
+        assert!(!col.is_null(&bm, 0, &tx).unwrap());
+        assert!(col.is_null(&bm, 1, &tx).unwrap());
+        assert!(!col.is_null(&bm, 2, &tx).unwrap());
+    }
+
+    // --- Atomic counters ---
+
+    #[test]
+    fn test_atomic_counters_track_values() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(1.0), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Null, 1, &tx).unwrap();
+        col.append_value(&bm, &Value::Number(3.0), 2, &tx).unwrap();
+        // atomic_num_values tracks ALL appended values (including nulls)
+        assert_eq!(col.atomic_num_values.load(Ordering::Acquire), 3);
+        // atomic_null_count tracks only nulls
+        assert_eq!(col.atomic_null_count.load(Ordering::Acquire), 1);
+    }
+
+    // --- Multiple values ---
+
+    #[test]
+    fn test_append_multiple_values_sequential() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        for i in 0..10 {
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+        }
+        for i in 0..10 {
+            let result = col.get_value(&bm, i, &tx).unwrap();
+            assert_eq!(result, Value::Number(i as f64), "row_id={i}");
+        }
+    }
+
+    // --- String / Overflow ---
+
+    #[test]
+    fn test_append_and_get_short_string() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+        let s = "hello world";
+        col.append_value(&bm, &Value::String(s.to_string()), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::String(s.to_string()));
+    }
+
+    #[test]
+    fn test_append_and_get_long_string_with_overflow() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+        // String longer than 63 bytes should go to overflow
+        let s = "a".repeat(200);
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::String(s));
+    }
+
+    #[test]
+    fn test_long_string_without_overflow_falls_back_to_inline() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, false);
+        let tx = begin_tx(&tm);
+        // No overflow file handle — long string will be truncated to 63 bytes
+        let s = "b".repeat(200);
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        if let Value::String(roundtrip) = &result {
+            assert!(roundtrip.len() < 200, "without overflow, string should be truncated");
+            assert!(roundtrip.len() <= 63, "truncated to at most 63 chars");
+        } else {
+            panic!("expected Value::String, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_append_multiple_strings() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+        let medium = "medium".repeat(10);
+        let long = "long".repeat(100);
+        let strings = vec![
+            "short".to_string(),
+            medium,
+            long,
+        ];
+        for (i, s) in strings.iter().enumerate() {
+            col.append_value(&bm, &Value::String(s.clone()), i as u64, &tx).unwrap();
+        }
+        for (i, expected) in strings.iter().enumerate() {
+            let result = col.get_value(&bm, i as u64, &tx).unwrap();
+            assert_eq!(result, Value::String(expected.clone()), "row_id={i}");
+        }
+    }
+
+    // --- Scan ---
+
+    #[test]
+    fn test_scan_returns_all_values() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        for i in 0..5 {
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+        }
+        let mut result = Vec::new();
+        col.scan(&bm, 0, 5, &tx, &mut result).unwrap();
+        assert_eq!(result.len(), 5);
+        for (i, val) in result.iter().enumerate() {
+            assert_eq!(*val, Value::Number(i as f64));
+        }
+    }
+
+    #[test]
+    fn test_scan_with_offset_and_limit() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        for i in 0..10 {
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+        }
+        let mut result = Vec::new();
+        col.scan(&bm, 3, 4, &tx, &mut result).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], Value::Number(3.0));
+        assert_eq!(result[3], Value::Number(6.0));
+    }
+
+    // --- Batch append ---
+
+    #[test]
+    fn test_batch_append_values() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        let vals: Vec<Value> = (0..10).map(|i| Value::Number(i as f64)).collect();
+        let result = col.batch_append_values(&bm, &vals, 0, &tx).unwrap();
+        assert_eq!(result.len(), 10, "batch_append returns per-value commit info");
+
+        // Verify all values can be read back
+        for i in 0..10 {
+            let val = col.get_value(&bm, i as u64, &tx).unwrap();
+            assert_eq!(val, Value::Number(i as f64));
+        }
+    }
+
+    #[test]
+    fn test_batch_append_mixed_null_and_values() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        let vals = vec![
+            Value::Number(1.0),
+            Value::Null,
+            Value::Number(3.0),
+            Value::Null,
+            Value::Number(5.0),
+        ];
+        col.batch_append_values(&bm, &vals, 0, &tx).unwrap();
+
+        assert_eq!(col.get_value(&bm, 0, &tx).unwrap(), Value::Number(1.0));
+        assert_eq!(col.get_value(&bm, 1, &tx).unwrap(), Value::Null);
+        assert_eq!(col.get_value(&bm, 2, &tx).unwrap(), Value::Number(3.0));
+        assert_eq!(col.get_value(&bm, 3, &tx).unwrap(), Value::Null);
+        assert_eq!(col.get_value(&bm, 4, &tx).unwrap(), Value::Number(5.0));
+    }
+
+    // --- Dirty flag ---
+
+    #[test]
+    fn test_append_sets_dirty_flag() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        assert!(!col.dirty.load(Ordering::Acquire));
+        let tx = begin_tx(&tm);
+        col.append_value(&bm, &Value::Number(42.0), 0, &tx).unwrap();
+        assert!(col.dirty.load(Ordering::Acquire));
+    }
+
+    // --- Element size ---
+
+    #[test]
+    fn test_element_size_for_types() {
+        let (col_i64, _, _, _) = setup_col(LogicalType::Int64, false);
+        assert_eq!(col_i64.element_size(), 8);
+
+        let (col_i32, _, _, _) = setup_col(LogicalType::Int32, false);
+        assert_eq!(col_i32.element_size(), 4);
+
+        let (col_bool, _, _, _) = setup_col(LogicalType::Bool, false);
+        assert_eq!(col_bool.element_size(), 1);
+
+        let (col_str, _, _, _) = setup_col(LogicalType::String, false);
+        // String columns have 64-byte elements (1 header + 63 data)
+        assert_eq!(col_str.element_size(), 64);
+
+        let (col_date, _, _, _) = setup_col(LogicalType::Date, false);
+        assert_eq!(col_date.element_size(), 4);
+
+        let (col_ts, _, _, _) = setup_col(LogicalType::Timestamp, false);
+        assert_eq!(col_ts.element_size(), 8);
+    }
+
+    // --- Overflow string edge cases ---
+
+    #[test]
+    fn test_overflow_exactly_63_chars() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+        // 63 chars = fits inline (max inline is 63 bytes)
+        let s = "c".repeat(63);
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::String(s));
+    }
+
+    #[test]
+    fn test_overflow_boundary_64_chars() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+        // 64 chars = goes to overflow
+        let s = "d".repeat(64);
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        let result = col.get_value(&bm, 0, &tx).unwrap();
+        assert_eq!(result, Value::String(s));
+    }
+
+    // --- Default trait ---
+
+    #[test]
+    fn test_column_default_zone_map_eq() {
+        let zm = ZoneMapEq { value: Value::Number(42.0) };
+        assert_eq!(zm.value, Value::Number(42.0));
+    }
+
+    // --- Null-only scan ---
+
+    #[test]
+    fn test_scan_skips_out_of_bounds() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
+        let tx = begin_tx(&tm);
+        let mut result = Vec::new();
+        // Scanning with offset=0, num_values=0 should return empty
+        col.scan(&bm, 0, 0, &tx, &mut result).unwrap();
+        assert!(result.is_empty());
+    }
+
+
 }

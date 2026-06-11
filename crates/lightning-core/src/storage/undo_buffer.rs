@@ -283,3 +283,237 @@ impl UndoBuffer {
         let _ = std::fs::remove_dir_all(&fts_dir);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_undo_buffer_is_empty() {
+        let ub = UndoBuffer::new();
+        assert!(ub.records.lock().is_empty());
+    }
+
+    #[test]
+    fn test_push_and_clear() {
+        let ub = UndoBuffer::new();
+        ub.push(UndoRecord::UpdateColumn("t".to_string(), 0, Value::Null));
+        ub.push(UndoRecord::CreateNodeTable("test".to_string()));
+        assert_eq!(ub.records.lock().len(), 2);
+        ub.clear();
+        assert!(ub.records.lock().is_empty());
+    }
+
+    #[test]
+    fn test_push_multiple_records() {
+        let ub = UndoBuffer::new();
+        ub.push(UndoRecord::CreateNodeTable("nodes".to_string()));
+        ub.push(UndoRecord::CreateRelTable("rels".to_string()));
+        ub.push(UndoRecord::DeleteNode("nodes".to_string(), 42));
+        assert_eq!(ub.records.lock().len(), 3);
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let ub: UndoBuffer = Default::default();
+        assert!(ub.records.lock().is_empty());
+    }
+
+    #[test]
+    fn test_rollback_reverses_order_with_database() {
+        use crate::catalog::NodeTableCatalogEntry;
+        use crate::catalog::PropertyDefinition;
+        use crate::Database;
+        use crate::SystemConfig;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db = Database::new(dir.path(), SystemConfig {
+            buffer_pool_size: 64 * 1024 * 1024,
+            prefetch_enabled: false,
+            vacuum_interval_ms: 86_400_000_000,
+            ..Default::default()
+        }).unwrap();
+
+        let tx = db.transaction_manager.begin(false).unwrap();
+
+        // Create a table, then undo it via CreateNodeTable rollback
+        let undo = UndoBuffer::new();
+        undo.push(UndoRecord::CreateNodeTable("rollback_test_table".to_string()));
+
+        // Manually create the table first (simulating what the executor does before recording undo)
+        db.storage_manager.write().create_table(
+            "rollback_test_table".to_string(),
+            vec![("id".to_string(), lightning_types::LogicalType::Int64)],
+            false,
+            None,
+        ).unwrap();
+        db.catalog.write().node_tables.insert(
+            "rollback_test_table".to_string(),
+            NodeTableCatalogEntry {
+                name: "rollback_test_table".to_string(),
+                properties: vec![PropertyDefinition {
+                    name: "id".to_string(),
+                    type_: lightning_types::LogicalType::Int64,
+                }],
+                primary_key: None,
+                num_rows: 0,
+                stats: crate::storage::stats::TableStats::new(0),
+                constraints: Vec::new(),
+            },
+        );
+
+        // Verify table exists
+        assert!(db.storage_manager.read().node_tables.contains_key("rollback_test_table"));
+
+        // Rollback should remove the table
+        undo.rollback(&db, tx.tx_id).unwrap();
+
+        // After rollback, the table should be gone from both catalog and storage
+        assert!(!db.storage_manager.read().node_tables.contains_key("rollback_test_table"));
+        assert!(!db.catalog.read().node_tables.contains_key("rollback_test_table"));
+    }
+
+    #[test]
+    fn test_rollback_create_rel_table() {
+        use crate::catalog::PropertyDefinition;
+        use crate::catalog::RelTableCatalogEntry;
+        use crate::Database;
+        use crate::SystemConfig;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db = Database::new(dir.path(), SystemConfig {
+            buffer_pool_size: 64 * 1024 * 1024,
+            prefetch_enabled: false,
+            vacuum_interval_ms: 86_400_000_000,
+            ..Default::default()
+        }).unwrap();
+
+        let tx = db.transaction_manager.begin(false).unwrap();
+
+        let undo = UndoBuffer::new();
+        undo.push(UndoRecord::CreateRelTable("rollback_rel_test".to_string()));
+
+        // Create table in storage + catalog
+        db.storage_manager.write().create_table(
+            "rollback_rel_test".to_string(),
+            vec![("from".to_string(), lightning_types::LogicalType::Uint64)],
+            true,
+            None,
+        ).unwrap();
+        db.catalog.write().rel_tables.insert(
+            "rollback_rel_test".to_string(),
+            RelTableCatalogEntry {
+                name: "rollback_rel_test".to_string(),
+                from_table: String::new(),
+                to_table: String::new(),
+                properties: vec![PropertyDefinition {
+                    name: "from".to_string(),
+                    type_: lightning_types::LogicalType::Uint64,
+                }],
+                num_rows: 0,
+                stats: crate::storage::stats::TableStats::new(0),
+            },
+        );
+
+        assert!(db.storage_manager.read().rel_tables.contains_key("rollback_rel_test"));
+
+        undo.rollback(&db, tx.tx_id).unwrap();
+
+        assert!(!db.storage_manager.read().rel_tables.contains_key("rollback_rel_test"));
+        assert!(!db.catalog.read().rel_tables.contains_key("rollback_rel_test"));
+    }
+
+    #[test]
+    fn test_rollback_empty_buffer_is_noop() {
+        use crate::Database;
+        use crate::SystemConfig;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db = Database::new(dir.path(), SystemConfig {
+            buffer_pool_size: 64 * 1024 * 1024,
+            prefetch_enabled: false,
+            vacuum_interval_ms: 86_400_000_000,
+            ..Default::default()
+        }).unwrap();
+
+        let tx = db.transaction_manager.begin(false).unwrap();
+        let undo = UndoBuffer::new();
+        // Rollback with no records should not error
+        undo.rollback(&db, tx.tx_id).unwrap();
+    }
+
+    #[test]
+    fn test_rollback_drop_table_restores_entry() {
+        use crate::catalog::NodeTableCatalogEntry;
+        use crate::catalog::PropertyDefinition;
+        use crate::catalog::TableEntry;
+        use crate::Database;
+        use crate::SystemConfig;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db = Database::new(dir.path(), SystemConfig {
+            buffer_pool_size: 64 * 1024 * 1024,
+            prefetch_enabled: false,
+            vacuum_interval_ms: 86_400_000_000,
+            ..Default::default()
+        }).unwrap();
+
+        let tx = db.transaction_manager.begin(false).unwrap();
+        let entry = NodeTableCatalogEntry {
+            name: "restored_table".to_string(),
+            properties: vec![PropertyDefinition {
+                name: "val".to_string(),
+                type_: lightning_types::LogicalType::Double,
+            }],
+            primary_key: None,
+            num_rows: 0,
+            stats: crate::storage::stats::TableStats::new(0),
+            constraints: Vec::new(),
+        };
+
+        let undo = UndoBuffer::new();
+        undo.push(UndoRecord::DropTable(
+            "restored_table".to_string(),
+            TableEntry::Node(entry.clone()),
+        ));
+
+        // Rollback should re-create the table
+        undo.rollback(&db, tx.tx_id).unwrap();
+
+        let catalog = db.catalog.read();
+        assert!(catalog.node_tables.contains_key("restored_table"));
+        if let Some(restored) = catalog.node_tables.get("restored_table") {
+            assert_eq!(restored.name, "restored_table");
+            assert_eq!(restored.properties.len(), 1);
+            assert_eq!(restored.properties[0].name, "val");
+        } else {
+            panic!("Expected Node table entry");
+        }
+    }
+
+    #[test]
+    fn test_undo_buffer_serialization() {
+        let ub = UndoBuffer::new();
+        ub.push(UndoRecord::UpdateColumn("t".into(), 42, Value::Number(3.14)));
+        ub.push(UndoRecord::CreateNodeTable("test_table".into()));
+        ub.push(UndoRecord::DeleteNode("t".into(), 99));
+        assert_eq!(ub.records.lock().len(), 3);
+        // Verify push order is preserved
+        let records = ub.records.lock();
+        assert!(matches!(records[0], UndoRecord::UpdateColumn(..)));
+        assert!(matches!(records[1], UndoRecord::CreateNodeTable(..)));
+        assert!(matches!(records[2], UndoRecord::DeleteNode(..)));
+    }
+
+    #[test]
+    fn test_undo_record_debug_and_clone() {
+        let r = UndoRecord::CreateNodeTable("test".to_string());
+        let cloned = r.clone();
+        assert!(format!("{r:?}").contains("CreateNodeTable"));
+        assert!(format!("{cloned:?}").contains("CreateNodeTable"));
+    }
+}

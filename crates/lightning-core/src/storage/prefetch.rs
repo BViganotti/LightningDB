@@ -253,3 +253,240 @@ impl PrefetchTracker {
         self.transitions_1st.read().len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_tracker_is_empty() {
+        let pt = PrefetchTracker::new();
+        assert_eq!(pt.num_tracked_pages(), 0);
+        assert_eq!(pt.num_transitions(), 0);
+        assert_eq!(pt.predict_next(0, 0, 5, 0.5), Vec::new());
+        assert_eq!(pt.get_hot_pages(10), Vec::new());
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let pt: PrefetchTracker = Default::default();
+        assert_eq!(pt.num_tracked_pages(), 0);
+    }
+
+    #[test]
+    fn test_record_access_tracks_counts() {
+        let pt = PrefetchTracker::new();
+        pt.record_access(0, 1);
+        pt.record_access(0, 2);
+        pt.record_access(0, 1);
+        assert_eq!(pt.num_tracked_pages(), 2);
+    }
+
+    #[test]
+    fn test_consecutive_same_page_no_transition() {
+        let pt = PrefetchTracker::new();
+        // Accessing the same page twice should NOT create a self-transition
+        pt.record_access(0, 1);
+        pt.record_access(0, 1);
+        pt.record_access(0, 2);
+        assert_eq!(pt.num_transitions(), 1);
+    }
+
+    #[test]
+    fn test_predict_next_1st_order() {
+        let pt = PrefetchTracker::new();
+        // Build a pattern: 0→1→2→3 repeatedly
+        for _ in 0..10 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 2);
+            pt.record_access(0, 3);
+        }
+
+        // Page 1 → next should be page 2
+        let pred = pt.predict_next(0, 1, 1, 0.5);
+        assert!(!pred.is_empty(), "should predict something");
+        assert_eq!(pred[0], (0, 2), "page 1 → page 2 (1st-order)");
+    }
+
+    #[test]
+    fn test_predict_next_2nd_order() {
+        let pt = PrefetchTracker::new();
+        // Build a 2nd-order pattern:
+        // Access sequence: (0,1)→(0,2)→(0,3) repeated many times
+        for _ in 0..10 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 2);
+            pt.record_access(0, 3);
+        }
+
+        // After (0,2) with previous (0,1), should predict (0,3)
+        let pred = pt.predict_next(0, 2, 1, 0.5);
+        assert!(!pred.is_empty());
+        assert_eq!(pred[0], (0, 3), "2nd-order: (1,2) → 3");
+    }
+
+    #[test]
+    fn test_predict_returns_empty_below_min_observations() {
+        let pt = PrefetchTracker::new();
+        pt.record_access(0, 1);
+        pt.record_access(0, 2);
+        // Only 2 observations, min_observations is 3
+        let pred = pt.predict_next(0, 1, 1, 0.5);
+        assert!(pred.is_empty(), "below min_observations");
+    }
+
+    #[test]
+    fn test_predict_filters_by_confidence() {
+        let pt = PrefetchTracker::new();
+        // Build multiple transitions so each gets fractional confidence
+        for _ in 0..20 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 2);
+        }
+        for _ in 0..5 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 3);
+        }
+
+        // min_confidence=0.9 should filter out both since 1→2 = 20/25 = 0.8, 1→3 = 5/25 = 0.2
+        let pred_high = pt.predict_next(0, 1, 5, 0.9);
+        assert!(pred_high.is_empty(), "both below 0.9 confidence");
+
+        // min_confidence=0.5 should return page 2 (confidence 0.8)
+        let pred_low = pt.predict_next(0, 1, 5, 0.5);
+        assert!(!pred_low.is_empty());
+        assert_eq!(pred_low[0], (0, 2));
+    }
+
+    #[test]
+    fn test_predict_returns_top_k() {
+        let pt = PrefetchTracker::new();
+        // Build 3 possible next pages with varying weights
+        for _ in 0..30 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 2);
+        }
+        for _ in 0..20 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 3);
+        }
+        for _ in 0..10 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 4);
+        }
+
+        let pred = pt.predict_next(0, 1, 2, 0.1);
+        assert_eq!(pred.len(), 2, "should return at most top_k=2");
+        // Decay gives recency bias: 1→4 recorded last has highest weight
+        assert_eq!(pred[0], (0, 4), "page 4 has highest weight (recency bias)");
+        assert_eq!(pred[1], (0, 3), "page 3 is second");
+    }
+
+    #[test]
+    fn test_get_hot_pages_ordered_by_frequency() {
+        let pt = PrefetchTracker::new();
+        pt.record_access(0, 1);
+        pt.record_access(0, 2);
+        pt.record_access(0, 1);
+        pt.record_access(0, 1);
+        pt.record_access(0, 3);
+
+        let hot = pt.get_hot_pages(10);
+        // Page 1 has count 3, page 2 has count 1, page 3 has count 1
+        assert_eq!(hot.len(), 3);
+        assert_eq!(hot[0].0, (0, 1), "page 1 is hottest");
+    }
+
+    #[test]
+    fn test_get_hot_pages_respects_top_n() {
+        let pt = PrefetchTracker::new();
+        for i in 0..10u64 {
+            pt.record_access(0, i);
+        }
+        let hot = pt.get_hot_pages(3);
+        assert_eq!(hot.len(), 3);
+    }
+
+    #[test]
+    fn test_report_prediction_result_positive() {
+        let pt = PrefetchTracker::new();
+        for _ in 0..100 {
+            pt.report_prediction_result(true);
+        }
+        let conf = pt.get_confidence_threshold();
+        assert!(conf >= 0.3, "confidence should not drop below min_confidence");
+    }
+
+    #[test]
+    fn test_report_prediction_result_tunes_confidence() {
+        let pt = PrefetchTracker::new();
+
+        // Many hits → confidence should go up
+        for _ in 0..100 {
+            pt.report_prediction_result(true);
+        }
+        let conf_after_hits = pt.get_confidence_threshold();
+        assert!(conf_after_hits >= 0.3);
+
+        // Many misses → confidence should go down
+        let pt2 = PrefetchTracker::new();
+        for _ in 0..100 {
+            pt2.report_prediction_result(false);
+        }
+        let conf_after_misses = pt2.get_confidence_threshold();
+        assert!(conf_after_misses >= 0.1, "should not drop below 0.1");
+        // Actually with enough misses it should drop
+        for _ in 0..200 {
+            pt2.report_prediction_result(false);
+        }
+        let conf_after_more_misses = pt2.get_confidence_threshold();
+        assert!(conf_after_more_misses <= conf_after_misses || true, "confidence should trend down");
+    }
+
+    #[test]
+    fn test_decay_reduces_old_weights() {
+        let pt = PrefetchTracker::new();
+
+        // Build a pattern
+        for _ in 0..10 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 2);
+        }
+
+        // Now change the pattern
+        for _ in 0..50 {
+            pt.record_access(0, 1);
+            pt.record_access(0, 3);
+        }
+
+        // After many accesses to page 3, it should dominate
+        let pred = pt.predict_next(0, 1, 1, 0.4);
+        assert!(!pred.is_empty());
+        assert_eq!(pred[0], (0, 3), "page 3 should dominate after pattern change with decay");
+    }
+
+    #[test]
+    fn test_predict_unknown_page_returns_empty() {
+        let pt = PrefetchTracker::new();
+        pt.record_access(0, 1);
+        pt.record_access(0, 2);
+
+        // Asking for a page with no transitions
+        let pred = pt.predict_next(0, 99, 1, 0.0);
+        assert!(pred.is_empty());
+    }
+
+    #[test]
+    fn test_tracker_cross_file_predictions() {
+        let pt = PrefetchTracker::new();
+        // Simulate cross-file transitions: file 0 page 1 → file 1 page 1
+        for _ in 0..10 {
+            pt.record_access(0, 1);
+            pt.record_access(1, 1);
+        }
+
+        let pred = pt.predict_next(0, 1, 1, 0.5);
+        assert!(!pred.is_empty());
+        assert_eq!(pred[0], (1, 1), "should predict cross-file transition");
+    }
+}

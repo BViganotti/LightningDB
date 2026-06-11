@@ -126,6 +126,10 @@ impl RowVersion {
             if mod_tx == tx_id {
                 return true;
             }
+            // Row is being modified by another uncommitted tx — not visible to us
+            drop(versions);
+            let committed = self.shards[shard_idx].committed.read();
+            return committed.get(&row_id).map_or(false, |&commit_ts| commit_ts <= read_ts);
         }
         let committed = self.shards[shard_idx].committed.read();
         if let Some(&commit_ts) = committed.get(&row_id) {
@@ -226,5 +230,302 @@ impl RowVersion {
     /// Force-set the dirty hint (used externally when entries may exist).
     pub fn mark_dirty(&self) {
         self.dirty_flag.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mark_and_commit_row() {
+        let rv = RowVersion::new();
+        assert!(!rv.has_modifications());
+
+        rv.mark_row(42, 100, 0).unwrap();
+        assert!(rv.has_modifications());
+        assert!(rv.has_committed() == false);
+
+        rv.commit_row(42, 200);
+        assert!(rv.has_committed());
+        // has_modifications includes committed rows (used for read-path optimization)
+        assert!(rv.has_modifications());
+    }
+
+    #[test]
+    fn test_mark_and_rollback_row() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        assert!(rv.has_modifications());
+
+        rv.rollback_row(42);
+        assert!(!rv.has_modifications());
+        assert!(!rv.has_committed());
+    }
+
+    #[test]
+    fn test_is_visible_self_modification() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        // Same tx should see its own modifications
+        assert!(rv.is_visible(42, 100, 0));
+    }
+
+    #[test]
+    fn test_is_visible_other_tx_uncommitted() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        // Different tx should NOT see uncommitted modification
+        assert!(!rv.is_visible(42, 200, 0));
+    }
+
+    #[test]
+    fn test_is_visible_committed_within_read_ts() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.commit_row(42, 50);
+        // read_ts=100 >= commit_ts=50 → visible
+        assert!(rv.is_visible(42, 200, 100));
+    }
+
+    #[test]
+    fn test_is_visible_committed_after_read_ts() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.commit_row(42, 200);
+        // read_ts=100 < commit_ts=200 → NOT visible
+        assert!(!rv.is_visible(42, 300, 100));
+    }
+
+    #[test]
+    fn test_is_visible_no_record() {
+        let rv = RowVersion::new();
+        // No record → visible by default
+        assert!(rv.is_visible(42, 100, 0));
+    }
+
+    #[test]
+    fn test_write_write_conflict_same_tx_ok() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        // Same tx marking again should succeed
+        assert!(rv.mark_row(42, 100, 0).is_ok());
+    }
+
+    #[test]
+    fn test_write_write_conflict_different_tx() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        // Different tx should fail
+        let result = rv.mark_row(42, 200, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Write-Write Conflict"));
+    }
+
+    #[test]
+    fn test_write_write_conflict_after_commit() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.commit_row(42, 50);
+        // Different tx, read_ts=0 < commit_ts=50 → conflict
+        let result = rv.mark_row(42, 200, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Write-Write Conflict"));
+    }
+
+    #[test]
+    fn test_write_after_committed_before_read_ts() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.commit_row(42, 50);
+        // read_ts=100 >= commit_ts=50 → no conflict
+        assert!(rv.mark_row(42, 200, 100).is_ok());
+    }
+
+    #[test]
+    fn test_mark_row_batch() {
+        let rv = RowVersion::new();
+        rv.mark_row_batch(0..100, 100);
+        assert!(rv.has_modifications());
+
+        for row_id in 0..100u64 {
+            assert!(rv.is_visible(row_id, 100, 0));
+        }
+    }
+
+    #[test]
+    fn test_commit_row_batch() {
+        let rv = RowVersion::new();
+        rv.mark_row_batch(0..100, 100);
+        rv.commit_row_batch(0..100, 200);
+        // has_modifications includes committed rows (used for read-path optimization)
+        assert!(rv.has_modifications());
+        assert!(rv.has_committed());
+
+        for row_id in 0..100u64 {
+            assert!(rv.is_visible(row_id, 300, 300));
+        }
+    }
+
+    #[test]
+    fn test_commit_row_batch_mixed_visibility() {
+        let rv = RowVersion::new();
+        rv.mark_row_batch(0..50, 100);
+        rv.commit_row_batch(0..50, 200);
+
+        // Batch with commit_ts=200, read_ts=100 → NOT visible
+        for row_id in 0..50u64 {
+            assert!(!rv.is_visible(row_id, 300, 100));
+        }
+        // read_ts=300 → visible
+        for row_id in 0..50u64 {
+            assert!(rv.is_visible(row_id, 300, 300));
+        }
+
+        // Unmarked rows should be visible
+        assert!(rv.is_visible(999, 300, 0));
+    }
+
+    #[test]
+    fn test_rollback_row_removes_mark() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.rollback_row(42);
+        // After rollback, row should be visible by default
+        assert!(rv.is_visible(42, 200, 0));
+    }
+
+    #[test]
+    fn test_get_visibility_mask_all_visible() {
+        let rv = RowVersion::new();
+        let row_ids = vec![1, 2, 3, 4, 5];
+        let mut mask = Vec::new();
+        rv.get_visibility_mask(&row_ids, 100, 0, &mut mask);
+        assert_eq!(mask, vec![true, true, true, true, true]);
+    }
+
+    #[test]
+    fn test_get_visibility_mask_mixed() {
+        let rv = RowVersion::new();
+        rv.mark_row(2, 50, 0).unwrap(); // uncommitted by tx 50
+        rv.commit_row(4, 200); // committed at 200
+
+        let row_ids = vec![1, 2, 3, 4, 5];
+        let mut mask = Vec::new();
+        // tx=100, read_ts=150
+        rv.get_visibility_mask(&row_ids, 100, 150, &mut mask);
+        // row 2: uncommitted by tx 50 (not us) → invisible
+        assert_eq!(mask[1], false);
+        // row 4: committed at 200 > read_ts 150 → invisible
+        assert_eq!(mask[3], false);
+        // rows 1, 3, 5: no record → visible
+        assert_eq!(mask[0], true);
+        assert_eq!(mask[2], true);
+        assert_eq!(mask[4], true);
+    }
+
+    #[test]
+    fn test_get_visibility_mask_self_uncommitted() {
+        let rv = RowVersion::new();
+        rv.mark_row(2, 100, 0).unwrap(); // our own uncommitted
+
+        let row_ids = vec![1, 2, 3];
+        let mut mask = Vec::new();
+        rv.get_visibility_mask(&row_ids, 100, 0, &mut mask);
+        // row 2: our own modification → visible
+        assert_eq!(mask, vec![true, true, true]);
+    }
+
+    #[test]
+    fn test_vacuum_removes_old_entries() {
+        let rv = RowVersion::new();
+        rv.mark_row(1, 100, 0).unwrap();
+        rv.commit_row(1, 50);
+        rv.mark_row(2, 100, 0).unwrap();
+        rv.commit_row(2, 100);
+        rv.mark_row(3, 100, 0).unwrap();
+        rv.commit_row(3, 200);
+
+        // Vacuum: remove entries with commit_ts < 150
+        let removed = rv.vacuum(150);
+        assert_eq!(removed, 2, "rows 1 (ts=50) and 2 (ts=100) should be removed");
+
+        // Row 3 still visible (commit_ts=200 >= 150)
+        assert!(rv.is_visible(3, 300, 300));
+        // Row 2 is gone — no record → visible by default
+        assert!(rv.is_visible(2, 300, 300));
+    }
+
+    #[test]
+    fn test_vacuum_noop_when_nothing_to_remove() {
+        let rv = RowVersion::new();
+        rv.mark_row(1, 100, 0).unwrap();
+        rv.commit_row(1, 200);
+
+        let removed = rv.vacuum(50);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_has_modifications_false_when_dirty_but_empty() {
+        // edge case: dirty flag was set but all entries were cleaned up
+        let rv = RowVersion::new();
+        rv.mark_dirty();
+        // has_modifications should scan and find nothing
+        assert!(!rv.has_modifications());
+    }
+
+    #[test]
+    fn test_clear_dirty_flag() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        assert!(rv.dirty_flag.load(Ordering::Acquire));
+        rv.rollback_row(42);
+        rv.clear_dirty_flag();
+        assert!(!rv.dirty_flag.load(Ordering::Acquire));
+        assert!(!rv.has_modifications());
+    }
+
+    #[test]
+    fn test_has_committed_false_after_rollback() {
+        let rv = RowVersion::new();
+        rv.mark_row(42, 100, 0).unwrap();
+        rv.rollback_row(42);
+        assert!(!rv.has_committed());
+    }
+
+    #[test]
+    fn test_multiple_rows_independent() {
+        let rv = RowVersion::new();
+        rv.mark_row(1, 100, 0).unwrap();
+        rv.mark_row(2, 100, 0).unwrap();
+        rv.mark_row(3, 100, 0).unwrap();
+
+        rv.commit_row(1, 200);
+        rv.rollback_row(2);
+
+        assert!(rv.is_visible(1, 300, 300));
+        assert!(rv.is_visible(2, 300, 300)); // rolled back → visible by default
+        assert!(rv.is_visible(3, 100, 0));   // still uncommitted by us
+    }
+
+    #[test]
+    fn test_shard_distribution_covers_all_shards() {
+        let rv = RowVersion::new();
+        let mut used_shards = std::collections::HashSet::new();
+
+        // Mark rows across a wide range to hit all shards
+        for row_id in 0..1000u64 {
+            used_shards.insert(rv.get_shard_idx(row_id));
+        }
+
+        assert_eq!(used_shards.len(), 16, "all 16 shards should see use");
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let rv: RowVersion = Default::default();
+        assert_eq!(rv.num_shards, 16);
+        assert!(!rv.has_modifications());
     }
 }
