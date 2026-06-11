@@ -8,6 +8,8 @@ description = "LightningDB — a high-performance graph+vector database with MVC
 repository = "https://github.com/lightning-db/lightning"
 keywords = ["graph", "vector", "database", "cypher", "mvcc"]
 
+[lib]
+
 [dependencies]
 lightning-core.workspace = true
 arrow = { workspace = true }

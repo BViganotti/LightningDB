@@ -625,46 +625,51 @@ impl StorageManager {
                 }
             }
         } else {
-            if !column_definitions.iter().any(|(n, _)| n == "_src") {
-                let src_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{name}_src.lbug")),
-                )?);
-                self.file_handles
-                    .insert(src_fh.file_id, Arc::clone(&src_fh));
-                let src_null_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{name}_src_null.lbug")),
-                )?);
-                self.file_handles
-                    .insert(src_null_fh.file_id, Arc::clone(&src_null_fh));
-                columns.push(Column::new(
-                    "_src".to_string(),
-                    LogicalType::Uint64,
-                    src_null_fh,
-                    src_fh,
-                    None,
-                    version_info.clone(),
-                ));
-            }
-            if !column_definitions.iter().any(|(n, _)| n == "_dst") {
-                let dst_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{name}_dst.lbug")),
-                )?);
-                self.file_handles
-                    .insert(dst_fh.file_id, Arc::clone(&dst_fh));
-                let dst_null_fh = Arc::new(FileHandle::open(
-                    &self.db_path.join(format!("{name}_dst_null.lbug")),
-                )?);
-                self.file_handles
-                    .insert(dst_null_fh.file_id, Arc::clone(&dst_null_fh));
-                columns.push(Column::new(
-                    "_dst".to_string(),
-                    LogicalType::Uint64,
-                    dst_null_fh,
-                    dst_fh,
-                    None,
-                    version_info.clone(),
-                ));
-            }
+            // Always add _src as the first rel column, regardless of whether
+            // column_definitions already contains it (e.g. when restoring from
+            // catalog on Database::new()). If _src IS in column_definitions,
+            // skip it during the user-column iteration below.
+            // Without this, a rel table restored from catalog on restart would
+            // have only user columns (type, weight, etc.) and no _src/_dst,
+            // causing PhysicalScan to fail with missing system columns.
+            let src_fh = Arc::new(FileHandle::open(
+                &self.db_path.join(format!("{name}_src.lbug")),
+            )?);
+            self.file_handles
+                .insert(src_fh.file_id, Arc::clone(&src_fh));
+            let src_null_fh = Arc::new(FileHandle::open(
+                &self.db_path.join(format!("{name}_src_null.lbug")),
+            )?);
+            self.file_handles
+                .insert(src_null_fh.file_id, Arc::clone(&src_null_fh));
+            columns.push(Column::new(
+                "_src".to_string(),
+                LogicalType::Uint64,
+                src_null_fh,
+                src_fh,
+                None,
+                version_info.clone(),
+            ));
+
+            let dst_fh = Arc::new(FileHandle::open(
+                &self.db_path.join(format!("{name}_dst.lbug")),
+            )?);
+            self.file_handles
+                .insert(dst_fh.file_id, Arc::clone(&dst_fh));
+            let dst_null_fh = Arc::new(FileHandle::open(
+                &self.db_path.join(format!("{name}_dst_null.lbug")),
+            )?);
+            self.file_handles
+                .insert(dst_null_fh.file_id, Arc::clone(&dst_null_fh));
+            columns.push(Column::new(
+                "_dst".to_string(),
+                LogicalType::Uint64,
+                dst_null_fh,
+                dst_fh,
+                None,
+                version_info.clone(),
+            ));
+
             for (col_name, col_type) in &column_definitions {
                 if col_name != "_src" && col_name != "_dst" {
                     let col = self.create_column_recursive(

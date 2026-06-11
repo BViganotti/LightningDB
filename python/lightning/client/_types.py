@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -13,6 +14,16 @@ class SearchResult:
     entity_type: str
     score: float
     metadata: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SearchResult:
+        return cls(
+            id=d["id"],
+            content=d["content"],
+            entity_type=d.get("entity_type", d.get("type", "")),
+            score=d["score"],
+            metadata=d.get("metadata", ""),
+        )
 
 
 @dataclass(frozen=True)
@@ -28,12 +39,35 @@ class Entity:
     valid_from: int
     valid_until: int
 
+    @classmethod
+    def from_dict(cls, d: dict) -> Entity:
+        return cls(
+            id=d["id"],
+            entity_type=d.get("entity_type", d.get("type", "")),
+            content=d.get("content", ""),
+            metadata=d.get("metadata", ""),
+            created_at=d.get("createdAt", 0),
+            last_accessed=d.get("lastAccessed", 0),
+            access_count=d.get("accessCount", 0),
+            ttl_seconds=d.get("ttlSeconds", 0),
+            valid_from=d.get("validFrom", 0),
+            valid_until=d.get("validUntil", 0),
+        )
+
 
 @dataclass(frozen=True)
 class QueryResult:
     columns: list[str]
     rows: list[dict[str, Any]]
     num_rows: int
+
+    @classmethod
+    def from_dict(cls, d: dict) -> QueryResult:
+        return cls(
+            columns=d.get("columns", []),
+            rows=d.get("rows", []),
+            num_rows=d.get("numRows", d.get("num_rows", 0)),
+        )
 
 
 @dataclass(frozen=True)
@@ -42,6 +76,15 @@ class SourceRef:
     score: float
     entity_type: str
     excerpt: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SourceRef:
+        return cls(
+            id=d["id"],
+            score=d["score"],
+            entity_type=d.get("entity_type", d.get("type", "")),
+            excerpt=d.get("excerpt", ""),
+        )
 
 
 @dataclass(frozen=True)
@@ -180,6 +223,3 @@ class ClientConfig:
             raise ValueError("max_top_k must be > 0")
         if self.tls is not None:
             self.tls.verify_self_consistency()
-
-
-import os

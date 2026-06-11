@@ -122,7 +122,7 @@ class Client:
         if embedding is not None:
             body["embedding"] = embedding
         result = self._post("/v1/memory/recall", body, timeout=timeout)
-        return [SearchResult(**r) for r in result["results"]]
+        return [SearchResult.from_dict(r) for r in result["results"]]
 
     def recall_recent(
         self,
@@ -135,7 +135,8 @@ class Client:
             {"topK": top_k},
             timeout=timeout,
         )
-        return [Entity(**e) for e in result["entities"]]
+        return [Entity.from_dict(e) for e in result["entities"]]
+
 
     def recall_by_type(
         self,
@@ -150,7 +151,7 @@ class Client:
             {"entityType": entity_type, "topK": top_k},
             timeout=timeout,
         )
-        return [Entity(**e) for e in result["entities"]]
+        return [Entity.from_dict(e) for e in result["entities"]]
 
     def forget(
         self,
@@ -176,7 +177,7 @@ class Client:
             {"id": id},
             timeout=timeout,
         )
-        return [Entity(**v) for v in result["versions"]]
+        return [Entity.from_dict(v) for v in result["versions"]]
 
     def consolidate(
         self,
@@ -232,7 +233,7 @@ class Client:
         if edge_types is not None:
             body["edgeTypes"] = edge_types
         result = self._post("/v1/graph/expand", body, timeout=timeout)
-        return [Entity(**e) for e in result["entities"]]
+        return [Entity.from_dict(e) for e in result["entities"]]
 
     # ── RAG ────────────────────────────────────────────────────────────
 
@@ -271,7 +272,7 @@ class Client:
                 SourceRef(
                     id=s["id"],
                     score=s["score"],
-                    entity_type=s["type"],
+                    entity_type=s.get("entity_type", s.get("type", "")),
                     excerpt=s.get("excerpt", ""),
                 )
                 for s in result["sources"]
@@ -297,7 +298,7 @@ class Client:
         if snapshot_ts is not None:
             body["snapshotTs"] = snapshot_ts
         result = self._post("/v1/query", body, timeout=timeout)
-        return QueryResult(**result)
+        return QueryResult.from_dict(result)
 
     def query_stream(
         self,

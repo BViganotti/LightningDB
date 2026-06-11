@@ -5,6 +5,8 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true

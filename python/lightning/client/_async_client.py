@@ -111,7 +111,7 @@ class AsyncClient:
         if embedding is not None:
             body["embedding"] = embedding
         result = await self._post("/v1/memory/recall", body, timeout=timeout)
-        return [SearchResult(**r) for r in result["results"]]
+        return [SearchResult.from_dict(r) for r in result["results"]]
 
     async def recall_recent(
         self,
@@ -124,73 +124,7 @@ class AsyncClient:
             {"topK": top_k},
             timeout=timeout,
         )
-        return [Entity(**e) for e in result["entities"]]
-
-    async def recall_by_type(
-        self,
-        entity_type: str,
-        top_k: int = 10,
-        timeout: Optional[float] = None,
-    ) -> list[Entity]:
-        validate_entity_type(entity_type)
-        validate_top_k(top_k, self._config.max_top_k)
-        result = await self._post(
-            "/v1/memory/recall-by-type",
-            {"entityType": entity_type, "topK": top_k},
-            timeout=timeout,
-        )
-        return [Entity(**e) for e in result["entities"]]
-
-    async def forget(
-        self,
-        id: str,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        validate_id(id)
-        result = await self._post("/v1/memory/forget", {"id": id}, timeout=timeout)
-        return result["deleted"]
-
-    async def decay(self, timeout: Optional[float] = None) -> int:
-        result = await self._post("/v1/memory/decay", {}, timeout=timeout)
-        return result["expired"]
-
-    async def entity_history(
-        self,
-        id: str,
-        timeout: Optional[float] = None,
-    ) -> list[Entity]:
-        validate_id(id)
-        result = await self._post(
-            "/v1/memory/entity-history",
-            {"id": id},
-            timeout=timeout,
-        )
-        return [Entity(**v) for v in result["versions"]]
-
-    async def consolidate(
-        self,
-        similarity_threshold: Optional[float] = None,
-        contradiction_jaccard_max: Optional[float] = None,
-        contradiction_cosine_min: Optional[float] = None,
-        contradiction_length_sim_min: Optional[float] = None,
-        max_comparisons_per_entity: Optional[int] = None,
-        timeout: Optional[float] = None,
-    ) -> ConsolidationReport:
-        body: dict[str, Any] = {}
-        if similarity_threshold is not None:
-            body["similarityThreshold"] = similarity_threshold
-        if contradiction_jaccard_max is not None:
-            body["contradictionJaccardMax"] = contradiction_jaccard_max
-        if contradiction_cosine_min is not None:
-            body["contradictionCosineMin"] = contradiction_cosine_min
-        if contradiction_length_sim_min is not None:
-            body["contradictionLengthSimMin"] = contradiction_length_sim_min
-        if max_comparisons_per_entity is not None:
-            body["maxComparisonsPerEntity"] = max_comparisons_per_entity
-        result = await self._post("/v1/memory/consolidate", body, timeout=timeout)
-        return ConsolidationReport(**result)
-
-    # ── Graph ─────────────────────────────────────────────────────────
+        return [Entity.from_dict(e) for e in result["entities"]]
 
     async def associate(
         self,
@@ -221,7 +155,7 @@ class AsyncClient:
         if edge_types is not None:
             body["edgeTypes"] = edge_types
         result = await self._post("/v1/graph/expand", body, timeout=timeout)
-        return [Entity(**e) for e in result["entities"]]
+        return [Entity.from_dict(e) for e in result["entities"]]
 
     # ── RAG ────────────────────────────────────────────────────────────
 
@@ -260,7 +194,7 @@ class AsyncClient:
                 SourceRef(
                     id=s["id"],
                     score=s["score"],
-                    entity_type=s["type"],
+                    entity_type=s.get("entity_type", s.get("type", "")),
                     excerpt=s.get("excerpt", ""),
                 )
                 for s in result["sources"]
@@ -286,7 +220,7 @@ class AsyncClient:
         if snapshot_ts is not None:
             body["snapshotTs"] = snapshot_ts
         result = await self._post("/v1/query", body, timeout=timeout)
-        return QueryResult(**result)
+        return QueryResult.from_dict(result)
 
     async def query_stream(
         self,

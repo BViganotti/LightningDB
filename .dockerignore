@@ -1,0 +1,12 @@
+target/
+.git/
+python/
+packages/
+antlr/
+scripts/
+.env
+*.md
+*.log
+*.jsonl
+*.rlib
+.DS_Store

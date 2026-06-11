@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt python-build clean
+.PHONY: build test lint fmt clean
 
 build:
 	cargo build --release
@@ -12,10 +12,6 @@ lint:
 
 fmt:
 	cargo fmt
-
-python-build:
-	maturin build --release
-	@echo "Python package built in target/wheels/"
 
 clean:
 	cargo clean
