@@ -2528,15 +2528,36 @@ impl FunctionRegistry {
                         ));
                     }
                     let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
-                    for i in 0..num_rows {
-                        let v = crate::processor::Value::from_arrow(&args[0], i);
-                        match v {
-                            crate::processor::Value::String(s) => {
-                                results.append_value(s.len() as i64)
+                    let data_type = args[0].data_type();
+                    let element_size = match data_type {
+                        arrow::datatypes::DataType::Boolean => 1i64,
+                        arrow::datatypes::DataType::Int8 | arrow::datatypes::DataType::UInt8 => 1,
+                        arrow::datatypes::DataType::Int16 | arrow::datatypes::DataType::UInt16 => 2,
+                        arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::UInt32 | arrow::datatypes::DataType::Float32 | arrow::datatypes::DataType::Date32 => 4,
+                        arrow::datatypes::DataType::Int64 | arrow::datatypes::DataType::UInt64 | arrow::datatypes::DataType::Float64 | arrow::datatypes::DataType::Date64 | arrow::datatypes::DataType::Timestamp(_, _) => 8,
+                        arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
+                            for i in 0..num_rows {
+                                let v = crate::processor::Value::from_arrow(&args[0], i);
+                                match v {
+                                    crate::processor::Value::String(s) => results.append_value(s.len() as i64),
+                                    crate::processor::Value::Null => results.append_null(),
+                                    _ => results.append_null(),
+                                }
                             }
-                            crate::processor::Value::Null => results.append_null(),
-                            _ => results.append_value(8), // Fixed size for others? Stub
+                            return Ok(Arc::new(results.finish()));
                         }
+                        arrow::datatypes::DataType::List(_) | arrow::datatypes::DataType::LargeList(_) | arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                            for i in 0..num_rows {
+                                // For lists, we estimate element count as a proxy for size
+                                let arr = &args[0];
+                                if arr.is_null(i) { results.append_null(); } else { results.append_value(8); }
+                            }
+                            return Ok(Arc::new(results.finish()));
+                        }
+                        _ => 8,
+                    };
+                    for _ in 0..num_rows {
+                        results.append_value(element_size);
                     }
                     Ok(Arc::new(results.finish()))
                 }),
