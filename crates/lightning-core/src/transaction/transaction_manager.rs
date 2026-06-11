@@ -261,10 +261,14 @@ impl TransactionManager {
             }
 
             // Phase 2: Update timestamps for non-bulk pages
-            let modified = tx.modified_pages.lock();
-            if !modified.is_empty() {
-                for (file_id, page_idx) in modified.iter() {
-                    bm.update_timestamps(*file_id, *page_idx, tx.tx_id, commit_ts);
+            // Scope block ensures the MutexGuard is dropped before the flush
+            // phase below, avoiding a double-lock deadlock on modified_pages.
+            {
+                let modified = tx.modified_pages.lock();
+                if !modified.is_empty() {
+                    for (file_id, page_idx) in modified.iter() {
+                        bm.update_timestamps(*file_id, *page_idx, tx.tx_id, commit_ts);
+                    }
                 }
             }
 

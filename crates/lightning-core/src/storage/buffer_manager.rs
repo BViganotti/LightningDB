@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub const PAGE_SIZE: usize = 4096;
 
 const UNCOMMITTED_BIT: u64 = 1 << 63;
+const INITIAL_SLOTS_PER_SHARD: usize = 256;
 
 pub struct Frame {
     pub data: UnsafeCell<[u8; PAGE_SIZE]>,
@@ -61,6 +62,7 @@ struct BufferPool {
     slots: Vec<BufferSlot>,
     clock_ptr: usize,
     capacity: usize,
+    max_capacity: usize,
     wal: Option<Arc<crate::storage::WAL>>,
     page_locks: LruCache<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
@@ -93,9 +95,10 @@ impl BufferManager {
         let prefetch_tracker = Arc::new(crate::storage::prefetch::PrefetchTracker::new());
         let mut shards = Vec::with_capacity(num_shards);
 
+        let initial_cap = INITIAL_SLOTS_PER_SHARD.min(shard_capacity);
         for _ in 0..num_shards {
-            let mut slots = Vec::with_capacity(shard_capacity);
-            for _ in 0..shard_capacity {
+            let mut slots = Vec::with_capacity(initial_cap);
+            for _ in 0..initial_cap {
                 slots.push(BufferSlot {
                     key: None,
                     frame: Arc::new(Frame::new([0u8; PAGE_SIZE], 0)),
@@ -110,7 +113,8 @@ impl BufferManager {
                 file_handles: HashMap::new(),
                 slots,
                 clock_ptr: 0,
-                capacity: shard_capacity,
+                capacity: initial_cap,
+                max_capacity: shard_capacity,
                 wal: wal.as_ref().map(|w| Arc::clone(w)),
                 page_locks: LruCache::new(lock_cap),
                 shutdown: AtomicBool::new(false),
@@ -692,6 +696,25 @@ impl BufferManager {
         Ok(())
     }
 
+    fn grow_pool(&self, pool: &mut BufferPool) {
+        let old_cap = pool.capacity;
+        let new_cap = (old_cap * 2).min(pool.max_capacity);
+        if new_cap <= old_cap {
+            return;
+        }
+        pool.slots.reserve(new_cap - old_cap);
+        for i in old_cap..new_cap {
+            pool.slots.push(BufferSlot {
+                key: None,
+                frame: Arc::new(Frame::new([0u8; PAGE_SIZE], 0)),
+                dirty: false,
+                referenced: false,
+            });
+            pool.free_candidates.push_back(i);
+        }
+        pool.capacity = new_cap;
+    }
+
     fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<usize> {
         // Fast path: pop a free candidate if available
         if let Some(idx) = pool.free_candidates.pop_front() {
@@ -740,6 +763,10 @@ impl BufferManager {
                 }
 
                 if pool.clock_ptr == start_ptr {
+                    if pool.capacity < pool.max_capacity {
+                        self.grow_pool(pool);
+                        break; // restart the CLOCK scan with larger pool
+                    }
                     if all_uncommitted {
                         if retry < max_retries {
                             // All pages are dirty-uncommitted — wait briefly for

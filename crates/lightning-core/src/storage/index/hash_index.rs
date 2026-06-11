@@ -137,8 +137,10 @@ impl HashIndex {
             self.insert_internal(bm, *hash, key, *row_id, tx)?;
         }
 
-        // 5. Update header LAST — all pages are zeroed and entries re-inserted
-        let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
+        // 5. Update header LAST — all pages are zeroed and entries re-inserted.
+        //    Use create_new_version so the BM tracks the header as dirty and
+        //    checkpoint will flush it atomically with all bucket pages.
+        let header_frame = bm.create_new_version(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         unsafe {
             std::ptr::copy_nonoverlapping(
                 new_buckets.to_le_bytes().as_ptr(),
@@ -148,11 +150,6 @@ impl HashIndex {
         }
         bm.log_page_update(self.file_handle.file_id, HEADER_PAGE_IDX, header_frame.as_slice())?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
-
-        // Also write header directly to file for durability
-        let mut header_data = [0u8; PAGE_SIZE];
-        header_data[0..8].copy_from_slice(&new_buckets.to_le_bytes());
-        self.file_handle.write_page(HEADER_PAGE_IDX, &header_data)?;
 
         Ok(())
     }
@@ -699,9 +696,6 @@ mod tests {
         let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
-        index.resize(bm, &tx).expect("internal invariant violated");
-
-        // Resize to 128
         index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 128);
 
