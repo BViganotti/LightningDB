@@ -421,6 +421,13 @@ impl ExpressionEvaluator {
                         num_rows,
                     ));
                 }
+                if entries.len() != field_defs.len() {
+                    return Err(LightningError::Query(format!(
+                        "Map has {} entries but struct type has {} fields",
+                        entries.len(),
+                        field_defs.len(),
+                    )));
+                }
                 let mut fields = Vec::new();
                 let mut arrays = Vec::new();
                 for ((_key, expr), field_def) in entries.iter().zip(field_defs.iter()) {
@@ -664,9 +671,11 @@ impl ExpressionEvaluator {
                 }
             }
             Divide => {
+                if r.iter().any(|v| v == Some(0)) {
+                    return Err(LightningError::Query("Division by zero".into()));
+                }
                 let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
                     match (a, b) {
-                        (Some(_), Some(0)) => None,
                         (Some(a), Some(b)) => match a.checked_div(b) {
                             Some(val) => Some(val),
                             None => None,
@@ -735,18 +744,13 @@ impl ExpressionEvaluator {
                     }
                 });
                 if has_neg {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
-                            (Some(a), Some(b)) => Some(a as f64 - b as f64),
-                            _ => None,
-                        }
-                    }).collect();
-                    Arc::new(f)
-                } else {
-                    let raw = arrow::compute::kernels::numeric::sub(l, r)
-                        .map_err(|e| LightningError::Internal(e.to_string()))?;
-                    Arc::new(raw)
+                    return Err(LightningError::Query(
+                        "UInt64 subtraction would produce negative result".into(),
+                    ));
                 }
+                let raw = arrow::compute::kernels::numeric::sub(l, r)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                Arc::new(raw)
             }
             Multiply => {
                 let raw = arrow::compute::kernels::numeric::mul(l, r)
