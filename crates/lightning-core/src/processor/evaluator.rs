@@ -866,59 +866,82 @@ impl ExpressionEvaluator {
             .downcast_ref::<ListArray>()
             .ok_or_else(|| LightningError::Internal("Expected ListArray".into()))?;
 
-        let mut filtered_values = Vec::new();
-        let mut new_offsets = Vec::with_capacity(list_arr.len() + 1);
-        new_offsets.push(0);
+        let num_elements = list_arr.len();
 
-        // Build the schema once from the first non-empty list element.
-        // All elements share the same data type in a fixed-type list column.
-        let canned_schema: Option<Arc<Schema>> = 'schema: {
-            for i in 0..list_arr.len() {
-                let values = list_arr.value(i);
-                if !values.is_empty() {
-                    break 'schema Some(Arc::new(Schema::new(vec![Field::new(
-                        var,
-                        values.data_type().clone(),
-                        true,
-                    )])));
-                }
-            }
-            None
-        };
-
-        for i in 0..list_arr.len() {
-            let values = list_arr.value(i);
-            let prev = *new_offsets.last().unwrap_or(&0);
-            if values.is_empty() {
-                new_offsets.push(prev);
-                continue;
-            }
-
-            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
-                var,
-                values.data_type().clone(),
-                true,
-            )])));
-            let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
-            let res = Self::evaluate(
-                body,
-                Some(&sub_batch),
-                params,
-                values.len(),
-                registry,
-                database,
-            )?;
-            new_offsets.push(prev + res.len() as i32);
-            filtered_values.push(res);
+        // Early exit for empty input
+        if num_elements == 0 {
+            return Ok(Arc::new(ListArray::new_null(
+                Arc::new(Field::new("item", arrow::datatypes::DataType::Null, true)),
+                0,
+            )));
         }
 
-        let flat_values = arrow::compute::concat(
-            &filtered_values
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| LightningError::Internal(e.to_string()))?;
+        // Detect the element data type from the first non-empty list element
+        let data_type = (0..num_elements)
+            .find_map(|i| {
+                let v = list_arr.value(i);
+                if !v.is_empty() { Some(v.data_type().clone()) } else { None }
+            })
+            .unwrap_or(arrow::datatypes::DataType::Null);
+
+        // Batch: concatenate ALL element values into one array, evaluate ONCE
+        let mut element_lens: Vec<usize> = Vec::with_capacity(num_elements);
+        let mut value_refs: Vec<&dyn Array> = Vec::new();
+        for i in 0..num_elements {
+            let v = list_arr.value(i);
+            element_lens.push(v.len());
+            if !v.is_empty() {
+                value_refs.push(v.as_ref());
+            }
+        }
+
+        let result_arr = if value_refs.is_empty() {
+            arrow::array::new_null_array(&arrow::datatypes::DataType::Boolean, 0)
+        } else {
+            let concat_all = if value_refs.len() == 1 {
+                // SAFETY: safe to clone Arc
+                value_refs[0].slice(0, value_refs[0].len())
+            } else {
+                arrow::compute::concat(&value_refs)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?
+            };
+            let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
+            let batch = RecordBatch::try_new(schema, vec![concat_all])?;
+            Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?
+        };
+
+        // Split the boolean result per element and filter original values
+        let mut filtered_pieces: Vec<ArrayRef> = Vec::with_capacity(num_elements);
+        let mut new_offsets: Vec<i32> = Vec::with_capacity(num_elements + 1);
+        new_offsets.push(0);
+        let mut input_pos = 0usize;
+        for (elem_idx, &orig_len) in element_lens.iter().enumerate() {
+            if orig_len == 0 {
+                new_offsets.push(*new_offsets.last().unwrap());
+                continue;
+            }
+            let mask_slice = result_arr.slice(input_pos, orig_len);
+            let mask = mask_slice.as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .ok_or_else(|| LightningError::Internal("LIST_FILTER predicate did not return boolean".into()))?;
+            let original_vals = list_arr.value(elem_idx);
+            let filtered = arrow::compute::filter(&original_vals, mask)
+                .map_err(|e| LightningError::Internal(e.to_string()))?;
+            let prev = *new_offsets.last().unwrap();
+            new_offsets.push(prev + filtered.len() as i32);
+            filtered_pieces.push(filtered);
+            input_pos += orig_len;
+        }
+
+        let flat_values = if filtered_pieces.is_empty() {
+            arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0)
+        } else if filtered_pieces.len() == 1 {
+            filtered_pieces.remove(0)
+        } else {
+            let refs: Vec<&dyn Array> = filtered_pieces.iter().map(|a| a.as_ref()).collect();
+            arrow::compute::concat(&refs)
+                .map_err(|e| LightningError::Internal(e.to_string()))?
+        };
 
         let field = Arc::new(Field::new("item", flat_values.data_type().clone(), true));
         let offset_buffer =
@@ -942,59 +965,81 @@ impl ExpressionEvaluator {
             .downcast_ref::<ListArray>()
             .ok_or_else(|| LightningError::Internal("Expected ListArray".into()))?;
 
-        let mut transformed_values = Vec::new();
-        let mut new_offsets = Vec::with_capacity(list_arr.len() + 1);
-        new_offsets.push(0);
-
-        // Build schema once from the first non-empty element
-        let canned_schema: Option<Arc<Schema>> = 'schema: {
-            for i in 0..list_arr.len() {
-                let values = list_arr.value(i);
-                if !values.is_empty() {
-                    break 'schema Some(Arc::new(Schema::new(vec![Field::new(
-                        var,
-                        values.data_type().clone(),
-                        true,
-                    )])));
-                }
-            }
-            None
-        };
-
-        for i in 0..list_arr.len() {
-            let values = list_arr.value(i);
-            let prev = *new_offsets.last().unwrap_or(&0);
-            if values.is_empty() {
-                new_offsets.push(prev);
-                continue;
-            }
-
-            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
-                var,
-                values.data_type().clone(),
-                true,
-            )])));
-            let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
-
-            let res = Self::evaluate(
-                body,
-                Some(&sub_batch),
-                params,
-                values.len(),
-                registry,
-                database,
-            )?;
-            new_offsets.push(prev + res.len() as i32);
-            transformed_values.push(res);
+        let num_elements = list_arr.len();
+        if num_elements == 0 {
+            return Ok(Arc::new(ListArray::new_null(
+                Arc::new(Field::new("item", arrow::datatypes::DataType::Null, true)),
+                0,
+            )));
         }
 
-        let flat_values = arrow::compute::concat(
-            &transformed_values
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| LightningError::Internal(e.to_string()))?;
+        let data_type = (0..num_elements)
+            .find_map(|i| {
+                let v = list_arr.value(i);
+                if !v.is_empty() { Some(v.data_type().clone()) } else { None }
+            })
+            .unwrap_or(arrow::datatypes::DataType::Null);
+
+        // Collect all values into one array
+        let mut element_orig_lens: Vec<usize> = Vec::with_capacity(num_elements);
+        let mut all_value_refs: Vec<&dyn Array> = Vec::new();
+        let mut owned_values: Vec<ArrayRef> = Vec::new();
+        for i in 0..num_elements {
+            let v = list_arr.value(i);
+            element_orig_lens.push(v.len());
+            if !v.is_empty() {
+                all_value_refs.push(v.as_ref());
+                owned_values.push(v);
+            }
+        }
+
+        // Evaluate the transform ONCE on concatenated values
+        let (result_arr, empty_result) = if owned_values.is_empty() {
+            (arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0), true)
+        } else {
+            let concat_all = if owned_values.len() == 1 {
+                owned_values.remove(0)
+            } else {
+                arrow::compute::concat(&all_value_refs)
+                    .map_err(|e| LightningError::Internal(e.to_string()))?
+            };
+            let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
+            let batch = RecordBatch::try_new(schema, vec![concat_all])?;
+            (Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?, false)
+        };
+
+        if empty_result {
+            return Ok(Arc::new(ListArray::new_null(
+                Arc::new(Field::new("item", arrow::datatypes::DataType::Null, true)),
+                0,
+            )));
+        }
+
+        // Split the result by original element lengths (1:1 mapping)
+        let mut new_offsets: Vec<i32> = Vec::with_capacity(num_elements + 1);
+        new_offsets.push(0);
+        let mut input_pos = 0usize;
+        let mut transformed_pieces: Vec<ArrayRef> = Vec::new();
+        for &orig_len in &element_orig_lens {
+            if orig_len == 0 {
+                new_offsets.push(*new_offsets.last().unwrap());
+            } else {
+                let prev = *new_offsets.last().unwrap();
+                new_offsets.push(prev + orig_len as i32);
+                transformed_pieces.push(result_arr.slice(input_pos, orig_len));
+                input_pos += orig_len;
+            }
+        }
+
+        let flat_values = if transformed_pieces.is_empty() {
+            arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0)
+        } else if transformed_pieces.len() == 1 {
+            transformed_pieces.remove(0)
+        } else {
+            let refs: Vec<&dyn Array> = transformed_pieces.iter().map(|a| a.as_ref()).collect();
+            arrow::compute::concat(&refs)
+                .map_err(|e| LightningError::Internal(e.to_string()))?
+        };
 
         let field = Arc::new(Field::new("item", flat_values.data_type().clone(), true));
         let offset_buffer =
