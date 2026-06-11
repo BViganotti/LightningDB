@@ -250,13 +250,13 @@ impl TransactionManager {
                             bm.unpin_page(&fh, *page_idx, our_frame);
                         }
                     }
-                }
 
-                // Clean up page merge locks for this transaction's modified pages
-                // to prevent unbounded growth of the page_merge_locks map.
-                let mut merge_locks = self.page_merge_locks.lock();
-                for ((file_id, page_idx), _mods) in &page_groups {
-                    merge_locks.remove(&(*file_id, *page_idx));
+                    // Clean up page merge locks for this transaction's modified pages
+                    // to prevent unbounded growth of the page_merge_locks map.
+                    let mut merge_locks = self.page_merge_locks.lock();
+                    for ((file_id, page_idx), _mods) in &page_groups {
+                        merge_locks.remove(&(*file_id, *page_idx));
+                    }
                 }
             }
 
