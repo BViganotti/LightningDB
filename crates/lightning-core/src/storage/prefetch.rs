@@ -62,6 +62,45 @@ impl PrefetchTracker {
         entries.retain(|(_, w)| *w > 0.01);
     }
 
+    fn remove_if_empty<K, V>(map: &mut HashMap<K, Vec<V>>, key: &K)
+    where
+        K: std::cmp::Eq + std::hash::Hash,
+    {
+        if let Some(v) = map.get(key) {
+            if v.is_empty() {
+                map.remove(key);
+            }
+        }
+    }
+
+    fn record_transition(
+        trans: &mut HashMap<(u64, u64), Vec<((u64, u64), f64)>>,
+        from: (u64, u64),
+        to: (u64, u64),
+    ) {
+        let total: f64 = trans.values().flat_map(|v| v.iter()).map(|(_, w)| *w).sum();
+        let entry = trans.entry(from).or_default();
+        let mut found = false;
+        for (key, weight) in entry.iter_mut() {
+            if *key == to {
+                *weight += 1.0;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            entry.push((to, 1.0));
+        }
+    }
+
+    // Flag to skip removing empty vectors where this isn't critical
+        for (_, w) in entries.iter_mut() {
+            *w *= 1.0 - decay;
+        }
+        // Remove entries that decayed below threshold
+        entries.retain(|(_, w)| *w > 0.01);
+    }
+
     fn record_transition(
         trans: &mut HashMap<(u64, u64), Vec<((u64, u64), f64)>>,
         from: (u64, u64),
@@ -149,21 +188,22 @@ impl PrefetchTracker {
 
     /// Report whether a previous prediction was correct (the predicted page was accessed).
     pub fn report_prediction_result(&self, was_hit: bool) {
-        let made = self.predictions_made.fetch_add(1, Ordering::Release);
         if was_hit {
             self.predictions_hit.fetch_add(1, Ordering::Release);
         }
-        // Auto-tune confidence every 100 predictions
-        if made >= 99 {
-            // Atomically snapshot and reset both counters
-            self.predictions_made.store(0, Ordering::Release);
+        // Atomically increment and check the made counter.
+        // Use fetch_update to atomically check if we should tune,
+        // preventing race conditions between concurrent callers.
+        let should_tune = self.predictions_made.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |v| if v >= 99 { Some(0) } else { Some(v + 1) },
+        ).unwrap_or(0) >= 99;
+        if should_tune {
             let hit_total = self.predictions_hit.swap(0, Ordering::Release);
-            let made_total = made + 1;
-            let hit_rate = if made_total > 0 {
-                hit_total as f64 / made_total as f64
-            } else {
-                0.0
-            };
+            // The made counter was already reset by fetch_update above.
+            // Use 100 as the denominator (the count of predictions we just tuned over).
+            let hit_rate = hit_total as f64 / 100.0;
             let mut conf = self.auto_confidence.write();
             if hit_rate > 0.7 && *conf < 0.8 {
                 *conf += 0.05;

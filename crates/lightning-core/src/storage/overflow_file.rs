@@ -23,25 +23,47 @@ impl OverflowFile {
         len: u32,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<String> {
+        const PAGE_SIZE: usize = 4096;
+        const NEXT_PTR_SIZE: usize = 4;
+        const USABLE_SIZE: usize = PAGE_SIZE - NEXT_PTR_SIZE;
+
+        if len == 0 {
+            return Ok(String::new());
+        }
+
         let mut result = String::with_capacity(len as usize);
         let mut current_page_idx = page_idx;
         let mut current_offset = offset as usize;
         let mut remaining = len as usize;
 
         while remaining > 0 {
+            if current_offset > USABLE_SIZE {
+                return Err(LightningError::Internal(format!(
+                    "read_string: offset {} exceeds usable page size {}", current_offset, USABLE_SIZE
+                )));
+            }
+
             let page = self.buffer_manager.pin_page(
                 self.file_handle.clone(),
                 current_page_idx as u64,
                 tx,
             )?;
-            // In kuzu/ladybug, each overflow page has a pointer to the next page at the end.
-            // Page size is 4KB.
-            let page_size = 4096;
-            let usable_size = page_size - 4;
             let page_data = page.as_slice();
+            if page_data.len() < PAGE_SIZE {
+                return Err(LightningError::Internal(format!(
+                    "read_string: page {} too short: {} bytes", current_page_idx, page_data.len()
+                )));
+            }
 
-            let to_read = std::cmp::min(remaining, usable_size - current_offset);
-            let slice = &page_data[current_offset..current_offset + to_read];
+            let to_read = std::cmp::min(remaining, USABLE_SIZE - current_offset);
+            let end = current_offset + to_read;
+            if end > page_data.len() {
+                return Err(LightningError::Internal(format!(
+                    "read_string: slice end {} exceeds page size {} on page {}",
+                    end, page_data.len(), current_page_idx
+                )));
+            }
+            let slice = &page_data[current_offset..end];
             result.push_str(
                 std::str::from_utf8(slice)
                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?,
@@ -49,8 +71,17 @@ impl OverflowFile {
 
             remaining -= to_read;
             if remaining > 0 {
-                let next_page_bytes = &page_data[usable_size..page_size];
-                let next_page_idx = u32::from_le_bytes(next_page_bytes.try_into().expect("4-byte array"));
+                let next_ptr_end = USABLE_SIZE + NEXT_PTR_SIZE;
+                if next_ptr_end > page_data.len() {
+                    return Err(LightningError::Internal(format!(
+                        "read_string: page {} too short for next pointer", current_page_idx
+                    )));
+                }
+                let next_page_bytes = &page_data[USABLE_SIZE..next_ptr_end];
+                let next_page_idx = u32::from_le_bytes(
+                    next_page_bytes.try_into()
+                        .map_err(|_| LightningError::Internal("read_string: invalid next page pointer".into()))?
+                );
                 current_page_idx = next_page_idx;
                 current_offset = 0;
             }

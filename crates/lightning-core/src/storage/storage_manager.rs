@@ -92,9 +92,8 @@ impl Table {
                 if wb.columns.is_empty() || wb.columns[0].is_empty() {
                     return Ok(());
                 }
-                let row_ids = wb.row_ids.clone();
+                let row_ids = std::mem::take(&mut wb.row_ids);
                 let columns = std::mem::take(&mut wb.columns);
-                let _ = std::mem::take(&mut wb.row_ids);
                 wb.size_bytes = 0;
                 // Re-initialize column vecs for next batch
                 let num_cols = self.columns.len();
