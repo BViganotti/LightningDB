@@ -313,7 +313,7 @@ impl FunctionRegistry {
                                     .map_err(|e| crate::LightningError::Internal(e.to_string()))
                             }
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<std::result::Result<Vec<_>, crate::LightningError>>()?;
 
                     let mut builder = arrow::array::make_builder(&target_type, num_rows);
                     for i in 0..num_rows {

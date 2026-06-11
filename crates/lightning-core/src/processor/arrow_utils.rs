@@ -461,9 +461,6 @@ pub fn values_to_array(values: &[Value], data_type: &DataType) -> ArrayRef {
         _ => Arc::new(arrow::array::NullArray::new(values.len())),
     }
 }
-        _ => arrow::array::new_null_array(data_type, values.len()),
-    }
-}
 
 pub fn str_col(batch: &arrow::record_batch::RecordBatch, col: usize) -> std::result::Result<&StringArray, LightningError> {
     batch.column(col)
