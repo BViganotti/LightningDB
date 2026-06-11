@@ -3,6 +3,8 @@ use crate::Result;
 use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 
+const FLATTEN_BATCH_SIZE: usize = 1024;
+
 pub struct PhysicalFlatten {
     child: Box<dyn PhysicalOperator>,
     current_batch: Option<RecordBatch>,
@@ -28,23 +30,26 @@ impl PhysicalOperator for PhysicalFlatten {
     ) -> Result<Option<DataChunk>> {
         loop {
             if let Some(batch) = &self.current_batch {
-                if self.cursor < batch.num_rows() {
-                    let row_idx = self.cursor;
-                    self.cursor += 1;
+                let num_rows = batch.num_rows();
+                if self.cursor < num_rows {
+                    let start = self.cursor;
+                    let end = (start + FLATTEN_BATCH_SIZE).min(num_rows);
+                    let count = end - start;
+                    self.cursor = end;
 
-                    let mut columns = Vec::new();
+                    let mut columns = Vec::with_capacity(batch.num_columns());
                     for col_idx in 0..batch.num_columns() {
                         let col = batch.column(col_idx);
-                        columns.push(col.slice(row_idx, 1));
+                        columns.push(col.slice(start, count));
                     }
 
-                    let single_row_batch =
+                    let result_batch =
                         RecordBatch::try_new(batch.schema(), columns).map_err(|e| {
                             crate::LightningError::Internal(format!("Arrow error: {e}"))
                         })?;
 
                     return Ok(Some(DataChunk {
-                        batch: single_row_batch,
+                        batch: result_batch,
                     }));
                 } else {
                     self.current_batch = None;
