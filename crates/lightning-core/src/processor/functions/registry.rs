@@ -3157,37 +3157,6 @@ impl FunctionRegistry {
             );
         }
 
-        // Define EXP
-        scalar_functions.insert(
-            "EXP".to_string(),
-            ScalarFunction::new(
-                "EXP".to_string(),
-                Arc::new(|args, num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "EXP requires 1 argument".into(),
-                        ));
-                    }
-                    let n_arg =
-                        arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
-                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                    let n_arr = n_arg
-                        .as_any()
-                        .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
-                    let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
-                    for i in 0..num_rows {
-                        if n_arr.is_null(i) {
-                            results.append_null();
-                            continue;
-                        }
-                        results.append_value(n_arr.value(i).exp());
-                    }
-                    Ok(Arc::new(results.finish()))
-                }),
-            ),
-        );
-
         // Define POWER
         scalar_functions.insert(
             "POWER".to_string(),
