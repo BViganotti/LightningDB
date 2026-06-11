@@ -58,6 +58,12 @@ pub struct CliArgs {
     /// If not set, defaults to allowing only localhost origins.
     #[arg(long, env = "LIGHTNING_CORS_ORIGINS")]
     pub cors_allowed_origins: Option<String>,
+
+    /// API token for authentication (Authorization: Bearer <token>).
+    /// If set, all endpoints (except /health) require this token.
+    /// If not set, authentication is disabled (open access).
+    #[arg(long, env = "LIGHTNING_AUTH_TOKEN")]
+    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +81,7 @@ pub struct ServerConfig {
     pub tls_key: Option<PathBuf>,
     pub startup_time: std::time::Instant,
     pub cors_allowed_origins: Vec<String>,
+    pub auth_token: Option<String>,
 }
 
 impl ServerConfig {
@@ -111,6 +118,7 @@ impl ServerConfig {
             tls_key: args.tls_key.clone(),
             startup_time: std::time::Instant::now(),
             cors_allowed_origins,
+            auth_token: args.auth_token.clone(),
         }
     }
 

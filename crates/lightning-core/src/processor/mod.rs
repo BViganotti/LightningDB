@@ -81,7 +81,7 @@ pub trait PhysicalOperator: Send + Sync {
     /// in the cache key. Write operators must either not be cached or use a
     /// transaction-specific key.
     fn is_read_only(&self) -> bool {
-        true
+        false
     }
 }
 

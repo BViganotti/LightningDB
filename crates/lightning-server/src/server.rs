@@ -133,8 +133,31 @@ impl Server {
                 ])
         };
 
+        // Build auth layer from config (if auth_token is set)
+        let auth_token = state.config.auth_token.clone();
+        let auth_layer = axum::middleware::from_fn(move |req: Request, next: Next| {
+            let expected = auth_token.clone();
+            async move {
+                if let Some(ref expected) = expected {
+                    let provided = req
+                        .headers()
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.strip_prefix("Bearer "))
+                        .map(|s| s.trim().to_string());
+                    match provided {
+                        Some(token) if token == *expected => {}
+                        _ => {
+                            return Err(axum::http::StatusCode::UNAUTHORIZED);
+                        }
+                    }
+                }
+                Ok(next.run(req).await)
+            }
+        });
+
         let app = Router::new()
-            // Health
+            // Health (no auth required)
             .route("/health", get(routes::health::health_handler))
             // Query
             .route("/v1/query", post(routes::query::query_handler))
@@ -161,7 +184,8 @@ impl Server {
             .route("/metrics", get(routes::admin::metrics_handler))
             // CDC
             .route("/v1/subscribe", get(routes::subscribe::subscribe_handler))
-            // Middleware
+            // Middleware (auth BEFORE all protected routes)
+            .layer(auth_layer)
             .layer(middleware::from_fn(request_id_middleware))
             .layer(
                 TraceLayer::new_for_http()
