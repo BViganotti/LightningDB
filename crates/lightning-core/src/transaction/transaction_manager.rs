@@ -3,6 +3,7 @@ use crate::storage::buffer_manager::BufferManager;
 use crate::storage::row_version::RowVersion;
 use crate::storage::undo_buffer::UndoBuffer;
 use crate::storage::WAL;
+use crate::LightningError;
 use crate::Result;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -92,7 +93,13 @@ impl TransactionManager {
     /// will show only data committed at or before `snapshot_ts`, as if
     /// the clock was frozen at that moment.
     pub fn begin_at(&self, is_read_only: bool, snapshot_ts: u64) -> Result<Transaction> {
-        let tx_id = self.next_tx_id.fetch_add(1, Ordering::SeqCst);
+        let tx_id = self.next_tx_id.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
+            if id == u64::MAX {
+                None
+            } else {
+                Some(id + 1)
+            }
+        }).map_err(|_| LightningError::Internal("transaction ID overflow".into()))?;
         let read_ts = snapshot_ts;
 
         if !is_read_only {
@@ -174,7 +181,13 @@ impl TransactionManager {
                 }
             }
 
-            let commit_ts = self.current_ts.fetch_add(1, Ordering::SeqCst) + 1;
+            let commit_ts = self.current_ts.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ts| {
+                if ts == u64::MAX {
+                    None
+                } else {
+                    Some(ts + 1)
+                }
+            }).map_err(|_| LightningError::Internal("MVCC timestamp overflow".into()))? + 1;
             tx.commit_ts.store(commit_ts, Ordering::SeqCst);
 
             // Phase 1: Row-level merge — re-read the latest committed page for each
@@ -297,8 +310,8 @@ impl TransactionManager {
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
 
-            let committed_count = self.committed_tx_count.fetch_add(1, Ordering::SeqCst) + 1;
-            db.catalog.save_if_needed(committed_count)?;
+            self.committed_tx_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c + 1));
+            db.catalog.save_if_needed(self.committed_tx_count.load(Ordering::Acquire))?;
         }
         self.remove_read_ts(tx.read_ts);
         tx.finalized.store(true, Ordering::SeqCst);
@@ -322,7 +335,7 @@ impl TransactionManager {
     fn remove_read_ts(&self, read_ts: u64) {
         let mut active = self.active_read_ts.write();
         if let Some(count) = active.get_mut(&read_ts) {
-            *count -= 1;
+            *count = count.saturating_sub(1);
             if *count == 0 {
                 active.remove(&read_ts);
             }
