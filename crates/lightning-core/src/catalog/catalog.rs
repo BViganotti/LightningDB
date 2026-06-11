@@ -356,7 +356,7 @@ impl Catalog {
         // Sync the parent directory to ensure the rename is durable
         if let Some(parent) = path.parent() {
             if let Ok(f) = std::fs::File::open(parent) {
-                f.sync_all().ok();
+                f.sync_all()?;
             }
         }
         Ok(())

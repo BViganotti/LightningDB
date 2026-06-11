@@ -11,7 +11,7 @@ pub struct CliArgs {
     pub db_path: PathBuf,
 
     /// Host address to bind to
-    #[arg(long, default_value = "0.0.0.0", env = "LIGHTNING_HOST")]
+    #[arg(long, default_value = "127.0.0.1", env = "LIGHTNING_HOST")]
     pub host: String,
 
     /// Port to listen on

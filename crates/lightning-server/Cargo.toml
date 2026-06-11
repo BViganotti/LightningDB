@@ -16,7 +16,7 @@ lightning = { path = "../lightning" }
 axum = { version = "0.8", features = ["json", "macros"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "net", "io-util"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "limit"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }

@@ -2468,9 +2468,13 @@ impl FunctionRegistry {
             "CURRENT_USER".to_string(),
             ScalarFunction::new(
                 "CURRENT_USER".to_string(),
-                Arc::new(|_args, num_rows| {
-                    let u = std::env::var("USER").unwrap_or_else(|_| "lightning_user".to_string());
-                    Ok(Arc::new(arrow::array::StringArray::from(vec![u; num_rows])))
+                Arc::new({
+                    let u = std::env::var("USER")
+                        .or_else(|_| std::env::var("LOGNAME"))
+                        .unwrap_or_else(|_| "lightning_user".to_string());
+                    move |_args, num_rows| {
+                        Ok(Arc::new(arrow::array::StringArray::from(vec![u.clone(); num_rows])))
+                    }
                 }),
             ),
         );

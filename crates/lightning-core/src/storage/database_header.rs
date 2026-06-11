@@ -37,7 +37,17 @@ impl DatabaseHeader {
             .map_err(|e| crate::LightningError::Database(e.to_string()))?;
         if header.magic != Self::MAGIC {
             return Err(crate::LightningError::Database(
-                "Invalid magic number".into(),
+                format!("Invalid magic number: got {:#x?}, expected {:#x?}", header.magic, Self::MAGIC),
+            ));
+        }
+        if header.version > Self::VERSION {
+            return Err(crate::LightningError::Database(
+                format!("Database version {} is newer than this software (v{}); upgrade required", header.version, Self::VERSION),
+            ));
+        }
+        if header.version == 0 {
+            return Err(crate::LightningError::Database(
+                "Database version 0 is invalid".into(),
             ));
         }
         Ok(header)

@@ -38,14 +38,11 @@ impl FileHandle {
             page_states.push(PageState::new());
         }
 
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        // Use ONLY the filename for hash, not the full path
-        // Hash the full path to prevent file_id collisions between
-        // different directories with the same filename.
-        path.as_os_str().hash(&mut hasher);
-        let file_id = hasher.finish();
+        // Use FNV-1a hash for stable, deterministic file_id across
+        // Rust versions and process restarts. DefaultHasher (SipHash)
+        // uses a random key per-process and is NOT stable.
+        let path_bytes = path.as_os_str().as_encoded_bytes();
+        let file_id = fnv1a_hash64(path_bytes);
 
         Ok(Self {
             file_id,
@@ -204,4 +201,16 @@ impl FileHandle {
         *num_pages = keep_count;
         Ok(())
     }
+}
+
+/// FNV-1a 64-bit hash — deterministic, stable across Rust versions and platforms.
+fn fnv1a_hash64(data: &[u8]) -> u64 {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    let mut hash = FNV_OFFSET;
+    for &byte in data {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }

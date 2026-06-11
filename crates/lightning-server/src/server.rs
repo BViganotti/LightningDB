@@ -12,6 +12,7 @@ use lightning::Database;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::compression::CompressionLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing::Level;
 
 use crate::config::ServerConfig;
@@ -194,6 +195,7 @@ impl Server {
             )
             .layer(cors_layer)
             .layer(CompressionLayer::new())
+            .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max body
             .with_state(state.clone());
 
         let addr = format!("{}:{}", state.config.host, state.config.port);
