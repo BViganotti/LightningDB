@@ -354,7 +354,9 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     .map(|c| (c.name.clone(), c.type_.clone()))
                     .collect();
                 storage.create_table(name.clone(), col_defs, false, None)?;
-                storage.create_index(name)?;
+                if !primary_key.is_empty() {
+                    storage.create_index(name)?;
+                }
                 storage.set_fsm_on_all_file_handles();
 
                 // 3. Register for rollback
@@ -487,8 +489,13 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 table_name,
                 property: _,
             } => {
+                fn sanitize(s: &str) -> String {
+                    s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
+                }
                 let mut storage = database.storage_manager.write();
-                let index_path = database._path.join(format!("{table_name}_{name}_idx.lbug"));
+                let safe_name = sanitize(name);
+                let safe_table = sanitize(table_name);
+                let index_path = database._path.join(format!("{safe_table}_{safe_name}_idx.lbug"));
                 let index = crate::storage::index::hash_index::HashIndex::open_or_create(
                     &index_path,
                 )?;
