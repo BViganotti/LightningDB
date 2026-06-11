@@ -851,15 +851,12 @@ impl FunctionRegistry {
                         }
                         let list = list_array.value(i);
                         let val = crate::processor::Value::from_arrow(value_array, i);
-                        let mut found = false;
+                        // Use HashSet for O(1) element lookup instead of O(m) iteration
+                        let mut seen = std::collections::HashSet::new();
                         for j in 0..list.len() {
-                            let list_val = crate::processor::Value::from_arrow(&list, j);
-                            if list_val == val {
-                                found = true;
-                                break;
-                            }
+                            seen.insert(crate::processor::Value::from_arrow(&list, j));
                         }
-                        results.append_value(found);
+                        results.append_value(seen.contains(&val));
                     }
                     Ok(Arc::new(results.finish()))
                 }),
@@ -2456,15 +2453,15 @@ impl FunctionRegistry {
                             let start = crate::processor::Value::from_arrow(&args[1], i);
                             let end = crate::processor::Value::from_arrow(&args[2], i);
 
-                            let diff_seconds = match (start, end) {
+                            let diff_days = match (&start, &end) {
                                 (
                                     crate::processor::Value::Date(s),
                                     crate::processor::Value::Date(e),
-                                ) => (e as i64 - s as i64) * 86400,
+                                ) => *e as i64 - *s as i64,
                                 (
                                     crate::processor::Value::Timestamp(s),
                                     crate::processor::Value::Timestamp(e),
-                                ) => (e - s) / 1_000_000,
+                                ) => ((*e - *s) / 1_000_000) / 86400,
                                 _ => {
                                     results.append_null();
                                     continue;
@@ -2472,13 +2469,47 @@ impl FunctionRegistry {
                             };
 
                             let res = match u_val.as_str() {
-                                "SECOND" | "SECONDS" => diff_seconds,
-                                "MINUTE" | "MINUTES" => diff_seconds / 60,
-                                "HOUR" | "HOURS" => diff_seconds / 3600,
-                                "DAY" | "DAYS" => diff_seconds / 86400,
-                                "WEEK" | "WEEKS" => diff_seconds / (86400 * 7),
-                                "MONTH" | "MONTHS" => diff_seconds / (86400 * 30),
-                                "YEAR" | "YEARS" => diff_seconds / (86400 * 365),
+                                "SECOND" | "SECONDS" => diff_days * 86400,
+                                "MINUTE" | "MINUTES" => diff_days * 1440,
+                                "HOUR" | "HOURS" => diff_days * 24,
+                                "DAY" | "DAYS" => diff_days,
+                                "WEEK" | "WEEKS" => diff_days / 7,
+                                "MONTH" | "MONTHS" => {
+                                    use chrono::Datelike;
+                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
+                                    let start_date = epoch + chrono::Duration::days(match &start {
+                                        crate::processor::Value::Date(s) => *s as i64,
+                                        _ => 0,
+                                    });
+                                    let end_date = epoch + chrono::Duration::days(match &end {
+                                        crate::processor::Value::Date(e) => *e as i64,
+                                        _ => 0,
+                                    });
+                                    let total_months = (end_date.year() - start_date.year()) * 12
+                                        + (end_date.month() as i32 - start_date.month() as i32);
+                                    if end_date.day() < start_date.day() {
+                                        total_months as i64 - 1
+                                    } else {
+                                        total_months as i64
+                                    }
+                                }
+                                "YEAR" | "YEARS" => {
+                                    use chrono::Datelike;
+                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
+                                    let start_date = epoch + chrono::Duration::days(match &start {
+                                        crate::processor::Value::Date(s) => *s as i64,
+                                        _ => 0,
+                                    });
+                                    let end_date = epoch + chrono::Duration::days(match &end {
+                                        crate::processor::Value::Date(e) => *e as i64,
+                                        _ => 0,
+                                    });
+                                    let mut years = end_date.year() - start_date.year();
+                                    if end_date.ordinal() < start_date.ordinal() {
+                                        years -= 1;
+                                    }
+                                    years as i64
+                                }
                                 _ => 0,
                             };
                             results.append_value(res);
@@ -3353,8 +3384,6 @@ impl FunctionRegistry {
             ("ARRAY_SIZE", "SIZE"),
             ("LIST_SIZE", "SIZE"),
             ("DATETIME", "TIMESTAMP"),
-            ("TO_DATE", "DATE"),
-            ("TO_TIMESTAMP", "TIMESTAMP"),
         ] {
             if let Some(f) = scalar_functions.get(*target) {
                 scalar_functions.insert(alias.to_string(), f.clone());
