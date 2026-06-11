@@ -114,6 +114,11 @@ impl JoinReordering {
                 crate::LightningError::Internal("Expected at least one relation in join reordering".into())
             })?);
         }
+        if n > 30 {
+            return Err(crate::LightningError::Internal(format!(
+                "Join reordering does not support {} relations (max 30)", n
+            )));
+        }
 
         let relation_vars: Vec<HashSet<String>> = relations
             .iter()
@@ -133,11 +138,8 @@ impl JoinReordering {
         }
 
         for size in 2..=n {
-            for subset_mask in 1..(1u32 << n) {
-                if subset_mask.count_ones() as usize != size {
-                    continue;
-                }
-
+            let mut subset_mask = (1u32 << size) - 1;
+            while subset_mask < (1u32 << n) {
                 let mut best_for_subset: Option<(LogicalOperator, u64, u64, HashSet<usize>)> = None;
 
                 let mut subset_vars = HashSet::new();
@@ -152,9 +154,6 @@ impl JoinReordering {
                         continue;
                     }
                     let right_mask = subset_mask ^ left_mask;
-                    if left_mask > right_mask {
-                        continue;
-                    }
 
                     if let (
                         Some((lhs, l_card, l_cost, l_used)),
@@ -217,6 +216,11 @@ impl JoinReordering {
                 if let Some(best) = best_for_subset {
                     dp.insert(subset_mask, best);
                 }
+
+                // Gosper's hack: advance to next subset with same popcount
+                let c = subset_mask & subset_mask.wrapping_neg();
+                let r = subset_mask + c;
+                subset_mask = r | (((r ^ subset_mask) >> 2) / c);
             }
         }
 
