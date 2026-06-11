@@ -57,4 +57,7 @@ wasmi = "2.0.0-beta.2"
 rand = "0.8"
 
 [dev-dependencies]
+# rusqlite is a dev-only dependency used for testing SQLite interop.
+# It is not part of the runtime library build and is excluded from
+# production builds. Do not move to [dependencies].
 rusqlite = { version = "0.37", features = ["bundled"] }
