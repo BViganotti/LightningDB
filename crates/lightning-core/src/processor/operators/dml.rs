@@ -129,11 +129,16 @@ impl PhysicalOperator for PhysicalCreate {
                     let storage_guard = database.storage_manager.read();
                     let table_name = &self.table_name;
                     if let Some(fts) = storage_guard.fts_indexes.get(table_name) {
+                        // Build column-name→index map once, avoiding O(num_cols²) per row
+                        let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
+                            .enumerate()
+                            .map(|(i, c)| (c.name.as_str(), i))
+                            .collect();
                         for (i, row) in rows.iter().enumerate() {
                             let node_id = start_id + i as u64;
                             let text_fields: Vec<(String, &str)> = self.table.columns.iter()
                                 .filter_map(|col| {
-                                    let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                                    let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row.get(idx).and_then(|v| match v {
                                         Value::String(s) => Some((col.name.clone(), s.as_str())),
                                         _ => None,
@@ -364,6 +369,12 @@ impl PhysicalOperator for PhysicalSet {
             let vec_opt = storage_guard.vector_indexes.get(table_name);
             let hash_index_opt = storage_guard.get_index(table_name);
 
+            // Build column-name→index map once for FTS lookups, avoiding O(C²) per row
+            let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
+                .enumerate()
+                .map(|(i, c)| (c.name.as_str(), i))
+                .collect();
+
             for (node_id, updated_props) in &modified_nodes {
                 // Update PK hash index if PK column changed
                 if let (Some(pk_idx_val), Some(ref hash_idx)) = (pk_idx, &hash_index_opt) {
@@ -386,7 +397,7 @@ impl PhysicalOperator for PhysicalSet {
                 if let Some(ref fts) = fts_opt {
                     let string_fields: Vec<(String, String)> = self.table.columns.iter()
                         .filter_map(|col| {
-                            let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                            let idx = *col_name_to_idx.get(col.name.as_str())?;
                             if updated_props.contains(&idx) {
                                 let val = col.get_value(&self.buffer_manager, *node_id, tx)
                                     .unwrap_or(Value::Null);
@@ -1018,9 +1029,13 @@ impl PhysicalOperator for PhysicalMerge {
                         }
 
                         if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
+                            let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
+                                .enumerate()
+                                .map(|(i, c)| (c.name.as_str(), i))
+                                .collect();
                             let text_fields: Vec<(String, &str)> = self.table.columns.iter()
                                 .filter_map(|col| {
-                                    let idx = self.table.columns.iter().position(|c| c.name == col.name)?;
+                                    let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row_data.get(idx).and_then(|v| match v {
                                         Value::String(s) => Some((col.name.clone(), s.as_str())),
                                         _ => None,
