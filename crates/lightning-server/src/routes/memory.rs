@@ -278,6 +278,7 @@ pub async fn consolidate_handler(
             contradiction_jaccard_max: req.contradiction_jaccard_max.unwrap_or(0.15),
             contradiction_cosine_min: req.contradiction_cosine_min.unwrap_or(0.7),
             contradiction_length_sim_min: req.contradiction_length_sim_min.unwrap_or(0.8),
+            max_comparisons_per_entity: req.max_comparisons_per_entity.unwrap_or(5000),
         };
         store.inner().consolidate(Some(config)).map_err(AppError::from)?
     } else {

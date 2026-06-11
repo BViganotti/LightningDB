@@ -281,7 +281,7 @@ impl BufferManager {
                 // On commit, per-row modifications are merged into the latest page.
                 if version == tx_id_marked {
                     best_version = version;
-                    // SAFETY: SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The shard read lock ensures no concurrent write to this slot.
+                    // SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The caller holds the shard write lock (acquired above at line 266), ensuring exclusive access to this slot.
                     source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                     break;
                 }
@@ -294,7 +294,7 @@ impl BufferManager {
                     && (version > best_version || (version == 0 && source_data.is_none()))
                 {
                     best_version = version;
-                    // SAFETY: SAFETY: Same as above — pinned frame, shard read lock held.
+                    // SAFETY: Same as above — pinned frame, shard write lock held.
                     source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                 }
             }
