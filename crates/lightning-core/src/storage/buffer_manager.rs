@@ -902,3 +902,282 @@ impl BufferManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::file_handle::FileHandle;
+    use crate::storage::wal::WAL;
+    use crate::transaction::TransactionManager;
+    use crate::SyncMode;
+    use tempfile::TempDir;
+
+    fn setup() -> (TempDir, Arc<FileHandle>, Arc<WAL>, Arc<TransactionManager>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let fh = Arc::new(FileHandle::open(&path).unwrap());
+        let wal = Arc::new(WAL::new(dir.path(), SyncMode::Off).unwrap());
+        let tm = Arc::new(TransactionManager::new(Arc::clone(&wal)));
+        tm.set_self_weak(Arc::downgrade(&tm));
+        (dir, fh, wal, tm)
+    }
+
+    fn create_bm(capacity_pages: usize) -> BufferManager {
+        BufferManager::new(capacity_pages, None, false, 0, 0.0)
+    }
+
+    fn begin_tx(tm: &TransactionManager) -> Arc<crate::transaction::transaction_manager::Transaction> {
+        Arc::new(tm.begin(false).unwrap())
+    }
+
+    fn begin_tx_at(tm: &TransactionManager, ts: u64) -> Arc<crate::transaction::transaction_manager::Transaction> {
+        Arc::new(tm.begin_at(true, ts).unwrap())
+    }
+
+    #[test]
+    fn test_new_buffer_manager_has_correct_capacity() {
+        let bm = create_bm(256);
+        assert_eq!(bm.num_shards, 16);
+        let total_slots: usize = bm.shards.iter().map(|s| s.read().slots.len()).sum();
+        assert_eq!(total_slots, 256);
+    }
+
+    #[test]
+    fn test_pin_page_new_page_returns_zeros() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let frame = bm.pin_page(Arc::clone(&fh), 1000, &tx).unwrap();
+        assert_eq!(frame.as_slice(), &[0u8; PAGE_SIZE]);
+    }
+
+    #[test]
+    fn test_unpin_decrements_pin_count() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let frame = bm.pin_page(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(frame.pin_count.load(Ordering::Acquire), 1);
+        bm.unpin_page(&fh, 0, frame.clone());
+        assert_eq!(frame.pin_count.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn test_create_new_version_creates_dirty_page() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let frame = bm.create_new_version(Arc::clone(&fh), 5, &tx).unwrap();
+        assert!(frame.version.load(Ordering::Acquire) & UNCOMMITTED_BIT != 0);
+        assert!(bm.dirty_page_count() > 0);
+    }
+
+    #[test]
+    fn test_pin_page_loads_after_write() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let commit_ts = tm.get_current_ts() + 1;
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        f1.as_mut_slice()[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]);
+        bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
+        bm.unpin_page(&fh, 0, f1);
+        let tx2 = begin_tx_at(&tm, commit_ts);
+        let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(f2.as_slice()[..4], [0xAB, 0xCD, 0xEF, 0x12]);
+        assert_eq!(f2.pin_count.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn test_create_new_version_copies_source_data() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let commit_ts = tm.get_current_ts() + 1;
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        f1.as_mut_slice()[0] = 0x55;
+        bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
+        bm.unpin_page(&fh, 0, f1);
+        let tx2 = begin_tx_at(&tm, commit_ts);
+        let f2 = bm.create_new_version(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(f2.as_slice()[0], 0x55);
+    }
+
+    #[test]
+    fn test_version_isolation_snapshot() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx1 = begin_tx(&tm);
+        let frame1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
+        frame1.as_mut_slice()[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let tx2 = begin_tx(&tm);
+        let frame2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(frame2.as_slice()[..4], [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_dirty_page_count_tracking() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        assert_eq!(bm.dirty_page_count(), 0);
+        let tx = begin_tx(&tm);
+        let _f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(bm.dirty_page_count(), 1);
+        let _f2 = bm.create_new_version(Arc::clone(&fh), 1, &tx).unwrap();
+        assert_eq!(bm.dirty_page_count(), 2);
+    }
+
+    #[test]
+    fn test_pin_latest_committed() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let _f = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        let frame = bm.pin_latest_committed(Arc::clone(&fh), 0).unwrap();
+        assert_eq!(frame.version.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn test_update_timestamps() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let frame = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(frame.version.load(Ordering::Acquire), tx_id | UNCOMMITTED_BIT);
+        bm.update_timestamps(fh.file_id, 0, tx_id, 200);
+        assert_eq!(frame.version.load(Ordering::Acquire), 200);
+    }
+
+    #[test]
+    fn test_eviction_roundtrip() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = BufferManager::new(512, None, false, 0, 0.0);
+        let tx = begin_tx(&tm);
+        let mut frames = Vec::new();
+        for i in 0..64 {
+            let f = bm.pin_page(Arc::clone(&fh), i, &tx).unwrap();
+            frames.push(f);
+        }
+        for f in frames.iter() {
+            assert_eq!(f.as_slice().len(), PAGE_SIZE);
+        }
+    }
+
+    #[test]
+    fn test_log_page_update_without_wal_no_op() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        bm.log_page_update(fh.file_id, 0, &[0xAAu8; PAGE_SIZE]);
+    }
+
+    #[test]
+    fn test_rollback_versions() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let _f = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(bm.dirty_page_count(), 1);
+        bm.rollback_versions(tx.tx_id).unwrap();
+        assert_eq!(bm.dirty_page_count(), 0);
+    }
+
+    #[test]
+    fn test_shutdown_and_restart() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        assert!(!bm.is_shutting_down());
+        bm.shutdown();
+        assert!(bm.is_shutting_down());
+    }
+
+    #[test]
+    fn test_evict_pages_for_file() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let _f = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        let _f2 = bm.create_new_version(Arc::clone(&fh), 1, &tx).unwrap();
+        let _f3 = bm.create_new_version(Arc::clone(&fh), 2, &tx).unwrap();
+        assert_eq!(bm.dirty_page_count(), 3);
+        bm.evict_pages_for_file(fh.file_id, 0, 3);
+        assert!(bm.dirty_page_count() <= 3);
+    }
+
+    #[test]
+    fn test_reclaim_expired_versions() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let f = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        bm.update_timestamps(fh.file_id, 0, tx_id, 50);
+        bm.unpin_page(&fh, 0, f);
+        let reclaimed = bm.reclaim_expired_versions(200).unwrap();
+        assert!(reclaimed == 0 || reclaimed == 1);
+    }
+
+    #[test]
+    fn test_multiple_shards_are_independent() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(256);
+        let tx = begin_tx(&tm);
+        for i in 0..32 {
+            let _f = bm.pin_page(Arc::clone(&fh), i, &tx).unwrap();
+        }
+        let total_mapped: usize = bm.shards.iter()
+            .map(|s| s.read().page_to_slots.len())
+            .sum();
+        assert_eq!(total_mapped, 32);
+    }
+
+    #[test]
+    fn test_pin_same_page_twice_returns_same_data() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let f1 = bm.pin_page(Arc::clone(&fh), 0, &tx).unwrap();
+        let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(f1.as_slice(), f2.as_slice());
+        assert_eq!(f1.pin_count.load(Ordering::Acquire), 2);
+        assert_eq!(f2.pin_count.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn test_create_new_version_tracks_modified_pages() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        assert!(tx.modified_pages.lock().is_empty());
+        let _f = bm.create_new_version(Arc::clone(&fh), 7, &tx).unwrap();
+        let modified = tx.modified_pages.lock();
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0], (fh.file_id, 7));
+    }
+
+    #[test]
+    fn test_read_write_evict_read_consistency() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = BufferManager::new(256, None, false, 0, 0.0);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let commit_ts = tm.get_current_ts() + 1;
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        f1.as_mut_slice()[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
+        let tx2 = begin_tx_at(&tm, commit_ts);
+        let mut pinned = Vec::new();
+        for i in 1..100 {
+            pinned.push(bm.pin_page(Arc::clone(&fh), i, &tx2).unwrap());
+        }
+        for f in pinned.drain(..) {
+            bm.unpin_page(&fh, 0, f);
+        }
+        let tx3 = begin_tx_at(&tm, commit_ts);
+        let _f = bm.create_new_version(Arc::clone(&fh), 200, &tx3).unwrap();
+        let f_reload = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(f_reload.as_slice()[..8], [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+}

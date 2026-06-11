@@ -941,6 +941,17 @@ impl StorageManager {
         Ok(())
     }
 
+    /// Sync all column data files to disk.
+    ///
+    /// # Ordering invariant
+    ///
+    /// This method MUST be called *before* WAL truncation: column data files
+    /// must be fully durable on stable storage before the WAL is truncated,
+    /// otherwise a crash between `sync_all_data_files` and `WAL::truncate`
+    /// would lose committed page updates with no WAL record to replay them
+    /// from. Callers (e.g. `BufferManager::checkpoint`) guarantee this order
+    /// by syncing data first, then truncating the WAL. Violating this order
+    /// may produce an unrecoverable database on the next open.
     pub fn sync_all_data_files(&self) -> Result<()> {
         for table in self.node_tables.values().chain(self.rel_tables.values()) {
             for col in &table.columns {
