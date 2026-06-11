@@ -9,6 +9,7 @@ pub enum AppError {
     Db(lightning_core::LightningError),
     Internal(String),
     Timeout(u64),
+    BadRequest(String),
 }
 
 impl std::fmt::Display for AppError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for AppError {
             AppError::Db(e) => write!(f, "{}", e),
             AppError::Internal(s) => write!(f, "{}", s),
             AppError::Timeout(ms) => write!(f, "query timed out after {}ms", ms),
+            AppError::BadRequest(s) => write!(f, "{}", s),
         }
     }
 }
@@ -30,6 +32,9 @@ impl From<lightning_core::LightningError> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
+            AppError::BadRequest(_) => {
+                (StatusCode::BAD_REQUEST, Some("BAD_REQUEST".into()))
+            }
             AppError::Timeout(_) => {
                 (StatusCode::REQUEST_TIMEOUT, Some("QUERY_TIMEOUT".into()))
             }

@@ -271,22 +271,33 @@ pub async fn consolidate_handler(
 ) -> Result<Json<ApiResponse<ConsolidationReportResponse>>, AppError> {
     let start = std::time::Instant::now();
 
-    let report = if req.similarity_threshold.is_some()
+    let config = if req.similarity_threshold.is_some()
         || req.contradiction_jaccard_max.is_some()
         || req.contradiction_cosine_min.is_some()
         || req.contradiction_length_sim_min.is_some()
+        || req.max_comparisons_per_entity.is_some()
     {
-        let config = lightning_core::memory::ConsolidationConfig {
-            similarity_threshold: req.similarity_threshold.unwrap_or(0.35),
-            contradiction_jaccard_max: req.contradiction_jaccard_max.unwrap_or(0.15),
-            contradiction_cosine_min: req.contradiction_cosine_min.unwrap_or(0.7),
-            contradiction_length_sim_min: req.contradiction_length_sim_min.unwrap_or(0.8),
-            max_comparisons_per_entity: req.max_comparisons_per_entity.unwrap_or(5000),
-        };
-        store.inner().consolidate(Some(config)).map_err(AppError::from)?
+        Some(lightning_core::memory::ConsolidationConfig {
+            similarity_threshold: req.similarity_threshold.ok_or_else(|| {
+                AppError::BadRequest("similarity_threshold is required".into())
+            })?,
+            contradiction_jaccard_max: req.contradiction_jaccard_max.ok_or_else(|| {
+                AppError::BadRequest("contradiction_jaccard_max is required".into())
+            })?,
+            contradiction_cosine_min: req.contradiction_cosine_min.ok_or_else(|| {
+                AppError::BadRequest("contradiction_cosine_min is required".into())
+            })?,
+            contradiction_length_sim_min: req.contradiction_length_sim_min.ok_or_else(|| {
+                AppError::BadRequest("contradiction_length_sim_min is required".into())
+            })?,
+            max_comparisons_per_entity: req.max_comparisons_per_entity.ok_or_else(|| {
+                AppError::BadRequest("max_comparisons_per_entity is required".into())
+            })?,
+        })
     } else {
-        store.inner().consolidate(None).map_err(AppError::from)?
+        None
     };
+    let report = store.inner().consolidate(config).map_err(AppError::from)?;
 
     let duration = start.elapsed().as_millis() as u64;
     tracing::info!(
