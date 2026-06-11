@@ -53,11 +53,11 @@ impl Alp {
     ];
 
     /// Sentinel for NaN encoding: uses i64::MIN (most negative value)
-    const NAN_SENTINEL: i64 = i64::MIN;
+    pub const NAN_SENTINEL: i64 = i64::MIN;
     /// Sentinel for +Infinity encoding
-    const POS_INF_SENTINEL: i64 = i64::MIN + 1;
+    pub const POS_INF_SENTINEL: i64 = i64::MIN + 1;
     /// Sentinel for -Infinity encoding
-    const NEG_INF_SENTINEL: i64 = i64::MIN + 2;
+    pub const NEG_INF_SENTINEL: i64 = i64::MIN + 2;
 
     pub fn encode_value(val: f64, fac_idx: u8, exp_idx: u8) -> i64 {
         if val.is_nan() {
@@ -82,7 +82,8 @@ impl Alp {
             return i64::MAX;
         }
         if tmp <= i64::MIN as f64 {
-            return i64::MIN;
+            // Use NEG_INF_SENTINEL to avoid collision with NAN_SENTINEL (also i64::MIN)
+            return Self::NEG_INF_SENTINEL;
         }
         tmp.round() as i64
     }

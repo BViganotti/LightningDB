@@ -19,7 +19,6 @@ fn test_analyze_bit_packing() {
     }
     let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
     assert_eq!(meta.compression, CompressionType::FixedFrameOfReference);
-    // Range 0..99 -> 100 values. max-min is 99. bitwidth = log2(99) = 7
     assert_eq!(meta.bit_width, 7);
 }
 
@@ -48,10 +47,41 @@ fn test_analyze_rle() {
 #[test]
 fn test_analyze_dict() {
     let mut vals = Vec::new();
-    // 100 values, but only 5 distinct ones
     for i in 0..100 {
         vals.push(Value::Number((i % 5) as f64));
     }
     let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
     assert_eq!(meta.compression, CompressionType::Dict);
+}
+
+#[test]
+fn test_analyze_empty_slice() {
+    let vals: Vec<Value> = vec![];
+    let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
+    assert_eq!(meta.compression, CompressionType::Uncompressed);
+    assert_eq!(meta.bit_width, 0);
+}
+
+#[test]
+fn test_analyze_single_value() {
+    let vals = vec![Value::Number(42.0)];
+    let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
+    assert_eq!(meta.compression, CompressionType::Constant);
+    assert_eq!(meta.min, Value::Number(42.0));
+}
+
+#[test]
+fn test_analyze_nan() {
+    let vals = vec![Value::Number(f64::NAN), Value::Number(f64::NAN)];
+    let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
+    // NaN should not cause panic; should produce some valid compression type
+    assert!(meta.bit_width <= 64);
+}
+
+#[test]
+fn test_analyze_null() {
+    let vals = vec![Value::Null; 10];
+    let meta = CompressionAnalyzer::analyze_integer_chunk(&vals, &LogicalType::Int64, None, None);
+    assert_eq!(meta.compression, CompressionType::Constant);
+    assert_eq!(meta.min, Value::Null);
 }
