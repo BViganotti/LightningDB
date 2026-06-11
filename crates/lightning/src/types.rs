@@ -23,8 +23,12 @@ impl TypedQueryResult {
         use serde_json::json;
 
         let mut rows: Vec<Row> = Vec::new();
+        // Extract column names from the first non-empty batch, falling back
+        // to the first batch even if empty (its schema still has valid field names).
         let col_names: Vec<String> = batches
-            .first()
+            .iter()
+            .find(|b| b.num_rows() > 0)
+            .or_else(|| batches.first())
             .map(|b| {
                 b.schema()
                     .fields()
@@ -109,8 +113,11 @@ impl TypedQueryResult {
     }
 
     /// Serialize to a JSON string.
+    /// Returns a JSON error object on serialization failure instead of silently returning empty string.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        serde_json::to_string(self).unwrap_or_else(|e| {
+            serde_json::json!({"error": format!("JSON serialization failed: {}", e)}).to_string()
+        })
     }
 }
 
