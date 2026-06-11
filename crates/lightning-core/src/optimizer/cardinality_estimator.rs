@@ -94,7 +94,7 @@ impl CardinalityEstimator {
                     s1 + s2 - (s1 * s2)
                 }
                 AstLogicalOperator::Not => {
-                    0.5 // Fallback selectivity for Not
+                    1.0 - self.estimate_selectivity(right, child)
                 }
                 AstLogicalOperator::Xor => {
                     let s1 = self.estimate_selectivity(left, child);
@@ -190,11 +190,36 @@ impl CardinalityEstimator {
             | LogicalOperator::Sort(child, _)
             | LogicalOperator::Limit(child, _)
             | LogicalOperator::Skip(child, _)
+            | LogicalOperator::TopK(child, _, _)
             | LogicalOperator::Accumulate(child)
-            | LogicalOperator::Distinct(child, _) => self.find_table_for_var(child, var),
-            LogicalOperator::Join(left, right, _) => self
+            | LogicalOperator::Distinct(child, _)
+            | LogicalOperator::Delete(child, ..)
+            | LogicalOperator::Set(child, _)
+            | LogicalOperator::Subquery(child)
+            | LogicalOperator::Profile(child)
+            | LogicalOperator::Explain(child)
+            | LogicalOperator::Merge { child, .. }
+            | LogicalOperator::With(child, ..) => self.find_table_for_var(child, var),
+            LogicalOperator::Join(left, right, _)
+            | LogicalOperator::Union(left, right, _)
+            | LogicalOperator::OptionalMatch(left, right)
+            | LogicalOperator::SemiJoin(left, right, _, _) => self
                 .find_table_for_var(left, var)
                 .or_else(|| self.find_table_for_var(right, var)),
+            LogicalOperator::Intersect { probe_child, .. } => {
+                self.find_table_for_var(probe_child, var)
+            }
+            LogicalOperator::CreateNode(child, _) | LogicalOperator::CreateRel(child, _) => {
+                if let Some(c) = child {
+                    self.find_table_for_var(c, var)
+                } else {
+                    None
+                }
+            }
+            LogicalOperator::RecursiveJoin { child, .. }
+            | LogicalOperator::AllShortestPaths { child, .. } => {
+                self.find_table_for_var(child, var)
+            }
             _ => None,
         }
     }
