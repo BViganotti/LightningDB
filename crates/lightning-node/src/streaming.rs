@@ -10,7 +10,7 @@ use napi_derive::napi;
 use crate::types::{JsChangeEvent, JsSearchResult};
 
 pub struct NextChunk {
-    rx: Arc<Mutex<Receiver<std::result::Result<DataChunk, LightningError>>>>,
+    rx: Arc<Mutex<Option<Receiver<std::result::Result<DataChunk, LightningError>>>>>,
 }
 
 #[napi]
@@ -19,12 +19,18 @@ impl Task for NextChunk {
     type JsValue = JsChunkResult;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        // Clone the receiver out of the mutex so recv() doesn't hold the lock
+        // Take the receiver out of the Option so only one task can consume messages.
+        // This prevents the fragile Receiver.clone pattern where duplicate tasks
+        // steal messages from each other.
         let rx = self
             .rx
             .lock()
             .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
-            .clone();
+            .take();
+        let rx = match rx {
+            Some(r) => r,
+            None => return Ok(None),
+        };
         match rx.recv() {
             Ok(Ok(chunk)) => {
                 let batch = &chunk.batch;
@@ -60,7 +66,7 @@ impl Task for NextChunk {
 }
 
 pub struct NextChange {
-    rx: Arc<Mutex<Receiver<ChangeEvent>>>,
+    rx: Arc<Mutex<Option<Receiver<ChangeEvent>>>>,
 }
 
 #[napi]
@@ -73,7 +79,11 @@ impl Task for NextChange {
             .rx
             .lock()
             .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
-            .clone();
+            .take();
+        let rx = match rx {
+            Some(r) => r,
+            None => return Ok(None),
+        };
         match rx.recv() {
             Ok(event) => Ok(Some(event)),
             Err(_) => Ok(None),
@@ -86,7 +96,7 @@ impl Task for NextChange {
 }
 
 pub struct NextRecall {
-    rx: Arc<Mutex<Receiver<std::result::Result<SearchResult, LightningError>>>>,
+    rx: Arc<Mutex<Option<Receiver<std::result::Result<SearchResult, LightningError>>>>>,
 }
 
 #[napi]
@@ -99,7 +109,11 @@ impl Task for NextRecall {
             .rx
             .lock()
             .map_err(|e| napi::Error::from_reason(format!("Lock error: {}", e)))?
-            .clone();
+            .take();
+        let rx = match rx {
+            Some(r) => r,
+            None => return Ok(None),
+        };
         match rx.recv() {
             Ok(Ok(result)) => Ok(Some(result)),
             Ok(Err(e)) => Err(napi::Error::from_reason(format!("Recall error: {}", e))),
@@ -123,7 +137,7 @@ impl Task for NextRecall {
 
 #[napi]
 pub struct JsQueryStream {
-    rx: Arc<Mutex<Receiver<std::result::Result<DataChunk, LightningError>>>>,
+    rx: Arc<Mutex<Option<Receiver<std::result::Result<DataChunk, LightningError>>>>>,
 }
 
 #[napi]
@@ -137,7 +151,7 @@ impl JsQueryStream {
 impl JsQueryStream {
     pub fn new(rx: Receiver<std::result::Result<DataChunk, LightningError>>) -> Self {
         Self {
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(Mutex::new(Some(rx))),
         }
     }
 }
@@ -150,7 +164,7 @@ pub struct JsChunkResult {
 
 #[napi]
 pub struct JsChangeStream {
-    rx: Arc<Mutex<Receiver<ChangeEvent>>>,
+    rx: Arc<Mutex<Option<Receiver<ChangeEvent>>>>,
 }
 
 #[napi]
@@ -164,14 +178,14 @@ impl JsChangeStream {
 impl JsChangeStream {
     pub fn new(rx: Receiver<ChangeEvent>) -> Self {
         Self {
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(Mutex::new(Some(rx))),
         }
     }
 }
 
 #[napi]
 pub struct JsRecallStream {
-    rx: Arc<Mutex<Receiver<std::result::Result<SearchResult, LightningError>>>>,
+    rx: Arc<Mutex<Option<Receiver<std::result::Result<SearchResult, LightningError>>>>>,
 }
 
 #[napi]
@@ -185,7 +199,7 @@ impl JsRecallStream {
 impl JsRecallStream {
     pub fn new(rx: Receiver<std::result::Result<SearchResult, LightningError>>) -> Self {
         Self {
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(Mutex::new(Some(rx))),
         }
     }
 }

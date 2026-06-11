@@ -47,10 +47,50 @@ impl QueryStreamIter {
     }
 
     fn __next__(slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        match slf.rx.recv() {
+        // Release GIL while waiting for the next chunk (DB ops don't need the GIL)
+        let chunk = py.allow_threads(|| slf.rx.recv());
+        match chunk {
             Ok(Ok(chunk)) => {
+                let batch = &chunk.batch;
+                let schema = batch.schema();
+                let num_rows = batch.num_rows();
+                let num_cols = batch.num_columns();
+                let rows: Vec<PyObject> = (0..num_rows).map(|row_idx| {
+                    let row_dict = PyDict::new(py);
+                    for col_idx in 0..num_cols {
+                        let col_name = schema.field(col_idx).name();
+                        let arr = batch.column(col_idx);
+                        let val: serde_json::Value = if arr.is_null(row_idx) {
+                            serde_json::Value::Null
+                        } else {
+                            use arrow::array::*;
+                            macro_rules! extract {
+                                ($ty:ident, $method:ident) => {{
+                                    arr.as_any().downcast_ref::<$ty>()
+                                        .map(|c| serde_json::json!(c.value(row_idx)))
+                                        .unwrap_or(serde_json::Value::Null)
+                                }};
+                            }
+                            match arr.data_type() {
+                                t if t == &arrow::datatypes::DataType::Int8 => extract!(Int8Array, value),
+                                t if t == &arrow::datatypes::DataType::Int16 => extract!(Int16Array, value),
+                                t if t == &arrow::datatypes::DataType::Int32 => extract!(Int32Array, value),
+                                t if t == &arrow::datatypes::DataType::Int64 => extract!(Int64Array, value),
+                                t if t == &arrow::datatypes::DataType::UInt64 => extract!(UInt64Array, value),
+                                t if t == &arrow::datatypes::DataType::Float32 => extract!(Float32Array, value),
+                                t if t == &arrow::datatypes::DataType::Float64 => extract!(Float64Array, value),
+                                t if t == &arrow::datatypes::DataType::Boolean => extract!(BooleanArray, value),
+                                t if t == &arrow::datatypes::DataType::Utf8 || t == &arrow::datatypes::DataType::LargeUtf8 => extract!(StringArray, value),
+                                _ => serde_json::Value::Null,
+                            }
+                        };
+                        row_dict.set_item(col_name, val.to_string()).ok();
+                    }
+                    row_dict.into()
+                }).collect();
                 let dict = PyDict::new(py);
-                dict.set_item("num_rows", chunk.num_rows())?;
+                dict.set_item("num_rows", num_rows)?;
+                dict.set_item("rows", rows)?;
                 Ok(Some(dict.into()))
             }
             Ok(Err(e)) => Err(to_py_err(e)),
@@ -166,9 +206,12 @@ impl LightningDatabase {
         Ok(Self { db })
     }
 
-    fn execute(&self, query: &str) -> PyResult<String> {
-        let conn = self.db.connect();
-        let result = conn.query(query).map_err(to_py_err)?;
+    fn execute(&self, query: &str, py: Python<'_>) -> PyResult<String> {
+        // Release GIL during DB operations to allow other Python threads to run
+        let result = py.allow_threads(|| {
+            let conn = self.db.connect();
+            conn.query(query)
+        }).map_err(to_py_err)?;
         let col_names: Vec<String> = result
             .batches
             .first()
