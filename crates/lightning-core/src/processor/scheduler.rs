@@ -53,7 +53,6 @@ impl Scheduler {
                         }
                     }
                 });
-                drop(ch_tx);
                 return Ok(rx);
             }
 
