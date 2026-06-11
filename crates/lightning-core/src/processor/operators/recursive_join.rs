@@ -64,9 +64,13 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 vec![Vec::new(); chunk.batch.num_columns() + 1 + num_dst_cols.saturating_sub(1)];
 
             // Adjacency lookup mechanism
-            let storage = database.storage_manager.read();
-            storage.ensure_csr_fresh(&self.rel_table.name, &self.bm, tx)?;
-            let csr = storage.fwd_csr.get(&self.rel_table.name);
+            // Clone the CSR Arc and drop the storage lock immediately so writers
+            // are not blocked during the entire BFS traversal.
+            let csr: Option<Arc<crate::storage::index::csr::CSRIndex>> = {
+                let storage = database.storage_manager.read();
+                storage.ensure_csr_fresh(&self.rel_table.name, &self.bm, tx)?;
+                storage.fwd_csr.get(&self.rel_table.name).cloned()
+            };
 
             let mut fallback_adj: Option<std::collections::HashMap<u64, Vec<u64>>> = None;
 
