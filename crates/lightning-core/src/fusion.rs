@@ -21,9 +21,43 @@ pub struct FusionApp;
 
 impl FusionApp {
     /// Initialize fusion-specific schema (CSR indexes for graph traversal).
-    pub fn init_fusion_schema(_conn: &Connection) -> Result<(), crate::LightningError> {
-        // Schema initialization is handled by the database catalog on open.
-        // No additional fusion-specific schema is needed.
+    ///
+    /// Scans the catalog for the CodeNode and CodeRel tables and creates CSR
+    /// (compressed sparse row) indexes on any relationship table that lacks one.
+    /// CSR indexes enable efficient graph traversal (BFS, PageRank, path finding)
+    /// without full-table scans on every hop. If neither table exists this is a
+    /// safe no-op -- the function can be called unconditionally at startup.
+    pub fn init_fusion_schema(conn: &Connection) -> Result<(), crate::LightningError> {
+        let db = &conn.client_context.database;
+        let catalog = db.catalog.read();
+
+        // Check for the expected fusion tables; only create CSR indexes on rel tables.
+        let fusion_tables: Vec<String> = catalog
+            .node_tables
+            .keys()
+            .chain(catalog.rel_tables.keys())
+            .filter(|n| n.starts_with("Code"))
+            .cloned()
+            .collect();
+        drop(catalog);
+
+        for name in &fusion_tables {
+            let mut sm = db.storage_manager.write();
+            if !sm.fwd_csr.contains_key(name) && !sm.bwd_csr.contains_key(name) {
+                if let Err(e) = sm.create_csr(name) {
+                    tracing::warn!(
+                        "init_fusion_schema: failed to create CSR index for '{}': {}",
+                        name, e
+                    );
+                } else {
+                    tracing::info!(
+                        "init_fusion_schema: created CSR index for '{}'",
+                        name
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
