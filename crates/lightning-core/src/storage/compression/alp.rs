@@ -98,6 +98,7 @@ impl Alp {
 }
 
 use crate::storage::compression::{CompressionAlg, CompressionMetadata, CompressionType};
+use crate::LightningError;
 use crate::Result;
 
 pub struct AlpAlg;
@@ -117,6 +118,12 @@ impl CompressionAlg for AlpAlg {
         let num_values = std::cmp::min(num_values_remaining, 32);
         if num_values == 0 {
             return Ok((0, 0));
+        }
+        let required_src = num_values as usize * 8;
+        if src.len() < required_src {
+            return Err(LightningError::Internal(format!(
+                "ALP compress: src too short, need {required_src} bytes"
+            )));
         }
 
         let mut best_shared_exp = 0u8;
@@ -139,6 +146,12 @@ impl CompressionAlg for AlpAlg {
             }
         }
 
+        let required_dst = 2 + num_values as usize * 8;
+        if dst.len() < required_dst {
+            return Err(LightningError::Internal(format!(
+                "ALP compress: dst too short, need {required_dst} bytes"
+            )));
+        }
         dst[0] = best_shared_exp;
         dst[1] = best_shared_fac;
         for i in 0..num_values as usize {
@@ -160,15 +173,28 @@ impl CompressionAlg for AlpAlg {
         num_values: u64,
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
+        if src.len() < 2 {
+            return Err(LightningError::Internal("ALP decompress: src too short for header".into()));
+        }
         let exp_idx = src[0];
         let fac_idx = src[1];
         for i in 0..num_values as usize {
             let start = 2 + (src_offset as usize + i) * 8;
+            if start + 8 > src.len() {
+                return Err(LightningError::Internal(format!(
+                    "ALP decompress: src too short at offset {start}"
+                )));
+            }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&src[start..start + 8]);
             let encoded = i64::from_le_bytes(bytes);
             let decoded = Alp::decode_value(encoded, fac_idx, exp_idx);
             let dst_start = (dst_offset as usize + i) * 8;
+            if dst_start + 8 > dst.len() {
+                return Err(LightningError::Internal(format!(
+                    "ALP decompress: dst too short at offset {dst_start}"
+                )));
+            }
             dst[dst_start..dst_start + 8].copy_from_slice(&decoded.to_le_bytes());
         }
         Ok(())

@@ -4,8 +4,7 @@ impl BitPacker {
     /// Pack 32 values into a byte buffer using bit_width bits per value.
     pub fn pack_32(values: &[u64], bit_width: u8, output: &mut [u8]) {
         if bit_width == 0 {
-            // All values must be 0 when bit_width is 0 (zero range)
-            debug_assert!(
+            assert!(
                 values.iter().all(|&v| v == 0),
                 "bit_width=0 but values are not all zero"
             );
@@ -52,7 +51,7 @@ impl BitPacker {
     }
 
     fn write_bits(val: u64, bit_width: u8, bit_offset: usize, data: &mut [u8]) {
-        if bit_width == 0 {
+        if bit_width == 0 || data.is_empty() {
             return;
         }
         let word_idx = bit_offset / 64;
@@ -73,6 +72,9 @@ impl BitPacker {
         let mut bits_written = 0;
         while bits_written < bit_width {
             let byte_idx = (bit_offset + bits_written as usize) / 8;
+            if byte_idx >= data.len() {
+                return;
+            }
             let bit_in_byte = (bit_offset + bits_written as usize) % 8;
             let bits_to_write_in_byte =
                 std::cmp::min(bit_width - bits_written, 8 - bit_in_byte as u8);
@@ -88,7 +90,7 @@ impl BitPacker {
     }
 
     fn read_bits(bit_width: u8, bit_offset: usize, data: &[u8]) -> u64 {
-        if bit_width == 0 {
+        if bit_width == 0 || data.is_empty() {
             return 0;
         }
         let word_idx = bit_offset / 64;
@@ -108,6 +110,9 @@ impl BitPacker {
         let mut bits_read = 0;
         while bits_read < bit_width {
             let byte_idx = (bit_offset + bits_read as usize) / 8;
+            if byte_idx >= data.len() {
+                return val;
+            }
             let bit_in_byte = (bit_offset + bits_read as usize) % 8;
             let bits_to_read_in_byte = std::cmp::min(bit_width - bits_read, 8 - bit_in_byte as u8);
 

@@ -1,6 +1,7 @@
 use crate::processor::Value;
 use crate::storage::compression::bitpacking::BitPacker;
 use crate::storage::compression::{CompressionAlg, CompressionMetadata, CompressionType};
+use crate::LightningError;
 use crate::Result;
 
 pub struct FixedFrameOfReferenceAlg;
@@ -29,6 +30,11 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
         let mut deltas = [0u64; 32];
         for i in 0..num_values as usize {
             let start = i * 8;
+            if start + 8 > src.len() {
+                return Err(LightningError::Internal(format!(
+                    "delta compress: src too short at offset {start}"
+                )));
+            }
             let mut val_bytes = [0u8; 8];
             val_bytes.copy_from_slice(&src[start..start + 8]);
             let val = i64::from_le_bytes(val_bytes);
@@ -64,6 +70,11 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
             let val_idx = (src_offset as usize + i) % 32;
             let val = min + (deltas[val_idx] as i64);
             let dst_start = (dst_offset as usize + i) * 8;
+            if dst_start + 8 > dst.len() {
+                return Err(LightningError::Internal(format!(
+                    "delta decompress: dst too short at offset {dst_start}"
+                )));
+            }
             dst[dst_start..dst_start + 8].copy_from_slice(&val.to_le_bytes());
         }
         Ok(())

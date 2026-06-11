@@ -347,43 +347,76 @@ impl HashIndex {
         }
     }
     fn deserialize_value(buf: &[u8]) -> Result<Value> {
+        if buf.is_empty() {
+            return Err(LightningError::Internal("empty buffer in deserialize_value".into()));
+        }
         match buf[0] {
             0 => {
+                if buf.len() < 9 {
+                    return Err(LightningError::Internal("short buffer for Number in deserialize_value".into()));
+                }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Number(f64::from_le_bytes(bytes)))
             }
             1 => {
+                if buf.len() < 5 {
+                    return Err(LightningError::Internal("short buffer for String length in deserialize_value".into()));
+                }
                 let mut len_bytes = [0u8; 4];
                 len_bytes.copy_from_slice(&buf[1..5]);
                 let len = u32::from_le_bytes(len_bytes) as usize;
+                if 5 + len > buf.len() {
+                    return Err(LightningError::Internal(format!(
+                        "String data length {} exceeds buffer size {} in deserialize_value",
+                        len,
+                        buf.len()
+                    )));
+                }
                 Ok(Value::String(
                     String::from_utf8_lossy(&buf[5..5 + len]).into_owned(),
                 ))
             }
-            2 => Ok(Value::Boolean(buf[1] != 0)),
+            2 => {
+                if buf.len() < 2 {
+                    return Err(LightningError::Internal("short buffer for Boolean in deserialize_value".into()));
+                }
+                Ok(Value::Boolean(buf[1] != 0))
+            }
             3 => {
+                if buf.len() < 9 {
+                    return Err(LightningError::Internal("short buffer for Node in deserialize_value".into()));
+                }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Node(u64::from_le_bytes(bytes)))
             }
             4 => {
+                if buf.len() < 9 {
+                    return Err(LightningError::Internal("short buffer for Relationship in deserialize_value".into()));
+                }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Relationship(u64::from_le_bytes(bytes)))
             }
             5 => {
+                if buf.len() < 5 {
+                    return Err(LightningError::Internal("short buffer for Date in deserialize_value".into()));
+                }
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(&buf[1..5]);
                 Ok(Value::Date(i32::from_le_bytes(bytes)))
             }
             6 => {
+                if buf.len() < 9 {
+                    return Err(LightningError::Internal("short buffer for Timestamp in deserialize_value".into()));
+                }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Timestamp(i64::from_le_bytes(bytes)))
             }
-            _ => Err(LightningError::Internal(
-                "Unsupported index value type".into(),
+            t => Err(LightningError::Internal(
+                format!("Unsupported index value type tag {t}"),
             )),
         }
     }
