@@ -89,6 +89,8 @@ impl PhysicalOperator for PhysicalUnwind {
                     self.current_list = Some(lists.value(self.current_row_idx));
                 } else if let Some(lists) = eval_res.as_list_opt::<i64>() {
                     self.current_list = Some(lists.value(self.current_row_idx));
+                } else if let Some(large_lists) = eval_res.as_any().downcast_ref::<arrow::array::LargeListArray>() {
+                    self.current_list = Some(large_lists.value(self.current_row_idx));
                 } else {
                     // Not a list: treat as single-element list containing the value itself
                     // unless it's null (Cypher: UNWIND null produces 0 rows)

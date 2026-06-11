@@ -175,6 +175,8 @@ impl AggregateFunction for CountDistinct {
 
 pub struct Sum {
     sum: f64,
+    int_sum: i128,
+    is_integer: bool,
 }
 
 impl Default for Sum {
@@ -185,7 +187,7 @@ impl Default for Sum {
 
 impl Sum {
     pub fn new() -> Self {
-        Self { sum: 0.0 }
+        Self { sum: 0.0, int_sum: 0, is_integer: false }
     }
 }
 
@@ -198,19 +200,39 @@ impl AggregateFunction for Sum {
             return Ok(());
         }
         let arr = &values[0];
-        // Handle Float64Array
         if let Some(arr_float) = arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            self.is_integer = false;
             for i in row_indices {
                 if !arr_float.is_null(*i) {
                     self.sum += arr_float.value(*i);
                 }
             }
-        }
-        // Handle Int64Array - convert to f64
-        else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+        } else if let Some(arr_int) = arr.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            self.is_integer = true;
             for i in row_indices {
                 if !arr_int.is_null(*i) {
-                    self.sum += arr_int.value(*i) as f64;
+                    self.int_sum += arr_int.value(*i) as i128;
+                }
+            }
+        } else if let Some(arr_int32) = arr.as_any().downcast_ref::<arrow::array::Int32Array>() {
+            self.is_integer = true;
+            for i in row_indices {
+                if !arr_int32.is_null(*i) {
+                    self.int_sum += arr_int32.value(*i) as i128;
+                }
+            }
+        } else if let Some(arr_int16) = arr.as_any().downcast_ref::<arrow::array::Int16Array>() {
+            self.is_integer = true;
+            for i in row_indices {
+                if !arr_int16.is_null(*i) {
+                    self.int_sum += arr_int16.value(*i) as i128;
+                }
+            }
+        } else if let Some(arr_int8) = arr.as_any().downcast_ref::<arrow::array::Int8Array>() {
+            self.is_integer = true;
+            for i in row_indices {
+                if !arr_int8.is_null(*i) {
+                    self.int_sum += arr_int8.value(*i) as i128;
                 }
             }
         }
@@ -218,23 +240,60 @@ impl AggregateFunction for Sum {
     }
     fn update_vector(&mut self, values: &ArrayRef) -> Result<()> {
         if let Some(arr_float) = values.as_any().downcast_ref::<arrow::array::Float64Array>() {
+            self.is_integer = false;
             self.sum += arrow::compute::kernels::aggregate::sum(arr_float).unwrap_or(0.0);
-        } else if let Some(arr_int) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
-            self.sum += arrow::compute::kernels::aggregate::sum(arr_int).unwrap_or(0) as f64;
+        } else if let Some(arr) = values.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            self.is_integer = true;
+            for i in 0..values.len() {
+                if !arr.is_null(i) {
+                    self.int_sum += arr.value(i) as i128;
+                }
+            }
+        } else if let Some(arr) = values.as_any().downcast_ref::<arrow::array::Int32Array>() {
+            self.is_integer = true;
+            for i in 0..values.len() {
+                if !arr.is_null(i) {
+                    self.int_sum += arr.value(i) as i128;
+                }
+            }
+        } else if let Some(arr) = values.as_any().downcast_ref::<arrow::array::Int16Array>() {
+            self.is_integer = true;
+            for i in 0..values.len() {
+                if !arr.is_null(i) {
+                    self.int_sum += arr.value(i) as i128;
+                }
+            }
+        } else if let Some(arr) = values.as_any().downcast_ref::<arrow::array::Int8Array>() {
+            self.is_integer = true;
+            for i in 0..values.len() {
+                if !arr.is_null(i) {
+                    self.int_sum += arr.value(i) as i128;
+                }
+            }
         }
         Ok(())
     }
     fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
         if let Some(other_sum) = other.as_any().downcast_ref::<Sum>() {
-            self.sum += other_sum.sum;
+            if other_sum.is_integer {
+                self.is_integer = true;
+                self.int_sum += other_sum.int_sum;
+            } else {
+                self.is_integer = false;
+                self.sum += other_sum.sum;
+            }
         }
         Ok(())
     }
     fn finalize(&self) -> Result<Value> {
-        Ok(Value::Number(self.sum))
+        if self.is_integer {
+            Ok(Value::Number(self.int_sum as f64))
+        } else {
+            Ok(Value::Number(self.sum))
+        }
     }
     fn clone_box(&self) -> Box<dyn AggregateFunction> {
-        Box::new(Self { sum: self.sum })
+        Box::new(Self { sum: self.sum, int_sum: self.int_sum, is_integer: self.is_integer })
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
