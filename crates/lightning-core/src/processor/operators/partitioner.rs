@@ -7,7 +7,7 @@ use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 pub struct PartitionedState {

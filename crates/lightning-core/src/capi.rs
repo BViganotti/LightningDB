@@ -46,6 +46,7 @@ pub extern "C" fn lightning_database_init(
         slow_query_threshold_ms: 100,
         copy_base_dir: None,
         wasm_base_dir: None,
+        embedding_dim: 384,
     };
 
     match Database::new(path_str, sys_config) {

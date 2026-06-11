@@ -124,6 +124,8 @@ pub struct SystemConfig {
     /// When None (default), only relative paths are allowed and resolved
     /// relative to the database directory.
     pub wasm_base_dir: Option<std::path::PathBuf>,
+    /// Default embedding dimension for memory/vector operations.
+    pub embedding_dim: usize,
 }
 
 impl Default for SystemConfig {
@@ -140,6 +142,7 @@ impl Default for SystemConfig {
             slow_query_threshold_ms: 100,
             copy_base_dir: None,
             wasm_base_dir: None,
+            embedding_dim: 384,
         }
     }
 }

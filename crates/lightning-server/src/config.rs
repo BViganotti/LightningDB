@@ -137,6 +137,7 @@ impl ServerConfig {
             buffer_pool_size: self.buffer_pool_size,
             read_only: self.read_only,
             vacuum_interval_ms: self.vacuum_interval_ms,
+            embedding_dim: self.embedding_dim,
             ..Default::default()
         }
     }
