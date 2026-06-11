@@ -249,9 +249,9 @@ pub fn append_raw_to_builder(
             b.append_value(i32::from_le_bytes(data[..4].try_into().map_err(|_| LightningError::Internal("failed to read Date from raw data".into()))?));
         }
         LogicalType::List(_) => {
-            // Lists (like embeddings) are variable-length and not suitable for raw append
-            // Just append an empty/null list for now
-            return Ok(());
+            return Err(LightningError::Internal(
+                "Raw append not supported for List type".into(),
+            ));
         }
         _ => {
             return Err(LightningError::Internal(
@@ -281,7 +281,7 @@ pub fn from_arrow(array: &ArrayRef, i: usize) -> Result<Value> {
         }
         DataType::UInt64 => {
             let a = downcast_ref_array!(array, UInt64Array);
-            Ok(Value::Node(a.value(i)))
+            Ok(Value::Number(a.value(i) as f64))
         }
         DataType::Int64 => {
             let a = downcast_ref_array!(array, Int64Array);
@@ -448,7 +448,16 @@ pub fn values_to_array(values: &[Value], data_type: &DataType) -> ArrayRef {
             }
             Arc::new(builder.finish())
         }
-        _ => Arc::new(arrow::array::NullArray::new(values.len())),
+        DataType::List(_) | DataType::Map(_, _) | DataType::Struct(_) => {
+            let arrays: Vec<ArrayRef> = values.iter().map(|v| v.to_arrow(1)).collect();
+            let refs: Vec<&dyn arrow::array::Array> = arrays.iter().map(|a| a.as_ref()).collect();
+            arrow::compute::concat(&refs)
+                .map_err(|e| {
+                    tracing::warn!("values_to_array concat for composite type: {e}");
+                    arrow::array::new_null_array(data_type, values.len())
+                })
+                .unwrap_or_else(|e| e)
+        }
     }
 }
 
