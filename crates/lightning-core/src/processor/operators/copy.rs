@@ -257,10 +257,12 @@ impl PhysicalCopy {
                 table.bulk_append_batch(&database.buffer_manager, &batch, next_id, tx)?;
             }
 
-            // Write undo records so a rollback can revert the imported rows
+            // Write undo records so a rollback can revert the imported rows.
+            // Batch all node IDs into a single undo buffer acquisition.
+            let table_name = self.table_name.clone();
             for i in 0..num_rows as u64 {
                 tx.undo_buffer.push(UndoRecord::DeleteNode(
-                    self.table_name.clone(),
+                    table_name.clone(),
                     next_id + i,
                 ));
             }

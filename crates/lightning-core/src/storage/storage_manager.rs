@@ -910,12 +910,11 @@ impl StorageManager {
     }
 
     pub fn get_all_file_handles(&self) -> Vec<Arc<FileHandle>> {
-        let mut fhs = vec![Arc::clone(&self.data_fh), Arc::clone(&self.overflow_fh)];
-        for table in self.node_tables.values().chain(self.rel_tables.values()) {
-            for col in &table.columns {
-                self.collect_fhs_recursive(col, &mut fhs);
-            }
-        }
+        // Use the centrally tracked file_handles map instead of walking the
+        // entire column tree recursively (which clones every child Arc).
+        let mut fhs: Vec<Arc<FileHandle>> = self.file_handles.values().cloned().collect();
+        fhs.push(Arc::clone(&self.data_fh));
+        fhs.push(Arc::clone(&self.overflow_fh));
         fhs
     }
 

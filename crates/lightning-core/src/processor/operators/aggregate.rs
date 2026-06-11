@@ -256,11 +256,12 @@ impl Aggregate {
                     }
 
                     let group_len = end - start;
-                    let mut group_indices: Vec<u64> = (start..end).map(|i| indices.value(i) as u64).collect();
+                    let group_indices: Vec<u64> = (start..end).map(|i| indices.value(i) as u64).collect();
+                    // Build the index array once and share it across all aggregate columns
+                    let idx_arr = arrow::array::UInt64Array::from(group_indices);
 
                     let mut agg_funcs = self.create_agg_functions();
                     for (j, (_, col_idx)) in self.aggregates.iter().enumerate() {
-                        let idx_arr = arrow::array::UInt64Array::from(group_indices.clone());
                         let gathered = arrow::compute::take(
                             full_batch.column(*col_idx),
                             &idx_arr,

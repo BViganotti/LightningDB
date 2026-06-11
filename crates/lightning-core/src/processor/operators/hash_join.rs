@@ -160,68 +160,75 @@ impl HashJoin {
         let mut total_build_rows = 0;
         let mut build_chunk_count = 0;
         let mut base_offset = 0usize;
+
+        // Per-builder staging tables to minimize write lock hold time.
+        // Lock is only held for batch-merge at chunk boundaries instead of
+        // per-row, allowing concurrent builders to interleave efficiently.
+        let mut local_u64: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut local_i64: HashMap<i64, Vec<usize>> = HashMap::new();
+        let mut local_val: HashMap<Value, Vec<usize>> = HashMap::new();
+        let mut local_chunks: Vec<RecordBatch> = Vec::new();
+        let mut local_chunk_offsets: Vec<usize> = Vec::new();
+
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
             build_chunk_count += 1;
             total_build_rows += chunk.num_rows();
             let batch = chunk.batch;
             let num_rows = batch.num_rows();
 
-            // Grab the write lock only for the shared-builder critical section.
-            // Schema initialization and hash-table insertion are serialized, but
-            // concurrent builders can interleave: each one computes its own next
-            // offset atomically and inserts into its own staging area before
-            // merging into the shared tables.
-            {
-                let mut shared = self.shared_build.write();
-
-                if shared.right_schema.is_none() {
-                    shared.right_schema = Some(batch.schema());
-                    shared.key_type = Some(batch.column(self.right_key_idx).data_type().clone());
-                }
-
-                let key_col = batch.column(self.right_key_idx);
-                match key_col.data_type() {
-                    DataType::UInt64 => {
-                        let arr = key_col.as_any().downcast_ref::<UInt64Array>().expect("hash join build: UInt64 key");
-                        for row_idx in 0..num_rows {
-                            if !arr.is_null(row_idx) {
-                                shared
-                                    .u64_hash_table
-                                    .entry(arr.value(row_idx))
-                                    .or_default()
-                                    .push(base_offset + row_idx);
-                            }
-                        }
-                    }
-                    DataType::Int64 => {
-                        let arr = key_col.as_any().downcast_ref::<Int64Array>()
-                            .expect("hash join build: Int64 key");
-                        for row_idx in 0..num_rows {
-                            if !arr.is_null(row_idx) {
-                                shared
-                                    .i64_hash_table
-                                    .entry(arr.value(row_idx))
-                                    .or_default()
-                                    .push(base_offset + row_idx);
-                            }
-                        }
-                    }
-                    _ => {
-                        for row_idx in 0..num_rows {
-                            let key = Value::from_arrow(key_col, row_idx);
-                            shared
-                                .hash_table
-                                .entry(key)
-                                .or_default()
-                                .push(base_offset + row_idx);
+            let key_col = batch.column(self.right_key_idx);
+            match key_col.data_type() {
+                DataType::UInt64 => {
+                    let arr = key_col.as_any().downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| crate::LightningError::Internal("hash join build: UInt64 key".into()))?;
+                    for row_idx in 0..num_rows {
+                        if !arr.is_null(row_idx) {
+                            local_u64.entry(arr.value(row_idx)).or_default().push(base_offset + row_idx);
                         }
                     }
                 }
-                shared.build_chunks.push(batch);
-            } // release write lock
-
+                DataType::Int64 => {
+                    let arr = key_col.as_any().downcast_ref::<Int64Array>()
+                        .ok_or_else(|| crate::LightningError::Internal("hash join build: Int64 key".into()))?;
+                    for row_idx in 0..num_rows {
+                        if !arr.is_null(row_idx) {
+                            local_i64.entry(arr.value(row_idx)).or_default().push(base_offset + row_idx);
+                        }
+                    }
+                }
+                _ => {
+                    for row_idx in 0..num_rows {
+                        let key = Value::from_arrow(key_col, row_idx);
+                        local_val.entry(key).or_default().push(base_offset + row_idx);
+                    }
+                }
+            }
+            local_chunks.push(batch);
+            local_chunk_offsets.push(base_offset);
             base_offset += num_rows;
         }
+
+        // Batch-merge local staging into shared tables under a single write lock acquisition
+        {
+            let mut shared = self.shared_build.write();
+
+            if shared.right_schema.is_none() && !local_chunks.is_empty() {
+                shared.right_schema = Some(local_chunks[0].schema());
+                shared.key_type = Some(local_chunks[0].column(self.right_key_idx).data_type().clone());
+            }
+
+            for (key, vals) in local_u64 {
+                shared.u64_hash_table.entry(key).or_default().extend(vals);
+            }
+            for (key, vals) in local_i64 {
+                shared.i64_hash_table.entry(key).or_default().extend(vals);
+            }
+            for (key, vals) in local_val {
+                shared.hash_table.entry(key).or_default().extend(vals);
+            }
+            shared.build_chunks.extend(local_chunks);
+            shared.chunk_offsets.extend(local_chunk_offsets);
+        } // release write lock
 
         tracing::debug!(
             "HashJoin::build done: {} chunks, {} rows, right_key_idx={}",
