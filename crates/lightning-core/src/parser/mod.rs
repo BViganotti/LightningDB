@@ -1397,7 +1397,7 @@ fn parse_arithmetic_operator(p: pest::iterators::Pair<Rule>) -> ArithmeticOperat
         "*" => ArithmeticOperator::Multiply,
         "/" => ArithmeticOperator::Divide,
         "%" => ArithmeticOperator::Modulo,
-        _ => unreachable!(),
+        other => panic!("unexpected arithmetic operator: {:?}", other),
     }
 }
 

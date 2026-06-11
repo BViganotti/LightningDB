@@ -131,9 +131,10 @@ impl Column {
         let is_val_null = matches!(val, Value::Null);
         self.set_null(bm, row_id, is_val_null, tx)?;
         if is_val_null {
+            self.flush_pending_nulls(bm, tx)?;
+            let zero = Value::Number(0.0);
             self.atomic_null_count.fetch_add(1, Ordering::Release);
-            self.atomic_num_values.fetch_add(1, Ordering::Release);
-            return Ok(());
+            return self.append_plain_value(bm, &zero, row_id, tx);
         }
         match &self.data_type {
             LogicalType::List(_) => {
