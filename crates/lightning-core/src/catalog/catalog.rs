@@ -3,6 +3,22 @@ use lightning_types::LogicalType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub trait TableLike {
+    fn properties_mut(&mut self) -> &mut Vec<PropertyDefinition>;
+}
+
+impl TableLike for NodeTableCatalogEntry {
+    fn properties_mut(&mut self) -> &mut Vec<PropertyDefinition> {
+        &mut self.properties
+    }
+}
+
+impl TableLike for RelTableCatalogEntry {
+    fn properties_mut(&mut self) -> &mut Vec<PropertyDefinition> {
+        &mut self.properties
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyDefinition {
     pub name: String,
@@ -61,6 +77,8 @@ pub struct Catalog {
     pub rel_tables: HashMap<String, RelTableCatalogEntry>,
     pub sequences: HashMap<String, SequenceCatalogEntry>,
     pub macros: HashMap<String, MacroCatalogEntry>,
+    #[serde(skip)]
+    pub constraint_by_name: HashMap<String, (String, usize)>,
 }
 
 impl Default for Catalog {
@@ -76,6 +94,37 @@ impl Catalog {
             rel_tables: HashMap::new(),
             sequences: HashMap::new(),
             macros: HashMap::new(),
+            constraint_by_name: HashMap::new(),
+        }
+    }
+
+    pub fn rebuild_constraint_index(&mut self) {
+        self.constraint_by_name.clear();
+        for (table_name, table) in &self.node_tables {
+            for (pos, c) in table.constraints.iter().enumerate() {
+                self.constraint_by_name.insert(c.name.clone(), (table_name.clone(), pos));
+            }
+        }
+    }
+
+    fn get_node_table_mut(&mut self, name: &str) -> Option<&mut NodeTableCatalogEntry> {
+        self.node_tables.get_mut(name)
+    }
+
+    fn get_rel_table_mut(&mut self, name: &str) -> Option<&mut RelTableCatalogEntry> {
+        self.rel_tables.get_mut(name)
+    }
+
+    fn get_table_mut(&mut self, name: &str) -> Result<&mut dyn TableLike, crate::LightningError> {
+        if self.node_tables.contains_key(name) {
+            Ok(self.node_tables.get_mut(name).unwrap() as &mut dyn TableLike)
+        } else if self.rel_tables.contains_key(name) {
+            Ok(self.rel_tables.get_mut(name).unwrap() as &mut dyn TableLike)
+        } else {
+            Err(crate::LightningError::Database(format!(
+                "Table '{}' not found",
+                name
+            )))
         }
     }
 
@@ -399,8 +448,9 @@ impl Catalog {
         }
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
-        let catalog = serde_json::from_reader(reader)
+        let mut catalog: Self = serde_json::from_reader(reader)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        catalog.rebuild_constraint_index();
         Ok(catalog)
     }
 
@@ -477,7 +527,9 @@ impl Catalog {
                 constraint.property, table_name
             )));
         }
-        table.constraints.push(constraint);
+        let pos = table.constraints.len();
+        table.constraints.push(constraint.clone());
+        self.constraint_by_name.insert(constraint.name.clone(), (table_name.to_string(), pos));
         Ok(())
     }
 
@@ -485,11 +537,15 @@ impl Catalog {
         &mut self,
         constraint_name: &str,
     ) -> Result<(String, NodeConstraint), crate::LightningError> {
-        for (table_name, table) in self.node_tables.iter_mut() {
-            if let Some(pos) = table.constraints.iter().position(|c| c.name == constraint_name) {
-                let c = table.constraints.remove(pos);
-                return Ok((table_name.clone(), c));
+        if let Some((table_name, pos)) = self.constraint_by_name.remove(constraint_name) {
+            if let Some(table) = self.node_tables.get_mut(&table_name) {
+                if pos < table.constraints.len() {
+                    let c = table.constraints.remove(pos);
+                    self.rebuild_constraint_index();
+                    return Ok((table_name, c));
+                }
             }
+            self.rebuild_constraint_index();
         }
         Err(crate::LightningError::Database(format!(
             "Constraint '{}' not found",
