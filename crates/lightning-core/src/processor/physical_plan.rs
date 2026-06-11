@@ -1376,11 +1376,17 @@ impl PhysicalPlanner {
                     let l_cand = self.extract_trigram_candidates(left, table);
                     let r_cand = self.extract_trigram_candidates(right, table);
                     if let (Some(l), Some(r)) = (l_cand, r_cand) {
-                        let mut res = l;
-                        res.extend(r);
-                        res.sort_unstable();
-                        res.dedup();
-                        Some(res)
+                        // XOR = (A âˆª B) - (A âˆ© B): keep candidates that are in
+                        // exactly one of the two sets. Previously this computed
+                        // A âˆª B (same as OR), which was incorrect for XOR semantics.
+                        use std::collections::HashSet;
+                        let l_set: HashSet<u64> = l.into_iter().collect();
+                        let r_set: HashSet<u64> = r.into_iter().collect();
+                        let xor: Vec<u64> = l_set
+                            .symmetric_difference(&r_set)
+                            .copied()
+                            .collect();
+                        Some(xor)
                     } else {
                         None
                     }

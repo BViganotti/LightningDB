@@ -35,12 +35,12 @@ impl Frame {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        // SAFETY: SAFETY: Frame.data is UnsafeCell; access is serialized by shard RwLock or per-page Mutex. All callers hold the appropriate lock before calling as_slice().
+        // SAFETY: Frame.data is UnsafeCell; access is serialized by shard RwLock or per-page Mutex. All callers hold the appropriate lock before calling as_slice().
         unsafe { &*self.data.get() }
     }
 
     pub fn as_mut_slice(&self) -> &mut [u8] {
-        // SAFETY: SAFETY: Same as as_slice() — exclusive access guaranteed by shard write lock or page-level synchronization.
+        // SAFETY: Same as as_slice() — exclusive access guaranteed by shard write lock or page-level synchronization.
         unsafe { &mut *self.data.get() }
     }
 }
@@ -696,7 +696,6 @@ impl BufferManager {
         // Fast path: pop a free candidate if available
         if let Some(idx) = pool.free_candidates.pop_front() {
             if pool.slots[idx].key.is_none() && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0 {
-                // Check if the slot was dirtied since being queued
                 if pool.slots[idx].dirty {
                     if let Some((fid, pid)) = pool.slots[idx].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
@@ -707,48 +706,69 @@ impl BufferManager {
                 return Ok(idx);
             }
         }
-        let start_ptr = pool.clock_ptr;
-        let mut all_uncommitted = true;
-        loop {
-            let idx = pool.clock_ptr;
-            pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
 
-            let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
-            if pin_count == 0 {
-                if pool.slots[idx].referenced {
-                    pool.slots[idx].referenced = false;
-                    all_uncommitted = false;
-                    continue;
-                }
-                if pool.slots[idx].dirty {
-                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
-                    if version & UNCOMMITTED_BIT != 0 {
+        // Retry loop: if eviction fails (all pages pinned), wait and retry.
+        // This prevents unrecoverable errors on transient pin contention.
+        let max_retries = 3;
+        for retry in 0..=max_retries {
+            let start_ptr = pool.clock_ptr;
+            let mut all_uncommitted = true;
+            loop {
+                let idx = pool.clock_ptr;
+                pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
+
+                let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
+                if pin_count == 0 {
+                    if pool.slots[idx].referenced {
+                        pool.slots[idx].referenced = false;
+                        all_uncommitted = false;
                         continue;
                     }
-                    all_uncommitted = false;
-                    if let Some((fid, pid)) = pool.slots[idx].key {
-                        if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
+                    if pool.slots[idx].dirty {
+                        let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                        if version & UNCOMMITTED_BIT != 0 {
+                            continue;
+                        }
+                        all_uncommitted = false;
+                        if let Some((fid, pid)) = pool.slots[idx].key {
+                            if let Some(fh) = pool.file_handles.get(&fid) {
+                                fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
+                            }
                         }
                     }
+                    return Ok(idx);
                 }
-                return Ok(idx);
-            }
 
-            if pool.clock_ptr == start_ptr {
-                if all_uncommitted {
+                if pool.clock_ptr == start_ptr {
+                    if all_uncommitted {
+                        if retry < max_retries {
+                            // All pages are dirty-uncommitted — wait briefly for
+                            // a commit/rollback to free pages, then retry.
+                            std::thread::sleep(std::time::Duration::from_millis(10 * (retry + 1)));
+                            break; // restart the outer retry loop
+                        }
+                        return Err(LightningError::Internal(format!(
+                            "Buffer pool exhausted (capacity={}): all pages are dirty with uncommitted data. \
+                             Commit or rollback transactions to free pages",
+                            pool.capacity,
+                        )));
+                    }
+                    if retry < max_retries {
+                        std::thread::sleep(std::time::Duration::from_millis(5 * (retry + 1)));
+                        break;
+                    }
                     return Err(LightningError::Internal(format!(
-                        "Buffer pool exhausted (capacity={}): all pages are dirty with uncommitted data. \
-                         Commit or rollback transactions to free pages",
+                        "Buffer pool exhausted (capacity={}). Increase buffer_pool_size in SystemConfig",
                         pool.capacity,
                     )));
                 }
-                return Err(LightningError::Internal(format!(
-                    "Buffer pool exhausted (capacity={}). Increase buffer_pool_size in SystemConfig",
-                    pool.capacity,
-                )));
             }
         }
+
+        Err(LightningError::Internal(format!(
+            "Buffer pool exhausted after {} retries (capacity={})",
+            max_retries, pool.capacity,
+        )))
     }
 
     pub fn is_shutting_down(&self) -> bool {

@@ -432,8 +432,6 @@ impl MemoryStore {
 
         let db = self.conn.client_context.database.clone();
         let storage = db.storage_manager.read();
-        let _fts_exists = storage.fts_indexes.contains_key(ENTITY_TABLE);
-        let _vec_exists = storage.vector_indexes.contains_key(ENTITY_TABLE);
         drop(storage);
 
         let (tx, rx) = crossbeam::channel::unbounded();
@@ -925,11 +923,10 @@ impl MemoryStore {
         };
         let senders = self.cdc_senders.lock();
         for tx in senders.iter() {
-            if tx.try_send(event.clone()).is_err() {
-                // Channel full (slow consumer) — block until space is available.
-                // This applies backpressure instead of silently dropping the event.
-                let _ = tx.send(event.clone());
-            }
+            // Only try_send: if the channel is full (slow consumer), drop the event.
+            // Previously this fell back to a blocking send which would stall the
+            // entire write path (store/forget) behind a slow CDC consumer.
+            let _ = tx.try_send(event.clone());
         }
     }
 
@@ -1105,7 +1102,7 @@ impl MemoryStore {
         let conn = self.conn.client_context.database.connect();
         let now = Self::now_micros();
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND e.valid_until > $now RETURN e.id, e.entity_type, e.content, e.metadata"
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND e.valid_until > $now RETURN e.id, e.type, e.content, e.metadata"
         );
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(entity_id.to_string()));
