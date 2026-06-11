@@ -683,7 +683,7 @@ impl MemoryStore {
              e.valid_from, e.valid_until \
              ORDER BY e.last_accessed DESC LIMIT {top_k}"
         );
-        println!("query: {query}");
+        tracing::debug!("query: {query}");
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
         let res = self.conn.execute(&query, Some(params))?;

@@ -46,6 +46,17 @@ fn cache_shard(key: &str, num_shards: usize) -> usize {
     (h.finish() as usize) % num_shards
 }
 
+/// Compute a 64-bit hash from a string key using the same DefaultHasher
+/// that cache_shard uses internally. This ensures query_hash and shard
+/// selection are always consistent: a given key maps to the same shard
+/// regardless of which cache (plan vs physical plan) is being accessed.
+fn hash_cache_key(key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    h.finish()
+}
+
 use crate::catalog::{Catalog, LazyCatalog};
 use crate::parser::parse;
 use crate::planner::Binder;
@@ -1171,13 +1182,10 @@ impl Connection {
             query_str.to_string()
         };
 
-        // Hash the cache key for zero-allocation physical plan cache lookups
-        let query_hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            cache_key.hash(&mut h);
-            h.finish()
-        };
+        // Hash the cache key for zero-allocation physical plan cache lookups.
+        // Uses the same hash function as cache_shard() to ensure consistent
+        // shard assignment between the plan cache and physical plan cache.
+        let query_hash = hash_cache_key(&cache_key);
 
         let pp_shard = cache_shard(&cache_key, 4);
 
