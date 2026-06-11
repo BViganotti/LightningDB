@@ -67,7 +67,7 @@ impl FunctionRegistry {
                 )
             }),
         );
-        // Define UPPER — vectorized via direct buffer access
+        // Define UPPER — Unicode-aware via char::to_uppercase
         scalar_functions.insert(
             "UPPER".to_string(),
             ScalarFunction::new(
@@ -86,32 +86,38 @@ impl FunctionRegistry {
                                 "UPPER expects a String argument".into(),
                             )
                         })?;
-                    // Direct buffer iteration avoids per-element builder overhead
-                    let offsets = string_array.value_offsets();
-                    let values = string_array.value_data();
-                    let mut out_values = Vec::<u8>::with_capacity(values.len());
-                    let mut out_offsets = Vec::<i32>::with_capacity(offsets.len());
-                    out_offsets.push(0);
-                    for i in 0..string_array.len() {
-                        if string_array.is_null(i) {
-                            out_offsets.push(out_offsets.last().copied().unwrap_or(0));
-                            continue;
-                        }
-                        let start = offsets[i] as usize;
-                        let end = offsets[i + 1] as usize;
-                        let s = &values[start..end];
-                        for &b in s {
-                            out_values.push(b.to_ascii_uppercase());
-                        }
-                        out_offsets.push(out_values.len() as i32);
+                    let result: arrow::array::StringArray = string_array
+                        .iter()
+                        .map(|opt| opt.map(|s| s.to_uppercase()))
+                        .collect();
+                    Ok(Arc::new(result))
+                }),
+            ),
+        );
+
+        // Define LOWER — Unicode-aware via char::to_lowercase
+        scalar_functions.insert(
+            "LOWER".to_string(),
+            ScalarFunction::new(
+                "LOWER".to_string(),
+                Arc::new(|args, _num_rows| {
+                    if args.len() != 1 {
+                        return Err(crate::LightningError::Internal(
+                            "LOWER requires 1 argument".into(),
+                        ));
                     }
-                    let result = unsafe {
-                        arrow::array::StringArray::new_unchecked(
-                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(out_offsets)),
-                            out_values.into(),
-                            None,
-                        )
-                    };
+                    let string_array = args[0]
+                        .as_any()
+                        .downcast_ref::<arrow::array::StringArray>()
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal(
+                                "LOWER expects a String argument".into(),
+                            )
+                        })?;
+                    let result: arrow::array::StringArray = string_array
+                        .iter()
+                        .map(|opt| opt.map(|s| s.to_lowercase()))
+                        .collect();
                     Ok(Arc::new(result))
                 }),
             ),
@@ -291,28 +297,32 @@ impl FunctionRegistry {
                             "COALESCE requires at least 1 argument".into(),
                         ));
                     }
-                    let mut target_type = args[0].data_type().clone();
-                    for arg in args {
-                        if arg.data_type() != &arrow::datatypes::DataType::Float64
-                            || arg.null_count() < num_rows
-                        {
-                            target_type = arg.data_type().clone();
-                            if target_type != arrow::datatypes::DataType::Null {
-                                break;
+                    let target_type = args.iter()
+                        .find(|a| a.data_type() != &arrow::datatypes::DataType::Null)
+                        .map(|a| a.data_type().clone())
+                        .unwrap_or_else(|| args[0].data_type().clone());
+
+                    // Cast ALL arguments to the target type ONCE (not per row).
+                    // This turns O(num_rows × num_args) casts into O(num_args) casts.
+                    let casted_args: Vec<ArrayRef> = args.iter()
+                        .map(|arg| {
+                            if arg.data_type() == &target_type {
+                                arg.clone()
+                            } else {
+                                arrow::compute::cast(arg, &target_type)
+                                    .map_err(|e| crate::LightningError::Internal(e.to_string()))
                             }
-                        }
-                    }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                     let mut builder = arrow::array::make_builder(&target_type, num_rows);
                     for i in 0..num_rows {
                         let mut found = false;
-                        for arg in args {
+                        for arg in &casted_args {
                             if !arg.is_null(i) {
-                                let casted = arrow::compute::cast(arg, &target_type)
-                                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                                 crate::processor::arrow_utils::append_to_builder(
                                     &mut *builder,
-                                    &casted,
+                                    arg,
                                     i,
                                 )?;
                                 found = true;
@@ -915,7 +925,18 @@ impl FunctionRegistry {
                             ));
                         }
 
-                        let mut range_vals = Vec::new();
+                        const RANGE_MAX_ELEMS: u64 = 10_000_000;
+                        let estimated = if step > 0 {
+                            if start > end { 0 } else { ((end as i128 - start as i128) / step as i128 + 1) as u64 }
+                        } else {
+                            if start < end { 0 } else { ((start as i128 - end as i128) / (-step as i128) + 1) as u64 }
+                        };
+                        if estimated > RANGE_MAX_ELEMS {
+                            return Err(crate::LightningError::Query(
+                                format!("RANGE would produce {} elements (max {})", estimated, RANGE_MAX_ELEMS)
+                            ));
+                        }
+                        let mut range_vals = Vec::with_capacity(estimated as usize);
                         let mut curr = start;
                         if step > 0 {
                             while curr <= end {
