@@ -31,10 +31,18 @@ impl Hll {
     }
 
     fn estimate(&self) -> usize {
+        let m = 256usize;
         let sum: f64 = self.registers.iter().map(|&r| 2.0f64.powi(-(r as i32))).sum();
         if sum == 0.0 { return 0; }
-        let alpha = 0.7213 / (1.0 + 1.079 / 256.0);
-        (alpha * 256.0 * 256.0 / sum).round() as usize
+        let alpha = 0.7213 / (1.0 + 1.079 / m as f64);
+        let est = alpha * (m as f64) * (m as f64) / sum;
+        if est < 2.5 * m as f64 {
+            let zeros = self.registers.iter().filter(|&&r| r == 0).count();
+            if zeros > 0 {
+                return (-(m as f64) * (zeros as f64 / m as f64).ln()).round() as usize;
+            }
+        }
+        est.round() as usize
     }
 }
 

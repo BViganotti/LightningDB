@@ -570,3 +570,285 @@ pub struct WALReplayReport {
     pub corrupt_records_skipped: u64,
     pub partial_record_at_eof: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::buffer_manager::PAGE_SIZE;
+
+    fn create_wal(sync_mode: SyncMode) -> (WAL, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let wal = WAL::new(dir.path(), sync_mode).unwrap();
+        (wal, dir)
+    }
+
+    #[test]
+    fn test_new_wal_creates_header() {
+        let (wal, _dir) = create_wal(SyncMode::Normal);
+        let size = wal.size().unwrap();
+        assert_eq!(size, WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_new_wal_invalid_magic() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.lbug");
+        std::fs::write(&wal_path, b"BOGUS").unwrap();
+        let result = WAL::new(dir.path(), SyncMode::Normal);
+        match result {
+            Err(e) => assert!(e.to_string().contains("invalid magic")),
+            Ok(_) => panic!("expected Err for invalid magic"),
+        }
+    }
+
+    #[test]
+    fn test_log_page_update_and_commit() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let data = vec![0xABu8; PAGE_SIZE];
+        wal.log_page_update(1, 42, 7, &data).unwrap();
+        wal.log_commit(1).unwrap();
+        let size = wal.size().unwrap();
+        assert!(size > WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_replay_committed_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.lbug");
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            let data = vec![0xCDu8; PAGE_SIZE];
+            wal.log_page_update(1, 0, 0, &data).unwrap();
+            wal.log_commit(1).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let mut applied: Vec<(u64, u64, Vec<u8>)> = Vec::new();
+        let report = wal.replay(
+            |fid, pid, data| {
+                applied.push((fid, pid, data.to_vec()));
+                Ok(())
+            },
+            0,
+        ).unwrap();
+        assert_eq!(report.records_read, 2);
+        assert_eq!(report.corrupt_records_skipped, 0);
+        assert!(!report.partial_record_at_eof);
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0], (0, 0, vec![0xCDu8; PAGE_SIZE]));
+    }
+
+    #[test]
+    fn test_replay_skips_pre_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            let data = vec![0xEFu8; PAGE_SIZE];
+            wal.log_page_update(1, 0, 0, &data).unwrap();
+            wal.log_commit(1).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let mut applied = 0u64;
+        let report = wal.replay(
+            |_fid, _pid, _data| { applied += 1; Ok(()) },
+            1,
+        ).unwrap();
+        assert_eq!(applied, 0);
+        assert_eq!(report.records_read, 2);
+    }
+
+    #[test]
+    fn test_replay_partial_record_at_eof() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.lbug");
+        {
+            let mut f = std::fs::File::create(&wal_path).unwrap();
+            f.write_all(&WAL_MAGIC).unwrap();
+            f.write_all(&[WAL_VERSION]).unwrap();
+            f.write_all(&[RECORD_TYPE_PAGE_UPDATE]).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
+        assert!(report.partial_record_at_eof);
+    }
+
+    #[test]
+    fn test_replay_corrupt_checksum() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.lbug");
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            let data = vec![0xAAu8; PAGE_SIZE];
+            wal.log_page_update(1, 0, 0, &data).unwrap();
+            wal.log_commit(1).unwrap();
+        }
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&wal_path)
+                .unwrap();
+            f.seek(std::io::SeekFrom::Start(WAL_HEADER_SIZE as u64 + 10)).unwrap();
+            f.write_all(&[0xFF]).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
+        assert_eq!(report.corrupt_records_skipped, 1);
+    }
+
+    #[test]
+    fn test_truncate_resets_wal() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let data = vec![0xBBu8; PAGE_SIZE];
+        wal.log_page_update(1, 0, 0, &data).unwrap();
+        wal.log_commit(1).unwrap();
+        let before = wal.size().unwrap();
+        assert!(before > WAL_HEADER_SIZE as u64);
+        wal.truncate().unwrap();
+        let after = wal.size().unwrap();
+        assert_eq!(after, WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_sync_mode_off() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let data = vec![0xCCu8; PAGE_SIZE];
+        wal.log_page_update(1, 0, 0, &data).unwrap();
+        wal.log_commit(1).unwrap();
+        assert!(wal.size().unwrap() > WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_multiple_transactions() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        for tx in 0..5 {
+            let data = vec![tx as u8; PAGE_SIZE];
+            wal.log_page_update(tx, 0, tx, &data).unwrap();
+            wal.log_commit(tx).unwrap();
+        }
+        let size = wal.size().unwrap();
+        assert!(size > WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_read_records_from_offset() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let data = vec![0xDDu8; PAGE_SIZE];
+        wal.log_page_update(1, 0, 0, &data).unwrap();
+        wal.log_commit(1).unwrap();
+
+        let mut iter = wal.read_records_from(0).unwrap();
+        let r1 = iter.next_record();
+        assert!(matches!(r1, Some(WALRecord::PageUpdate { .. })));
+        let r2 = iter.next_record();
+        assert!(matches!(r2, Some(WALRecord::Commit { .. })));
+        let r3 = iter.next_record();
+        assert!(r3.is_none());
+    }
+
+    #[test]
+    fn test_read_records_past_eof() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let mut iter = wal.read_records_from(999_999).unwrap();
+        assert!(iter.next_record().is_none());
+    }
+
+    #[test]
+    fn test_empty_wal_no_records() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        let mut iter = wal.read_records_from(0).unwrap();
+        assert!(iter.next_record().is_none());
+    }
+
+    #[test]
+    fn test_align_position_roundtrip() {
+        let data = vec![0xFFu8; PAGE_SIZE];
+        let dir = tempfile::tempdir().unwrap();
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        for tx in 0..3 {
+            wal.log_page_update(tx, 0, tx, &data).unwrap();
+            wal.log_commit(tx).unwrap();
+        }
+        let mut iter = wal.read_records_from(0).unwrap();
+        let mut count = 0u64;
+        while let Some(record) = iter.next_record() {
+            match record {
+                WALRecord::PageUpdate { .. } | WALRecord::Commit { .. } => count += 1,
+                WALRecord::Corrupt { msg } => panic!("Unexpected corrupt record: {msg}"),
+            }
+        }
+        assert_eq!(count, 6);
+    }
+
+    #[test]
+    fn test_archiving() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_dir = tempfile::tempdir().unwrap();
+        let mut wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        wal.enable_archive(archive_dir.path()).unwrap();
+        let data = vec![0xEEu8; PAGE_SIZE];
+        wal.log_page_update(1, 0, 0, &data).unwrap();
+        wal.log_commit(1).unwrap();
+        wal.truncate().unwrap();
+        let entries: Vec<_> = std::fs::read_dir(archive_dir.path()).unwrap().collect();
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn test_group_commit_buffer_flushed() {
+        let (wal, _dir) = create_wal(SyncMode::Off);
+        for i in 0..10 {
+            let data = vec![i; PAGE_SIZE];
+            wal.log_page_update(1, 0, i as u64, &data).unwrap();
+        }
+        assert_eq!(wal.size().unwrap(), WAL_HEADER_SIZE as u64);
+        wal.log_commit(1).unwrap();
+        assert!(wal.size().unwrap() > WAL_HEADER_SIZE as u64);
+    }
+
+    #[test]
+    fn test_replay_applies_pending_after_commit_record() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            let data = vec![0x11u8; PAGE_SIZE];
+            wal.log_page_update(2, 1, 100, &data).unwrap();
+            wal.log_commit(2).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let mut applied = Vec::new();
+        wal.replay(
+            |fid, pid, data| { applied.push((fid, pid, data.to_vec())); Ok(()) },
+            0,
+        ).unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0], (1, 100, vec![0x11u8; PAGE_SIZE]));
+    }
+
+    #[test]
+    fn test_replay_commit_without_page_update() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            wal.log_commit(99).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
+        assert_eq!(report.records_read, 1);
+        assert_eq!(report.corrupt_records_skipped, 0);
+    }
+
+    #[test]
+    fn test_replay_unknown_record_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.lbug");
+        {
+            let mut f = std::fs::File::create(&wal_path).unwrap();
+            f.write_all(&WAL_MAGIC).unwrap();
+            f.write_all(&[WAL_VERSION]).unwrap();
+            f.write_all(&[0xFF]).unwrap();
+        }
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
+        assert_eq!(report.records_read, 0);
+        assert_eq!(report.corrupt_records_skipped, 0);
+    }
+}

@@ -276,7 +276,8 @@ impl FusionApp {
 MATCH (n:CodeNode)-[r]-(m:CodeNode) \
 WITH n.file_path AS nf, m.file_path AS mf \
 WHERE nf IS NOT NULL AND mf IS NOT NULL \
-WITH replace(nf, '.rs', '') AS n_clean, replace(mf, '.rs', '') AS m_clean \
+WITH CASE WHEN nf ENDS_WITH '.rs' THEN LEFT(nf, LENGTH(nf) - 3) ELSE nf END AS n_clean, \
+     CASE WHEN mf ENDS_WITH '.rs' THEN LEFT(mf, LENGTH(mf) - 3) ELSE mf END AS m_clean \
 WITH n_clean AS n_mod, m_clean AS m_mod \
 WHERE n_mod IS NOT NULL AND m_mod IS NOT NULL \
 RETURN n_mod, m_mod, count(*) AS edge_count \
