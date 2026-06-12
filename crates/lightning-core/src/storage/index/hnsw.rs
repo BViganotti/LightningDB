@@ -205,11 +205,12 @@ impl HnswIndex {
     }
 
     pub fn insert(&self, id: u64, embedding: Vec<f32>) {
-        // Check if node already exists — silently overwriting would corrupt the graph
+        // Check if node already exists — update embedding in-place.
+        // Note: neighbor links are NOT rebuilt, so they may be suboptimal
+        // if the embedding changed significantly.
         {
             let nodes = self.nodes.read();
             if (id as usize) < nodes.len() && nodes[id as usize].id == id {
-                // Node exists: update embedding in-place without rebuilding neighbor links
                 let mut embeddings = self.embeddings.write();
                 if (id as usize) < embeddings.len() {
                     embeddings[id as usize] = embedding;
