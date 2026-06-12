@@ -879,11 +879,6 @@ impl LogicalPlanner {
                             LogicalOperator::CreateRel(Some(Box::new(plan)), pat.clone())
                         }
                         BoundClause::Call(call) => LogicalOperator::Call(call.clone()),
-                        BoundClause::Unwind(unwind) => LogicalOperator::Unwind(
-                            Box::new(plan),
-                            unwind.expression.clone(),
-                            unwind.alias.clone(),
-                        ),
                         BoundClause::Subquery(subquery) => {
                             let sub_plan = Self::plan_query(*subquery)?;
                             LogicalOperator::Join(
