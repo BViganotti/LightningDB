@@ -357,7 +357,9 @@ impl Aggregate {
             }
 
             let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), final_columns)
-                .expect("aggregate output schema must match columns");
+                .map_err(|e| crate::LightningError::Internal(format!(
+                    "Aggregate output schema mismatch: {e}"
+                )))?;
             *self.shared_state.final_result.write() = Some(batch);
             self.shared_state.is_done.store(true, Ordering::SeqCst);
         }
