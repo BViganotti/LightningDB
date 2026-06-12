@@ -92,6 +92,21 @@ impl SubqueryUnnesting {
                     Ok(child)
                 }
             }
+            // Handle NOT EXISTS — check both Function("NOT", ...) and Not(Exists(...))
+            BoundExpression::Not(inner) => {
+                if let BoundExpression::Exists(steps) = inner.as_ref() {
+                    if let Some((sub_match, sub_where)) = steps.first() {
+                        self.create_semi_join(child, sub_match.clone(), sub_where.clone(), true)
+                    } else {
+                        Ok(child)
+                    }
+                } else {
+                    Ok(LogicalOperator::Filter(
+                        Box::new(child),
+                        BoundExpression::Not(inner),
+                    ))
+                }
+            }
             BoundExpression::Function(name, args, _) if name == "NOT" => {
                 if let Some(BoundExpression::Exists(steps)) = args.first() {
                     if let Some((sub_match, sub_where)) = steps.first() {
