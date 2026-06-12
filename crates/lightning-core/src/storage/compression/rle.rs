@@ -30,6 +30,7 @@ impl CompressionAlg for RleCompression {
             let mut count = 1u32;
             let mut j = values_processed + 1;
             while j < num_values_remaining
+                && count < u32::MAX
                 && (j as usize + 1) * element_size <= src.len()
                 && &src[j as usize * element_size..(j as usize + 1) * element_size] == val
             {
