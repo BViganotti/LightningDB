@@ -101,6 +101,13 @@ pub struct BufferManager {
     shutting_down: AtomicBool,
 }
 
+enum EvictResult {
+    /// Successfully found a slot index to reuse.
+    Found(usize),
+    /// All pages are pinned/uncommitted; caller should release the lock and retry.
+    NeedRetry,
+}
+
 impl BufferManager {
     pub fn new(
         capacity: usize,
@@ -247,10 +254,29 @@ impl BufferManager {
             }
         }
 
-        // Load from disk
-        pool.file_handles
-            .insert(fh_arc.file_id, Arc::clone(&fh_arc));
-        let slot_idx = self.evict_with_clock(&mut pool)?;
+        // Load from disk — retry loop for eviction (releases lock on NeedRetry)
+        let mut slot_idx_opt: Option<usize> = None;
+        const MAX_EVICT_RETRIES: u32 = 5;
+        for retry in 0..MAX_EVICT_RETRIES {
+            match self.evict_with_clock(&mut pool)? {
+                EvictResult::Found(idx) => {
+                    slot_idx_opt = Some(idx);
+                    break;
+                }
+                EvictResult::NeedRetry => {
+                    // Drop the lock, sleep briefly, and retry
+                    drop(pool);
+                    std::thread::sleep(std::time::Duration::from_millis(5u64 * (retry as u64 + 1)));
+                    pool = self.shards[shard_idx].write();
+                }
+            }
+        }
+        let slot_idx = slot_idx_opt.ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer pool exhausted after {} retries (capacity={}). Increase buffer_pool_size",
+                MAX_EVICT_RETRIES, pool.capacity
+            ))
+        })?;
 
         // FIX #26: Skip disk read for brand new pages
         let mut data = [0u8; PAGE_SIZE];
@@ -338,7 +364,27 @@ impl BufferManager {
         pool.file_handles
             .insert(fh_arc.file_id, Arc::clone(&fh_arc));
 
-        let slot_idx = self.evict_with_clock(&mut pool)?;
+        let mut slot_idx_opt: Option<usize> = None;
+        const MAX_EVICT_RETRIES: u32 = 5;
+        for retry in 0..MAX_EVICT_RETRIES {
+            match self.evict_with_clock(&mut pool)? {
+                EvictResult::Found(idx) => {
+                    slot_idx_opt = Some(idx);
+                    break;
+                }
+                EvictResult::NeedRetry => {
+                    drop(pool);
+                    std::thread::sleep(std::time::Duration::from_millis(5u64 * (retry as u64 + 1)));
+                    pool = self.shards[shard_idx].write();
+                }
+            }
+        }
+        let slot_idx = slot_idx_opt.ok_or_else(|| {
+            LightningError::Internal(format!(
+                "Buffer pool exhausted after {} retries (capacity={})",
+                MAX_EVICT_RETRIES, pool.capacity
+            ))
+        })?;
 
         let mut data = [0u8; PAGE_SIZE];
         if let Some(src) = source_data {
@@ -382,20 +428,22 @@ impl BufferManager {
                 if !already_cached {
                     if let Some(pf_fh) = pf_fh_opt {
                         if (pf_pg as usize) < pf_fh.get_num_pages() as usize {
-                            let pf_slot = self.evict_with_clock(&mut pool)?;
-                            let mut pf_data = [0u8; PAGE_SIZE];
-                            let _ = pf_fh.read_page(pf_pg, &mut pf_data);
-                            let pf_frame = Arc::new(Frame::new(pf_data, 0));
-                            if let Some(old_key) = pool.slots[pf_slot].key {
-                                if let Some(slots) = pool.page_to_slots.get_mut(&old_key) {
-                                    slots.retain(|&idx| idx != pf_slot);
+                            // Prefetch is optional — skip if eviction fails
+                            if let Ok(EvictResult::Found(pf_slot)) = self.evict_with_clock(&mut pool) {
+                                let mut pf_data = [0u8; PAGE_SIZE];
+                                let _ = pf_fh.read_page(pf_pg, &mut pf_data);
+                                let pf_frame = Arc::new(Frame::new(pf_data, 0));
+                                if let Some(old_key) = pool.slots[pf_slot].key {
+                                    if let Some(slots) = pool.page_to_slots.get_mut(&old_key) {
+                                        slots.retain(|&idx| idx != pf_slot);
+                                    }
                                 }
+                                pool.slots[pf_slot].key = Some(pf_key);
+                                pool.slots[pf_slot].frame = pf_frame;
+                                pool.slots[pf_slot].dirty = false;
+                                pool.slots[pf_slot].referenced = true;
+                                pool.page_to_slots.entry(pf_key).or_default().push(pf_slot);
                             }
-                            pool.slots[pf_slot].key = Some(pf_key);
-                            pool.slots[pf_slot].frame = pf_frame;
-                            pool.slots[pf_slot].dirty = false;
-                            pool.slots[pf_slot].referenced = true;
-                            pool.page_to_slots.entry(pf_key).or_default().push(pf_slot);
                         }
                     }
                 }
@@ -731,85 +779,59 @@ impl BufferManager {
         pool.capacity = new_cap;
     }
 
-    fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<usize> {
+    fn evict_with_clock(&self, pool: &mut BufferPool) -> Result<EvictResult> {
         // Fast path: pop a free candidate if available
         if let Some(idx) = pool.free_candidates.pop_front() {
             if pool.slots[idx].key.is_none()
                 && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0
                 && !pool.slots[idx].dirty
             {
-                return Ok(idx);
+                return Ok(EvictResult::Found(idx));
             }
             // Re-queue for normal clock eviction path
             pool.free_candidates.push_back(idx);
         }
 
-        // Retry loop: if eviction fails (all pages pinned), wait and retry.
-        // This prevents unrecoverable errors on transient pin contention.
-        let max_retries = 3;
-        for retry in 0..=max_retries {
-            let start_ptr = pool.clock_ptr;
-            let mut all_uncommitted = true;
-            loop {
-                let idx = pool.clock_ptr;
-                pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
+        // Single scan of the clock — no sleeping while holding the lock.
+        let start_ptr = pool.clock_ptr;
+        let mut all_uncommitted = true;
+        loop {
+            let idx = pool.clock_ptr;
+            pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
 
-                let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
-                if pin_count == 0 {
-                    if pool.slots[idx].referenced {
-                        pool.slots[idx].referenced = false;
-                        all_uncommitted = false;
+            let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
+            if pin_count == 0 {
+                if pool.slots[idx].referenced {
+                    pool.slots[idx].referenced = false;
+                    all_uncommitted = false;
+                    continue;
+                }
+                if pool.slots[idx].dirty {
+                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
                         continue;
                     }
-                    if pool.slots[idx].dirty {
-                        let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
-                        if version & UNCOMMITTED_BIT != 0 {
-                            continue;
-                        }
-                        all_uncommitted = false;
-                        if let Some((fid, pid)) = pool.slots[idx].key {
-                            if let Some(fh) = pool.file_handles.get(&fid) {
-                                fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
-                            }
+                    all_uncommitted = false;
+                    if let Some((fid, pid)) = pool.slots[idx].key {
+                        if let Some(fh) = pool.file_handles.get(&fid) {
+                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
                         }
                     }
-                    return Ok(idx);
                 }
+                return Ok(EvictResult::Found(idx));
+            }
 
-                if pool.clock_ptr == start_ptr {
-                    if pool.capacity < pool.max_capacity {
-                        self.grow_pool(pool);
-                        break; // restart the CLOCK scan with larger pool
-                    }
-                    if all_uncommitted {
-                        if retry < max_retries {
-                            // All pages are dirty-uncommitted — wait briefly for
-                            // a commit/rollback to free pages, then retry.
-                            std::thread::sleep(std::time::Duration::from_millis(10 * (retry + 1)));
-                            break; // restart the outer retry loop
-                        }
-                        return Err(LightningError::Internal(format!(
-                            "Buffer pool exhausted (capacity={}): all pages are dirty with uncommitted data. \
-                             Commit or rollback transactions to free pages",
-                            pool.capacity,
-                        )));
-                    }
-                    if retry < max_retries {
-                        std::thread::sleep(std::time::Duration::from_millis(5 * (retry + 1)));
-                        break;
-                    }
-                    return Err(LightningError::Internal(format!(
-                        "Buffer pool exhausted (capacity={}). Increase buffer_pool_size in SystemConfig",
-                        pool.capacity,
-                    )));
+            if pool.clock_ptr == start_ptr {
+                // Full scan complete — no evictable slot found.
+                if pool.capacity < pool.max_capacity {
+                    self.grow_pool(pool);
+                    // Retry immediately with larger pool
+                    continue;
                 }
+                // Caller should release the lock, sleep briefly, and retry.
+                return Ok(EvictResult::NeedRetry);
             }
         }
-
-        Err(LightningError::Internal(format!(
-            "Buffer pool exhausted after {} retries (capacity={})",
-            max_retries, pool.capacity,
-        )))
     }
 
     pub fn is_shutting_down(&self) -> bool {
