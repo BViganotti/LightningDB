@@ -2,6 +2,7 @@ use crate::processor::Value;
 use crate::storage::column::Column;
 use parking_lot::Mutex;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum UndoRecord {
@@ -35,12 +36,20 @@ pub enum UndoRecord {
         table_name: String,
         property: String,
     },
-    DropConstraint(String),
+    DropConstraint {
+        name: String,
+        table_name: String,
+        property: String,
+    },
     CreateIndex {
         name: String,
         index_path: std::path::PathBuf,
     },
-    DropIndex(String),
+    DropIndex {
+        name: String,
+        table_name: String,
+        property: String,
+    },
 }
 
 pub struct UndoBuffer {
@@ -252,9 +261,17 @@ impl UndoBuffer {
                         table.constraints.retain(|c| c.name != name);
                     }
                 }
-                UndoRecord::DropConstraint(name) => {
-                    // Drop constraint undo is more complex — we'd need to re-add the constraint.
-                    tracing::warn!("Drop constraint rollback not fully implemented: {name}");
+                UndoRecord::DropConstraint { name, table_name, property } => {
+                    // Re-add the constraint that was dropped
+                    let mut catalog = db.catalog.write();
+                    if let Some(table) = catalog.node_tables.get_mut(&table_name) {
+                        table.constraints.push(crate::catalog::NodeConstraint {
+                            name: name.clone(),
+                            property: property.clone(),
+                        });
+                    }
+                    drop(catalog);
+                    db.catalog.mark_dirty();
                 }
                 UndoRecord::CreateIndex {
                     name,
@@ -266,8 +283,25 @@ impl UndoBuffer {
                         tracing::error!("Rollback CreateIndex: failed to remove index file {}: {}", index_path.display(), e);
                     }
                 }
-                UndoRecord::DropIndex(name) => {
-                    tracing::warn!("Drop index rollback not fully implemented: {name}");
+                UndoRecord::DropIndex { name, table_name: _, property: _ } => {
+                    // Re-create the index that was dropped.
+                    // The index data is gone (file removed), so we can only re-create an empty index.
+                    let mut storage = db.storage_manager.write();
+                    fn sanitize(s: &str) -> String {
+                        s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
+                    }
+                    let safe_name = sanitize(&name);
+                    let index_path = db._path.join(format!("{safe_name}_idx.lbug"));
+                    match crate::storage::index::hash_index::HashIndex::open_or_create(&index_path) {
+                        Ok(index) => {
+                            storage.indexes.insert(name.clone(), Arc::new(index));
+                        }
+                        Err(e) => {
+                            tracing::error!("Rollback DropIndex: failed to re-create index '{}': {}", name, e);
+                        }
+                    }
+                    drop(storage);
+                    db.catalog.mark_dirty();
                 }
             }
         }

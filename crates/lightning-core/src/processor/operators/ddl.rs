@@ -481,9 +481,20 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
             }
             DDLAction::DropConstraint(name) => {
                 let mut catalog = database.catalog.write();
+                // Capture constraint info before removing for undo
+                let constraint_info = catalog.node_tables.values()
+                    .flat_map(|t| t.constraints.iter().map(move |c| (t.name.clone(), c)))
+                    .find(|(_, c)| c.name == *name)
+                    .map(|(table_name, c)| (table_name, c.property.clone()));
                 catalog.remove_constraint(name)?;
                 database.catalog.mark_dirty();
-                self.undo_buffer.push(UndoRecord::DropConstraint(name.clone()));
+                if let Some((table_name, property)) = constraint_info {
+                    self.undo_buffer.push(UndoRecord::DropConstraint {
+                        name: name.clone(),
+                        table_name,
+                        property,
+                    });
+                }
             }
             DDLAction::CreateIndex {
                 name,
@@ -511,7 +522,11 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 let mut storage = database.storage_manager.write();
                 storage.indexes.remove(name);
                 database.catalog.mark_dirty();
-                self.undo_buffer.push(UndoRecord::DropIndex(name.clone()));
+                self.undo_buffer.push(UndoRecord::DropIndex {
+                    name: name.clone(),
+                    table_name: String::new(),
+                    property: String::new(),
+                });
             }
             DDLAction::CreateVectorIndex {
                 table_name,
