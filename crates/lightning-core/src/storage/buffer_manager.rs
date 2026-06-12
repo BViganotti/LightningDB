@@ -589,7 +589,7 @@ impl BufferManager {
                         pool.slots[i].key = None;
                         pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
                         if pool.slots[i].dirty {
-                            pool.dirty_count.fetch_sub(1, Ordering::Release);
+                            Self::decrement_dirty_count(&pool.dirty_count);
                         }
                         pool.slots[i].dirty = false;
                         pool.slots[i].referenced = false;
@@ -629,7 +629,7 @@ impl BufferManager {
                     pool.slots[idx].key = None;
                     pool.slots[idx].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
                     if pool.slots[idx].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                        Self::decrement_dirty_count(&pool.dirty_count);
                     }
                     pool.slots[idx].dirty = false;
                     pool.slots[idx].referenced = false;
@@ -690,7 +690,7 @@ impl BufferManager {
                     }
                     pool.slots[i].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
                     if pool.slots[i].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                        Self::decrement_dirty_count(&pool.dirty_count);
                     }
                     pool.slots[i].dirty = false;
                     pool.slots[i].referenced = false;
@@ -718,7 +718,7 @@ impl BufferManager {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
                             synced_fids.lock().insert(fid);
                             if pool.slots[i].dirty {
-                                pool.dirty_count.fetch_sub(1, Ordering::Release);
+                                Self::decrement_dirty_count(&pool.dirty_count);
                             }
                             pool.slots[i].dirty = false;
                         }
@@ -848,6 +848,14 @@ impl BufferManager {
         }).sum()
     }
 
+    /// Decrement dirty count safely, preventing underflow.
+    /// Uses fetch_update to atomically check and decrement.
+    fn decrement_dirty_count(counter: &AtomicU64) {
+        counter.fetch_update(Ordering::Release, Ordering::Acquire, |v| {
+            v.checked_sub(1)
+        }).ok();
+    }
+
     pub fn shutdown(&self) {
         // Set lock-free flag FIRST so vacuum thread sees it immediately
         // without needing to acquire any shard locks.
@@ -876,7 +884,7 @@ impl BufferManager {
                                 tracing::error!("flush_all: write error on page {} file {}: {}", pid, fid, e);
                             } else {
                                 if pool.slots[i].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                        Self::decrement_dirty_count(&pool.dirty_count);
                     }
                     pool.slots[i].dirty = false;
                             }
@@ -915,7 +923,7 @@ impl BufferManager {
                                     tracing::error!("flush_pages: write error on page {} file {}: {}", key.1, key.0, e);
                                 } else {
                                     if pool.slots[i].dirty {
-                                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                                        Self::decrement_dirty_count(&pool.dirty_count);
                                     }
                                     pool.slots[i].dirty = false;
                                 }
@@ -960,7 +968,7 @@ impl BufferManager {
                                 tracing::error!("flush_all_with_handles: write error on page {} file {}: {}", pid, fid, e);
                             } else {
                                 if pool.slots[i].dirty {
-                        pool.dirty_count.fetch_sub(1, Ordering::Release);
+                        Self::decrement_dirty_count(&pool.dirty_count);
                     }
                     pool.slots[i].dirty = false;
                             }
