@@ -138,8 +138,9 @@ impl CompressionAnalyzer {
                     LogicalType::Int8 | LogicalType::Int16 | LogicalType::Int32 | LogicalType::Int64 |
                     LogicalType::Uint8 | LogicalType::Uint16 | LogicalType::Uint32 | LogicalType::Uint64
                 ) {
-                    let min_val = v1 as i64;
-                    let max_val = v2 as i64;
+                    // Saturating cast to prevent truncation for large floats
+                    let min_val = (v1 as i128).max(i64::MIN as i128).min(i64::MAX as i128) as i64;
+                    let max_val = (v2 as i128).max(i64::MIN as i128).min(i64::MAX as i128) as i64;
                     let range = (max_val as i128 - min_val as i128) as u64;
                     let bit_width = Self::calculate_bit_width(range);
                     if bit_width < 64 {
