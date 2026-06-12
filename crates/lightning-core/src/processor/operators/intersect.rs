@@ -152,7 +152,7 @@ impl PhysicalOperator for PhysicalIntersect {
                     }
 
                     if possible && matches_sets.len() == self.build_hts.len() {
-                        let base = matches_sets[smallest_idx].clone();
+                        let base = &matches_sets[smallest_idx];
                         // Convert other match sets to HashSet for O(1) .contains()
                         let other_sets: Vec<std::collections::HashSet<Value>> = matches_sets
                             .iter()
@@ -161,7 +161,7 @@ impl PhysicalOperator for PhysicalIntersect {
                             .map(|(_, m)| m.iter().cloned().collect())
                             .collect();
 
-                        for candidate_val in &base {
+                        for candidate_val in base {
                             if other_sets.iter().all(|s| s.contains(candidate_val)) {
                                 let mut out_row = Vec::with_capacity(num_cols + 1);
                                 for col_idx in 0..num_cols {
