@@ -805,7 +805,9 @@ impl ExpressionEvaluator {
     ) -> Option<Result<ArrayRef>> {
         use crate::parser::ast::ComparisonOperator::*;
         if let Literal::Number(n) = lit {
-            let val = *n as i64;
+            // For integer column comparisons, round the float to the nearest integer.
+            // This matches SQL semantics where 3.7 compared to an int column uses 4.
+            let val = n.round() as i64;
             let scalar = arrow::array::Int64Array::new_scalar(val);
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
                 let res = match op {
