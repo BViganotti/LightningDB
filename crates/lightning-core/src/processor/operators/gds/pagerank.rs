@@ -117,7 +117,9 @@ impl PhysicalOperator for PhysicalPageRank {
 
             let mut deg = 0;
             for csr in &csrs {
-                let _ = csr.for_each_neighbor(bm, nid, tx, |_| deg += 1);
+                if let Err(e) = csr.for_each_neighbor(bm, nid, tx, |_| deg += 1) {
+                    tracing::warn!("PageRank: error counting neighbors for node {}: {}", nid, e);
+                }
             }
             out_degrees[local_idx] = deg;
         }
@@ -145,9 +147,11 @@ impl PhysicalOperator for PhysicalPageRank {
                     if degree > 0 {
                         let contrib = score / (degree as f64);
                         for csr in &csrs {
-                            let _ = csr.for_each_neighbor(bm, nid, tx, |neighbor| {
+                            if let Err(e) = csr.for_each_neighbor(bm, nid, tx, |neighbor| {
                                 local_contribs.push((neighbor, contrib));
-                            });
+                            }) {
+                                tracing::warn!("PageRank: error traversing neighbors for node {}: {}", nid, e);
+                            }
                         }
                     }
                     local_contribs
