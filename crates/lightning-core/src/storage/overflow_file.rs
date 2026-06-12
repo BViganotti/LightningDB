@@ -64,40 +64,57 @@ impl OverflowFile {
                 current_page_idx as u64,
                 tx,
             )?;
-            let page_data = page.as_slice();
-            if page_data.len() < PAGE_SIZE {
-                return Err(LightningError::Internal(format!(
-                    "read_string: page {} too short: {} bytes", current_page_idx, page_data.len()
-                )));
-            }
 
-            let to_read = std::cmp::min(remaining, USABLE_SIZE - current_offset);
-            let end = current_offset + to_read;
-            if end > page_data.len() {
-                return Err(LightningError::Internal(format!(
-                    "read_string: slice end {} exceeds page size {} on page {}",
-                    end, page_data.len(), current_page_idx
-                )));
-            }
-            let slice = &page_data[current_offset..end];
-            result.push_str(
-                std::str::from_utf8(slice)
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?,
-            );
-
-            remaining -= to_read;
-            if remaining > 0 {
-                let next_ptr_end = USABLE_SIZE + NEXT_PTR_SIZE;
-                if next_ptr_end > page_data.len() {
+            // Copy all needed data from the page while pinned, then unpin immediately.
+            // This avoids holding the pin across the loop iteration.
+            let result_inner: Result<(String, Option<u32>)> = (|| {
+                let page_data = page.as_slice();
+                if page_data.len() < PAGE_SIZE {
                     return Err(LightningError::Internal(format!(
-                        "read_string: page {} too short for next pointer", current_page_idx
+                        "read_string: page {} too short: {} bytes", current_page_idx, page_data.len()
                     )));
                 }
-                let next_page_bytes = &page_data[USABLE_SIZE..next_ptr_end];
-                let next_page_idx = u32::from_le_bytes(
-                    next_page_bytes.try_into()
-                        .map_err(|_| LightningError::Internal("read_string: invalid next page pointer".into()))?
-                );
+
+                let to_read = std::cmp::min(remaining, USABLE_SIZE - current_offset);
+                let end = current_offset + to_read;
+                if end > page_data.len() {
+                    return Err(LightningError::Internal(format!(
+                        "read_string: slice end {} exceeds page size {} on page {}",
+                        end, page_data.len(), current_page_idx
+                    )));
+                }
+
+                let chunk = std::str::from_utf8(&page_data[current_offset..end])
+                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?
+                    .to_string();
+
+                let next_page_opt = if remaining > to_read {
+                    let next_ptr_end = USABLE_SIZE + NEXT_PTR_SIZE;
+                    if next_ptr_end > page_data.len() {
+                        return Err(LightningError::Internal(format!(
+                            "read_string: page {} too short for next pointer", current_page_idx
+                        )));
+                    }
+                    let next_page_idx = u32::from_le_bytes(
+                        page_data[USABLE_SIZE..next_ptr_end].try_into()
+                            .map_err(|_| LightningError::Internal("read_string: invalid next page pointer".into()))?
+                    );
+                    Some(next_page_idx)
+                } else {
+                    None
+                };
+
+                Ok((chunk, next_page_opt))
+            })();
+
+            // Unpin page regardless of success or failure
+            self.buffer_manager.unpin_page(&self.file_handle, current_page_idx as u64, page);
+
+            let (chunk, next_page_opt) = result_inner?;
+
+            result.push_str(&chunk);
+            remaining -= chunk.len();
+            if let Some(next_page_idx) = next_page_opt {
                 current_page_idx = next_page_idx;
                 current_offset = 0;
             }
