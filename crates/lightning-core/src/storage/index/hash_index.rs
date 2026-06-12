@@ -169,6 +169,8 @@ impl HashIndex {
             let mut current = bucket_idx;
             loop {
                 let frame = bm.pin_page(Arc::clone(self.fh()), current, tx)?;
+                // SAFETY: frame.as_ptr() points to PAGE_SIZE bytes of initialized memory.
+                // The frame was either read from disk or zero-initialized on creation.
                 let data = unsafe { &*frame.as_ptr().cast::<[u8; PAGE_SIZE]>() };
                 let num_entries = read_u64_at(data, 8)?;
                 let next_page = read_u64_at(data, 0)?;
