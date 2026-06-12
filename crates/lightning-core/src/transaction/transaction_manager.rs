@@ -256,7 +256,9 @@ impl TransactionManager {
                                 *page_idx,
                                 tx,
                             )?;
-                            our_frame.as_mut_slice().copy_from_slice(&merged_data);
+                            // SAFETY: We hold the page lock and have exclusive
+                            // access to this frame after merging concurrent changes.
+                            unsafe { our_frame.as_mut_slice() }.copy_from_slice(&merged_data);
 
                             // Log the merged page to WAL
                             bm.log_page_update(*file_id, *page_idx, our_frame.as_slice())?;

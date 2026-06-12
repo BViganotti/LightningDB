@@ -36,16 +36,29 @@ impl Frame {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        // SAFETY: Frame.data is UnsafeCell; access is serialized by shard RwLock or per-page Mutex. All callers hold the appropriate lock before calling as_slice().
+        // SAFETY: Frame.data is UnsafeCell; read access is safe when no
+        // concurrent mutable access exists. The shard RwLock ensures that
+        // readers don't overlap with writers.
         unsafe { &*self.data.get() }
     }
 
-    pub fn as_mut_slice(&self) -> &mut [u8] {
-        // SAFETY: Same as as_slice() — exclusive access guaranteed by shard write lock or page-level synchronization.
+    /// Get a mutable reference to the frame data.
+    ///
+    /// # Safety
+    /// The caller must ensure that no other reference (shared or mutable)
+    /// to this frame's data exists simultaneously. This is guaranteed when:
+    /// - The caller holds the shard write lock, OR
+    /// - The frame is freshly created and not yet shared, OR
+    /// - The frame's pin_count is 0 and no other thread has a reference.
+    pub unsafe fn as_mut_slice(&self) -> &mut [u8] {
         unsafe { &mut *self.data.get() }
     }
 }
 
+// SAFETY: Frame contains UnsafeCell which is !Sync. We implement Sync
+// manually because all access to the UnsafeCell data is serialized by
+// the shard RwLock (readers hold read lock, writers hold write lock).
+// The pin_count and version fields use atomic operations.
 unsafe impl Send for Frame {}
 unsafe impl Sync for Frame {}
 
@@ -1009,7 +1022,7 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        f1.as_mut_slice()[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]);
+        unsafe { f1.as_mut_slice() }[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]);
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         bm.unpin_page(&fh, 0, f1);
         let tx2 = begin_tx_at(&tm, commit_ts);
@@ -1026,7 +1039,7 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        f1.as_mut_slice()[0] = 0x55;
+        unsafe { f1.as_mut_slice() }[0] = 0x55;
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         bm.unpin_page(&fh, 0, f1);
         let tx2 = begin_tx_at(&tm, commit_ts);
@@ -1040,7 +1053,7 @@ mod tests {
         let bm = create_bm(64);
         let tx1 = begin_tx(&tm);
         let frame1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
-        frame1.as_mut_slice()[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        unsafe { frame1.as_mut_slice() }[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
         let tx2 = begin_tx(&tm);
         let frame2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
         assert_eq!(frame2.as_slice()[..4], [0, 0, 0, 0]);
@@ -1194,7 +1207,7 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        f1.as_mut_slice()[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        unsafe { f1.as_mut_slice() }[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         let tx2 = begin_tx_at(&tm, commit_ts);
         let mut pinned = Vec::new();
