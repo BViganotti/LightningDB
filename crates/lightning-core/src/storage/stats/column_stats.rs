@@ -112,6 +112,11 @@ impl ColumnStats {
         if val == &Value::Null {
             return;
         }
+        // Cap page_bounds growth to prevent unbounded memory from corrupted page_idx
+        const MAX_PAGE_BOUNDS: usize = 1_000_000;
+        if page_idx >= MAX_PAGE_BOUNDS {
+            return;
+        }
         while self.page_bounds.len() <= page_idx {
             self.page_bounds.push(None);
         }
