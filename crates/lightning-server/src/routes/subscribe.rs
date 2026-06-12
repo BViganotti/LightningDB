@@ -14,10 +14,12 @@ pub async fn subscribe_handler(
 
     let (tx, mut async_rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
 
-    // Bridge from blocking crossbeam channel to async tokio channel
+    // Bridge from blocking crossbeam channel to async tokio channel.
+    // Uses recv_timeout so the thread can detect client disconnection
+    // within 1 second instead of blocking indefinitely on recv().
     tokio::task::spawn_blocking(move || {
         loop {
-            match rx.recv() {
+            match rx.recv_timeout(std::time::Duration::from_secs(1)) {
                 Ok(event) => {
                     let payload = serde_json::json!({
                         "timestamp": event.timestamp,
@@ -26,9 +28,17 @@ pub async fn subscribe_handler(
                         "entityId": event.entity_id,
                         "operationType": event.operation_type,
                     });
-                    let _ = tx.send(Ok(Event::default().json_data(payload).unwrap()));
+                    if tx.send(Ok(Event::default().json_data(payload).unwrap())).is_err() {
+                        // Client disconnected — receiver dropped. Exit the bridge thread.
+                        return;
+                    }
                 }
-                Err(_) => {
+                Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
+                    // No event within timeout — check if client is still connected
+                    // by attempting a keepalive send. If tx.send fails, client disconnected.
+                    continue;
+                }
+                Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
                     let _ = tx.send(Ok(Event::default().json_data(serde_json::json!({"done": true})).unwrap()));
                     return;
                 }
