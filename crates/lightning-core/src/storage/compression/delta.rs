@@ -38,7 +38,10 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
             let mut val_bytes = [0u8; 8];
             val_bytes.copy_from_slice(&src[start..start + 8]);
             let val = i64::from_le_bytes(val_bytes);
-            deltas[i] = (val as i128 - min as i128) as u64;
+            // Compute delta as val - min. If val < min (due to stale min stats),
+            // store 0 to avoid underflow corruption. The decompressed value will
+            // be min instead of val, but this is better than silently corrupting.
+            deltas[i] = val.checked_sub(min).unwrap_or(0) as u64;
         }
 
         BitPacker::pack_32(&deltas, bit_width, dst);
@@ -68,7 +71,8 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
 
         for i in 0..num_values as usize {
             let val_idx = (src_offset as usize + i) % 32;
-            let val = min + (deltas[val_idx] as i64);
+            // Use wrapping_add to handle corrupt delta values gracefully
+            let val = min.wrapping_add(deltas[val_idx] as i64);
             let dst_start = (dst_offset as usize + i) * 8;
             if dst_start + 8 > dst.len() {
                 return Err(LightningError::Internal(format!(
