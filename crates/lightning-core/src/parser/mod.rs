@@ -1508,7 +1508,7 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
             "BOOL" => Ok(DataType::Bool),
             "DATE" => Ok(DataType::Date),
             "TIMESTAMP" => Ok(DataType::Timestamp),
-            _ => Ok(DataType::String),
+            unknown => Err(ParserError::Internal(format!("Unknown data type '{}'. Valid types: INT64, INT32, UINT64, DOUBLE, FLOAT, STRING, BOOL, DATE, TIMESTAMP", unknown))),
         },
     }
 }
