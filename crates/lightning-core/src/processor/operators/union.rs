@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 pub struct SharedUnionState {
     pub seen_hashes: RwLock<HashSet<u64>>,
-    /// Rows whose hash collides with another row; stored for full comparison.
-    pub collision_rows: RwLock<Vec<(u64, Vec<Value>)>>,
+    /// Hash → list of rows with that hash (for O(1) collision lookup)
+    pub collision_rows: RwLock<HashMap<u64, Vec<Vec<Value>>>>,
     pub left_exhausted: AtomicBool,
 }
 
@@ -34,7 +34,7 @@ impl PhysicalUnion {
             is_all,
             shared_state: Arc::new(SharedUnionState {
                 seen_hashes: RwLock::new(HashSet::new()),
-                collision_rows: RwLock::new(Vec::new()),
+                collision_rows: RwLock::new(HashMap::new()),
                 left_exhausted: AtomicBool::new(false),
             }),
             local_left_exhausted: false,
@@ -65,10 +65,11 @@ impl PhysicalUnion {
                     // Fast path: hash is unique, definitely a new row
                     filtered_indices.push(i as u64);
                 } else {
-                    // Hash collision: check all collision rows for equality
-                    let is_dup = collisions.iter().any(|(h, r)| *h == hash && r == &row);
+                    // Hash collision: check collision rows for this hash
+                    let entry = collisions.entry(hash).or_default();
+                    let is_dup = entry.iter().any(|r| r == &row);
                     if !is_dup {
-                        collisions.push((hash, row));
+                        entry.push(row);
                         filtered_indices.push(i as u64);
                     }
                 }
