@@ -280,7 +280,10 @@ impl CSRIndex {
         // Pair adjacency values with their src nodes using the offset array
         let mut result = Vec::with_capacity(adj_values.len());
         let mut pos = 0usize;
-        for src in 0..=num_nodes as usize {
+        for src in 0..num_nodes as usize {
+            if src + 1 >= offsets.len() {
+                break;
+            }
             let end = offsets[src + 1] as usize;
             while pos < end && pos < adj_values.len() {
                 result.push((src as u64, adj_values[pos]));
