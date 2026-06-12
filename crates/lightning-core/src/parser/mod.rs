@@ -197,18 +197,18 @@ fn inject_modifiers(
     lmt: Option<f64>,
 ) -> Result<(), ParserError> {
     if let Some(ref e) = ord {
-        if let Ok(p) = CypherParser::parse(Rule::expression, e) {
-            let expr = parse_expression(p.into_iter().next().expect("expected next element"))?;
-            let desc = e.to_uppercase().contains("DESC");
-            for u in &mut q.union_queries {
-                if let Statement::Match(_, _, cs) = &mut u.statement {
-                    for c in cs.iter_mut() {
-                        if let Clause::Return(ref mut r) = c {
-                            r.order_by = Some(vec![OrderByItem {
-                                expression: expr.clone(),
-                                descending: desc,
-                            }]);
-                        }
+        let p = CypherParser::parse(Rule::expression, e)
+            .map_err(|_| ParserError::Internal(format!("Failed to parse ORDER BY expression: '{}'", e)))?;
+        let expr = parse_expression(p.into_iter().next().expect("expected next element"))?;
+        let desc = e.to_uppercase().contains("DESC");
+        for u in &mut q.union_queries {
+            if let Statement::Match(_, _, cs) = &mut u.statement {
+                for c in cs.iter_mut() {
+                    if let Clause::Return(ref mut r) = c {
+                        r.order_by = Some(vec![OrderByItem {
+                            expression: expr.clone(),
+                            descending: desc,
+                        }]);
                     }
                 }
             }
