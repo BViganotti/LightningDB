@@ -329,15 +329,20 @@ impl PhysicalOperator for HashJoin {
             // Vectorized Probe Phase
             while self.left_row_idx < left_num_rows && left_indices.len() < 1024 {
                 if self.is_cross_join {
-                    // Cross join optimized path
-                    if !shared.build_chunks.is_empty() {
-                        let n = shared.build_chunks[0].num_rows();
-                        for build_idx in 0..n {
+                    // Cross join: pair each left row with ALL build rows across ALL chunks.
+                    let mut global_build_idx = 0usize;
+                    for (chunk_i, build_chunk) in shared.build_chunks.iter().enumerate() {
+                        let n = build_chunk.num_rows();
+                        for local_idx in 0..n {
                             left_indices.push(self.left_row_idx as u64);
-                            right_indices.push(Some(build_idx as u64));
+                            right_indices.push(Some(global_build_idx as u64));
                             if left_indices.len() >= 1024 {
                                 break;
                             }
+                            global_build_idx += 1;
+                        }
+                        if left_indices.len() >= 1024 {
+                            break;
                         }
                     }
                 } else {
