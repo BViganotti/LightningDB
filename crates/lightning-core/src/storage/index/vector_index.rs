@@ -77,7 +77,8 @@ impl VectorIndex {
             // SAFETY: SSE dot product with bounds guard `a.len() >= 4`.
             return unsafe { Self::sse_dot(a, b) };
         }
-        a.iter().zip(b.iter()).map(|(x, y)| *x as f64 * *y as f64).sum::<f64>() as f32
+        // Fallback: f32 dot product (matches SIMD precision)
+        a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
     }
 
     /// ARM64 NEON SIMD dot product: processes 4 f32 values per iteration
