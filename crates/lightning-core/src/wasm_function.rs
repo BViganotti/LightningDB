@@ -400,6 +400,9 @@ impl WasmFunction {
                             let write_offset = 0i32;
                             {
                                 let mem_data = mem.data_mut(&mut store);
+                                // Zero the entire memory before each invocation
+                                // to prevent data leakage from previous rows
+                                mem_data.fill(0);
                                 mem_data[..input_len].copy_from_slice(input_bytes);
                             }
 
