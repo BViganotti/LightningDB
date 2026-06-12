@@ -122,8 +122,9 @@ impl Processor {
     /// as they are produced. This enables streaming processing of large
     /// result sets without buffering everything in memory.
     ///
-    /// The receiver yields `Result<DataChunk>`. When the query is complete,
-    /// the channel is closed and `recv()` will return `Err(RecvError)`.
+    /// NOTE: This consumes the physical plan root. Calling execute_stream
+    /// a second time on the same Processor will return an empty result
+    /// because the root has been replaced with a placeholder.
     pub fn execute_stream(
         &mut self,
         database: Arc<crate::Database>,
