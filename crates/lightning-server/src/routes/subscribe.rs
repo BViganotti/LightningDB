@@ -28,8 +28,11 @@ pub async fn subscribe_handler(
                         "entityId": event.entity_id,
                         "operationType": event.operation_type,
                     });
-                    if tx.send(Ok(Event::default().json_data(payload).unwrap())).is_err() {
-                        // Client disconnected — receiver dropped. Exit the bridge thread.
+                    let event_data = match Event::default().json_data(payload) {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+                    if tx.send(Ok(event_data)).is_err() {
                         return;
                     }
                 }
@@ -39,7 +42,9 @@ pub async fn subscribe_handler(
                     continue;
                 }
                 Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                    let _ = tx.send(Ok(Event::default().json_data(serde_json::json!({"done": true})).unwrap()));
+                    if let Ok(event) = Event::default().json_data(serde_json::json!({"done": true})) {
+                        let _ = tx.send(Ok(event));
+                    }
                     return;
                 }
             }
