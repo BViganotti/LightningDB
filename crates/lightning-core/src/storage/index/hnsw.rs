@@ -70,14 +70,14 @@ impl PartialEq for Candidate {
 impl Eq for Candidate {}
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.distance.partial_cmp(&other.distance)
+        Some(self.cmp(other))
     }
 }
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // NaN distances are sorted as Greater (pushes them to the end of the heap)
-        // instead of Equal which would corrupt heap ordering.
-        self.distance.partial_cmp(&other.distance).unwrap_or(std::cmp::Ordering::Greater)
+        // Use total_cmp for a consistent, transitive ordering that handles
+        // NaN deterministically (NaN sorts after all finite values).
+        self.distance.total_cmp(&other.distance)
     }
 }
 
