@@ -105,8 +105,9 @@ impl HashIndex {
             let frame = bm.create_new_version(Arc::clone(self.fh()), idx, tx)?;
             unsafe {
                 let zero8 = 0u64.to_le_bytes();
-                zero8.as_ptr().copy_to(frame.as_ptr(), 8);
-                zero8.as_ptr().copy_to(frame.as_ptr().add(8), 8);
+                // SAFETY: zero8 (stack) and frame (heap) do not overlap.
+                std::ptr::copy_nonoverlapping(zero8.as_ptr(), frame.as_ptr(), 8);
+                std::ptr::copy_nonoverlapping(zero8.as_ptr(), frame.as_ptr().add(8), 8);
             }
             bm.log_page_update(self.file_handle.file_id, idx, frame.as_slice())?;
             bm.unpin_page(self.fh(), idx, frame);
@@ -120,8 +121,9 @@ impl HashIndex {
             unsafe {
                 ptr.write_bytes(0, PAGE_SIZE);
                 let zero8 = 0u64.to_le_bytes();
-                zero8.as_ptr().copy_to(ptr, 8);
-                zero8.as_ptr().copy_to(ptr.add(8), 8);
+                // SAFETY: zero8 (stack) and ptr (heap) do not overlap.
+                std::ptr::copy_nonoverlapping(zero8.as_ptr(), ptr, 8);
+                std::ptr::copy_nonoverlapping(zero8.as_ptr(), ptr.add(8), 8);
             }
             bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(self.fh(), page_idx, frame);
