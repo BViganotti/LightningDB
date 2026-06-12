@@ -17,19 +17,24 @@ impl LimitPushDown {
 
     fn push_down(&self, op: LogicalOperator) -> Result<LogicalOperator> {
         match op {
+            // Push Limit past Projection: LIMIT(PROJECTION(x)) → PROJECTION(LIMIT(x))
+            // This is safe because Projection doesn't change row count.
+            LogicalOperator::Limit(child, limit) => {
+                let pushed_child = self.push_down(*child)?;
+                match pushed_child {
+                    LogicalOperator::Projection(grandchild, items) => {
+                        Ok(LogicalOperator::Projection(
+                            Box::new(LogicalOperator::Limit(grandchild, limit)),
+                            items,
+                        ))
+                    }
+                    _ => Ok(LogicalOperator::Limit(Box::new(pushed_child), limit)),
+                }
+            }
             LogicalOperator::Sort(child, order_by) => {
-                // If child is a Limit, we can't easily push down without Top-K
                 Ok(LogicalOperator::Sort(
                     Box::new(self.push_down(*child)?),
                     order_by,
-                ))
-            }
-            LogicalOperator::Limit(child, limit) => {
-                // Push limit into child if child supports it (e.g. Scan)
-                // For now, simple recursive
-                Ok(LogicalOperator::Limit(
-                    Box::new(self.push_down(*child)?),
-                    limit,
                 ))
             }
             LogicalOperator::Join(left, right, cond) => {
