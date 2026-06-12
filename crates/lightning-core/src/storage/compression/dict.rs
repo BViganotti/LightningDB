@@ -85,6 +85,9 @@ impl CompressionAlg for DictCompression {
         }
 
         let dict_count = {
+            if src.len() < 4 {
+                return Err(LightningError::Internal("Dict decompress: src too short for header".into()));
+            }
             let mut bytes = [0u8; 4];
             bytes.copy_from_slice(&src[..4]);
             u32::from_le_bytes(bytes) as usize
@@ -97,6 +100,13 @@ impl CompressionAlg for DictCompression {
         let dict_start = 4;
         let dict_end = dict_start + dict_count * element_size;
         let packed_start = dict_end;
+
+        if dict_end > src.len() {
+            return Err(LightningError::Internal(format!(
+                "Dict decompress: dict entries exceed src length (dict_end={}, src_len={})",
+                dict_end, src.len()
+            )));
+        }
 
         let bit_width = std::cmp::max(64 - (dict_count as u64).leading_zeros(), 1) as u8;
 
