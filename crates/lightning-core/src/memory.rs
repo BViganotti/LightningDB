@@ -221,7 +221,10 @@ impl MemoryStore {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX))
-            .unwrap_or(0)
+            .unwrap_or_else(|e| {
+                tracing::warn!("SystemTime error: {}. Falling back to 0.", e);
+                0
+            })
     }
 
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
