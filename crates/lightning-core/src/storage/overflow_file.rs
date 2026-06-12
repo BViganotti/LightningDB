@@ -26,6 +26,7 @@ impl OverflowFile {
         const PAGE_SIZE: usize = 4096;
         const NEXT_PTR_SIZE: usize = 4;
         const USABLE_SIZE: usize = PAGE_SIZE - NEXT_PTR_SIZE;
+        const MAX_PAGES: usize = 1_048_576; // Safety limit: ~4GB of overflow pages
 
         if len == 0 {
             return Ok(String::new());
@@ -35,8 +36,23 @@ impl OverflowFile {
         let mut current_page_idx = page_idx;
         let mut current_offset = offset as usize;
         let mut remaining = len as usize;
+        let mut pages_visited = 0usize;
+        let mut seen_pages = std::collections::HashSet::new();
 
         while remaining > 0 {
+            pages_visited += 1;
+            if pages_visited > MAX_PAGES {
+                return Err(LightningError::Internal(format!(
+                    "read_string: exceeded maximum page chain length ({}) — possible corruption",
+                    MAX_PAGES
+                )));
+            }
+            if !seen_pages.insert(current_page_idx) {
+                return Err(LightningError::Internal(format!(
+                    "read_string: cycle detected — page {} visited twice",
+                    current_page_idx
+                )));
+            }
             if current_offset > USABLE_SIZE {
                 return Err(LightningError::Internal(format!(
                     "read_string: offset {} exceeds usable page size {}", current_offset, USABLE_SIZE
