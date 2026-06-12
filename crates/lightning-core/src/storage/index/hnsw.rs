@@ -8,7 +8,18 @@ use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 thread_local! {
-    static RNG_STATE: RefCell<u64> = const { RefCell::new(12345) };
+    // Use a unique seed per thread based on time + thread address
+    static RNG_STATE: RefCell<u64> = {
+        let mut seed: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xdeadbeef);
+        // Mix in stack address for per-thread uniqueness
+        let stack_var: u64 = &seed as *const u64 as u64;
+        seed ^= stack_var.wrapping_mul(6364136223846793005);
+        if seed == 0 { seed = 1; }
+        RefCell::new(seed)
+    };
 }
 
 const HNSW_MAGIC: [u8; 4] = *b"HNSW";
