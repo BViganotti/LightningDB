@@ -128,7 +128,7 @@ impl WAL {
             .max()
             .map(|s| s + 1)
             .unwrap_or(0);
-        self.archive_seq.store(max_seq, Ordering::Relaxed);
+        self.archive_seq.store(max_seq, Ordering::Release);
         self.archive_path = Some(dir);
         Ok(())
     }
@@ -416,7 +416,7 @@ impl WAL {
         if let Some(ref archive_dir) = self.archive_path {
             let current_len = file.metadata()?.len();
             if current_len > WAL_HEADER_SIZE as u64 {
-                let seq = self.archive_seq.fetch_add(1, Ordering::Relaxed);
+                let seq = self.archive_seq.fetch_add(1, Ordering::AcqRel);
                 let archive_name = format!("wal_{seq}.lbug");
                 let archive_path = archive_dir.join(&archive_name);
                 file.seek(SeekFrom::Start(0))?;
