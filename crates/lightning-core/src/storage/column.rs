@@ -1247,7 +1247,14 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.dirty.store(true, Ordering::Release);
-        self.pending_nulls.lock().push((row_id as usize, if is_null { 1 } else { 0 }));
+        let mut pending = self.pending_nulls.lock();
+        pending.push((row_id as usize, if is_null { 1 } else { 0 }));
+        if pending.len() > 100_000 {
+            tracing::warn!(
+                "pending_nulls for column '{}' has {} entries — consider flushing more frequently",
+                self.name, pending.len()
+            );
+        }
         Ok(())
     }
 
