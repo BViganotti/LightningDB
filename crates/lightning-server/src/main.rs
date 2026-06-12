@@ -59,14 +59,20 @@ async fn main() {
     );
 
     let db = Database::open_with_config(&db_path, config.system_config())
-        .expect("Failed to open database");
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to open database at '{}': {}", db_path.display(), e);
+            std::process::exit(1);
+        });
 
     let conn = db.connect();
     let store = MemoryStore::new(conn, config.embedding_dim);
 
     store
         .ensure_schema()
-        .expect("Failed to initialize memory schema");
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to initialize memory schema: {}", e);
+            std::process::exit(1);
+        });
 
     let state = server::AppState::new(db, store, config);
 
