@@ -100,10 +100,12 @@ async fn request_id_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
+    const MAX_REQUEST_ID_LEN: usize = 256;
     let request_id = req
         .headers()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
+        .filter(|s| s.len() <= MAX_REQUEST_ID_LEN)
         .map(|s| s.to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
