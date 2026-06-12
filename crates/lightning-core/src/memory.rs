@@ -443,24 +443,32 @@ impl MemoryStore {
         let conn = self.conn.client_context.database.clone();
         let embed_dim = self.embedding_dim;
 
-        std::thread::spawn(move || {
-            let new_conn = conn.connect();
-            let store = MemoryStore::new(new_conn, embed_dim);
-            let results = match store.recall(&query_text, &embedding, top_k) {
-                Ok(r) => r,
-                Err(e) => {
-                    if tx.send(Err(e)).is_err() {
-                        tracing::warn!("MemoryStore: recall_stream channel closed, dropping error");
+        // NOTE: This spawns a new thread per call. Under high concurrency,
+        // this could create many threads. A production system should use a
+        // bounded thread pool or async runtime instead.
+        std::thread::Builder::new()
+            .name("recall_stream".into())
+            .spawn(move || {
+                let new_conn = conn.connect();
+                let store = MemoryStore::new(new_conn, embed_dim);
+                let results = match store.recall(&query_text, &embedding, top_k) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        if tx.send(Err(e)).is_err() {
+                            tracing::warn!("MemoryStore: recall_stream channel closed, dropping error");
+                        }
+                        return;
                     }
-                    return;
+                };
+                for r in results {
+                    if tx.send(Ok(r)).is_err() {
+                        break;
+                    }
                 }
-            };
-            for r in results {
-                if tx.send(Ok(r)).is_err() {
-                    break;
-                }
-            }
-        });
+            })
+            .map_err(|e| crate::LightningError::Internal(format!(
+                "Failed to spawn recall_stream thread: {e}"
+            )))?;
 
         Ok(rx)
     }
