@@ -417,7 +417,7 @@ impl MemoryStore {
             .into_iter()
             .map(|(_, (entity, score))| SearchResult { entity, score })
             .collect();
-        sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).expect("infallible: scores are finite"));
+        sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(top_k);
         Ok(sorted)
     }
@@ -566,7 +566,7 @@ impl MemoryStore {
                 + config.degree_weight * deg;
             *score = composite;
         }
-        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).expect("infallible: scores are finite"));
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Phase 5: Cross-encoder reranking if configured
         if !config.cross_encoder_wasm.is_empty() {
@@ -590,7 +590,7 @@ impl MemoryStore {
                 }
             }
             // Re-rank by cross-encoder score
-            cross_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).expect("infallible: scores are finite"));
+            cross_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let re_ranked: Vec<(MemoryEntity, f64)> = cross_scores
                 .into_iter()
                 .map(|(idx, ce_score)| (ranked[idx].0.clone(), ce_score))
@@ -861,7 +861,7 @@ impl MemoryStore {
             }
 
             let mut ranked: Vec<(usize, f64)> = rank.into_iter().enumerate().collect();
-            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).expect("infallible: scores are finite"));
+            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             let top_n = std::cmp::min(10, n);
             if top_n > 0 {
                 let mut unwind_parts: Vec<String> = Vec::with_capacity(top_n);
