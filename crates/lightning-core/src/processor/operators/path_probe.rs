@@ -71,7 +71,10 @@ impl PhysicalOperator for PhysicalPathPropertyProbe {
             let mut columns = chunk.batch.columns().to_vec();
             let json_props: Vec<Value> = path_properties
                 .into_iter()
-                .map(|p| Value::String(format!("{p:?}")))
+                .map(|p| {
+                    let json_val = p.to_json();
+                    Value::String(serde_json::to_string(&json_val).unwrap_or_default())
+                })
                 .collect();
             columns.push(crate::processor::arrow_utils::values_to_array(
                 &json_props,
