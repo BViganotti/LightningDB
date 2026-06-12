@@ -303,7 +303,12 @@ impl BoundExpression {
             BoundExpression::Function(_, _, t) => t.clone(),
             BoundExpression::List(_, t) => t.clone(),
             BoundExpression::Case { return_type, .. } => return_type.clone(),
-            BoundExpression::Aggregate(_, _, _) => LogicalType::Any,
+            BoundExpression::Aggregate(name, _, _) => match name.as_str() {
+                "count" | "count_distinct" => LogicalType::Int64,
+                "sum" | "avg" | "min" | "max" => LogicalType::Double,
+                "collect" => LogicalType::List(Box::new(LogicalType::Any)),
+                _ => LogicalType::Any,
+            },
             BoundExpression::Lambda(_, body) => LogicalType::Lambda(Box::new(body.get_type())),
             BoundExpression::Parameter(_) => LogicalType::Any,
             BoundExpression::NextVal(_) => LogicalType::Uint64,
