@@ -245,26 +245,36 @@ impl FilterPushDown {
 
                 match pushed_child {
                     LogicalOperator::Scan(table, var, mask, projected, filter) => {
-                        // Push filter into scan operator
-                        // The scan operator will use padded batches to handle column indices
-                        let new_filter = match filter {
-                            Some(existing) => {
-                                // Combine existing filter with new condition
-                                BoundExpression::Logical(
-                                    Box::new(existing),
-                                    crate::parser::ast::LogicalOperator::And,
-                                    Box::new(condition),
-                                )
-                            }
-                            None => condition,
-                        };
-                        Ok(LogicalOperator::Scan(
-                            table,
-                            var,
-                            mask,
-                            projected,
-                            Some(new_filter),
-                        ))
+                        // Only push filter into scan if ALL variables in the
+                        // condition belong to this scan (prevents pushing filters
+                        // that reference variables from other parts of the query).
+                        let mut scan_vars = HashSet::new();
+                        scan_vars.insert(var.clone());
+                        if condition_vars.is_subset(&scan_vars) {
+                            let new_filter = match filter {
+                                Some(existing) => {
+                                    BoundExpression::Logical(
+                                        Box::new(existing),
+                                        crate::parser::ast::LogicalOperator::And,
+                                        Box::new(condition),
+                                    )
+                                }
+                                None => condition,
+                            };
+                            Ok(LogicalOperator::Scan(
+                                table,
+                                var,
+                                mask,
+                                projected,
+                                Some(new_filter),
+                            ))
+                        } else {
+                            // Can't push into this scan — keep filter above
+                            Ok(LogicalOperator::Filter(
+                                Box::new(LogicalOperator::Scan(table, var, mask, projected, filter)),
+                                condition,
+                            ))
+                        }
                     }
                     LogicalOperator::Join(left, right, join_cond) => {
                         let mut left_vars = HashSet::new();
