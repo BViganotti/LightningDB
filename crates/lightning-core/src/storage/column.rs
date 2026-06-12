@@ -743,10 +743,12 @@ impl Column {
             }
         }
 
-        // Pre-read overflow file if needed — we need it for overflow strings
+        // Pre-read overflow file if needed — we need it for overflow strings.
+        // Limit to a reasonable number of pages to prevent OOM on large files.
+        const MAX_OVERFLOW_PAGES: usize = 1024; // 4MB max pre-read
         let overflow_data: Vec<u8> = if self.overflow_fh.is_some() {
             let ofh = self.overflow_fh.as_ref().expect("overflow file handle required");
-            let num_of_pages = ofh.get_num_pages() as usize;
+            let num_of_pages = (ofh.get_num_pages() as usize).min(MAX_OVERFLOW_PAGES);
             if num_of_pages > 0 {
                 let mut buf = vec![0u8; num_of_pages * 4096];
                 let _ = ofh.read_pages(0, num_of_pages as u64, &mut buf);
