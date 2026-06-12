@@ -146,11 +146,14 @@ impl HnswIndex {
 
     fn random_level(&self) -> usize {
         let ml = (self.config.M as f64).ln();
+        const MAX_LEVEL: usize = 64;
         RNG_STATE.with(|state| {
             let mut rng = state.borrow_mut();
             *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let u = (*rng >> 33) as f64 / (1u64 << 31) as f64;
-            (-u.ln() * ml) as usize
+            let bits = (*rng >> 33) as u64;
+            // Avoid log(0) = -infinity by ensuring u > 0
+            let u = ((bits | 1) as f64) / (1u64 << 31) as f64;
+            ((-u.ln() * ml) as usize).min(MAX_LEVEL)
         })
     }
 
