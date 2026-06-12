@@ -666,10 +666,6 @@ impl<'a> Binder<'a> {
             Statement::Checkpoint => Ok(BoundStatement::Checkpoint),
             Statement::Vacuum => Ok(BoundStatement::Vacuum),
             Statement::StandaloneCall(name, args) => {
-                let _parameters: Vec<BoundExpression> = args
-                    .iter()
-                    .map(|a| BoundExpression::Literal(a.clone()))
-                    .collect();
                 Ok(BoundStatement::StandaloneCall(name.clone(), args.clone()))
             }
             Statement::CreateSequence {
