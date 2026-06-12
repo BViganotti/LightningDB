@@ -40,9 +40,11 @@ impl CompressionAlg for DictCompression {
 
         // Write dict count (4 bytes)
         let dict_count = dict.len() as u32;
-        if dst.len() < 4 + dict.len() * 8 + 32 {
-            // Rough check
-            return Ok((0, 0));
+        if dst.len() < 4 + dict.len() * element_size + 32 {
+            return Err(crate::LightningError::Internal(format!(
+                "Dict compress: dst buffer too small ({} bytes needed, {} available)",
+                4 + dict.len() * element_size + 32, dst.len()
+            )));
         }
 
         dst[0..4].copy_from_slice(&dict_count.to_le_bytes());
