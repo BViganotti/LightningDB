@@ -136,6 +136,11 @@ impl OverflowFile {
         if data_len == 0 {
             return Ok((0, 0));
         }
+        if data_len > u32::MAX as usize {
+            return Err(crate::LightningError::Internal(format!(
+                "String length {} exceeds maximum overflow size ({})", data_len, u32::MAX
+            )));
+        }
 
         let first_page_idx = self.file_handle.add_new_page()? as u32;
         let mut current_page_idx = first_page_idx;
