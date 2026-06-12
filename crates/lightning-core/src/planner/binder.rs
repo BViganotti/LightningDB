@@ -1264,7 +1264,10 @@ impl<'a> Binder<'a> {
         for item in &return_clause.items {
             match item {
                 ProjectionItem::Star => {
-                    for (var_name, var_binding) in &self.variables {
+                    // Sort variables by name for deterministic column order
+                    let mut sorted_vars: Vec<_> = self.variables.iter().collect();
+                    sorted_vars.sort_by_key(|(name, _)| name.clone());
+                    for (var_name, var_binding) in sorted_vars {
                         let table_info = if let Some(t) =
                             self.catalog.get_node_table(&var_binding.table_name)
                         {
