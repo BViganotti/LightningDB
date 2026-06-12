@@ -3,6 +3,7 @@
 # Stage 1: Build the lightning-server binary
 # ============================================================
 FROM rust:1.88-slim-bookworm AS builder
+ARG CACHEBUST=0
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,7 +22,7 @@ COPY crates/lightning/src/ crates/lightning/src/
 COPY crates/lightning-server/Cargo.toml crates/lightning-server/
 COPY crates/lightning-server/src/ crates/lightning-server/src/
 
-RUN cargo build --release -p lightning-server && \
+RUN echo "build ${CACHEBUST}" && cargo build --release -p lightning-server && \
     cp target/release/lightning-server /lightning-server
 
 # ============================================================

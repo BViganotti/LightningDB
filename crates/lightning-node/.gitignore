@@ -1,6 +1,0 @@
-*.node
-index.js
-index.d.ts
-npm/
-artifacts/
-target/

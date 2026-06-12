@@ -199,6 +199,9 @@ impl MemoryStore {
                 if let Err(e) = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim) {
                     tracing::warn!("MemoryStore: failed to create vector index for {}: {}", ENTITY_TABLE, e);
                 }
+                if let Err(e) = storage.create_csr(RELATES_TABLE) {
+                    tracing::warn!("MemoryStore: failed to create CSR for {}: {}", RELATES_TABLE, e);
+                }
             }
         }
 
@@ -710,15 +713,14 @@ impl MemoryStore {
     pub fn entity_history(&self, entity_id: &str) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = '{}' \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.valid_from DESC"
+             ORDER BY e.valid_from DESC",
+            entity_id.replace('\'', "\\'")
         );
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(entity_id.to_string()));
-        let res = self.conn.execute(&query, Some(params))?;
+        let res = self.conn.execute(&query, None)?;
         Ok(self.batches_to_entities(&res.batches))
     }
 
