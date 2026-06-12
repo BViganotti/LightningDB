@@ -331,10 +331,28 @@ impl PartialOrd for Value {
             (Value::Number(n1), Value::Number(n2)) => n1.partial_cmp(n2),
             (Value::Boolean(b1), Value::Boolean(b2)) => b1.partial_cmp(b2),
             (Value::Null, Value::Null) => Some(std::cmp::Ordering::Equal),
+            (Value::Null, _) => Some(std::cmp::Ordering::Less),
+            (_, Value::Null) => Some(std::cmp::Ordering::Greater),
             (Value::Node(id1), Value::Node(id2)) => id1.partial_cmp(id2),
+            (Value::Relationship(id1), Value::Relationship(id2)) => id1.partial_cmp(id2),
             (Value::Date(d1), Value::Date(d2)) => d1.partial_cmp(d2),
             (Value::Timestamp(t1), Value::Timestamp(t2)) => t1.partial_cmp(t2),
-            _ => None,
+            (Value::List(l1), Value::List(l2)) => {
+                // Lexicographic comparison of lists
+                for (a, b) in l1.iter().zip(l2.iter()) {
+                    match a.partial_cmp(b) {
+                        Some(std::cmp::Ordering::Equal) => continue,
+                        other => return other,
+                    }
+                }
+                l1.len().partial_cmp(&l2.len())
+            }
+            _ => {
+                // For incomparable types, use string representation
+                let s1 = format!("{:?}", self);
+                let s2 = format!("{:?}", other);
+                s1.partial_cmp(&s2)
+            }
         }
     }
 }
