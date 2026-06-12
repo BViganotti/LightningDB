@@ -726,7 +726,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                     .expect("internal invariant violated")
                     .as_str()
                     .parse::<f64>()
-                    .unwrap_or(0.0);
+                    .map_err(|e| ParserError::Internal(format!("Invalid SKIP value: {e}")))?;
                 skip = Some(val);
             }
             Rule::limit_clause => {
@@ -736,7 +736,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                     .expect("internal invariant violated")
                     .as_str()
                     .parse::<f64>()
-                    .unwrap_or(0.0);
+                    .map_err(|e| ParserError::Internal(format!("Invalid LIMIT value: {e}")))?;
                 limit = Some(val);
             }
             _ => {}
