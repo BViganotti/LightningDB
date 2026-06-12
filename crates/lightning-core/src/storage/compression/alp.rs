@@ -70,6 +70,9 @@ impl Alp {
                 Self::NEG_INF_SENTINEL
             };
         }
+        if (exp_idx as usize) >= Self::EXP_ARR.len() || (fac_idx as usize) >= Self::FACTOR_ARR.len() {
+            return 0;
+        }
         let tmp = val * Self::EXP_ARR[exp_idx as usize] / Self::FACTOR_ARR[fac_idx as usize];
         if !tmp.is_finite() {
             return if tmp.is_sign_positive() || tmp.is_nan() {
@@ -94,7 +97,12 @@ impl Alp {
             Self::NAN_SENTINEL => f64::NAN,
             Self::POS_INF_SENTINEL => f64::INFINITY,
             Self::NEG_INF_SENTINEL => f64::NEG_INFINITY,
-            _ => (encoded as f64) * Self::FACTOR_ARR[fac_idx as usize] * Self::FRAC_ARR[exp_idx as usize],
+            _ => {
+                if (fac_idx as usize) >= Self::FACTOR_ARR.len() || (exp_idx as usize) >= Self::FRAC_ARR.len() {
+                    return 0.0;
+                }
+                (encoded as f64) * Self::FACTOR_ARR[fac_idx as usize] * Self::FRAC_ARR[exp_idx as usize]
+            }
         }
     }
 }
