@@ -195,7 +195,7 @@ impl FunctionRegistry {
                     let f64_arg = arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let result: arrow::array::Float64Array =
                         f64_arg.iter().map(|opt_n| opt_n.map(|n| n.abs())).collect();
                     Ok(Arc::new(result))
@@ -223,7 +223,7 @@ impl FunctionRegistry {
                         let f64_arg = arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let result: arrow::array::Float64Array = match *name {
                             "CEIL" => f64_arg
                                 .iter()
@@ -473,7 +473,7 @@ impl FunctionRegistry {
                         let s_array = string_array
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         for i in 0..args[0].len() {
                             if !s_array.is_null(i) {
                                 result_vec[i].push_str(s_array.value(i));
@@ -635,11 +635,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || start_arr.is_null(i) {
@@ -652,7 +652,7 @@ impl FunctionRegistry {
                             let l_arr = l
                                 .as_any()
                                 .downcast_ref::<arrow::array::Int64Array>()
-                                .expect("type mismatch in function");
+                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                             if l_arr.is_null(i) {
                                 result.append_null();
                                 continue;
@@ -690,15 +690,15 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let from_arr = from_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let to_arr = to_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || from_arr.is_null(i) || to_arr.is_null(i) {
@@ -851,11 +851,11 @@ impl FunctionRegistry {
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let end_arr = end_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let step_arr = step_arg.as_ref().map(|a| {
                         a.as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
@@ -1085,11 +1085,11 @@ impl FunctionRegistry {
                         let base_arr = base
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let pattern_arr = pattern
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if base_arr.is_null(i) || pattern_arr.is_null(i) {
@@ -1137,11 +1137,11 @@ impl FunctionRegistry {
                         let s_arr = s_arg
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results =
                             arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 8);
                         for i in 0..num_rows {
@@ -1184,11 +1184,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1254,7 +1254,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         // Vectorized: use Arrow unary kernel instead of per-row loop
                         use arrow::compute::kernels::arity::unary;
                         use arrow::datatypes::Float64Type;
@@ -1310,7 +1310,7 @@ impl FunctionRegistry {
                                 }
                                 crate::processor::Value::Timestamp(micros) => {
                                     let dt = chrono::DateTime::from_timestamp_micros(micros)
-                                        .expect("type mismatch in function")
+                                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?
                                         .naive_utc();
                                     use chrono::{Datelike, Timelike};
                                     let res = match *name {
@@ -1353,11 +1353,11 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -1388,11 +1388,11 @@ impl FunctionRegistry {
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if n_arr.is_null(i) || d_arr.is_null(i) || d_arr.value(i) == 0 {
@@ -1424,11 +1424,11 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
 
                     let mut results = Vec::with_capacity(num_rows);
                     for i in 0..num_rows {
@@ -1783,7 +1783,7 @@ impl FunctionRegistry {
                                                 dt.checked_sub_months(chrono::Months::new(
                                                     count.unsigned_abs() as u32,
                                                 ))
-                                                .expect("type mismatch in function")
+                                                .expect("date arithmetic overflow")
                                             } else {
                                                 d
                                             }
@@ -1875,11 +1875,11 @@ impl FunctionRegistry {
                         let arr1 = a1
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let arr2 = a2
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr1.is_null(i) || arr2.is_null(i) {
@@ -1922,7 +1922,7 @@ impl FunctionRegistry {
                         let arr = a
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr.is_null(i) {
@@ -1959,7 +1959,7 @@ impl FunctionRegistry {
                     let sep_arr = sep_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1976,7 +1976,7 @@ impl FunctionRegistry {
                             let s_arr = s_arg
                                 .as_any()
                                 .downcast_ref::<arrow::array::StringArray>()
-                                .expect("type mismatch in function");
+                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                             if !s_arr.is_null(i) {
                                 parts.push(s_arr.value(i).to_string());
                             }
@@ -2181,11 +2181,11 @@ impl FunctionRegistry {
                     let y_arr = y_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let x_arr = x_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if y_arr.is_null(i) || x_arr.is_null(i) {
@@ -2217,7 +2217,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -2369,7 +2369,7 @@ impl FunctionRegistry {
                         ) = (&unit_val, &d_val)
                         {
                             let dt = chrono::DateTime::from_timestamp_micros(*micros)
-                                .expect("type mismatch in function")
+                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?
                                 .naive_utc();
                             use chrono::{Datelike, Timelike};
                             let res = match unit.to_lowercase().as_str() {
@@ -3140,7 +3140,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -3181,11 +3181,11 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .expect("type mismatch in function");
+                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -3242,7 +3242,7 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .expect("type mismatch in function");
+                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
