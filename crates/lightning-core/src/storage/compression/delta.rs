@@ -71,8 +71,11 @@ impl CompressionAlg for FixedFrameOfReferenceAlg {
 
         for i in 0..num_values as usize {
             let val_idx = (src_offset as usize + i) % 32;
-            // Use wrapping_add to handle corrupt delta values gracefully
-            let val = min.wrapping_add(deltas[val_idx] as i64);
+            // Use wrapping arithmetic to handle corrupt delta values gracefully.
+            // u64 → i64 cast wraps for values > i64::MAX, which is fine since
+            // we're adding to min and storing the result as i64 anyway.
+            let delta_i64 = deltas[val_idx] as i64; // wrapping cast
+            let val = min.wrapping_add(delta_i64);
             let dst_start = (dst_offset as usize + i) * 8;
             if dst_start + 8 > dst.len() {
                 return Err(LightningError::Internal(format!(
