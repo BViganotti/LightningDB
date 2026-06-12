@@ -68,9 +68,17 @@ impl PageState {
     }
 
     pub fn unlock(&self) {
-        let old_val = self.state_and_version.load(Ordering::Acquire);
-        let new_val = self.update_state_and_increment_version(old_val, Self::UNLOCKED);
-        self.state_and_version.store(new_val, Ordering::Release);
+        // Use CAS loop to avoid losing concurrent dirty/referenced bit updates
+        loop {
+            let old_val = self.state_and_version.load(Ordering::Acquire);
+            let new_val = self.update_state_and_increment_version(old_val, Self::UNLOCKED);
+            match self.state_and_version.compare_exchange_weak(
+                old_val, new_val, Ordering::Release, Ordering::Acquire
+            ) {
+                Ok(_) => break,
+                Err(_) => continue, // Retry if another thread modified state
+            }
+        }
     }
 
     pub fn set_dirty(&self) {
