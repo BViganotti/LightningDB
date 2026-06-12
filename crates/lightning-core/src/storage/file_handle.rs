@@ -128,6 +128,11 @@ impl FileHandle {
                     if (freed_page as usize) < page_states.len() {
                         page_states[freed_page as usize] = PageState::new();
                     }
+                    // NOTE: The freed page's old data may still be on disk.
+                    // The buffer manager creates a zeroed in-memory version,
+                    // but the old data persists on disk until the new version
+                    // is flushed. For sensitive data, a flush-on-free policy
+                    // would be needed.
                     return Ok(freed_page);
                 }
             }
