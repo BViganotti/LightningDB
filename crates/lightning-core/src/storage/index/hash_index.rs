@@ -474,7 +474,9 @@ impl HashIndex {
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<u64> {
-        let new_idx = self.file_handle.get_num_pages();
+        // add_new_page atomically increments the page count, preventing
+        // two threads from allocating the same page index.
+        let new_idx = self.file_handle.add_new_page()?;
         let frame = bm.create_new_version(Arc::clone(&self.file_handle), new_idx, tx)?;
         let ptr = frame.as_ptr();
         unsafe {
