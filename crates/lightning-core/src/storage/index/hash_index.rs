@@ -244,59 +244,73 @@ impl HashIndex {
     }
 
     fn compute_hash(val: &Value) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        Self::hash_value(val, &mut h);
+        h.finish() & !DELETED_BIT
+    }
+
+    fn hash_value<H: std::hash::Hasher>(val: &Value, h: &mut H) {
         use std::hash::Hash;
-        let hash = match val {
-            Value::Number(n) => n.to_bits(),
-            Value::String(s) => {
-                let mut h = 0u64;
-                for chunk in s.as_bytes().chunks(8) {
-                    let mut buf = [0u8; 8];
-                    buf[..chunk.len()].copy_from_slice(chunk);
-                    h = h.wrapping_mul(6364136223846793005).wrapping_add(u64::from_le_bytes(buf));;
-                }
-                h
+        match val {
+            Value::Number(n) => {
+                0u8.hash(h);
+                n.to_bits().hash(h);
             }
-            Value::Boolean(b) => *b as u64,
-            Value::Node(id) | Value::Relationship(id) => *id,
-            Value::Date(d) => *d as u64,
-            Value::Timestamp(t) => *t as u64,
-            Value::Null => 0u64,
+            Value::String(s) => {
+                1u8.hash(h);
+                s.hash(h);
+            }
+            Value::Boolean(b) => {
+                2u8.hash(h);
+                b.hash(h);
+            }
+            Value::Node(id) | Value::Relationship(id) => {
+                3u8.hash(h);
+                id.hash(h);
+            }
+            Value::Date(d) => {
+                4u8.hash(h);
+                d.hash(h);
+            }
+            Value::Timestamp(t) => {
+                5u8.hash(h);
+                t.hash(h);
+            }
+            Value::Null => {
+                6u8.hash(h);
+            }
             Value::Path(vals) => {
-                let mut h: u64 = 0x6b821c9b;
+                7u8.hash(h);
+                vals.len().hash(h);
                 for v in vals {
-                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                    Self::hash_value(v, h);
                 }
-                h
             }
             Value::List(vals) => {
-                let mut h: u64 = 0x37e9c8a3;
+                8u8.hash(h);
+                vals.len().hash(h);
                 for v in vals {
-                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                    Self::hash_value(v, h);
                 }
-                h
             }
             Value::Struct(fields) => {
-                let mut h: u64 = 0x1429c4e7;
+                9u8.hash(h);
+                fields.len().hash(h);
                 for (name, v) in fields {
-                    for chunk in name.as_bytes().chunks(8) {
-                        let mut buf = [0u8; 8];
-                        buf[..chunk.len()].copy_from_slice(chunk);
-                        h = h.wrapping_mul(6364136223846793005).wrapping_add(u64::from_le_bytes(buf));
-                    }
-                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                    name.hash(h);
+                    Self::hash_value(v, h);
                 }
-                h
             }
             Value::Map(entries) => {
-                let mut h: u64 = 0x9e3a1c7d;
+                10u8.hash(h);
+                entries.len().hash(h);
                 for (k, v) in entries {
-                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(k));
-                    h = h.wrapping_mul(31).wrapping_add(Self::compute_hash(v));
+                    Self::hash_value(k, h);
+                    Self::hash_value(v, h);
                 }
-                h
             }
-        };
-        hash & !DELETED_BIT
+        }
     }
     fn serialize_value(val: &Value, buf: &mut [u8]) -> Result<()> {
         match val {
