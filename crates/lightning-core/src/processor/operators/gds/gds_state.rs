@@ -27,8 +27,10 @@ impl GDSFrontier {
 
     pub fn visit(&self, node_id: usize, distance: u32) -> bool {
         // Returns true if we successfully visited for the first time
+        // AcqRel is sufficient: Release makes our distance visible to other
+        // threads, Acquire sees their prior writes.
         let first_visit = self.nodes[node_id]
-            .compare_exchange(u32::MAX, distance, Ordering::SeqCst, Ordering::Acquire)
+            .compare_exchange(u32::MAX, distance, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         if first_visit {
             self.active_nodes.lock().unwrap().push(node_id as u32);
