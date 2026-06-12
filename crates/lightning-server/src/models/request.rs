@@ -52,6 +52,24 @@ pub struct StoreRequest {
     pub valid_until: Option<i64>,
 }
 
+const MAX_ID_LENGTH: usize = 4096;
+const MAX_CONTENT_LENGTH: usize = 1_000_000;
+
+impl StoreRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.is_empty() {
+            return Err("id cannot be empty".into());
+        }
+        if self.id.len() > MAX_ID_LENGTH {
+            return Err(format!("id length ({}) exceeds maximum ({})", self.id.len(), MAX_ID_LENGTH));
+        }
+        if self.content.len() > MAX_CONTENT_LENGTH {
+            return Err(format!("content length ({}) exceeds maximum ({})", self.content.len(), MAX_CONTENT_LENGTH));
+        }
+        Ok(())
+    }
+}
+
 fn default_entity_type() -> String {
     "memory".to_string()
 }
