@@ -20,11 +20,7 @@ pub async fn query_handler(
     let start = std::time::Instant::now();
 
     let query_str = req.query.clone();
-    let timeout_ms = if req.timeout_ms > 0 {
-        req.timeout_ms
-    } else {
-        state.config.query_timeout_ms.unwrap_or(30_000)
-    };
+    let timeout_ms = req.effective_timeout_ms();
     let timeout_dur = std::time::Duration::from_millis(timeout_ms);
 
     let params = req.params.map(|p| {

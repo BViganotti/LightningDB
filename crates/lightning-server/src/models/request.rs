@@ -14,8 +14,17 @@ pub struct QueryRequest {
     pub timeout_ms: u64,
 }
 
+const MAX_TIMEOUT_MS: u64 = 300_000; // 5 minutes max
+
 fn default_timeout() -> u64 {
     30000
+}
+
+impl QueryRequest {
+    pub fn effective_timeout_ms(&self) -> u64 {
+        let requested = if self.timeout_ms > 0 { self.timeout_ms } else { default_timeout() };
+        requested.min(MAX_TIMEOUT_MS)
+    }
 }
 
 #[derive(Debug, Deserialize)]
