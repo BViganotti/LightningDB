@@ -216,6 +216,7 @@ impl LogicalOperator {
             | LogicalOperator::Explain(c)
             | LogicalOperator::Accumulate(c)
             | LogicalOperator::Distinct(c, _)
+            | LogicalOperator::Profile(c)
             | LogicalOperator::SemiJoin(c, ..) => *c = Box::new(new_child),
             LogicalOperator::Join(l, _, _) | LogicalOperator::Union(l, _, _) => {
                 *l = Box::new(new_child);
