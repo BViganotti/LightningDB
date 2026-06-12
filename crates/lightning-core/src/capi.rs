@@ -142,8 +142,15 @@ pub extern "C" fn lightning_query_result_get_error_message(
     }
 }
 
+/// Free a string returned by a `lightning_*` function.
+///
+/// # Safety
+/// `s` must be a pointer previously returned by a `lightning_*` function
+/// that returns `*mut c_char` (e.g., `lightning_query_result_get_error_message`).
+/// Passing any other pointer (stack-allocated, malloc'd, already freed, etc.)
+/// is undefined behavior. After this call, `s` must not be used again.
 #[no_mangle]
-pub extern "C" fn lightning_destroy_string(s: *mut c_char) {
+pub unsafe extern "C" fn lightning_destroy_string(s: *mut c_char) {
     if !s.is_null() {
         let _ = unsafe { CString::from_raw(s) };
     }

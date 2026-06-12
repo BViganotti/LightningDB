@@ -103,11 +103,15 @@ pub extern "C" fn lightning_close(conn: *mut LightningConnection) {
     }
 }
 
+/// Free a string returned by `lightning_query`.
+///
+/// # Safety
+/// `s` must be a pointer previously returned by `lightning_query`.
+/// Passing any other pointer is undefined behavior. After this call,
+/// `s` must not be used again.
 #[no_mangle]
-pub extern "C" fn lightning_free_string(s: *mut c_char) {
+pub unsafe extern "C" fn lightning_free_string(s: *mut c_char) {
     if !s.is_null() {
-        unsafe {
-            let _ = CString::from_raw(s);
-        }
+        let _ = unsafe { CString::from_raw(s) };
     }
 }
