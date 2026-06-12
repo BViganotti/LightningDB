@@ -290,6 +290,11 @@ impl Table {
                             wb.size_bytes += s.len();
                         }
                         wb.columns[col_idx].push(val.clone());
+                    } else {
+                        tracing::warn!(
+                            "append_row: ignoring extra value at column index {} (table has {} columns)",
+                            col_idx, wb.columns.len()
+                        );
                     }
                 }
                 wb.row_ids.push(next_id);
