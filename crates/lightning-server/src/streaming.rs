@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int64Array, StringArray, UInt64Array,
 };
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use futures::stream::Stream;
 
@@ -16,31 +17,35 @@ pub fn arrow_row_to_json(batch: &RecordBatch, row_idx: usize) -> serde_json::Val
             serde_json::Value::Null
         } else {
             match arr.data_type() {
-                t if t == &arrow::datatypes::DataType::Int64 => {
-                    let c = arr.as_any().downcast_ref::<Int64Array>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::Int64 => {
+                    arr.as_any().downcast_ref::<Int64Array>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
-                t if t == &arrow::datatypes::DataType::UInt64 => {
-                    let c = arr.as_any().downcast_ref::<UInt64Array>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::UInt64 => {
+                    arr.as_any().downcast_ref::<UInt64Array>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
-                t if t == &arrow::datatypes::DataType::Float32 => {
-                    let c = arr.as_any().downcast_ref::<Float32Array>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::Float32 => {
+                    arr.as_any().downcast_ref::<Float32Array>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
-                t if t == &arrow::datatypes::DataType::Float64 => {
-                    let c = arr.as_any().downcast_ref::<Float64Array>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::Float64 => {
+                    arr.as_any().downcast_ref::<Float64Array>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
-                t if t == &arrow::datatypes::DataType::Boolean => {
-                    let c = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::Boolean => {
+                    arr.as_any().downcast_ref::<BooleanArray>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
-                t if t == &arrow::datatypes::DataType::Utf8
-                    || t == &arrow::datatypes::DataType::LargeUtf8 =>
-                {
-                    let c = arr.as_any().downcast_ref::<StringArray>().unwrap();
-                    serde_json::json!(c.value(row_idx))
+                DataType::Utf8 | DataType::LargeUtf8 => {
+                    arr.as_any().downcast_ref::<StringArray>()
+                        .map(|c| serde_json::json!(c.value(row_idx)))
+                        .unwrap_or(serde_json::Value::Null)
                 }
                 _ => {
                     // Fallback: try StringArray
