@@ -2022,7 +2022,10 @@ impl Column {
             LogicalType::Int32 | LogicalType::Date => 4,
             LogicalType::Bool => 1,
             LogicalType::String => 64,
-            _ => 8,
+            _ => {
+                tracing::warn!("Unknown logical type {:?}, defaulting to 8-byte element size", self.data_type);
+                8
+            }
         }
     }
 
