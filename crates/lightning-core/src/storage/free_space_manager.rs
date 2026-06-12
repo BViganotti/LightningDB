@@ -48,7 +48,12 @@ impl FreeSpaceManager {
     pub fn load(path: &Path) -> Result<Self> {
         let mut file = match File::open(path) {
             Ok(f) => f,
-            Err(_) => return Ok(Self::new()),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return Ok(Self::new());
+                }
+                return Err(crate::LightningError::Io(e));
+            }
         };
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
