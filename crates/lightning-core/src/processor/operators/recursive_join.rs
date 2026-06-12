@@ -116,8 +116,17 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                 let src_col = &self.rel_table.columns[0];
                                 let dst_col = &self.rel_table.columns[1];
                                 let total_rels = self.rel_table.stats.read().cardinality;
+                                // Limit fallback scan to prevent OOM on large graphs
+                                const MAX_FALLBACK_RELS: u64 = 1_000_000;
+                                let scan_limit = total_rels.min(MAX_FALLBACK_RELS);
+                                if total_rels > MAX_FALLBACK_RELS {
+                                    tracing::warn!(
+                                        "Recursive join fallback: {} relationships exceeds limit {}, scanning first {} only",
+                                        total_rels, MAX_FALLBACK_RELS, MAX_FALLBACK_RELS
+                                    );
+                                }
                                 let mut map: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
-                                for r_idx in 0..total_rels {
+                                for r_idx in 0..scan_limit {
                                     let Ok(s_val) = src_col.get_value(&self.bm, r_idx, tx) else { continue };
                                     let Ok(d_val) = dst_col.get_value(&self.bm, r_idx, tx) else { continue };
                                     if let (Value::Node(s_id), Value::Node(d_id)) = (s_val, d_val) {
