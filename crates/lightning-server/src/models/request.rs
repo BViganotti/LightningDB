@@ -208,6 +208,16 @@ impl RagRequest {
         if self.top_k > MAX_RAG_TOP_K {
             return Err(format!("top_k cannot exceed {}", MAX_RAG_TOP_K));
         }
+        if let Some(depth) = self.expansion_depth {
+            if depth > 10 {
+                return Err("expansion_depth cannot exceed 10".into());
+            }
+        }
+        if let Some(tokens) = self.max_tokens {
+            if tokens > 1_000_000 {
+                return Err("max_tokens cannot exceed 1,000,000".into());
+            }
+        }
         Ok(())
     }
 }
