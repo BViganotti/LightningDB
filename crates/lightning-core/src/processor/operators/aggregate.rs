@@ -320,7 +320,16 @@ impl Aggregate {
                 columns.push(builder);
             }
 
-            for (key, (agg_funcs, _count)) in groups.iter() {
+            // Sort groups by key for deterministic output order.
+            // Use string representation since Value doesn't implement Ord.
+            let mut sorted_groups: Vec<_> = groups.iter().collect();
+            sorted_groups.sort_by(|a, b| {
+                let a_str: Vec<String> = a.0.iter().map(|v| format!("{:?}", v)).collect();
+                let b_str: Vec<String> = b.0.iter().map(|v| format!("{:?}", v)).collect();
+                a_str.cmp(&b_str)
+            });
+
+            for (key, (agg_funcs, _count)) in sorted_groups {
                 for (i, val) in key.iter().enumerate() {
                     let builder = columns[i]
                         .as_any_mut()
