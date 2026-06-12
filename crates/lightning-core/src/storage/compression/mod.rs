@@ -74,6 +74,12 @@ impl CompressionAlg for Uncompressed {
         let values_to_copy =
             std::cmp::min(num_values_remaining as usize, dst.len() / self.element_size);
         let size_to_copy = values_to_copy * self.element_size;
+        if size_to_copy > src.len() {
+            return Err(crate::LightningError::Internal(format!(
+                "Uncompressed copy: src too short (need {} bytes, have {})",
+                size_to_copy, src.len()
+            )));
+        }
         dst[0..size_to_copy].copy_from_slice(&src[0..size_to_copy]);
         Ok((size_to_copy as u64, values_to_copy as u64))
     }
@@ -90,6 +96,18 @@ impl CompressionAlg for Uncompressed {
         let src_start = (src_offset as usize) * self.element_size;
         let dst_start = (dst_offset as usize) * self.element_size;
         let size = (num_values as usize) * self.element_size;
+        if src_start + size > src.len() {
+            return Err(crate::LightningError::Internal(format!(
+                "Uncompressed decompress: src too short (need {}..{}, have {})",
+                src_start, src_start + size, src.len()
+            )));
+        }
+        if dst_start + size > dst.len() {
+            return Err(crate::LightningError::Internal(format!(
+                "Uncompressed decompress: dst too short (need {}..{}, have {})",
+                dst_start, dst_start + size, dst.len()
+            )));
+        }
         dst[dst_start..dst_start + size].copy_from_slice(&src[src_start..src_start + size]);
         Ok(())
     }
