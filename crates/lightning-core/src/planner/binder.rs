@@ -1795,6 +1795,45 @@ impl<'a> Binder<'a> {
                     ret_type.clone(),
                 ))
             }
+            BoundExpression::Case { expression, when_then, else_expression, return_type } => {
+                let new_expr = expression.as_ref().map(|e| {
+                    self.substitute_macro_body(e, substitution).map(Box::new)
+                }).transpose()?;
+                let new_when_then = when_then.iter()
+                    .map(|(w, t)| Ok((
+                        self.substitute_macro_body(w, substitution)?,
+                        self.substitute_macro_body(t, substitution)?,
+                    )))
+                    .collect::<Result<Vec<_>>>()?;
+                let new_else = else_expression.as_ref().map(|e| {
+                    self.substitute_macro_body(e, substitution).map(Box::new)
+                }).transpose()?;
+                Ok(BoundExpression::Case {
+                    expression: new_expr,
+                    when_then: new_when_then,
+                    else_expression: new_else,
+                    return_type: return_type.clone(),
+                })
+            }
+            BoundExpression::List(items, typ) => {
+                let new_items = items.iter()
+                    .map(|i| self.substitute_macro_body(i, substitution))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(BoundExpression::List(new_items, typ.clone()))
+            }
+            BoundExpression::Map(entries, typ) => {
+                let new_entries = entries.iter()
+                    .map(|(k, v)| Ok((
+                        k.clone(),
+                        self.substitute_macro_body(v, substitution)?,
+                    )))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(BoundExpression::Map(new_entries, typ.clone()))
+            }
+            BoundExpression::Lambda(params, body) => {
+                let new_body = self.substitute_macro_body(body, substitution)?;
+                Ok(BoundExpression::Lambda(params.clone(), Box::new(new_body)))
+            }
             _ => Ok(body.clone()),
         }
     }
