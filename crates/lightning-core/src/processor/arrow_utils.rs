@@ -281,7 +281,9 @@ pub fn from_arrow(array: &ArrayRef, i: usize) -> Result<Value> {
         }
         DataType::UInt64 => {
             let a = downcast_ref_array!(array, UInt64Array);
-            Ok(Value::Number(a.value(i) as f64))
+            // Use Value::Node to preserve full u64 precision.
+            // Value::Number (f64) loses precision for values > 2^53.
+            Ok(Value::Node(a.value(i)))
         }
         DataType::Int64 => {
             let a = downcast_ref_array!(array, Int64Array);
