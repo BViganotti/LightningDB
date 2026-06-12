@@ -120,7 +120,8 @@ impl HnswIndex {
                 let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 let norm_a: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
                 let norm_b: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
-                1.0 - (dot / (norm_a * norm_b.max(f32::EPSILON)))
+                let denom = norm_a.max(f32::EPSILON) * norm_b.max(f32::EPSILON);
+                1.0 - (dot / denom)
             }
             DistanceMetric::L2 => {
                 a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
