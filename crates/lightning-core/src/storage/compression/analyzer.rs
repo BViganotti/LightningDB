@@ -70,9 +70,9 @@ impl CompressionAnalyzer {
         let mut count_same = 0;
         let mut prev = &values[0];
 
-        // Skip min/max computation if pre-computed values were provided
+        // Skip min/max computation if pre-computed values were provided,
+        // but still check for all_same and RLE patterns.
         let skip_minmax = precomputed_min.is_some() && precomputed_max.is_some();
-        if !skip_minmax {
 
         for val in values {
             if val != &values[0] {
@@ -82,13 +82,14 @@ impl CompressionAnalyzer {
                 count_same += 1;
             }
             prev = val;
-            if val < &min {
-                min = val.clone();
+            if !skip_minmax {
+                if val < &min {
+                    min = val.clone();
+                }
+                if val > &max {
+                    max = val.clone();
+                }
             }
-            if val > &max {
-                max = val.clone();
-            }
-        }
         }
 
         if all_same {
