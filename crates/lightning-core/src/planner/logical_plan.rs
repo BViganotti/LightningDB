@@ -852,12 +852,14 @@ impl LogicalPlanner {
                             }
 
                             if let Some(skip) = ret.skip {
+                                let skip_val = if skip < 0.0 { 0u64 } else { skip as u64 };
                                 current_plan =
-                                    LogicalOperator::Skip(Box::new(current_plan), skip as u64);
+                                    LogicalOperator::Skip(Box::new(current_plan), skip_val);
                             }
                             if let Some(limit) = ret.limit {
+                                let limit_val = if limit < 0.0 { 0u64 } else { limit as u64 };
                                 current_plan =
-                                    LogicalOperator::Limit(Box::new(current_plan), limit as u64);
+                                    LogicalOperator::Limit(Box::new(current_plan), limit_val);
                             }
                             current_plan
                         }
