@@ -1098,9 +1098,6 @@ impl FunctionRegistry {
                             }
                             let s = base_arr.value(i);
                             let p = pattern_arr.value(i);
-                            if i == 0 {
-                                tracing::debug!("CONTAINS: first row s='{}', p='{}', result={}", s, p, s.contains(p));
-                            }
                             let res = match *name {
                                 "CONTAINS" => s.contains(p),
                                 "STARTS_WITH" => s.starts_with(p),
