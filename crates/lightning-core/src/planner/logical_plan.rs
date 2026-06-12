@@ -913,7 +913,11 @@ impl LogicalPlanner {
                                 BoundExpression::Literal(Literal::Boolean(true)),
                             )
                         }
-                        _ => plan,
+                        other => {
+                            return Err(LightningError::Internal(format!(
+                                "Unsupported clause type in query: {:?}", other
+                            )));
+                        }
                     };
                 }
 
