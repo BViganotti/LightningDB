@@ -1974,7 +1974,7 @@ impl Column {
                     buf[9..17].copy_from_slice(&offset.to_le_bytes());
                     buf[17..21].copy_from_slice(&(s.len() as u32).to_le_bytes());
                 } else {
-                    return Err(LightningError::Internal(format!(
+                    return Err(crate::LightningError::Internal(format!(
                         "String of length {} exceeds inline limit (63 bytes) and no overflow file is configured",
                         s.len()
                     )));
