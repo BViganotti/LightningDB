@@ -233,8 +233,9 @@ impl Value {
                     elem_arrays.iter().map(|a| a.as_ref()).collect();
                 let flat = arrow::compute::concat(&elem_refs)
                     .unwrap_or_else(|_| arrow::array::new_null_array(&elem_data_type, l.len()));
-                let raw_offsets: Vec<i32> = (0..=num_elements as i32)
-                    .map(|i| i * l.len() as i32)
+                let list_len = l.len() as i64;
+                let raw_offsets: Vec<i32> = (0..=num_elements as i64)
+                    .map(|i| (i * list_len) as i32)
                     .collect();
                 let offset_buf =
                     arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(raw_offsets));
