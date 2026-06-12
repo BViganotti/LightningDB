@@ -1,5 +1,5 @@
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Maximum candidate ratio - if more than this fraction of total rows match a trigram,
@@ -263,49 +263,46 @@ impl TrigramIndex {
         let mut bi_map = self.bigrams.write();
         let mut uni_map = self.unigrams.write();
 
+        // Use HashSet for O(1) deduplication during batch insert
+        let mut tri_map: HashMap<[u8; 3], HashSet<u64>> = HashMap::new();
+        let mut bi_map: HashMap<[u8; 2], HashSet<u64>> = HashMap::new();
+        let mut uni_map: HashMap<u8, HashSet<u64>> = HashMap::new();
+
         for &(row_id, value) in entries {
             let tris = Self::extract_trigrams(value);
             trigram_count += tris.len() as u64;
             for tri in tris {
-                let list = tri_map.entry(tri).or_insert_with(Vec::new);
-                if !list.contains(&row_id) {
-                    list.push(row_id);
-                }
+                tri_map.entry(tri).or_default().insert(row_id);
             }
 
             let bis = Self::extract_bigrams(value);
             bigram_count += bis.len() as u64;
             for bi in bis {
-                let list = bi_map.entry(bi).or_insert_with(Vec::new);
-                if !list.contains(&row_id) {
-                    list.push(row_id);
-                }
+                bi_map.entry(bi).or_default().insert(row_id);
             }
 
             let unis = Self::extract_unigrams(value);
             unigram_count += unis.len() as u64;
             for u in unis {
-                let list = uni_map.entry(u).or_insert_with(Vec::new);
-                if !list.contains(&row_id) {
-                    list.push(row_id);
-                }
+                uni_map.entry(u).or_default().insert(row_id);
             }
         }
 
-        for list in tri_map.values_mut() {
+        for (_, set) in tri_map {
+            let mut list: Vec<u64> = set.into_iter().collect();
             list.sort_unstable();
             let size = list.len() as u64;
             self.posting_size_sum.fetch_add(size, Ordering::Relaxed);
             self.max_posting_size.fetch_max(size, Ordering::Relaxed);
         }
-        drop(tri_map);
 
-        for list in bi_map.values_mut() {
+        for (_, set) in bi_map {
+            let mut list: Vec<u64> = set.into_iter().collect();
             list.sort_unstable();
         }
-        drop(bi_map);
 
-        for list in uni_map.values_mut() {
+        for (_, set) in uni_map {
+            let mut list: Vec<u64> = set.into_iter().collect();
             list.sort_unstable();
         }
 
