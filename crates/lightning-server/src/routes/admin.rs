@@ -13,6 +13,9 @@ pub async fn checkpoint_handler(
     State(state): State<Arc<AppState>>,
     RequestId(request_id): RequestId,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
+    if state.config.read_only {
+        return Err(AppError::BadRequest("Checkpoint not allowed in read-only mode".into()));
+    }
     let start = std::time::Instant::now();
 
     state.db.checkpoint().map_err(AppError::from)?;
@@ -33,6 +36,9 @@ pub async fn vacuum_handler(
     State(state): State<Arc<AppState>>,
     RequestId(request_id): RequestId,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
+    if state.config.read_only {
+        return Err(AppError::BadRequest("Vacuum not allowed in read-only mode".into()));
+    }
     let start = std::time::Instant::now();
 
     state.db.vacuum().map_err(AppError::from)?;
