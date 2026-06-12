@@ -600,10 +600,12 @@ impl PhysicalOperator for PhysicalScan {
                                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                             }
                         }
-                        Err(_) => {
-                            tracing::debug!(
-                                "Pushdown filter evaluation skipped (index mismatch — filter will be applied at join level)"
-                            );
+                        Err(e) => {
+                            // Filter evaluation failed — propagate the error.
+                            // Returning unfiltered rows would silently produce wrong results.
+                            return Err(crate::LightningError::Internal(format!(
+                                "Pushdown filter evaluation failed: {e}"
+                            )));
                         }
                     }
                 }
