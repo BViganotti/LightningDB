@@ -976,7 +976,10 @@ impl MemoryStore {
         Ok(self.batches_to_entities(&res.batches))
     }
 
-    pub fn expand(&self, entity_id: &str, hops: u32, _edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+    pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+        if !edge_types.is_empty() {
+            tracing::warn!("expand: edge_types filtering not yet implemented, ignoring {:?}", edge_types);
+        }
         self.ensure_schema()?;
 
         let db = self.conn.client_context.database.clone();
