@@ -40,6 +40,15 @@ impl RateLimiter {
     fn check(&self, key: &str) -> bool {
         let mut buckets = self.buckets.lock();
         let now = Instant::now();
+
+        // Periodically evict stale entries to prevent unbounded growth
+        if buckets.len() > 1000 {
+            let stale_threshold = self.window * 2;
+            buckets.retain(|_, (_, last_seen)| {
+                now.duration_since(*last_seen) < stale_threshold
+            });
+        }
+
         let entry = buckets.entry(key.to_string()).or_insert((0, now));
         if now.duration_since(entry.1) > self.window {
             *entry = (1, now);
