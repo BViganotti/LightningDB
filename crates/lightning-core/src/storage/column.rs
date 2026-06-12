@@ -1973,6 +1973,11 @@ impl Column {
                     buf[1..9].copy_from_slice(&page_idx.to_le_bytes());
                     buf[9..17].copy_from_slice(&offset.to_le_bytes());
                     buf[17..21].copy_from_slice(&(s.len() as u32).to_le_bytes());
+                } else {
+                    return Err(LightningError::Internal(format!(
+                        "String of length {} exceeds inline limit (63 bytes) and no overflow file is configured",
+                        s.len()
+                    )));
                 }
             }
             (Value::Date(d), LogicalType::Date) => buf[..4].copy_from_slice(&d.to_le_bytes()),
