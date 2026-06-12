@@ -671,15 +671,10 @@ impl ExpressionEvaluator {
                 }
             }
             Divide => {
-                if r.iter().any(|v| v == Some(0)) {
-                    return Err(LightningError::Query("Division by zero".into()));
-                }
                 let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
                     match (a, b) {
-                        (Some(a), Some(b)) => match a.checked_div(b) {
-                            Some(val) => Some(val),
-                            None => None,
-                        }
+                        (Some(_), Some(0)) => None, // Division by zero → NULL (SQL standard)
+                        (Some(a), Some(b)) => a.checked_div(b),
                         _ => None,
                     }
                 }).collect();
@@ -689,7 +684,7 @@ impl ExpressionEvaluator {
                 let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
                     match (a, b) {
                         (Some(_), Some(0)) => None,
-                        (Some(a), Some(b)) => Some(a % b),
+                        (Some(a), Some(b)) => a.checked_rem(b), // handles i64::MIN % -1
                         _ => None,
                     }
                 }).collect();
