@@ -26,7 +26,11 @@ async fn main() {
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(tracing::Level::INFO.into())
-                .parse_lossy(&log_filter),
+                .parse(&log_filter)
+                .unwrap_or_else(|e| {
+                    eprintln!("Warning: invalid log filter '{}': {}. Using default.", log_filter, e);
+                    EnvFilter::from_default_env()
+                }),
         )
         .json()
         .with_target(true)
