@@ -832,12 +832,27 @@ impl StorageManager {
     }
 
     pub fn remove_table(&mut self, name: &str) {
-        // Remove trigram workers first (sends Shutdown signal to background threads)
+        // Collect file IDs from the table's columns before removing
+        let mut file_ids_to_remove: Vec<u64> = Vec::new();
         if let Some(table) = self.node_tables.get(name) {
             table.trigram_workers.write().clear();
+            for col in &table.columns {
+                file_ids_to_remove.push(col.fh.file_id);
+                file_ids_to_remove.push(col.null_fh.file_id);
+                if let Some(ref ofh) = col.overflow_fh {
+                    file_ids_to_remove.push(ofh.file_id);
+                }
+            }
         }
         if let Some(table) = self.rel_tables.get(name) {
             table.trigram_workers.write().clear();
+            for col in &table.columns {
+                file_ids_to_remove.push(col.fh.file_id);
+                file_ids_to_remove.push(col.null_fh.file_id);
+                if let Some(ref ofh) = col.overflow_fh {
+                    file_ids_to_remove.push(ofh.file_id);
+                }
+            }
         }
         self.node_tables.remove(name);
         self.rel_tables.remove(name);
@@ -846,6 +861,10 @@ impl StorageManager {
         self.vector_indexes.remove(name);
         self.fwd_csr.remove(name);
         self.bwd_csr.remove(name);
+        // Clean up file handles for removed table
+        for fid in file_ids_to_remove {
+            self.file_handles.remove(&fid);
+        }
     }
 
     pub fn add_column_to_table(
