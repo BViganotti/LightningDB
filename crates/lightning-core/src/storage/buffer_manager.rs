@@ -79,6 +79,9 @@ pub struct BufferManager {
     prefetch_enabled: bool,
     prefetch_depth: usize,
     prefetch_confidence: f64,
+    /// Lock-free shutdown flag to avoid deadlocking with shard RwLocks.
+    /// The vacuum thread checks this instead of reading through a shard lock.
+    shutting_down: AtomicBool,
 }
 
 impl BufferManager {
@@ -130,6 +133,7 @@ impl BufferManager {
             prefetch_enabled,
             prefetch_depth,
             prefetch_confidence,
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -455,6 +459,11 @@ impl BufferManager {
     pub fn reclaim_expired_versions(&self, min_active_ts: u64) -> Result<usize> {
         let mut total_reclaimed = 0;
         for shard in &self.shards {
+            // Bail out early if shutting down to avoid holding shard locks
+            // during Database::drop.
+            if self.shutting_down.load(Ordering::Acquire) {
+                return Ok(total_reclaimed);
+            }
             // Phase 1: scan under READ lock to find candidates
             // Phase 1 & 2 combined under read lock: collect candidates + their keys
             // Store the expected key alongside each candidate to detect reassignment.
@@ -642,10 +651,6 @@ impl BufferManager {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[i].frame.as_slice())?;
                             synced_fids.lock().insert(fid);
-                            // The shard write lock ensures exclusive access to this slot.
-                            // No concurrent writes to dirty or dirty_count can occur.
-                            // The frame's version is checked above: uncommitted frames
-                            // (UNCOMMITTED_BIT set) are skipped and not flushed here.
                             if pool.slots[i].dirty {
                                 pool.dirty_count.fetch_sub(1, Ordering::Release);
                             }
@@ -657,7 +662,6 @@ impl BufferManager {
             Ok(())
         }).collect();
 
-        // Check for errors from parallel phase
         for r in &results {
             if let Err(e) = r {
                 return Err(crate::LightningError::Internal(format!(
@@ -791,8 +795,11 @@ impl BufferManager {
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        // Just check the first shard
-        self.shards[0].read().shutdown.load(Ordering::Acquire)
+        self.shutting_down.load(Ordering::Acquire)
+    }
+
+    pub fn set_shutting_down(&self) {
+        self.shutting_down.store(true, Ordering::Release);
     }
 
     pub fn dirty_page_count(&self) -> usize {
@@ -802,6 +809,9 @@ impl BufferManager {
     }
 
     pub fn shutdown(&self) {
+        // Set lock-free flag FIRST so vacuum thread sees it immediately
+        // without needing to acquire any shard locks.
+        self.shutting_down.store(true, Ordering::Release);
         if let Err(e) = self.checkpoint() {
             tracing::error!("Checkpoint failed during shutdown: {}", e);
         }

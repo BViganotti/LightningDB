@@ -201,28 +201,14 @@ impl PhysicalPlanner {
                 ))
             }
             LogicalOperator::Join(left, right, join_cond) => {
-                // Log the join structure
-                let left_vars = self.compute_variable_positions(&*left).unwrap_or_default();
-                let right_vars = self.compute_variable_positions(&*right).unwrap_or_default();
-                let left_ncols = self.compute_subtree_num_cols(&*left);
-                let right_ncols = self.compute_subtree_num_cols(&*right);
-                tracing::warn!(
-                    "PHYSICAL_PLAN: JOIN left_vars={:?} left_ncols={} right_vars={:?} right_ncols={}",
-                    left_vars, left_ncols, right_vars, right_ncols
-                );
-                let (left_key, right_key) = if matches!(
+                let is_cross = matches!(
                     join_cond,
                     BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
-                ) {
-                    (0, 0)
-                } else {
-                    let keys = self.extract_join_keys(&join_cond, &*left, &*right)?;
-                    tracing::warn!("PHYSICAL_PLAN: join keys left={} right={}", keys.0, keys.1);
-                    keys
-                };
-                let planned_left = self.plan(*left)?;
-                let planned_right = self.plan(*right)?;
-                if (left_key, right_key) == (0, 0) {
+                );
+
+                if is_cross {
+                    let planned_left = self.plan(*left)?;
+                    let planned_right = self.plan(*right)?;
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new_cross_join(
                             planned_left,
@@ -230,14 +216,104 @@ impl PhysicalPlanner {
                         ),
                     ))
                 } else {
-                    Ok(Box::new(
-                        crate::processor::operators::hash_join::HashJoin::new(
-                            planned_left,
-                            planned_right,
-                            left_key,
-                            right_key,
-                        ),
-                    ))
+                    // Compute positions from child operators before planning
+                    let mut left_positions = std::collections::HashMap::new();
+                    self.collect_variable_positions(&left, 0, &mut left_positions)?;
+                    let mut right_positions = std::collections::HashMap::new();
+                    self.collect_variable_positions(&right, 0, &mut right_positions)?;
+
+                    // Collect all equality comparisons
+                    let mut comparisons = Vec::new();
+                    self.collect_eq_comparisons(&join_cond, &mut comparisons);
+
+                    // Find the best cross-boundary comparison for the hash join key
+                    let mut key_idx: Option<usize> = None;
+                    for (i, (left_expr, right_expr)) in comparisons.iter().enumerate() {
+                        let a_in_left = self.expr_belongs_to_side(left_expr, &left_positions);
+                        let a_in_right = self.expr_belongs_to_side(left_expr, &right_positions);
+                        let b_in_left = self.expr_belongs_to_side(right_expr, &left_positions);
+                        let b_in_right = self.expr_belongs_to_side(right_expr, &right_positions);
+
+                        // Canonical: left-expr ONLY in left, right-expr ONLY in right
+                        if a_in_left && !a_in_right && b_in_right && !b_in_left {
+                            key_idx = Some(i);
+                            break;
+                        }
+                    }
+                    // Fallback: any cross-boundary comparison (prefer canonical order)
+                    if key_idx.is_none() {
+                        for (i, (left_expr, right_expr)) in comparisons.iter().enumerate() {
+                            let a_in_left = self.expr_belongs_to_side(left_expr, &left_positions);
+                            let a_in_right = self.expr_belongs_to_side(left_expr, &right_positions);
+                            let b_in_left = self.expr_belongs_to_side(right_expr, &left_positions);
+                            let b_in_right = self.expr_belongs_to_side(right_expr, &right_positions);
+                            if a_in_left && b_in_right {
+                                key_idx = Some(i);
+                                break;
+                            }
+                            if b_in_left && a_in_right {
+                                key_idx = Some(i);
+                                break;
+                            }
+                        }
+                    }
+
+                    let key_i = key_idx.unwrap_or(0);
+                    let (key_left_expr, key_right_expr) = &comparisons[key_i];
+                    let (left_key, right_key) = self.resolve_join_key_pair(
+                        key_left_expr, key_right_expr, &left_positions, &right_positions,
+                    )?;
+
+                    // Build filter from remaining comparisons
+                    // The hash join output = left columns + right columns
+                    let left_ncols = self.compute_subtree_num_cols(&*left);
+                    let mut combined_positions = left_positions.clone();
+                    for (var, pos) in &right_positions {
+                        combined_positions.insert(var.clone(), pos + left_ncols);
+                    }
+
+                    let mut filter_conds = Vec::new();
+                    for (i, (l, r)) in comparisons.iter().enumerate() {
+                        if i == key_i { continue; }
+                        let mut cond = BoundExpression::Comparison(
+                            Box::new((*l).clone()),
+                            ComparisonOperator::Equal,
+                            Box::new((*r).clone()),
+                        );
+                        // Remap PropertyLookup indices to physical positions
+                        // in the hash join output (left cols + right cols)
+                        Self::remap_property_lookup(
+                            &mut cond,
+                            &combined_positions,
+                            &self.binder_column_offsets,
+                        );
+                        filter_conds.push(cond);
+                    }
+
+                    let planned_left = self.plan(*left)?;
+                    let planned_right = self.plan(*right)?;
+
+                    let join_op = crate::processor::operators::hash_join::HashJoin::new(
+                        planned_left,
+                        planned_right,
+                        left_key,
+                        right_key,
+                    );
+
+                    if filter_conds.is_empty() {
+                        Ok(Box::new(join_op))
+                    } else {
+                        let filter = filter_conds.into_iter().reduce(|acc, cond| {
+                            BoundExpression::Logical(
+                                Box::new(acc),
+                                crate::parser::ast::LogicalOperator::And,
+                                Box::new(cond),
+                            )
+                        }).unwrap();
+                        Ok(Box::new(
+                            crate::processor::operators::filter::PhysicalFilter::new(Box::new(join_op), filter),
+                        ))
+                    }
                 }
             }
             LogicalOperator::Aggregate {
@@ -877,38 +953,21 @@ impl PhysicalPlanner {
         }
     }
 
-    /// Extract the column indices for hash join keys from the join condition.
-    /// Computes variable positions for each child subtree independently,
-    /// giving correct column indices relative to each side's output batch.
-    fn extract_join_keys(
+    /// Recursively collect equality comparisons from a (possibly compound) expression.
+    fn collect_eq_comparisons<'a>(
         &self,
-        join_cond: &BoundExpression,
-        left_op: &LogicalOperator,
-        right_op: &LogicalOperator,
-    ) -> Result<(usize, usize)> {
-        let mut left_positions = std::collections::HashMap::new();
-        self.collect_variable_positions(left_op, 0, &mut left_positions)?;
-
-        let mut right_positions = std::collections::HashMap::new();
-        self.collect_variable_positions(right_op, 0, &mut right_positions)?;
-
-        match join_cond {
-            BoundExpression::Comparison(left_expr, ComparisonOperator::Equal, right_expr) => {
-                let (left_key, right_key) = self.resolve_join_key_pair(
-                    left_expr, right_expr, &left_positions, &right_positions,
-                )?;
-                Ok((left_key, right_key))
+        expr: &'a BoundExpression,
+        out: &mut Vec<(&'a BoundExpression, &'a BoundExpression)>,
+    ) {
+        match expr {
+            BoundExpression::Comparison(left, ComparisonOperator::Equal, right) => {
+                out.push((left.as_ref(), right.as_ref()));
             }
-            BoundExpression::Comparison(left_expr, ComparisonOperator::NotEqual, right_expr) => {
-                let (left_key, right_key) = self.resolve_join_key_pair(
-                    left_expr, right_expr, &left_positions, &right_positions,
-                )?;
-                Ok((left_key, right_key))
+            BoundExpression::Logical(left, crate::parser::ast::LogicalOperator::And, right) => {
+                self.collect_eq_comparisons(left, out);
+                self.collect_eq_comparisons(right, out);
             }
-            _ => {
-                tracing::warn!("Join condition is not a comparison expression, falling back to cross join");
-                Ok((0, 0))
-            }
+            _ => {}
         }
     }
 
@@ -968,6 +1027,10 @@ impl PhysicalPlanner {
 
     /// Resolve a PropertyLookup expression to its column index, checking
     /// both left and right variable positions.
+    ///
+    /// The join condition from the logical planner uses table-relative
+    /// indices (0 for _id/_from, 1 for _to, etc.).  We add the physical
+    /// base position of the variable to get the absolute column index.
     fn resolve_key_index(
         &self,
         expr: &BoundExpression,

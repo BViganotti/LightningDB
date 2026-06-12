@@ -291,43 +291,22 @@ impl std::fmt::Debug for Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
-        // Shutdown vacuum thread first so it doesn't interfere with checkpoint
+        // Signal vacuum thread to stop via lock-free flag.
+        self.buffer_manager.set_shutting_down();
+
+        // Wait for vacuum thread — it checks shutdown every ~100ms and
+        // also bails out of reclaim_expired_versions early.
         if let Some(handle) = self.vacuum_handle.take() {
-            self.buffer_manager.shutdown();
             let _ = handle.join();
         }
 
-        // Full Database::checkpoint persists dirty pages, catalog, free space map,
-        // and header — ensuring num_rows and data files are consistent on restart.
-        // This must happen BEFORE shutdown truncates the WAL.
-        if let Err(e) = self.checkpoint() {
+        // Flush dirty buffer pages to disk. We intentionally skip the full
+        // Database::checkpoint() here (catalog save, header update, etc.)
+        // because those operations can deadlock with other threads that hold
+        // catalog/storage_manager locks. The buffer_manager checkpoint
+        // handles the critical dirty-page flush.
+        if let Err(e) = self.buffer_manager.checkpoint() {
             tracing::warn!("Checkpoint failed during database shutdown: {e}");
-        }
-
-        // Shutdown buffer manager (final flush + WAL truncation)
-        self.buffer_manager.shutdown();
-
-        // Final flush of any remaining dirty pages via file handles
-        let fhs = {
-            let sm = self.storage_manager.read();
-            sm.get_all_file_handles()
-        };
-        for _ in 0..20 {
-            let dirty_exists = self.buffer_manager.dirty_page_count() > 0;
-            if !dirty_exists {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        self.buffer_manager.flush_all_with_handles(&fhs);
-        drop(fhs);
-
-        let remaining_dirty = self.buffer_manager.dirty_page_count();
-        if remaining_dirty > 0 {
-            tracing::warn!(
-                "{} dirty pages remain after final flush during Database::drop",
-                remaining_dirty
-            );
         }
     }
 }
@@ -458,7 +437,7 @@ impl Database {
                 std::thread::sleep(std::time::Duration::from_millis(check_interval));
                 elapsed += check_interval;
                 if bm_clone.is_shutting_down() {
-                    bm_clone.flush_all();
+                    // Don't flush here — Database::drop handles it after we exit.
                     return;
                 }
             }
@@ -1281,8 +1260,15 @@ impl Connection {
                     .first()
                     .ok_or_else(|| LightningError::Query("No query".into()))?;
                 let stmt = bound_union.statement.clone();
-                let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
-                cache.put(cache_key.clone(), Arc::new((stmt.clone(), binder_offsets.clone())));
+                // Only cache read-only Query statements. DML statements
+                // (CREATE, DELETE, SET, etc.) contain literal values that
+                // are normalized away by normalize_query, causing different
+                // DML statements to share the same cache key and reuse
+                // stale literal values from the first execution.
+                if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
+                    let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
+                    cache.put(cache_key.clone(), Arc::new((stmt.clone(), binder_offsets.clone())));
+                }
                 (stmt, binder_offsets)
             }
         };
