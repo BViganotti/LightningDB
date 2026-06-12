@@ -95,35 +95,7 @@ impl FunctionRegistry {
             ),
         );
 
-        // Define LOWER — Unicode-aware via char::to_lowercase
-        scalar_functions.insert(
-            "LOWER".to_string(),
-            ScalarFunction::new(
-                "LOWER".to_string(),
-                Arc::new(|args, _num_rows| {
-                    if args.len() != 1 {
-                        return Err(crate::LightningError::Internal(
-                            "LOWER requires 1 argument".into(),
-                        ));
-                    }
-                    let string_array = args[0]
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| {
-                            crate::LightningError::Internal(
-                                "LOWER expects a String argument".into(),
-                            )
-                        })?;
-                    let result: arrow::array::StringArray = string_array
-                        .iter()
-                        .map(|opt| opt.map(|s| s.to_lowercase()))
-                        .collect();
-                    Ok(Arc::new(result))
-                }),
-            ),
-        );
-
-        // Define LOWER — vectorized via direct buffer access
+        // Define LOWER — Unicode-aware via StringBuilder
         scalar_functions.insert(
             "LOWER".to_string(),
             ScalarFunction::new(
