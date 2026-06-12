@@ -334,21 +334,25 @@ impl WasmFunction {
                                 crate::LightningError::Internal(msg)
                             })?;
 
-                        // Validate output offset before reading
+                        // Validate output offset: must be within the originally written
+                        // input region to prevent reading uninitialized WASM memory.
                         let mut results = vec![f32::NAN; num_rows];
                         {
                             let mem_data = mem.data(&store);
                             let read_offset = output_offset as usize;
-                            // Clamp output range to the originally written region only
-                            if read_offset < mem_size && read_offset.saturating_add(num_rows * 4) <= mem_size {
-                                let read_end = read_offset + num_rows * 4;
+                            let output_byte_len = num_rows * 4;
+                            if read_offset >= input_byte_len
+                                || read_offset.saturating_add(output_byte_len) > input_byte_len
+                            {
+                                // Output offset is outside the written input region —
+                                // the WASM function tried to read uninitialized memory.
+                                // Return NaN for all values.
+                            } else {
                                 for j in 0..num_rows {
                                     let start = read_offset + j * 4;
-                                    if start + 4 <= mem_size {
-                                        let mut bytes = [0u8; 4];
-                                        bytes.copy_from_slice(&mem_data[start..start + 4]);
-                                        results[j] = f32::from_le_bytes(bytes);
-                                    }
+                                    let mut bytes = [0u8; 4];
+                                    bytes.copy_from_slice(&mem_data[start..start + 4]);
+                                    results[j] = f32::from_le_bytes(bytes);
                                 }
                             }
                         }
