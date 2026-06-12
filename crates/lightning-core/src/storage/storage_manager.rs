@@ -1038,6 +1038,11 @@ impl StorageManager {
     pub fn apply_page(&mut self, file_id: u64, page_idx: u64, data: &[u8]) -> Result<()> {
         if let Some(fh) = self.file_handles.get(&file_id) {
             fh.write_page(page_idx, data)?;
+        } else {
+            tracing::warn!(
+                "WAL replay: skipping page {} for unknown file_id {} (file may have been dropped)",
+                page_idx, file_id
+            );
         }
         Ok(())
     }
