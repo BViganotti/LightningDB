@@ -1593,6 +1593,7 @@ impl Column {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn bulk_append_primitive_fast(
         &self,
         bm: &BufferManager,
@@ -1676,6 +1677,7 @@ impl Column {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn bulk_append_string_fast(
         &self,
         bm: &BufferManager,
