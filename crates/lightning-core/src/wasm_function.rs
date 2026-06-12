@@ -151,6 +151,33 @@ impl WasmFunction {
             }
         };
 
+        // Validate WASM memory declarations to prevent unbounded allocation.
+        const MAX_WASM_MEMORY_PAGES: u64 = 4096; // 256MB (64KB per page)
+        for export in module.exports() {
+            if export.name() == "memory" {
+                if let wasmi::ExternType::Memory(mem_type) = export.ty() {
+                    let min_pages = mem_type.minimum();
+                    let max_pages = mem_type.maximum().unwrap_or(min_pages);
+                    if max_pages > MAX_WASM_MEMORY_PAGES {
+                        tracing::error!(
+                            "WASM module '{}' requests {} pages ({}MB), exceeding limit of {} pages ({}MB)",
+                            self.name, max_pages, max_pages * 64 / 1024,
+                            MAX_WASM_MEMORY_PAGES, MAX_WASM_MEMORY_PAGES * 64 / 1024
+                        );
+                        let name = self.name.clone();
+                        return ScalarFunction::new(
+                            name,
+                            Arc::new(move |_: &[ArrayRef], _: usize| {
+                                Err(crate::LightningError::Internal(
+                                    format!("WASM module '{func_name}' exceeds memory limit")
+                                ))
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+
     let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
         move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
             let exec_mode = WasmExecMode::from_u8(exec_mode, args.len());
