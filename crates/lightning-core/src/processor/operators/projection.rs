@@ -32,6 +32,11 @@ impl PhysicalOperator for PhysicalProjection {
             let mut fields: Vec<Field> = Vec::with_capacity(num_items);
             let mut evaluated: Vec<Option<ArrayRef>> = vec![None; num_items];
 
+            // Deduplicate identical expressions to avoid redundant evaluation.
+            // Uses Debug format for comparison — this is a heuristic that works
+            // for common cases (PropertyLookup, Function) but may have false
+            // positives for expressions with identical debug representations.
+            // A production implementation would use structural equality.
             let expr_debugs: Vec<String> = self.items
                 .iter()
                 .map(|item| format!("{:?}", item.expression))
