@@ -22,11 +22,15 @@ impl CompressionAlg for RleCompression {
         while values_processed < num_values_remaining && dst_offset + element_size + 4 <= dst.len()
         {
             let start = values_processed as usize * element_size;
+            if start + element_size > src.len() {
+                break;
+            }
             let val = &src[start..start + element_size];
 
             let mut count = 1u32;
             let mut j = values_processed + 1;
             while j < num_values_remaining
+                && (j as usize + 1) * element_size <= src.len()
                 && &src[j as usize * element_size..(j as usize + 1) * element_size] == val
             {
                 count += 1;
