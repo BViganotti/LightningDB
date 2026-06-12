@@ -76,7 +76,7 @@ where
             .extensions
             .get::<RequestIdExtension>()
             .map(|ext| ext.0.clone())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            .unwrap_or_else(|| format!("auto-{}", uuid::Uuid::new_v4()));
         Ok(RequestId(request_id))
     }
 }
