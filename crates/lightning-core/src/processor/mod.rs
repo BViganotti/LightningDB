@@ -169,6 +169,12 @@ impl Value {
             Value::String(s) => {
                 let mut bytes = vec![0u8; 64];
                 let s_bytes = s.as_bytes();
+                if s_bytes.len() > 64 {
+                    tracing::warn!(
+                        "String value truncated from {} to 64 bytes in to_le_bytes",
+                        s_bytes.len()
+                    );
+                }
                 let len = std::cmp::min(s_bytes.len(), 64);
                 bytes[0..len].copy_from_slice(&s_bytes[0..len]);
                 bytes
