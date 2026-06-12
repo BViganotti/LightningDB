@@ -212,7 +212,7 @@ impl Server {
                         .and_then(|v| v.strip_prefix("Bearer "))
                         .map(|s| s.trim().to_string());
                     match provided {
-                        Some(token) if token == *expected => {}
+                        Some(token) if token.as_str() == expected.as_ref() => {}
                         _ => {
                             return Err(axum::http::StatusCode::UNAUTHORIZED);
                         }

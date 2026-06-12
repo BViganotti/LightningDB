@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use lightning_core::SystemConfig;
@@ -85,7 +86,9 @@ pub struct ServerConfig {
     pub tls_key: Option<PathBuf>,
     pub startup_time: std::time::Instant,
     pub cors_allowed_origins: Vec<String>,
-    pub auth_token: Option<String>,
+    /// Shared auth token — single allocation shared across all clones
+    /// to reduce copies in memory.
+    pub auth_token: Option<Arc<str>>,
     pub query_timeout_ms: Option<u64>,
 }
 
@@ -123,7 +126,7 @@ impl ServerConfig {
             tls_key: args.tls_key.clone(),
             startup_time: std::time::Instant::now(),
             cors_allowed_origins,
-            auth_token: args.auth_token.clone(),
+            auth_token: args.auth_token.as_deref().map(|t| Arc::from(t)),
             query_timeout_ms: Some(args.query_timeout_ms),
         }
     }
