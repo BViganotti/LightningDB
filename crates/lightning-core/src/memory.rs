@@ -682,11 +682,12 @@ impl MemoryStore {
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.last_accessed DESC LIMIT {top_k}"
+             ORDER BY e.last_accessed DESC LIMIT $top_k"
         );
         tracing::debug!("query: {query}");
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
+        params.insert("top_k".to_string(), Value::Number(top_k as f64));
         let res = self.conn.execute(&query, Some(params))?;
         Ok(self.batches_to_entities(&res.batches))
     }
@@ -713,14 +714,15 @@ impl MemoryStore {
     pub fn entity_history(&self, entity_id: &str) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = '{}' \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $entity_id \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.valid_from DESC",
-            entity_id.replace('\'', "\\'")
+             ORDER BY e.valid_from DESC"
         );
-        let res = self.conn.execute(&query, None)?;
+        let mut params = HashMap::new();
+        params.insert("entity_id".to_string(), Value::String(entity_id.to_string()));
+        let res = self.conn.execute(&query, Some(params))?;
         Ok(self.batches_to_entities(&res.batches))
     }
 
