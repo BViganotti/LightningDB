@@ -132,7 +132,7 @@ impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             buffer_pool_size: 1024 * 1024 * 1024,
-            max_num_threads: 0,
+            max_num_threads: 0, // 0 = auto-detect (use all available CPU cores)
             read_only: false,
             sync_mode: SyncMode::Normal,
             vacuum_interval_ms: 1000,
