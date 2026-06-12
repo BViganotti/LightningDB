@@ -128,14 +128,13 @@ impl Server {
         req: Request,
         next: Next,
     ) -> Response {
-        // Rate limit by client IP
-        let client_ip = match req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            Some(ip) => ip.to_string(),
-            None => req.extensions()
-                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                .map(|ci| ci.0.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-        };
+        // Rate limit by the direct client IP (socket address).
+        // Do NOT use x-forwarded-for for rate limiting — it is trivially
+        // spoofable and allows attackers to bypass rate limits entirely.
+        let client_ip = req.extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
         if !state.rate_limiter.check(&client_ip) {
             let mut resp = (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
