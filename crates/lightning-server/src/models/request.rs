@@ -57,6 +57,14 @@ pub struct StoreBatchRequest {
     pub entities: Vec<StoreRequest>,
 }
 
+fn default_top_k() -> usize {
+    10
+}
+
+const MAX_TOP_K: usize = 10000;
+const MAX_HOPS: u32 = 20;
+const MAX_RAG_TOP_K: usize = 1000;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecallRequest {
@@ -68,8 +76,16 @@ pub struct RecallRequest {
     pub top_k: usize,
 }
 
-fn default_top_k() -> usize {
-    10
+impl RecallRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.top_k == 0 {
+            return Err("top_k must be greater than 0".into());
+        }
+        if self.top_k > MAX_TOP_K {
+            return Err(format!("top_k cannot exceed {}", MAX_TOP_K));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +123,10 @@ fn default_weight() -> f64 {
     1.0
 }
 
+fn default_hops() -> u32 {
+    1
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpandRequest {
@@ -117,8 +137,20 @@ pub struct ExpandRequest {
     pub edge_types: Option<Vec<String>>,
 }
 
-fn default_hops() -> u32 {
-    1
+impl ExpandRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.hops == 0 {
+            return Err("hops must be greater than 0".into());
+        }
+        if self.hops > MAX_HOPS {
+            return Err(format!("hops cannot exceed {}", MAX_HOPS));
+        }
+        Ok(())
+    }
+}
+
+fn default_rag_top_k() -> usize {
+    5
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,8 +173,16 @@ pub struct RagRequest {
     pub max_tokens: Option<usize>,
 }
 
-fn default_rag_top_k() -> usize {
-    5
+impl RagRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.top_k == 0 {
+            return Err("top_k must be greater than 0".into());
+        }
+        if self.top_k > MAX_RAG_TOP_K {
+            return Err(format!("top_k cannot exceed {}", MAX_RAG_TOP_K));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]

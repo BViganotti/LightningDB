@@ -40,6 +40,7 @@ pub async fn expand_handler(
     RequestId(request_id): RequestId,
     Json(req): Json<ExpandRequest>,
 ) -> Result<Json<ApiResponse<ExpandResponse>>, AppError> {
+    req.validate().map_err(|e| AppError::BadRequest(e))?;
     let start = std::time::Instant::now();
 
     let edge_types: Vec<&str> = req

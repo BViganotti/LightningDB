@@ -119,6 +119,7 @@ pub async fn recall_handler(
     RequestId(request_id): RequestId,
     Json(req): Json<RecallRequest>,
 ) -> Result<Json<ApiResponse<RecallResponse>>, AppError> {
+    req.validate().map_err(|e| AppError::BadRequest(e))?;
     let start = std::time::Instant::now();
 
     let results = store
