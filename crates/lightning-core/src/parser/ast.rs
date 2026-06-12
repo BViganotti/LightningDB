@@ -334,6 +334,9 @@ pub enum ComparisonOperator {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Literal value in a Cypher query.
+/// NOTE: Number uses f64, which loses precision for integers beyond ±2^53.
+/// A proper fix would add an Integer(i64) variant for integer literals.
 pub enum Literal {
     String(String),
     Number(f64),
