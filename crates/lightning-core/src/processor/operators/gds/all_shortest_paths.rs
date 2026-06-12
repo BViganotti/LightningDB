@@ -5,6 +5,13 @@ use crate::Result;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
+/// All Shortest Paths operator.
+///
+/// NOTE: Despite the name, this operator performs standard BFS which finds
+/// the SHORTEST DISTANCE to each reachable node, not ALL shortest paths.
+/// If multiple shortest paths exist between two nodes, only one distance
+/// is reported. A true "all shortest paths" implementation would need to
+/// track path counts at each distance level.
 pub struct PhysicalASP {
     child: Box<dyn PhysicalOperator>,
     rel_table_name: String,
