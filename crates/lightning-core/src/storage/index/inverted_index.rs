@@ -7,6 +7,10 @@ use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
+/// Default writer memory budget for the inverted index.
+/// 50MB provides a good balance between memory usage and write performance.
+const DEFAULT_WRITER_MEMORY_BYTES: usize = 50_000_000;
+
 pub struct InvertedIndex {
     index: Index,
     writer: RwLock<IndexWriter>,
@@ -46,7 +50,7 @@ impl InvertedIndex {
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let writer = index
-            .writer(50_000_000)
+            .writer(DEFAULT_WRITER_MEMORY_BYTES)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let reader = index
