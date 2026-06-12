@@ -139,25 +139,31 @@ impl SubqueryUnnesting {
         let cond = if common.is_empty() {
             BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
         } else {
-            // Build a proper equality: left-side PropertyLookup vs right-side PropertyLookup
-            // for each common variable. We prefix the right variable to avoid self-comparison.
-            BoundExpression::Logical(
-                Box::new(BoundExpression::Comparison(
+            // Build equality conditions for ALL common correlated variables
+            let mut conditions: Vec<BoundExpression> = Vec::new();
+            for var in &common {
+                conditions.push(BoundExpression::Comparison(
                     Box::new(BoundExpression::PropertyLookup(
-                        common[0].to_string(),
+                        var.to_string(),
                         0,
                         lightning_types::LogicalType::Any,
                     )),
                     crate::parser::ast::ComparisonOperator::Equal,
                     Box::new(BoundExpression::PropertyLookup(
-                        format!("__sub_{}", common[0]),
+                        format!("__sub_{}", var),
                         0,
                         lightning_types::LogicalType::Any,
                     )),
-                )),
-                crate::parser::ast::LogicalOperator::And,
-                Box::new(BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))),
-            )
+                ));
+            }
+            // Conjoin all conditions
+            conditions.into_iter().reduce(|acc, cond| {
+                BoundExpression::Logical(
+                    Box::new(acc),
+                    crate::parser::ast::LogicalOperator::And,
+                    Box::new(cond),
+                )
+            }).unwrap_or(BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)))
         };
         Ok(LogicalOperator::SemiJoin(
             Box::new(child),
