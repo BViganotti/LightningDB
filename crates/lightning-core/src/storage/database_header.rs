@@ -56,9 +56,15 @@ impl DatabaseHeader {
     pub fn save(&self, path: &Path) -> Result<()> {
         let buf =
             bincode::serialize(self).map_err(|e| crate::LightningError::Database(e.to_string()))?;
-        let mut file = File::create(path)?;
-        file.write_all(&buf)?;
-        file.sync_all()?;
+        // Write to temporary file first, then atomically rename.
+        // This prevents corruption if the process crashes during write.
+        let tmp_path = path.with_extension("header.tmp");
+        {
+            let mut file = File::create(&tmp_path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 }

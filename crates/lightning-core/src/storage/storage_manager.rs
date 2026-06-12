@@ -598,6 +598,7 @@ impl StorageManager {
         stats: Option<crate::storage::stats::TableStats>,
     ) -> Result<()> {
         let mut columns = Vec::new();
+        let mut created_files: Vec<std::path::PathBuf> = Vec::new();
         let version_info = Arc::new(RowVersion::new());
         if !is_rel {
             let col_fh = Arc::new(FileHandle::open(

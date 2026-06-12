@@ -39,9 +39,14 @@ impl FreeSpaceManager {
         }
         let buf =
             bincode::serialize(&*map).map_err(|e| crate::LightningError::Database(e.to_string()))?;
-        let mut file = File::create(path)?;
-        file.write_all(&buf)?;
-        file.sync_all()?;
+        // Write to temporary file first, then atomically rename
+        let tmp_path = path.with_extension("bin.tmp");
+        {
+            let mut file = File::create(&tmp_path)?;
+            file.write_all(&buf)?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 
