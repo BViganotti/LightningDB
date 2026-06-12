@@ -23,7 +23,7 @@ use crate::extract::{ConnectionPool, RequestIdExtension};
 use crate::routes;
 
 struct RateLimiter {
-    buckets: Mutex<HashMap<String, (u32, Instant)>>,
+    buckets: Mutex<HashMap<std::net::IpAddr, (u32, Instant)>>,
     max_requests: u32,
     window: Duration,
 }
@@ -37,7 +37,7 @@ impl RateLimiter {
         }
     }
 
-    fn check(&self, key: &str) -> bool {
+    fn check(&self, ip: std::net::IpAddr) -> bool {
         let mut buckets = self.buckets.lock();
         let now = Instant::now();
 
@@ -49,7 +49,7 @@ impl RateLimiter {
             });
         }
 
-        let entry = buckets.entry(key.to_string()).or_insert((0, now));
+        let entry = buckets.entry(ip).or_insert((0, now));
         if now.duration_since(entry.1) > self.window {
             *entry = (1, now);
             true
@@ -151,10 +151,10 @@ impl Server {
         // spoofable and allows attackers to bypass rate limits entirely.
         let client_ip = req.extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .map(|ci| ci.0.ip())
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
-        if !state.rate_limiter.check(&client_ip) {
+        if !state.rate_limiter.check(client_ip) {
             let mut resp = (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
             resp.headers_mut().insert(
                 header::RETRY_AFTER,
