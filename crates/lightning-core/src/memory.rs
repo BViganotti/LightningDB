@@ -147,7 +147,10 @@ fn minhash_similarity(a: &[u64], b: &[u64]) -> f64 {
             std::cmp::Ordering::Greater => j += 1,
         }
     }
-    intersection as f64 / MINHASH_K as f64
+    // Jaccard similarity: |intersection| / |union|
+    // For sorted MinHash signatures: union = a.len() + b.len() - intersection
+    let union = a.len() + b.len() - intersection;
+    if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
 }
 
 impl MemoryStore {
