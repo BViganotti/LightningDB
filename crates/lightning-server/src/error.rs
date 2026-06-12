@@ -68,8 +68,19 @@ impl IntoResponse for AppError {
             },
         };
 
+        // Sanitize error messages for HTTP responses.
+        // Internal errors must not leak file paths, stack traces, or
+        // implementation details to the client.
+        let user_message = match &self {
+            AppError::Internal(_) => "An internal error occurred".to_string(),
+            AppError::Db(lightning_core::LightningError::Internal(_)) => "An internal database error occurred".to_string(),
+            AppError::Db(lightning_core::LightningError::Database(_)) => "A database error occurred".to_string(),
+            AppError::Db(lightning_core::LightningError::Io(_)) => "An I/O error occurred".to_string(),
+            _ => self.to_string(),
+        };
+
         let error_response = ErrorResponse {
-            error: self.to_string(),
+            error: user_message,
             code,
             details: None,
             request_id: None,
