@@ -78,14 +78,15 @@ impl Alp {
                 Self::NEG_INF_SENTINEL
             };
         }
-        if tmp >= i64::MAX as f64 {
+        // Saturating cast to avoid overflow on extreme values
+        let rounded = tmp.round();
+        if rounded >= (i64::MAX - 1) as f64 {
             return i64::MAX;
         }
-        if tmp <= i64::MIN as f64 {
-            // Use NEG_INF_SENTINEL to avoid collision with NAN_SENTINEL (also i64::MIN)
+        if rounded <= (i64::MIN + 2) as f64 {
             return Self::NEG_INF_SENTINEL;
         }
-        tmp.round() as i64
+        rounded as i64
     }
 
     pub fn decode_value(encoded: i64, fac_idx: u8, exp_idx: u8) -> f64 {
