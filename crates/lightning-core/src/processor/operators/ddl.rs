@@ -344,19 +344,25 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                         "Table '{}' already exists", name
                     )));
                 }
-                // 1. Update Catalog
+                // Acquire both locks, do both updates, rollback on failure
                 let mut catalog = database.catalog.write();
                 catalog.add_node_table(name.clone(), columns.clone(), Some(primary_key.clone()))?;
 
-                // 2. Update Storage
                 let mut storage = database.storage_manager.write();
                 let col_defs = columns
                     .iter()
                     .map(|c| (c.name.clone(), c.type_.clone()))
                     .collect();
-                storage.create_table(name.clone(), col_defs, false, None)?;
+                if let Err(e) = storage.create_table(name.clone(), col_defs, false, None) {
+                    // Rollback catalog on storage failure
+                    catalog.node_tables.remove(name);
+                    return Err(e);
+                }
                 if !primary_key.is_empty() {
-                    storage.create_index(name)?;
+                    if let Err(e) = storage.create_index(name) {
+                        catalog.node_tables.remove(name);
+                        return Err(e);
+                    }
                 }
                 storage.set_fsm_on_all_file_handles();
 
@@ -385,7 +391,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                         "Table '{}' already exists", name
                     )));
                 }
-                // 1. Update Catalog
+                // Acquire both locks, do both updates, rollback on failure
                 let mut catalog = database.catalog.write();
                 catalog.add_rel_table(
                     name.clone(),
@@ -394,13 +400,16 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     columns.clone(),
                 )?;
 
-                // 2. Update Storage
                 let mut storage = database.storage_manager.write();
                 let col_defs = columns
                     .iter()
                     .map(|c| (c.name.clone(), c.type_.clone()))
                     .collect();
-                storage.create_table(name.clone(), col_defs, true, None)?;
+                if let Err(e) = storage.create_table(name.clone(), col_defs, true, None) {
+                    // Rollback catalog on storage failure
+                    catalog.rel_tables.remove(name);
+                    return Err(e);
+                }
                 storage.set_fsm_on_all_file_handles();
 
                 // 3. Register for rollback
