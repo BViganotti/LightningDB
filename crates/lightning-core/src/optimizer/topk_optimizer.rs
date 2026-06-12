@@ -19,12 +19,47 @@ impl TopKOptimizer {
         Ok(plan)
     }
 
+    /// Look through Projection/Filter layers to find a Sort operator.
+    fn find_sort_through_passthrough(&self, plan: &LogicalOperator) -> Option<Vec<crate::planner::binder::BoundOrderByItem>> {
+        match plan {
+            LogicalOperator::Sort(_, items) => Some(items.clone()),
+            LogicalOperator::Projection(child, _) | LogicalOperator::Filter(child, _) => {
+                self.find_sort_through_passthrough(child)
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract the Sort's child, preserving any Projection/Filter layers above it.
+    fn extract_sort_child(&self, plan: &LogicalOperator) -> Box<LogicalOperator> {
+        match plan {
+            LogicalOperator::Sort(child, _) => Box::new(child.as_ref().clone()),
+            LogicalOperator::Projection(child, items) => {
+                Box::new(LogicalOperator::Projection(
+                    self.extract_sort_child(child),
+                    items.clone(),
+                ))
+            }
+            LogicalOperator::Filter(child, expr) => {
+                Box::new(LogicalOperator::Filter(
+                    self.extract_sort_child(child),
+                    expr.clone(),
+                ))
+            }
+            _ => Box::new(plan.clone()),
+        }
+    }
+
     fn push_down(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
         match plan {
             LogicalOperator::Limit(child, limit) => {
                 let pushed_child = self.push_down(*child)?;
-                if let LogicalOperator::Sort(grandchild, sort_items) = pushed_child {
-                    Ok(LogicalOperator::TopK(grandchild, sort_items, limit))
+                // Look through Projection and Filter to find Sort for TopK fusion
+                if let Some(sort_items) = self.find_sort_through_passthrough(&pushed_child) {
+                    // Found Limit → [Projection/Filter]* → Sort pattern.
+                    // Extract the Sort's child and build TopK.
+                    let sort_child = self.extract_sort_child(&pushed_child);
+                    Ok(LogicalOperator::TopK(sort_child, sort_items, limit))
                 } else {
                     Ok(LogicalOperator::Limit(Box::new(pushed_child), limit))
                 }
