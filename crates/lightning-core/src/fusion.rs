@@ -484,7 +484,10 @@ ORDER BY n_mod".to_string();
                      SET n.page_rank = row.rank".to_string();
                 let mut params = HashMap::new();
                 params.insert("updates".to_string(), Value::List(updates));
-                let _ = conn.execute(&batch_update, Some(params));
+                conn.execute(&batch_update, Some(params))
+                    .map_err(|e| crate::LightningError::Internal(format!(
+                        "PageRank writeback failed: {e}"
+                    )))?;
             }
         }
 
