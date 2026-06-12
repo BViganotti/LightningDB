@@ -255,11 +255,24 @@ impl LogicalOperator {
             | LogicalOperator::Limit(child, _)
             | LogicalOperator::TopK(child, _, _)
             | LogicalOperator::Skip(child, _)
-            | LogicalOperator::Subquery(child) => {
+            | LogicalOperator::Subquery(child)
+            | LogicalOperator::Flatten(child)
+            | LogicalOperator::UnwindDedup(child, _)
+            | LogicalOperator::Distinct(child, _)
+            | LogicalOperator::Accumulate(child)
+            | LogicalOperator::Profile(child)
+            | LogicalOperator::Explain(child)
+            | LogicalOperator::With(child, _, _)
+            | LogicalOperator::Delete(child, _, _)
+            | LogicalOperator::Set(child, _) => {
                 count += child.node_count();
             }
-            LogicalOperator::Join(left, right, _) => {
+            LogicalOperator::Join(left, right, _)
+            | LogicalOperator::Union(left, right, _) => {
                 count += left.node_count() + right.node_count();
+            }
+            LogicalOperator::OptionalMatch(child, inner) => {
+                count += child.node_count() + inner.node_count();
             }
             LogicalOperator::Aggregate { child, .. } => {
                 count += child.node_count();
@@ -268,10 +281,21 @@ impl LogicalOperator {
                 count += child.node_count();
             }
             LogicalOperator::CreateNode(None, _) | LogicalOperator::CreateRel(None, _) => {}
-            LogicalOperator::Delete(child, _, _) | LogicalOperator::Set(child, _) => {
+            LogicalOperator::RecursiveJoin { child, .. } => {
                 count += child.node_count();
             }
-            LogicalOperator::RecursiveJoin { .. } | LogicalOperator::Intersect { .. } => {}
+            LogicalOperator::Intersect { probe_child, build_children, .. } => {
+                count += probe_child.node_count();
+                for bc in build_children {
+                    count += bc.node_count();
+                }
+            }
+            LogicalOperator::SemiJoin(left, right, _, _) => {
+                count += left.node_count() + right.node_count();
+            }
+            LogicalOperator::Merge { child, .. } => {
+                count += child.node_count();
+            }
             _ => {}
         }
         count
