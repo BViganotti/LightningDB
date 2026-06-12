@@ -361,6 +361,8 @@ impl Value {
                     .value(i),
             ),
             arrow::datatypes::DataType::Int64 => {
+                // NOTE: i64 → f64 cast is lossy for values beyond ±2^53.
+                // A proper fix would add an Int64 variant to Value.
                 Value::Number(array.as_primitive::<arrow::datatypes::Int64Type>().value(i) as f64)
             }
             arrow::datatypes::DataType::Int32 => {
