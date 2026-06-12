@@ -33,6 +33,10 @@ pub async fn query_handler(
             .collect::<std::collections::HashMap<_, _>>()
     });
 
+    // Acquire concurrency permit to prevent spawn_blocking pool exhaustion
+    let _permit = state.query_semaphore.acquire().await
+        .map_err(|_| AppError::Internal("Query concurrency limit exceeded".into()))?;
+
     let result = tokio::time::timeout(timeout_dur, tokio::task::spawn_blocking(move || {
         if let Some(ts) = req.snapshot_ts {
             conn.execute_at(&req.query, ts, params)

@@ -60,7 +60,12 @@ pub struct AppState {
     pub request_counter: AtomicU64,
     pub connection_pool: Arc<ConnectionPool>,
     rate_limiter: Arc<RateLimiter>,
+    /// Semaphore to limit concurrent query execution and prevent
+    /// spawn_blocking pool exhaustion from a single client.
+    pub query_semaphore: Arc<tokio::sync::Semaphore>,
 }
+
+const MAX_CONCURRENT_QUERIES: usize = 64;
 
 impl AppState {
     pub fn new(db: Database, store: MemoryStore, config: ServerConfig) -> Self {
@@ -72,6 +77,7 @@ impl AppState {
             request_counter: AtomicU64::new(0),
             connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db_arc))),
             rate_limiter: Arc::new(RateLimiter::new(100, 1)), // 100 req/sec per IP
+            query_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_QUERIES)),
         }
     }
 }
@@ -85,6 +91,7 @@ impl Clone for AppState {
             request_counter: AtomicU64::new(self.request_counter.load(Ordering::Relaxed)),
             connection_pool: Arc::clone(&self.connection_pool),
             rate_limiter: Arc::clone(&self.rate_limiter),
+            query_semaphore: Arc::clone(&self.query_semaphore),
         }
     }
 }
