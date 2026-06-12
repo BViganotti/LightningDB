@@ -142,32 +142,19 @@ impl FunctionRegistry {
                                 "LOWER expects a String argument".into(),
                             )
                         })?;
-                    let offsets = string_array.value_offsets();
-                    let values = string_array.value_data();
-                    let mut out_values = Vec::<u8>::with_capacity(values.len());
-                    let mut out_offsets = Vec::<i32>::with_capacity(offsets.len());
-                    out_offsets.push(0);
+                    let mut builder = arrow::array::StringBuilder::with_capacity(
+                        string_array.len(),
+                        string_array.value_data().len(),
+                    );
                     for i in 0..string_array.len() {
                         if string_array.is_null(i) {
-                            out_offsets.push(out_offsets.last().copied().unwrap_or(0));
-                            continue;
+                            builder.append_null();
+                        } else {
+                            let s = string_array.value(i);
+                            builder.append_value(s.to_lowercase());
                         }
-                        let start = offsets[i] as usize;
-                        let end = offsets[i + 1] as usize;
-                        let s = &values[start..end];
-                        for &b in s {
-                            out_values.push(b.to_ascii_lowercase());
-                        }
-                        out_offsets.push(out_values.len() as i32);
                     }
-                    let result = unsafe {
-                        arrow::array::StringArray::new_unchecked(
-                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(out_offsets)),
-                            out_values.into(),
-                            None,
-                        )
-                    };
-                    Ok(Arc::new(result))
+                    Ok(Arc::new(builder.finish()))
                 }),
             ),
         );
