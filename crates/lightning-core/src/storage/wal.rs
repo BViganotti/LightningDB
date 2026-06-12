@@ -560,6 +560,27 @@ impl WALRecordIter {
                     let off = self.pos + 1 + WAL_CHECKSUM_SIZE;
                     let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
 
+                    // Validate CRC for commit records
+                    let mut crc_bytes = [0u8; WAL_CHECKSUM_SIZE];
+                    crc_bytes.copy_from_slice(&self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE]);
+                    let stored_crc = u32::from_le_bytes(crc_bytes);
+                    let data_start = self.pos + 1 + WAL_CHECKSUM_SIZE;
+                    let data_end = data_start + 8;
+                    if data_end <= self.buf.len() {
+                        let mut digest = CRC32C.digest();
+                        digest.update(&self.buf[data_start..data_end]);
+                        let computed_crc = digest.finalize();
+                        if computed_crc != stored_crc {
+                            tracing::warn!(
+                                "Skipping corrupt WAL commit record (CRC mismatch: computed {:08x} != stored {:08x})",
+                                computed_crc, stored_crc
+                            );
+                            self.pos += needed;
+                            self.align_position();
+                            continue;
+                        }
+                    }
+
                     let record = WALRecord::Commit { tx_id };
 
                     self.pos += needed;
