@@ -682,22 +682,14 @@ impl Column {
         let last_page = (offset + num_values - 1) / values_per_page;
         let num_pages = last_page - first_page + 1;
 
-        let mut data_buf = Vec::with_capacity((num_pages as usize) * 4096);
-        // SAFETY: SAFETY: `set_len` on a freshly allocated Vec is safe because `read_pages` immediately fills the buffer with valid data from disk.
-        unsafe {
-            data_buf.set_len((num_pages as usize) * 4096);
-        }
+        let mut data_buf = vec![0u8; (num_pages as usize) * 4096];
         self.fh.read_pages(first_page, num_pages, &mut data_buf)?;
 
         // Batch read null pages
         let null_first_page = offset / 4096;
         let null_last_page = (offset + num_values - 1) / 4096;
         let num_null_pages = null_last_page - null_first_page + 1;
-        let mut null_data = Vec::with_capacity((num_null_pages as usize) * 4096);
-        // SAFETY: SAFETY: Same as above — immediately filled by `read_pages`.
-        unsafe {
-            null_data.set_len((num_null_pages as usize) * 4096);
-        }
+        let mut null_data = vec![0u8; (num_null_pages as usize) * 4096];
         self.null_fh
             .read_pages(null_first_page, num_null_pages, &mut null_data)?;
 
@@ -1005,12 +997,7 @@ impl Column {
             let num_pages = last_page - first_page + 1;
             let expected_bytes = (num_pages as usize) * 4096;
 
-            // Read directly into Vec, bypassing zeroing initialization
-            let mut data_vec = Vec::with_capacity(expected_bytes);
-            // SAFETY: SAFETY: Pinned frame access within pin-unpin lifecycle. The write is to a CoW page version owned exclusively by this transaction.
-            unsafe {
-                data_vec.set_len(expected_bytes);
-            }
+            let mut data_vec = vec![0u8; expected_bytes];
             self.fh.read_pages(first_page, num_pages, &mut data_vec)?;
             // Truncate down to the exact requested data size
             data_vec.truncate(total_bytes);
@@ -1021,11 +1008,7 @@ impl Column {
                 let null_first_page = offset / 4096;
                 let null_last_page = (offset + num_values - 1) / 4096;
                 let num_null_pages = null_last_page - null_first_page + 1;
-                let mut null_data = Vec::with_capacity((num_null_pages as usize) * 4096);
-                // SAFETY: SAFETY: Same pin-unpin invariant.
-                unsafe {
-                    null_data.set_len((num_null_pages as usize) * 4096);
-                }
+                let mut null_data = vec![0u8; (num_null_pages as usize) * 4096];
                 self.null_fh
                     .read_pages(null_first_page, num_null_pages, &mut null_data)?;
 
@@ -1070,21 +1053,13 @@ impl Column {
             let first_page = offset / values_per_page;
             let last_page = (offset + num_values - 1) / values_per_page;
             let num_pages = last_page - first_page + 1;
-            let mut pages_buf = Vec::with_capacity((num_pages as usize) * 4096);
-            // SAFETY: SAFETY: Immediately filled by read_pages syscall.
-            unsafe {
-                pages_buf.set_len((num_pages as usize) * 4096);
-            }
+            let mut pages_buf = vec![0u8; (num_pages as usize) * 4096];
             self.fh.read_pages(first_page, num_pages, &mut pages_buf)?;
 
             let null_first_page = offset / 4096;
             let null_last_page = (offset + num_values - 1) / 4096;
             let num_null_pages = null_last_page - null_first_page + 1;
-            let mut null_pages = Vec::with_capacity((num_null_pages as usize) * 4096);
-            // SAFETY: SAFETY: Immediately filled by read_pages syscall.
-            unsafe {
-                null_pages.set_len((num_null_pages as usize) * 4096);
-            }
+            let mut null_pages = vec![0u8; (num_null_pages as usize) * 4096];
             self.null_fh
                 .read_pages(null_first_page, num_null_pages, &mut null_pages)?;
 
