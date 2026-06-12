@@ -76,17 +76,23 @@ pub fn build_query_stream(
                 return;
             }
         };
-        while let Ok(result) = rx.recv() {
-            match result {
-                Ok(chunk) => {
-                    let batch = &chunk.batch;
-                    for row_idx in 0..batch.num_rows() {
-                        let row = arrow_row_to_json(batch, row_idx);
-                        yield Ok(row);
+        loop {
+            match rx.recv() {
+                Ok(result) => match result {
+                    Ok(chunk) => {
+                        let batch = &chunk.batch;
+                        for row_idx in 0..batch.num_rows() {
+                            let row = arrow_row_to_json(batch, row_idx);
+                            yield Ok(row);
+                        }
                     }
-                }
-                Err(e) => {
-                    yield Err(e.to_string());
+                    Err(e) => {
+                        yield Err(e.to_string());
+                        return;
+                    }
+                },
+                Err(_) => {
+                    // Channel closed — query completed normally
                     return;
                 }
             }
