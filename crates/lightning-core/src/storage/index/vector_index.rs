@@ -347,10 +347,23 @@ impl VectorIndex {
                     let emb_offset = offset + 12;
                     let frame_slice = frame.as_slice();
                     let emb_bytes = &frame_slice[emb_offset..emb_offset + dim * 4];
-                    let emb_f32: &[f32] = unsafe {
-                        std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)
+
+                    // SAFETY: emb_bytes may not be aligned to 4 bytes (f32 alignment).
+                    // We check alignment and fall back to byte-by-byte conversion if needed.
+                    let emb_f32: Vec<f32> = if emb_bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0 {
+                        // Aligned: can use direct slice cast
+                        let raw = unsafe {
+                            std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)
+                        };
+                        raw.to_vec()
+                    } else {
+                        // Unaligned: convert byte-by-byte
+                        emb_bytes.chunks_exact(4)
+                            .take(dim)
+                            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                            .collect()
                     };
-                    let dot = Self::dot_product(emb_f32, &query_normed);
+                    let dot = Self::dot_product(&emb_f32, &query_normed);
 
                     bm.unpin_page(&self.file_handle, page_idx, frame);
 
