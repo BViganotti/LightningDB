@@ -58,8 +58,8 @@ pub struct AppState {
     pub store: Arc<MemoryStore>,
     pub config: ServerConfig,
     pub request_counter: AtomicU64,
-    pub connection_pool: ConnectionPool,
-    rate_limiter: RateLimiter,
+    pub connection_pool: Arc<ConnectionPool>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl AppState {
@@ -70,8 +70,8 @@ impl AppState {
             store: Arc::new(store),
             config,
             request_counter: AtomicU64::new(0),
-            connection_pool: ConnectionPool::new(Arc::clone(&db_arc)),
-            rate_limiter: RateLimiter::new(100, 1), // 100 req/sec per IP
+            connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db_arc))),
+            rate_limiter: Arc::new(RateLimiter::new(100, 1)), // 100 req/sec per IP
         }
     }
 }
@@ -83,8 +83,8 @@ impl Clone for AppState {
             store: Arc::clone(&self.store),
             config: self.config.clone(),
             request_counter: AtomicU64::new(self.request_counter.load(Ordering::Relaxed)),
-            connection_pool: ConnectionPool::new(Arc::clone(&self.db)),
-            rate_limiter: RateLimiter::new(100, 1),
+            connection_pool: Arc::clone(&self.connection_pool),
+            rate_limiter: Arc::clone(&self.rate_limiter),
         }
     }
 }

@@ -1,1294 +1,522 @@
-# Lightning Codebase Deep Audit Report
+# Lightning Database — Deep Code Audit Report
 
-**Date:** 2026-06-11
-**Methodology:** Pure code analysis of all `.rs` files. No documentation consulted.
-**Coverage:** ~80 source files across 4 crates (lightning-core, lightning-server, lightning, lightning-arrow).
-**Categories:** CRITICAL > HIGH > MEDIUM > LOW
+**Date:** 2026-06-12  
+**Scope:** All `.rs` files under `crates/` (562 files total, ~200 production source files audited)  
+**Methodology:** File-by-file manual audit + automated pattern scanning  
+**Excludes:** `.forge/worktrees/`, `target/`, test files (tested separately)
 
 ---
 
-## CRITICAL FINDINGS (Must Fix Immediately — Correctness/Data Loss/Panic/Security)
+## Executive Summary
 
----
-
-### C1. Subquery Unnesting EXISTS is Broken — Produces Fabricated Variable Names
-**FILE:** `crates/lightning-core/src/optimizer/subquery_unnesting.rs:138-161`
-**CATEGORY:** Correctness Bug
-**ISSUE:** Semi-join condition for `EXISTS` unnesting uses `PropertyLookup(format!("__sub_{}", common[0]), 0, Any)` with a prefixed variable `__sub_` that DOES NOT exist in the sub-plan. The join condition can NEVER match, making EXISTS subqueries always return false. Also uses hardcoded column index `0` instead of actual schema analysis.
-
----
-
-### C2. Join Reordering O(3^n) with n=30 Limit — Will Hang Indefinitely
-**FILE:** `crates/lightning-core/src/optimizer/join_reordering.rs:117-121`
-**CATEGORY:** Performance/Correctness
-**ISSUE:** DP algorithm using Gosper's hack enumerates all subsets. For n=15, ~14M iterations; for n=30, NEVER terminates. Limit should be n<=12 or switch to a greedy/heuristic for larger joins.
-
----
-
-### C3. `subquery_unnesting.rs` — Only Processes First Match Clause
-**FILE:** `crates/lightning-core/src/optimizer/subquery_unnesting.rs:89,97`
-**CATEGORY:** Correctness Bug
-**ISSUE:** Only `steps.first()` is processed. Multi-pattern EXISTS e.g. `EXISTS { (a)-[:R]->(b), (b)-[:S]->(c) }` silently ignores subsequent patterns.
-
----
-
-### C4. Rate Limiter HashMap Grows Unbounded — Memory Leak
-**FILE:** `crates/lightning-server/src/server.rs:25-54`
-**CATEGORY:** Security/Performance
-**ISSUE:** `RateLimiter` bucket HashMap never evicts stale IP entries. Under sustained attack from many IPs, memory leaks indefinitely.
-
----
-
-### C5. Broken AppState Clone — RateLimiter / ConnectionPool Silently Become Independent
-**FILE:** `crates/lightning-server/src/server.rs:79-89`
-**CATEGORY:** Correctness
-**ISSUE:** `AppState::clone()` creates independent `RateLimiter` and `ConnectionPool` instances. Rate limits do NOT apply to clones. If state is cloned anywhere, rate limiting silently breaks.
-
----
-
-### C6. X-Forwarded-For Spoofing — Rate Limiting Bypass
-**FILE:** `crates/lightning-server/src/server.rs:132-136`
-**CATEGORY:** Security
-**ISSUE:** `X-Forwarded-For` header trusted blindly from any caller. Attacker can spoof IPs to bypass rate limiting or frame other IPs. Must validate against trusted proxy list.
-
----
-
-### C7. Error Messages Leak Internal Info to Clients
-**FILE:** `crates/lightning-server/src/error.rs:72`
-**CATEGORY:** Security
-**ISSUE:** `ErrorResponse.error` uses `self.to_string()` — leaks FULL internal error messages including file paths, query fragments, and schema details to HTTP clients. Information disclosure.
-
----
-
-### C8. Arrow Downcast Panics in Streaming
-**FILE:** `crates/lightning-server/src/streaming.rs:20-44`
-**CATEGORY:** ErrorHandling/Panic
-**ISSUE:** Multiple `.unwrap()` calls on `downcast_ref` — if an Arrow type not in the match arms (Int32, Int16, Timestamp, Date32, etc.) is encountered, the server PANICS. Reachable from user input.
-
----
-
-### C9. CountRelTable Uses Empty `bound_table` and Empty `dependent_group_by_cols`
-**FILE:** `crates/lightning-core/src/optimizer/count_rel_table_optimizer.rs:41,77`
-**CATEGORY:** Unimplemented/Correctness
-**ISSUE:** `bound_table: String::new()` is empty. `dependent_group_by_cols: Vec::new()` discards any previously computed dependent columns. Optimization produces incorrect results.
-
----
-
-### C10. Cardinality Estimator XOR Produces Negative Selectivities
-**FILE:** `crates/lightning-core/src/optimizer/cardinality_estimator.rs:99-103`
-**CATEGORY:** Correctness
-**ISSUE:** XOR selectivity `s1 + s2 - 2.0 * s1 * s2` can produce negative values (e.g., s1=0.8, s2=0.8 -> -0.48). Must clamp to [0.0, 1.0].
-
----
-
-### C11. SSL/TLS Server Skips Graceful Shutdown
-**FILE:** `crates/lightning-server/src/server.rs:300-303`
-**CATEGORY:** ErrorHandling
-**ISSUE:** TLS path does NOT use `with_graceful_shutdown()`. Non-TLS path does. TLS connections abruptly terminated on SIGTERM, losing in-flight data.
-
----
-
-### C12. ConnectionPool is a Factory, Not a Pool
-**FILE:** `crates/lightning-server/src/extract.rs:13-27`
-**CATEGORY:** Performance/Security
-**ISSUE:** `acquire()` calls `db.connect()` on every request — creates a brand-new connection each time. No reuse, no pooling, no max connections enforcement. Attacker can exhaust DB connections.
-
----
-
-### C13. Unbounded Channel in Subscribe Handler
-**FILE:** `crates/lightning-server/src/routes/subscribe.rs:15,18-37`
-**CATEGORY:** Performance/Security
-**ISSUE:** `mpsc::unbounded_channel` + infinite spawn_blocking loop = unbounded memory growth if CDC outpaces slow SSE client. Resource exhaustion/OOM risk.
-
----
-
-### C14. `column.rs` — `set_len` Before `read_pages` Produces Uninitialized Memory
-**FILE:** `crates/lightning-core/src/storage/column.rs:686-700`
-**CATEGORY:** Unsafe/Correctness
-**ISSUE:** `set_len` on freshly allocated Vec happens BEFORE `read_pages` call, not after. If `read_pages` returns early (partial read), Vec contains uninitialized bytes that are later read.
-
----
-
-### C15. `buffer_manager.rs` — `flush_all` Has Broken Indentation Suggesting Compilation Bug
-**FILE:** `crates/lightning-core/src/storage/buffer_manager.rs:828-837`
-**CATEGORY:** Correctness
-**ISSUE:** Mismatched indentation suggests a structural bug in `flush_all` loop. Verify with `cargo check`.
-
----
-
-### C16. `lightning-core/src/api.rs` — `'static` Lifetime Lie
-**FILE:** `crates/lightning-core/src/api.rs:9`
-**CATEGORY:** Unsafe/Unsound
-**ISSUE:** `c_str_to_str` returns `Result<&'static str, ...>` — the `'static` lifetime is a fabrication. The returned `&str` borrows from the `CStr::from_ptr` temporary. UB possible.
-
----
-
-### C17. CDC Events Silently Lost When Channel Full
-**FILE:** `crates/lightning-core/src/cdc.rs:101`
-**CATEGORY:** DataLoss
-**ISSUE:** `let _ = tx.try_send(event)` silently drops CDC events when channel full. No backpressure or buffering. Events permanently lost.
-
----
-
-### C18. Column Clone Silently Discards Pending Nulls
-**FILE:** `crates/lightning-core/src/storage/column.rs:54-56`
-**CATEGORY:** Correctness Bug
-**ISSUE:** `Clone` impl initializes `pending_nulls` as empty `Mutex::new(Vec::new())`. If a clone is used for reads, pending null changes are lost, producing incorrect `is_null()` results.
-
----
-
-### C19. Parser Normalizes Queries Inside String Literals
-**FILE:** `crates/lightning-core/src/parser/mod.rs:42-68`
-**CATEGORY:** Correctness
-**ISSUE:** `preprocess_distinct_functions` does case-insensitive substring matching on the ENTIRE query string including string literals. `SET n.x = 'COUNT(DISTINCT x)'` gets corrupted.
-
----
-
-### C20. Variable-Length Edge Patterns Silently Ignored in Parser
-**FILE:** `crates/lightning-core/src/parser/mod.rs:886-888`
-**CATEGORY:** Correctness Bug
-**ISSUE:** `parse_relationship_pattern` calls `parse_var_len` but NEVER assigns the return value to `b` (the `var_len_bounds` field). `-[r*2..5]->` syntax is parsed but produces `var_len_bounds: None`.
-
----
-
-### C21. Memory Consolidation Config Logic Bug
-**FILE:** `crates/lightning-server/src/routes/memory.rs:279-299`
-**CATEGORY:** ErrorHandling/Unimplemented
-**ISSUE:** The `if` check triggers when ANY optional config field is `Some`, but then requires ALL fields via `ok_or_else`. If user provides only `similarity_threshold`, they get an error for missing `contradiction_jaccard_max`.
-
----
-
-### C22. `build_array` Panics on Unhandled DataTypes
-**FILE:** `crates/lightning-core/src/storage/column.rs:1192`
-**CATEGORY:** Unimplemented
-**ISSUE:** `build_array` ends with `_ => unreachable!()`. Unsupported DataTypes (Date32, Timestamp, etc.) panic at runtime. Should return `Err`.
-
----
-
-### C23. `ProjectionPushdown` Catch-All Silently Skips Most Operators
-**FILE:** `crates/lightning-core/src/optimizer/projection_pushdown.rs:399-408`
-**CATEGORY:** Unimplemented
-**ISSUE:** The `_` wildcard catches ALL unhandled operator types (Unwind, Distinct, SemiJoin, Union, Intersect, Optional, With, etc.) and falls through to generic recursion. No column pruning on these subtrees.
-
----
-
-### C24. 4 Optimizer Files Are Complete No-Ops
-**FILES:**
-- `crates/lightning-core/src/optimizer/order_by_pushdown.rs:22-34`
-- `crates/lightning-core/src/optimizer/limit_pushdown.rs:27-33`
-- `crates/lightning-core/src/optimizer/factorization_rewriter.rs:20-53`
-- `crates/lightning-core/src/optimizer/foreign_join_pushdown.rs:18-45`
-**CATEGORY:** Unimplemented
-**ISSUE:** These 4 files traverse the plan tree but perform ZERO actual transformations. Dead code that adds overhead.
-
----
-
-### C25. Multiple `.expect()` Panics Across Server — Crashes in Production
-**FILES:**
-- `crates/lightning-server/src/server.rs:285,290,294,298,303,307,312,323,329`
-- `crates/lightning-server/src/routes/query.rs:95,97,102`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Numerous `.expect()` calls will panic and crash the entire server on edge cases. TLS config errors, bind failures, JSON serialization failures all abort the process.
-
----
-
-## HIGH FINDINGS (Should Fix Soon — Significant Impact)
-
----
-
-### H1. 6 Optimizer Rules Permanently Disabled
-**FILE:** `crates/lightning-core/src/optimizer/mod.rs:39,43-51`
-**CATEGORY:** Unimplemented
-**ISSUE:** ProjectionPushDown, IndexPushDown, SemiJoinPushDown, AccHashJoinOptimizer, AggKeyDependencyOptimizer, CountRelTableOptimizer are all commented out in the optimizer pipeline. Fundamental optimizations never run in production.
-
----
-
-### H2. Cardinality Estimator Uses Entirely Hardcoded Magic Numbers
-**FILE:** `crates/lightning-core/src/optimizer/cardinality_estimator.rs:26,34,74,85,106-108,135,142,148`
-**CATEGORY:** Correctness
-**ISSUE:** Fallback cardinality `1000`, default selectivity `0.1`, range selectivity `0.33` — completely arbitrary, not based on actual data stats. All cost-based decisions are wrong for most real-world data.
-
----
-
-### H3. Auth Token Comparison Vulnerable to Timing Attacks
-**FILE:** `crates/lightning-server/src/server.rs:215-216`
-**CATEGORY:** Security
-**ISSUE:** Token comparison uses `!=` (standard string equality). Vulnerable to timing side-channel. Use constant-time comparison.
-
----
-
-### H4. Rate Limiting is INNERMOST Layer
-**FILE:** `crates/lightning-server/src/server.rs:264-268`
-**CATEGORY:** Security/Performance
-**ISSUE:** Rate limiting runs AFTER compression, body limit, CORS, and tracing. A 10MB POST body is fully decompressed before rate limiting rejects it. Should be outermost.
-
----
-
-### H5. /metrics Endpoint NOT Behind Auth
-**FILE:** `crates/lightning-server/src/server.rs:228,251,255`
-**CATEGORY:** Security
-**ISSUE:** `/metrics` endpoint exposed without authentication regardless of `auth_token` config. Anyone can scrape query counts, uptime, buffer hit rate.
-
----
-
-### H6. Health Endpoint Does NOT Check Database Connectivity
-**FILE:** `crates/lightning-server/src/routes/health.rs:3-9`
-**CATEGORY:** Unimplemented
-**ISSUE:** Health endpoint returns `{"status":"ok"}` even if database is dead or corrupted. False-positive health check.
-
----
-
-### H7. No Input Validation on Batch Sizes, Embedding Vectors, Query Sizes
-**FILES:**
-- `crates/lightning-server/src/models/request.rs:8,24,31,57,62,66,115,129`
-- `crates/lightning-server/src/routes/memory.rs:77-115`
-**CATEGORY:** Security
-**ISSUE:** No limits on batch size (1M entities possible), embedding vector length (1M floats possible), `top_k` (could be 1,000,000), `hops` (could be u32::MAX). All lead to OOM or near-infinite loops.
-
----
-
-### H8. Non-Monotonic Clock for Timestamps
-**FILE:** `crates/lightning-server/src/routes/memory.rs:31-38`
-**CATEGORY:** Correctness
-**ISSUE:** `now_micros()` uses `SystemTime::now()` which is NOT monotonic. NTP adjustments and leap seconds cause timestamps to go backwards, corrupting entity ordering, TTL calculations, and time-based queries.
-
----
-
-### H9. `valid_until` Defaults to `i64::MAX` — 292 Billion Years
-**FILE:** `crates/lightning-server/src/routes/memory.rs:59,98`
-**CATEGORY:** Correctness
-**ISSUE:** Sentinel value I64::MAX can overflow in time arithmetic downstream. Should use a sentinel separate from the valid timestamp domain.
-
----
-
-### H10. Checkpoint and Vacuum Not Respecting Read-Only Mode
-**FILE:** `crates/lightning-server/src/routes/admin.rs:12-30,32-50`
-**CATEGORY:** Security
-**ISSUE:** Destructive/administrative operations are allowed even in `read_only` config mode.
-
----
-
-### H11. Full Query String Logged — PII Exposure
-**FILE:** `crates/lightning-server/src/routes/query.rs:53`
-**CATEGORY:** Security
-**ISSUE:** `tracing::info!` logs the complete query. If queries contain PII or credentials, they're exposed in logs.
-
----
-
-### H12. Write Endpoints Registered Unconditionally in Read-Only Mode
-**FILE:** `crates/lightning-server/src/server.rs:226-268`
-**CATEGORY:** Security
-**ISSUE:** All write endpoints (store, store-batch, associate) are registered even when `read_only` is configured, creating illusion of security while accepting POST requests.
-
----
-
-### H13. `.expect()` Panics on Database Open — Crashes Server
-**FILE:** `crates/lightning-server/src/main.rs:58,65`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `.expect()` on `Database::open_with_config` and `store.ensure_schema()` panics. Corrupt database or schema mismatch crashes the server.
-
----
-
-### H14. Subscribe Handler Task Never Cancels
-**FILE:** `crates/lightning-server/src/routes/subscribe.rs:18-37`
-**CATEGORY:** Performance
-**ISSUE:** `spawn_blocking` loops forever with no cancellation. If SSE client disconnects, the task continues running, wasting a blocking thread permanently.
-
----
-
-### H15. `inverted_index` — Insert Per Document Acquires Write Lock Per Iteration
-**FILE:** `crates/lightning-core/src/storage/index/inverted_index.rs:73-85`
-**CATEGORY:** Performance
-**ISSUE:** `insert_batch` acquires `self.writer.write()` inside a loop per document. For 1000 docs, lock acquired/released 1000 times.
-
----
-
-### H16. HNSW `visited_pool` Mutex Serializes All Searches
-**FILE:** `crates/lightning-core/src/storage/index/hnsw.rs:158-159`
-**CATEGORY:** Performance
-**ISSUE:** `search_layer` acquires `visited_pool.lock()` (Mutex) and holds it for the entire search. Only one `search_layer` invocation across all threads at a time. Should be thread-local.
-
----
-
-### H17. Hash Index Insert Serializes All Writes Under Single Mutex
-**FILE:** `crates/lightning-core/src/storage/index/hash_index.rs:514`
-**CATEGORY:** Performance
-**ISSUE:** `insert` acquires `resize_lock.lock()` even when no resize is needed. All insertions serialized.
-
----
-
-### H18. Trigram Index `insert_batch` — O(n^2) on Unsorted Lists
-**FILE:** `crates/lightning-core/src/storage/index/trigram_index.rs:270-273`
-**CATEGORY:** Performance
-**ISSUE:** `list.contains(&row_id)` is O(n) on unsorted lists. In each batch, lists grow unsorted and `contains` linear-scans. O(n^2) for large batches.
-
----
-
-### H19. `sync_all_data_files()` on Every Commit — Unnecessary fsync
-**FILE:** `crates/lightning-core/src/lib.rs:146-147`
-**CATEGORY:** Performance
-**ISSUE:** On every commit, ALL data files are synced regardless of which tables were modified. For databases with many tables, massive unnecessary fsync I/O.
-
----
-
-### H20. `FastInsert` — O(num_cols * num_rows) Hash Lookups
-**FILE:** `crates/lightning-core/src/lib.rs:996-998`
-**CATEGORY:** Performance
-**ISSUE:** Builds per-row `HashMap` then does nested loop `for col in columns... for row_idx in 0..num_rows`. Should invert: iterate rows first.
-
----
-
-### H21. Scalar Function `resolve_type()` — Empty Catch-All Returns Any
-**FILE:** `crates/lightning-core/src/processor/functions/scalar_function.rs:54`
-**CATEGORY:** Unimplemented
-**ISSUE:** Functions not explicitly listed silently return `LogicalType::Any`. Causes type errors downstream instead of failing at planning.
-
----
-
-### H22. `Sum::update_vector()` Does NOT Handle UInt64
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_function.rs:272`
-**CATEGORY:** Unimplemented
-**ISSUE:** UInt64Array has no handling branch — falls through silently. SUM of UInt64 columns accumulates nothing.
-
----
-
-### H23. Integer SUM/MIN/MAX Use Per-Row Loops Instead of Arrow Kernels
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_function.rs:269-270,441-448,530-538`
-**CATEGORY:** Performance
-**ISSUE:** Float64 uses `arrow::compute::kernels::aggregate::sum()` but ALL integer types use per-element loops. Massive performance gap.
-
----
-
-### H24. LOWER Function Registered Twice — Unicode Version Overwritten by ASCII Version
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:127-173,99-124`
-**CATEGORY:** Correctness/Unimplemented
-**ISSUE:** Unicode-aware `LOWER` registered then immediately overwritten by ASCII-only `LOWER`. UPPER stays Unicode, LOWER becomes ASCII-only. Inconsistent behavior.
-
----
-
-### H25. `Median::finalize()` — O(n log n) Sort Per Group
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_ext.rs:284`
-**CATEGORY:** Performance
-**ISSUE:** Clones entire values vector, sorts it. For 10M+ values per group, this is extremely slow. Should use quickselect (O(n)).
-
----
-
-### H26. `LEVENSHTEIN` — Full O(N*M) Matrix Per Row
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:2637-2684`
-**CATEGORY:** Performance
-**ISSUE:** Allocates full O(len1 * len2) matrix. A two-row rolling buffer uses O(min(len1, len2)).
-
----
-
-### H27. `RecordBatch::clone()` for StructArray Conversion
-**FILE:** `crates/lightning-arrow/src/lib.rs:44`
-**CATEGORY:** Performance
-**ISSUE:** `batch.clone().into()` clones entire RecordBatch (potentially GBs) for conversion to StructArray. Should use zero-copy.
-
----
-
-### H28. Arrow-to-JSON Downcast `.unwrap()` Panics on Type Mismatch
-**FILE:** `crates/lightning/src/types.rs:55-96`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Multiple `.unwrap()` on `downcast_ref<T>()` — if Array metadata doesn't match concrete type, panics entire process. Should use graceful fallback like `unwrap_or(Null)` instead.
-
----
-
-### H29. `Memory::parse_relationship_pattern` Var-Length Parser Bug
-**FILE:** `crates/lightning-core/src/memory.rs:886-888`
-**CATEGORY:** Correctness Bug
-**ISSUE:** `parse_var_len(i)` result is discarded with `if let Err(e) = ... { tracing::warn!(...) }`. `var_len_bounds` is never assigned. Variable-length edge patterns silently ignored in RAG memory queries.
-
----
-
-### H30. UndoBuffer Unimplemented Rollbacks
-**FILE:** `crates/lightning-core/src/storage/undo_buffer.rs:255-257,269-271`
-**CATEGORY:** Unimplemented
-**ISSUE:** `DropConstraint` rollback logs "not fully implemented" and does nothing. `DropIndex` rollback similarly logs a warning. Leaves corrupted state after rollback.
-
----
-
-### H31. macOS fsync — No F_FULLFSYNC for Durability
-**FILE:** `crates/lightning-core/src/storage/wal.rs:253-257`
-**CATEGORY:** Unsafe/Portability
-**ISSUE:** `unsafe { libc::fsync(sync_fd) }` — on macOS, fsync does NOT guarantee durability. `F_FULLFSYNC` required. All current macOS deployments have a false sense of data safety.
-
----
-
-### H32. `buffer_manager.rs` — `as_slice()` on UnsafeCell Without Lock Verification
-**FILE:** `crates/lightning-core/src/storage/buffer_manager.rs:39-41`
-**CATEGORY:** Unsafe
-**ISSUE:** `as_slice()` returns `&[u8]` from UnsafeCell with no runtime lock check. Caller must correctly hold external locks — no verification mechanism.
-
----
-
-### H33. Page Merge Locks HashMap Grows Unbounded — Memory Leak
-**FILE:** `crates/lightning-core/src/transaction/transaction_manager.rs:61,269-272`
-**CATEGORY:** MemoryLeak
-**ISSUE:** `page_merge_locks: HashMap<(u64, u64), Arc<Mutex<()>>>` — lock entries for (file_id, page_idx) remain forever. Pages modified once then never again cause permanent memory leak.
-
----
-
-### H34. 5-Second Timeout for Page Merge Deadlock "Detection"
-**FILE:** `crates/lightning-core/src/transaction/transaction_manager.rs:221-226`
-**CATEGORY:** Performance/Deadlock
-**ISSUE:** `try_lock_for(Duration::from_secs(5))` — real deadlock causes 5-second stall + error for ALL writers. Excessive timeout.
-
----
-
-### H35. Transaction Drop Without Commit — UndoRecords Incomplete
-**FILE:** `crates/lightning-core/src/transaction/transaction_manager.rs:372-411`
-**CATEGORY:** ResourceLeak
-**ISSUE:** If TransactionManager was dropped before Transaction, `active_tx_ids` and `active_read_ts` are never cleaned up. The Arc<RowVersion> tracking is lost.
-
----
-
-### H36. `capi.rs` — Error Messages Silently Replaced When Containing Null Bytes
-**FILE:** `crates/lightning-core/src/capi.rs:139`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `CString::new(msg).unwrap_or_else(|_| CString::new("error")...)` — if error contains null byte, all context is lost, replaced with "error".
-
----
-
-### H37. Parser `skip_clause` and `limit_clause` — Silently Default to 0
-**FILE:** `crates/lightning-core/src/parser/mod.rs:726-729,733-738`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `.unwrap_or(0.0)` on parse failures. `SKIP abc` silently becomes `SKIP 0` instead of parse error. Masks user typos.
-
----
-
-### H38. `buffer_manager.rs` — Eviction Sleep Blocks Transaction Threads
-**FILE:** `crates/lightning-core/src/storage/buffer_manager.rs:713-723,766,776`
-**CATEGORY:** Performance
-**ISSUE:** `evict_with_clock` has retry loop with `std::thread::sleep` (up to 30ms). For high-throughput workloads, creates latency spikes on transactions.
-
----
-
----
-
-## MEDIUM FINDINGS (Fix in Next Cycle)
-
----
-
-### M1. `UndoRecord::UpdateColumn` and `UndoRecord::DeleteNode` Arms Are No-Ops
-**FILE:** `crates/lightning-core/src/storage/undo_buffer.rs:72-78,80-85`
-**CATEGORY:** Unimplemented
-**ISSUE:** Effectively no-ops — comment says BufferManager handles rollback but these records should not be pushed at all.
-
----
-
-### M2. CDC Background Thread Reads WAL Per-Subscriber (Fan-Out Missing)
-**FILE:** `crates/lightning-core/src/cdc.rs:93-109`
-**CATEGORY:** Performance
-**ISSUE:** Each subscriber independently iterates WAL from their start_offset. Two subscribers sharing offsets = records read twice.
-
----
-
-### M3. LazyCatalog `save_if_needed` Race Condition
-**FILE:** `crates/lightning-core/src/catalog/lazy_catalog.rs:71-84`
-**CATEGORY:** Correctness/Race
-**ISSUE:** Dirty flag read outside write lock. Two threads can concurrently decide to save, causing write race.
-
----
-
-### M4. `capi.rs` — Database Init Swallows Validation Errors
-**FILE:** `crates/lightning-core/src/capi.rs:37-50`
-**CATEGORY:** Validation
-**ISSUE:** `buffer_pool_size: 0` or other invalid configs from C silently accepted. Error on line 57 swallowed with `ptr::null_mut()`.
-
----
-
-### M5. Catalog `get_constraint` — Linear Scan Instead of O(1) Index
-**FILE:** `crates/lightning-core/src/catalog/catalog.rs:489`
-**CATEGORY:** Performance
-**ISSUE:** `constraint_by_name` index exists but `get_constraint` doesn't use it. Does O(tables * constraints) linear scan.
-
----
-
-### M6. Parser Multiple `.expect()` Calls — Panics on Malformed Grammar
-**FILE:** `crates/lightning-core/src/parser/mod.rs:728,738`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `.expect("internal invariant violated")` panics when PEG grammar and parser get out of sync. Should return `ParserError::Internal`.
-
----
-
-### M7. `DESC` Detection Fails on Words Containing "DESC"
-**FILE:** `crates/lightning-core/src/parser/mod.rs:203`
-**CATEGORY:** Correctness
-**ISSUE:** `ORDER BY description` detects "desc" inside "description" and marks as descending incorrectly.
-
----
-
-### M8. Eviction `synced_fids` Single Mutex Contention
-**FILE:** `crates/lightning-core/src/storage/buffer_manager.rs:633-658`
-**CATEGORY:** Performance
-**ISSUE:** Checkpoint flushes dirty pages in parallel via rayon but `synced_fids` is single Mutex for every dirty page. Use per-thread local sets merged at end.
+| Severity | Count |
+|----------|-------|
+| **CRITICAL** | 17 |
+| **HIGH** | 52 |
+| **MEDIUM** | 78 |
+| **LOW** | 58 |
+| **TOTAL** | **205** |
 
----
-
-### M9. Trigram Index Worker Uses Rayon Thread for Long-Lived I/O Task
-**FILE:** `crates/lightning-core/src/storage/trigram_index_worker.rs:21`
-**CATEGORY:** Performance
-**ISSUE:** `rayon::spawn` for background I/O worker. Rayon threads designed for CPU-bound parallel, not I/O. Should use `std::thread::spawn`.
-
----
-
-### M10. Trigram Index Worker Polls Every 50ms Even When Idle
-**FILE:** `crates/lightning-core/src/storage/trigram_index_worker.rs:33`
-**CATEGORY:** Performance
-**ISSUE:** `recv_timeout(Duration::from_millis(50))` — constant polling wastes CPU in power-sensitive environments.
-
----
-
-### M11. Ineffective `build_query_stream` — Creates New Connection Per Stream Request
-**FILE:** `crates/lightning-server/src/streaming.rs:66`
-**CATEGORY:** Performance
-**ISSUE:** Accepts `Arc<Database>` but ignores it. Creates new connection via `db.connect()`. Never returned to pool.
-
----
-
-### M12. `RECALL` No Validation That Query OR Embedding Is Provided
-**FILE:** `crates/lightning-server/src/models/request.rs:62-69`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Both `query` and `embedding` are Optional with no validation that at least one is provided. Empty query + empty embedding = meaningless results.
-
----
-
-### M13. RAG Query No Timeout, No Depth Validation
-**FILE:** `crates/lightning-server/src/routes/rag.rs:9-65`
-**CATEGORY:** Performance
-**ISSUE:** `expansion_depth` could be arbitrarily large, `max_context_tokens` vast, causing unbounded computation.
-
----
-
-### M14. Pagerank Bulk Update Errors Silently Ignored
-**FILE:** `crates/lightning-core/src/fusion.rs:487`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `let _ = conn.execute(&batch_update, ...);` — if PageRank bulk update fails, scores computed in memory are lost with no indication.
-
----
-
-### M15. WASM Function — New Store + Instance Per Call
-**FILE:** `crates/lightning-core/src/wasm_function.rs:168,174`
-**CATEGORY:** Performance
-**ISSUE:** Each call creates new `wasmi::Store` and `wasmi::Instance`. Row-at-a-time execution creates N Stores per call.
-
----
-
-### M16. WASM Function — Registration Succeeds Silently on Compilation Failure
-**FILE:** `crates/lightning-core/src/wasm_function.rs:141-151`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Failed WASM compilation returns stub ScalarFunction that always errors at execution. Should fail at registration.
-
----
-
-### M17. Parser `parse_arithmetic` — Dead Code
-**FILE:** `crates/lightning-core/src/parser/mod.rs:1139-1154`
-**CATEGORY:** DeadCode
-**ISSUE:** Marked `#[allow(dead_code)]` — legacy function never called.
-
----
-
-### M18. AST Variants `CopyFrom`, `CopyTo`, `CreateSequence`, `CreateMacro` — Unreachable
-**FILE:** `crates/lightning-core/src/parser/ast.rs:70-76,81-84`
-**CATEGORY:** Unimplemented
-**ISSUE:** Defined in AST but never constructed by parser. Dead variants.
-
----
-
-### M19. `ConcatWs` — Per-Row, Per-Argument Cast Inside Loop
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:1994-2030`
-**CATEGORY:** Performance
-**ISSUE:** Each arg cast per row inside loop = N * M casts. Should hoist casts outside the loop.
-
----
-
-### M20. `JaroWinkler` — Potentially O(n^2) Inner Loop
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:3084-3163`
-**CATEGORY:** Performance
-**ISSUE:** Transposition counting has `while !s2_matches[k]` scan that can skip many elements, making it O(n^2).
-
----
-
-### M21. `drop/ch_tx` — Errors During Send Silently Swallowed
-**FILE:** `crates/lightning-core/src/processor/scheduler.rs:104`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Send errors during parallel execution only produce `tracing::warn!`. Data may be silently lost.
-
----
-
-### M22. `IVF::Centroids` — K-Means++ Not Used
-**FILE:** `crates/lightning-core/src/storage/index/ivf.rs:77-79`
-**CATEGORY:** Correctness
-**ISSUE:** First k data points used as initial centroids. Biased toward beginning of sorted data. Should use K-means++ or random sampling.
-
----
-
-### M23. `CSR::for_each_base_neighbor` — O(n) Deletions Check Per Neighbor
-**FILE:** `crates/lightning-core/src/storage/index/csr.rs:389-391`
-**CATEGORY:** Performance
-**ISSUE:** `deletions.contains(&(node_id, neighbor))` is O(n) on deletions Vec. Should use HashSet.
-
----
-
-### M24. `Delta::decompress_from_page` Ignores `src_offset`
-**FILE:** `crates/lightning-core/src/storage/compression/delta.rs:66-67`
-**CATEGORY:** Correctness
-**ISSUE:** `BitPacker::unpack_32` always starts from `src[0..]`. For non-zero `src_offset`, wrong bytes are uncompressed.
-
----
-
-### M25. `Alp::encode_value` — Threshold Precision Issue
-**FILE:** `crates/lightning-core/src/storage/compression/alp.rs:82-83`
-**CATEGORY:** Correctness
-**ISSUE:** `i64::MAX as f64` rounds to `9223372036854775808.0` > `i64::MAX`. Values just below i64::MAX get clipped.
-
----
-
-### M26. `BitPacker::pack_32` — Silently Produces No Output on bit_width=0 in Release
-**FILE:** `crates/lightning-core/src/storage/compression/bitpacking.rs:7-9`
-**CATEGORY:** Correctness
-**ISSUE:** `assert!` is not `debug_assert!`. In release, non-zero values with bit_width=0 silently produce no output.
-
----
-
-### M27. `ConstantCompression::decompress_from_page` — Placeholder
-**FILE:** `crates/lightning-core/src/storage/compression/mod.rs:126-128`
-**CATEGORY:** Unimplemented
-**ISSUE:** Comment says "In a real implementation, we'd use the physical type." Assumes 8-byte values.
-
----
-
-### M28. `analyzer::analyze_integer_chunk` — Empty Loop Body Bug
-**FILE:** `crates/lightning-core/src/storage/compression/analyzer.rs:67-91`
-**CATEGORY:** Correctness
-**ISSUE:** When `skip_minmax` is true, the for-loop has empty body — `all_same`, `count_same`, and prev are never updated.
-
----
-
-### M29. `PageState` — Misleading State Bit Size Comment
-**FILE:** `crates/lightning-core/src/storage/page_state.rs:24`
-**CATEGORY:** Documentation
-**ISSUE:** Comment says "7 bits for page state" but STATE_MASK = 0x3F = 6 bits. Comment is wrong.
-
----
-
-### M30. `overflow_file::read_string` — Off-By-One in Bounds Check
-**FILE:** `crates/lightning-core/src/storage/overflow_file.rs:40-41`
-**CATEGORY:** Correctness
-**ISSUE:** `current_offset > USABLE_SIZE` should be `>= USABLE_SIZE` for empty reads at end.
-
----
-
-### M31. `checkpoint_handler` and `vacuum_handler` — No Timeout, Blocking
-**FILE:** `crates/lightning-server/src/routes/admin.rs:12-50`
-**CATEGORY:** Performance
-**ISSUE:** Synchronous blocking calls with no timeout. Can hold async runtime thread for minutes.
-
----
-
-### M32. CORS Allows ALL HTTP Methods
-**FILE:** `crates/lightning-server/src/server.rs:176-201`
-**CATEGORY:** Security
-**ISSUE:** GET/POST/PUT/DELETE/OPTIONS all allowed. PUT and DELETE should be removed since API uses only GET/POST.
-
----
-
-### M33. `Error Classification` Uses String Matching
-**FILE:** `crates/lightning-server/src/error.rs:46-54`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `msg.contains("not found")` — if upstream error messages change phrasing, status codes become silently wrong.
-
----
-
-### M34. Duplication of Arrow-to-JSON Conversion Code
-**FILES:**
-- `crates/lightning/src/types.rs:53-98`
-- `crates/lightning-core/src/processor/arrow_utils.rs`
-**CATEGORY:** Simplification
-**ISSUE:** Same Arrow-to-JSON conversion logic duplicated across the `lightning` client crate. Should be unified into a single shared conversion function.
-
----
-
-### M35. `physical_plan.rs` — Join Key Resolution Fallback Silently Maps Both to Left
-**FILE:** `crates/lightning-core/src/processor/physical_plan.rs:920-941`
-**CATEGORY:** ErrorHandling
-**ISSUE:** If neither `a_in_left && b_in_right` nor `b_in_left && a_in_right`, both keys silently mapped to left side. Produces incorrect join results.
-
----
-
-### M36. `evaluator::compare_column_literal` — Integer Truncation
-**FILE:** `crates/lightning-core/src/processor/evaluator.rs:808-821`
-**CATEGORY:** Correctness
-**ISSUE:** Literal `Number(n)` cast to `*n as i64`. `WHERE x = 3.14` against Int64 column truncates 3.14 to 3.
-
----
-
-### M37. `arrow_utils::append_null_to_builder` — Only Supports Float32 List Inner Type
-**FILE:** `crates/lightning-core/src/processor/arrow_utils.rs:82-106`
-**CATEGORY:** Unimplemented
-**ISSUE:** All other inner types (Int64, String, Float64, etc.) fall through to error. Nulls cannot be appended to most list builders.
-
----
-
-### M38. `LimitPushdown` and `OrderByPushdown` Are Perpetually Disabled
-**FILE:** `crates/lightning-core/src/optimizer/mod.rs:39,43-51`
-**CATEGORY:** Unimplemented
-**ISSUE:** These important optimizations are commented out from the pipeline with comments about known bugs.
-
----
-
-### M39. `SemijoinPushdown` — Column Index for Right Side Discarded
-**FILE:** `crates/lightning-core/src/optimizer/semijoin_pushdown.rs:122,135`
-**CATEGORY:** Unimplemented
-**ISSUE:** `p2` (right side column index) destructured as `_` and discarded. Mask has no column index affinity.
-
----
-
-### M40. Undo Buffer On Disk File Paths — Fragile String Conventions
-**FILE:** `crates/lightning-core/src/storage/undo_buffer.rs:100-103`
-**CATEGORY:** ErrorHandling
-**ISSUE:** File paths reconstructed by naming conventions. If conventions change, undo silently fails.
-
----
-
-### M41. Trigrams — `posting_size_sum` Double-Counts
-**FILE:** `crates/lightning-core/src/storage/index/trigram_index.rs:297-300`
-**CATEGORY:** Correctness
-**ISSUE:** `posting_size_sum.fetch_add(size)` called every insert_batch for every posting. Doubles, triples, etc. over time. Should be a gauge, not counter.
-
----
-
-### M42. WASM Arity Dispatch — 3 Nearly Identical Code Blocks
-**FILE:** `crates/lightning-core/src/wasm_function.rs:155-250`
-**CATEGORY:** Simplification
-**ISSUE:** Three code blocks for 1/2/3 args differ only in tuple packing. Could use macro.
-
----
-
-### M43. `memory::forget_inner` Called Before `store_batch` — No Rollback
-**FILE:** `crates/lightning-core/src/memory.rs:226-227,1017-1020`
-**CATEGORY:** ErrorHandling
-**ISSUE:** If `store_batch` fails after `forget_inner` succeeds, the entity is deleted but not re-inserted.
-
----
-
-### M44. RAG Degree Computation — O(N) Round-Trips for Internal ID Resolution
-**FILE:** `crates/lightning-core/src/memory.rs:530`
-**CATEGORY:** Performance
-**ISSUE:** Each entity queries individually for internal ID resolution. Should batch-lookup once.
-
----
-
-### M45. `storage_manager::rebuild_csr` — Materializes All Edges Into Memory
-**FILE:** `crates/lightning-core/src/storage/storage_manager.rs:1067-1079`
-**CATEGORY:** Performance
-**ISSUE:** `table.columns[0].scan()` and `columns[1].scan()` materialize ALL src/dst IDs into Vecs. For millions of edges = OOM.
+Top-level pattern counts across production code:
 
----
-
-### M46. `VectorIndex::delete` — Triggers Full Index Rebuild
-**FILE:** `crates/lightning-core/src/storage/index/vector_index.rs:419-443`
-**CATEGORY:** Performance
-**ISSUE:** Single delete causes full O(n) scan of all entries to rebuild node_index HashMap.
-
----
-
-### M47. `inverted_index::delete` — Never Calls `writer.commit()`
-**FILE:** `crates/lightning-core/src/storage/index/inverted_index.rs:138-152`
-**CATEGORY:** Unimplemented
-**ISSUE:** Deletions buffered but may never be persisted/visible until external commit.
-
----
-
-### M48. `Fusion::find_paths` and `find_connected_nodes` — Duplicate Input Validation
-**FILE:** `crates/lightning-core/src/fusion.rs:89-95`
-**CATEGORY:** Simplification
-**ISSUE:** Same edge type validation logic duplicated. Should be shared function.
-
----
-
----
-
-## LOW FINDINGS (Fix When Convenient)
-
----
-
-### L1. FNV-1a Hash for file_id — Hardlink Collision
-**FILE:** `crates/lightning-core/src/storage/file_handle.rs:44-45`
-**CATEGORY:** Correctness
-**ISSUE:** Two different hardlinks to the same file would get different file_id values, causing incorrect WAL shard routing.
-
----
-
-### L2. `div_ceil` — Nightly-Only Method
-**FILE:** `crates/lightning-core/src/storage/file_handle.rs:32`
-**CATEGORY:** Simplification
-**ISSUE:** `size.div_ceil(PAGE_SIZE as u64)` requires nightly feature gate or polyfill.
-
----
-
-### L3. `free_space_manager` Setter Uses Write Lock Instead of AtomicPtr
-**FILE:** `crates/lightning-core/src/storage/file_handle.rs:118`
-**CATEGORY:** Simplification
-**ISSUE:** Simple pointer swap uses `write()` lock.
-
----
-
-### L4. Hardcoded `32` as Values-Per-Page for Compressed Data
-**FILE:** `crates/lightning-core/src/storage/column.rs:226,418,443,460,1217`
-**CATEGORY:** Magic Numbers
-**ISSUE:** Multiple locations. Should be named constant.
-
----
-
-### L5. `column_stats` — atomic_num_values Known Wrong for List Types
-**FILE:** `crates/lightning-core/src/storage/column.rs:153`
-**CATEGORY:** Correctness
-**ISSUE:** Comment says over-counting for list types is "acceptable for approximate stats" but `query_with_adaptive_threshold` makes wrong decisions.
-
----
-
-### L6. `zone_map_should_skip` — Lock Acquisition Per Page
-**FILE:** `crates/lightning-core/src/storage/column.rs:540-551`
-**CATEGORY:** Performance
-**ISSUE:** `self.stats.read()` per page in hot scan loops adds contention.
-
----
-
-### L7. CRC32C Validation — Correct but Densely Documented
-**FILE:** `crates/lightning-core/src/storage/wal.rs:32-41`
-**CATEGORY:** Other
-**ISSUE:** CRC parameters confirmed valid. No code issue.
-
----
-
-### L8. `row_version::mark_row` — Returns `Result<(), String>` Instead of Proper Error
-**FILE:** `crates/lightning-core/src/storage/row_version.rs:45`
-**CATEGORY:** Simplification
-**ISSUE:** Inconsistent with rest of codebase (`Result<()>` with proper Error type).
-
----
-
-### L9. `has_modifications` — Scans All 16 Shards Per Call
-**FILE:** `crates/lightning-core/src/storage/row_version.rs:183-198`
-**CATEGORY:** Performance
-**ISSUE:** Called from hot scan paths, iterates all shards' versions/committed maps per call.
-
----
-
-### L10. `storage_manager::flush_buffer` — Only Checks First Column for Emptiness
-**FILE:** `crates/lightning-core/src/storage/storage_manager.rs:95-97`
-**CATEGORY:** Correctness
-**ISSUE:** If column 0 empty but others have data (after partial rollback), flush silently skips.
-
----
-
-### L11. `prefetch::report_prediction_result` — Convoluted Counter Logic
-**FILE:** `crates/lightning-core/src/storage/prefetch.rs:178-181`
-**CATEGORY:** Simplification
-**ISSUE:** `fetch_update` wrapping counter logic is correct but hard to reason about.
-
----
-
-### L12. Prefetch `record_access` — Four Sequential Lock Acquisitions
-**FILE:** `crates/lightning-core/src/storage/prefetch.rs:141-168`
-**CATEGORY:** Performance
-**ISSUE:** `access_counts`, `access_window`, `transitions_1st`, `transitions_2nd` all acquired sequentially.
-
----
-
-### L13. `overflow_file::write_string` — Duplicated Unpin+Log Code
-**FILE:** `crates/lightning-core/src/storage/overflow_file.rs:133-138,141-146`
-**CATEGORY:** Simplification
-**ISSUE:** Two branches with identical unpin + log logic.
-
----
-
-### L14. `database_header` — Version Check `>` Allows Skip-Ahead
-**FILE:** `crates/lightning-core/src/storage/database_header.rs:43`
-**CATEGORY:** Correctness
-**ISSUE:** `header.version > Self::VERSION` — if VERSION bumped to 2, v1 databases silently pass. Should use `!=`.
+| Pattern | Count |
+|---------|-------|
+| `unsafe` blocks | 78 |
+| `.unwrap()` (non-test) | ~150 |
+| `.expect()` | 217 |
+| `panic!()` (non-test) | 4 |
+| Numeric `as` casts (truncation risk) | 667 |
+| `.clone()` | 977 |
+| Disabled optimizers | 6 |
 
 ---
 
-### L15. `database_header` — `bincode::deserialize` on Untrusted Disk Input
-**FILE:** `crates/lightning-core/src/storage/database_header.rs:N/A`
-**CATEGORY:** Other
-**ISSUE:** No checksum/magic bytes before deserializing. Corrupted file = UB.
+## CRITICAL Issues (17)
 
----
-
-### L16. `bincode::deserialize` Pattern Used Throughout Codebase
-**FILE:** Multiple files
-**CATEGORY:** Other
-**ISSUE:** No integrity verification before deserialization. Corrupted storage = undefined behavior.
-
----
-
-### L17. `hash_index::compute_hash` — SipHash Commented but Different Algorithm Used
-**FILE:** `crates/lightning-core/src/storage/index/hash_index.rs:10-14`
-**CATEGORY:** Correctness
-**ISSUE:** Comment says "SipHash" but code uses `h.wrapping_mul(6364136223846793005).wrapping_add(...)`. Different hash with unknown collision properties.
-
----
+### C1. Rate Limiter Completely Broken — No Rate Limiting Enforced
+**File:** `crates/lightning-server/src/server.rs:79-90`
 
-### L18. `hash_index::write_entry_to_page` — Takes Raw Pointer, Not Marked unsafe
-**FILE:** `crates/lightning-core/src/storage/index/hash_index.rs:469`
-**CATEGORY:** Unsafe
-**ISSUE:** Method takes `data_ptr: *mut u8` but is not `unsafe` fn. Callers may misuse.
+`Clone for AppState` creates a **new, independent `RateLimiter`** on every clone. Since `Router::with_state` clones the state, each request handler sees a different rate limiter with its own empty bucket map. The `Mutex<HashMap>` is never shared. **Zero rate limiting is actually enforced.**
 
----
+```rust
+// Each clone gets a fresh rate limiter — the old one is discarded
+fn clone(&self) -> Self {
+    Self {
+        rate_limiter: RateLimiter::new(self.rate_limiter.max_requests, ...), // NEW
+        ...
+    }
+}
+```
 
-### L19. HNSW Thread-Local RNG — All Threads Start with Same Seed
-**FILE:** `crates/lightning-core/src/storage/index/hnsw.rs:11`
-**CATEGORY:** Correctness
-**ISSUE:** `RefCell::new(12345)` — all threads produce identical level sequences. Biases HNSW graph construction.
+**Fix:** Wrap `RateLimiter` in `Arc<Mutex<...>>`.
 
 ---
-
-### L20. `cosine_distance` Duplicated in `hnsw.rs` and `ivf.rs`
-**FILE:** `crates/lightning-core/src/storage/index/hnsw.rs`, `ivf.rs`
-**CATEGORY:** Simplification
-**ISSUE:** Identical free function in two files. Should be shared.
 
----
+### C2. Connection Pool Not Shared Across Clones
+**File:** `crates/lightning-server/src/server.rs:85-86`
 
-### L21. K-Means Iteration Count Hardcoded at 10
-**FILE:** `crates/lightning-core/src/storage/index/ivf.rs:82`
-**CATEGORY:** Configuration
-**ISSUE:** For large datasets, 10 iterations may not converge. Should be configurable or convergence-based.
+Same cloning issue: `Clone for AppState` creates a new `ConnectionPool` per clone, making the pool useless.
 
 ---
-
-### L22. `VectorIndex::insert_batch` — Entry Size Mismatch
-**FILE:** `crates/lightning-core/src/storage/index/vector_index.rs:233`
-**CATEGORY:** Correctness
-**ISSUE:** Entry size `4 + dim * 4` but actual layout is `8 + 4 + dim * 4 = 12 + dim * 4`. Comment/layout mismatch.
 
----
+### C3. Cypher Injection via String Formatting
+**File:** `crates/lightning-core/src/memory.rs:716-721`
 
-### L23. RLE Compression — `element_size` Hardcoded to 8
-**FILE:** `crates/lightning-core/src/storage/compression/rle.rs:18`
-**CATEGORY:** Correctness
-**ISSUE:** Only works for 8-byte elements. CompressionAlg trait doesn't communicate element size.
+`entity_history` uses manual string escaping (`replace('\'', "\\'")`) instead of parameterized queries. Trivially bypassable with `\'; DROP TABLE Entity; --`.
 
----
+```rust
+let query = format!(
+    "MATCH (e:{ENTITY_TABLE}) WHERE e.id = '{}' ...",
+    entity_id.replace('\'', "\\'")  // NOT SAFE
+);
+```
 
-### L24. Delta Compression — Negative Delta on Corrupted Data Wraps Silently
-**FILE:** `crates/lightning-core/src/storage/compression/delta.rs:41`
-**CATEGORY:** Correctness
-**ISSUE:** `(val as i128 - min as i128) as u64` wraps silently if val < min.
+**Also affected:** `memory.rs:680-686` (`recall_by_type` with `top_k` directly interpolated).
 
 ---
 
-### L25. Dict Compression — Double HashMap Lookup
-**FILE:** `crates/lightning-core/src/storage/compression/dict.rs:34-38`
-**CATEGORY:** Performance
-**ISSUE:** `contains_key` then `get` — use `entry()` or single `get`.
+### C4. Unsafe `StringArray::new_unchecked` — Potential UB
+**File:** `crates/lightning-core/src/processor/functions/registry.rs:163-169`
 
----
+LOWER function uses `unsafe` `new_unchecked` on `StringArray`. If `to_ascii_lowercase()` produces invalid data, this is undefined behavior.
 
-### L26. Uncompressed `compress_next_page` — No Bounds Check Before Slice
-**FILE:** `crates/lightning-core/src/storage/compression/mod.rs:67-77`
-**CATEGORY:** Correctness
-**ISSUE:** Panics with index out of bounds if `src` shorter than `size_to_copy`.
-
 ---
-
-### L27. `StorageStats` Struct — Empty/Unused
-**FILE:** `crates/lightning-core/src/storage/stats/mod.rs:9-12`
-**CATEGORY:** DeadCode
-**ISSUE:** Defined but never used anywhere.
 
----
+### C5. C FFI: `c_str_to_str` Returns Unsound `'static` Lifetime
+**File:** `crates/lightning-core/src/api.rs:9-17`
 
-### L28. `ScopedThreadPool::build()` — `expect()` Panics on Thread Pool Creation Failure
-**FILE:** `crates/lightning-core/src/processor/scheduler.rs:17`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Panics on constrained systems. Should return Result.
+Returns `&'static str` but the pointer is owned by C and could be freed at any time. **Use-after-free** if C frees the string.
 
 ---
-
-### L29. `scheduler` — Parallel Execution Creates N Box Clones of Operator Tree
-**FILE:** `crates/lightning-core/src/processor/scheduler.rs:59-83`
-**CATEGORY:** Performance
-**ISSUE:** `op.clone_box()` N times. If operators share mutable state, all workers compete for same locks.
 
----
+### C6. C API: Double-Free Risk with `CString::from_raw`
+**File:** `crates/lightning-core/src/api.rs:98-104`, `capi.rs:146-149`
 
-### L30. `evaluate_list_predicate` — Per-Element RecordBatch Allocation
-**FILE:** `crates/lightning-core/src/processor/evaluator.rs:1049-1127`
-**CATEGORY:** Performance
-**ISSUE:** Each list element creates new RecordBatch, evaluates expression tree individually. O(n * m) vs batch evaluation.
+`lightning_free_string` calls `CString::from_raw` on a pointer that may not have been allocated by `CString::into_raw`. UB if misused from C side.
 
 ---
-
-### L31. `aggregate_function.rs` — CountDistinct merge clones HashSet
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_function.rs:163`
-**CATEGORY:** Performance
-**ISSUE:** `.extend(other_distinct.values.clone())` allocates intermediate clone.
 
----
+### C7. C API: Use-After-Free in Database/Connection Lifetime
+**File:** `crates/lightning-core/src/capi.rs:7-9, 52-56, 74`
 
-### L32. GroupConcat Separator Hardcoded to ", "
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_ext.rs:239`
-**CATEGORY:** Simplification
-**ISSUE:** Standard SQL GROUP_CONCAT accepts configurable separator.
+Double `Box::into_raw` creates two separate heap allocations. If the C code destroys the database before the connection, `unsafe { &*(*database).database }` dereferences a dangling pointer.
 
 ---
 
-### L33. `Welford::update_from_array` — Only Handles Float64 and Int64
-**FILE:** `crates/lightning-core/src/processor/functions/aggregate_ext.rs:167-168`
-**CATEGORY:** Unimplemented
-**ISSUE:** Int32, Int16, UInt64, Float32 silently ignored.
-
----
+### C8. Unsafe Frame Aliasing — Data Races in Buffer Manager
+**File:** `crates/lightning-core/src/storage/buffer_manager.rs:34-50`
 
-### L34. `ABS` Function — `.expect()` on Type Cast
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:239`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `.expect("type mismatch in function")` panics if cast produces non-Float64Array.
+`Frame::as_mut_slice()` returns `&mut [u8]` from `UnsafeCell`. `as_slice()` and `as_mut_slice()` can be called concurrently via `Arc<Frame>` clones, violating Rust's aliasing rules. The `unsafe impl Send/Sync` masks data race UB.
 
 ---
 
-### L35. IFNULL/ISNULL — Round-Trip Through Value Type Unnecessarily
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:363-369`
-**CATEGORY:** Performance
-**ISSUE:** Converts Arrow arrays to Value per row, then back to Arrow. Direct Arrow ops would be faster.
+### C9. TOCTOU Race in `reclaim_expired_versions` — Stale Data Flushed to Disk
+**File:** `crates/lightning-core/src/storage/buffer_manager.rs:459-537`
 
----
-
-### L36. `JSON_PARSE` — Schema Type is Null
-**FILE:** `crates/lightning-core/src/processor/functions/registry.rs:2710-2713`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Returns `DataType::Null` as schema type. Downstream operators lose all type info.
+Phase 1 (read lock) collects dirty data, releases lock. Phase 3 writes to disk. Between phases, another thread could modify the frame data, meaning **stale data is written to disk**.
 
 ---
 
-### L37. `from_arrow()` — Only Handles 6 Types, Everything Else Becomes Null
-**FILE:** `crates/lightning-core/src/processor/arrow_utils.rs:348`
-**CATEGORY:** Simplification
-**ISSUE:** Date32, Timestamp, List, Struct etc. silently become `Value::Null`. Data loss.
-
----
+### C10. `unsafe set_len` on Vec Before Fallible I/O — Uninitialized Memory
+**File:** `crates/lightning-core/src/storage/column.rs:687-689, 697-699, 1010-1013, 1025-1028, 1074-1077, 1084-1088`
 
-### L38. Functions `mod.rs` — Wildcard Re-Exports Pollute API
-**FILE:** `crates/lightning-core/src/processor/functions/mod.rs`
-**CATEGORY:** Simplification
-**ISSUE:** `pub use aggregate_function::*`, `registry::*`, `scalar_function::*` — internal types exposed.
+Multiple places call `unsafe { data_buf.set_len(N) }` before `read_pages`. If `read_pages` fails, the Vec contains uninitialized memory that will be dropped.
 
 ---
 
-### L39. Server Config — `host` Can Be Empty, `max_connections` No Upper Bound
-**FILE:** `crates/lightning-server/src/config.rs:145-167`
-**CATEGORY:** ErrorHandling
-**ISSUE:** No validation on empty host string or unbounded max_connections.
+### C11. Bitpacking Shift Overflow — UB/Panic at `bit_width=64`
+**File:** `crates/lightning-core/src/storage/compression/bitpacking.rs:66, 105`
 
----
+`(1u64 << bit_width) - 1` when `bit_width == 64` causes shift overflow (UB in debug, panic in release). Affects both `write_bits` and `read_bits`.
 
-### L40. Server Config — `query_timeout_ms` Defaults to 30s (Very Permissive)
-**FILE:** `crates/lightning-server/src/config.rs:69`
-**CATEGORY:** Configuration
-**ISSUE:** Single slow query holds DB connection for 30s. No concurrent limit enforced.
-
 ---
-
-### L41. `admin::request_counter` — Dead Code, Never Incremented
-**FILE:** `crates/lightning-server/src/routes/admin.rs:57-58,61`
-**CATEGORY:** DeadCode
-**ISSUE:** AtomicU64 counter defined and loaded but never incremented anywhere.
 
----
+### C12. HNSW `Ord` Contract Violation — Corrupts BinaryHeap
+**File:** `crates/lightning-core/src/storage/index/hnsw.rs:80`
 
-### L42. `rag_handler` — Empty Embedding Silently Degrades to Content-Only
-**FILE:** `crates/lightning-server/src/routes/rag.rs:28`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `req.embedding.as_deref().unwrap_or(&[])` — no warning when embedding missing.
+`unwrap_or(Ordering::Greater)` for NaN distances violates the requirement that `Ord` is total and transitive. This corrupts `BinaryHeap` ordering.
 
 ---
-
-### L43. `associate_handler` — No Validation That Entities Exist
-**FILE:** `crates/lightning-server/src/routes/graph.rs:8-36`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Creates association between any two IDs without checking if source/destination exist. Orphan edges.
 
----
+### C13. Unaligned Pointer Cast — UB on ARM
+**File:** `crates/lightning-core/src/storage/index/vector_index.rs:350-352`
 
-### L44. `TypedQueryResult::to_json()` — Silently Returns Error Object as Valid JSON
-**FILE:** `crates/lightning/src/types.rs:118`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `unwrap_or_else` returns JSON error object on serialization failure. Caller receives seemingly valid JSON with different structure.
+`std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)` — `emb_bytes` may not be aligned to 4 bytes. UB on ARM, slow on x86.
 
 ---
-
-### L45. `MemoryStore` — Wastes Connection By Accepting and Dropping It
-**FILE:** `crates/lightning/src/memory.rs:50-55,59-65`
-**CATEGORY:** Performance
-**ISSUE:** Takes `Connection` by value, extracts database handle, creates new connection. Original connection wasted.
 
----
+### C14. Weak Hash Function in Hash Index — DoS Vector
+**File:** `crates/lightning-core/src/storage/index/hash_index.rs:246-299`
 
-### L46. Query Plan Cache Normalization — Too Aggressive
-**FILE:** `crates/lightning-core/src/lib.rs:40-42`
-**CATEGORY:** Other
-**ISSUE:** `normalize_re()` replaces ALL quoted strings with `'?'`. Different WHERE values could produce different plan shapes.
+`compute_hash` uses simple LCG/xor mixing, NOT SipHash despite doc comments. Hash collisions cause O(n) bucket chains, enabling hash-flooding DoS.
 
 ---
 
-### L47. `fusion.rs` — `SystemTime` fallback to `unwrap_or(0)` Before Epoch
-**FILE:** `crates/lightning-core/src/fusion.rs:225-227`
-**CATEGORY:** ErrorHandling
-**ISSUE:** If system clock before UNIX_EPOCH, silently uses timestamp 0.
-
----
+### C15. Overflow File Infinite Loop on Corrupt Data
+**File:** `crates/lightning-core/src/storage/overflow_file.rs:73-86`
 
-### L48. `fusion.rs` — NaN sorting with `partial_cmp(..).unwrap_or(Equal)`
-**FILE:** `crates/lightning-core/src/fusion.rs:320`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Non-deterministic sort order if cohesion contains NaN.
+`read_string` follows `next_page` pointers. If the pointer is corrupt (cycle to page 0), the function enters an infinite loop with no cycle detection.
 
 ---
 
-### L49. CDC `now_micros()` Duplicated in `memory.rs`
-**FILE:** `crates/lightning-core/src/cdc.rs:129-134`
-**CATEGORY:** Simplification
-**ISSUE:** Identical function in two files. Should be shared.
+### C16. Overflow File Pin Count Leak — Pages Never Evicted
+**File:** `crates/lightning-core/src/storage/overflow_file.rs:46-87`
 
----
-
-### L50. `normalize_query` — Two Different Functions With Same Name
-**FILE:** `crates/lightning-core/src/lib.rs:32-34`, `parser/mod.rs:74`
-**CATEGORY:** Confusing
-**ISSUE:** Two distinct functions both named `normalize_query`. Confusing and error-prone.
+`read_string` calls `bm.pin_page` in a loop but NEVER calls `bm.unpin_page`. Each iteration pins a new page without unpinning the previous, leaking pin counts permanently.
 
 ---
 
-### L51. `lib.rs` — Duplicate Transaction Creation Logic
-**FILE:** `crates/lightning-core/src/lib.rs:1219-1254`
-**CATEGORY:** Simplification
-**ISSUE:** Identical begin/begin_at with explicit_tx/snapshot_ts logic appears twice.
-
----
+### C17. Delta Compression Data Corruption
+**File:** `crates/lightning-core/src/storage/compression/delta.rs:41, 71`
 
-### L52. `lib.rs` — Busy-Wait Polling During Drop
-**FILE:** `crates/lightning-core/src/lib.rs:315-321`
-**CATEGORY:** Simplification
-**ISSUE:** Fixed 200ms max wait polling with 10ms sleep. Should use condition variable.
+`(val as i128 - min as i128) as u64` — if `val < min`, the result is negative but cast to `u64`, producing a huge value. **Silently corrupts data.**
 
 ---
 
-### L53. `lib.rs` — `buffer_manager.shutdown()` Called Twice in Drop
-**FILE:** `crates/lightning-core/src/lib.rs:296,308`
-**CATEGORY:** Correctness
-**ISSUE:** Once in vacuum handle block, once after checkpoint. If shutdown not idempotent, use-after-free or double-free.
+## HIGH Issues (52)
 
----
+### Security
 
-### L54. `lib.rs` — LazyCatalog Load Errors Silently Swallowed
-**FILE:** `crates/lightning-core/src/lib.rs:355`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `unwrap_or_else(|_| LazyCatalog::new(...))`. Corrupt catalog falls back to empty catalog. All schema lost.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H1 | `server.rs` | 132 | `x-forwarded-for` trusted without validation — rate limit bypass trivially |
+| H2 | `error.rs` | 71-72 | Internal error messages leaked to HTTP clients (file paths, SQL syntax) |
+| H3 | `request.rs` | 7-8 | Raw SQL query accepted from user input with no enforced parameterization |
+| H4 | `admin.rs` | 12-50 | Admin endpoints (checkpoint, vacuum) not guarded by read-only mode |
+| H5 | `request.rs` | 68,115 | No upper bounds on `top_k` and `hops` — resource exhaustion DoS vectors |
+| H6 | `config.rs` | 65-66 | Auth token stored as plain `String`, cloned into every state copy |
+| H7 | `subscribe.rs` | 18-37 | Thread leak on client disconnect — no cancellation for blocking CDC bridge |
+| H8 | `query.rs` | 36-46 | No per-client concurrency limit — `spawn_blocking` pool exhaustion DoS |
+| H9 | `wasm_function.rs` | 135-152 | WASM engine has no maximum memory limit — unbounded allocation possible |
+| H10 | `wasm_function.rs` | 310-327 | WASM sandbox output can read beyond written region (info leak) |
 
----
+### Memory Safety
 
-### L55. Catalog `SourceTable` rename — Fragile to Refactoring
-**FILE:** `crates/lightning-core/src/catalog/catalog.rs:219`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `.unwrap()` after `contains_key` check. Fragile pattern.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H11 | `buffer_manager.rs` | 770-780 | `thread::sleep` while holding shard write lock — severe lock convoy |
+| H12 | `buffer_manager.rs` | 67 | LRU `page_locks` can evict in-use mutex — UB if lock guard references freed mutex |
+| H13 | `hash_index.rs` | 106-124 | Unsafe `ptr::copy_to` (should be `copy_nonoverlapping`) |
+| H14 | `hash_index.rs` | 170 | Unsafe cast to `[u8; PAGE_SIZE]` on potentially uninitialized memory |
+| H15 | `vector_index.rs` | 231-248 | Unsafe writes without bounds check — buffer overflow if offset exceeds page |
+| H16 | `column.rs` | 755-767 | `scan_string_direct` reads ENTIRE overflow file into memory (OOM risk) |
+| H17 | `column.rs` | 619 | `.expect("internal invariant")` panics on missing null page |
 
----
+### Data Integrity
 
-### L56. LazyCatalog `force_save_with_catalog` — `ptr::eq` Fragile
-**FILE:** `crates/lightning-core/src/catalog/lazy_catalog.rs:99-104`
-**CATEGORY:** Simplification
-**ISSUE:** Pointer equality check depends on internal RwLock layout. Breaks if catalog wrapping changes.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H18 | `wal.rs` | 555-567 | Commit records not CRC-validated during replay — corrupt commits accepted |
+| H19 | `undo_buffer.rs` | 255-271 | `DropConstraint`/`DropIndex` rollback not implemented — permanent loss on rollback |
+| H20 | `storage_manager.rs` | 1038-1043 | `apply_page` silently ignores unknown file IDs during WAL replay — data loss |
+| H21 | `column.rs` | 1988-1999 | `serialize_value_into` silently drops strings without overflow FH |
+| H22 | `free_space_manager.rs` | 50 | `load` silently returns empty on ANY I/O error (not just "file not found") |
+| H23 | `column.rs` | 1989 | Element size defaults to 8 for many types — misaligned reads |
+| H24 | `memory.rs` | 1033,1283 | `u64` IDs cast to `f64` — precision loss for IDs > 2^53 (data corruption at scale) |
 
----
+### Query Correctness
 
-### L57. LazyCatalog `Clone` — Dirty Flag Can Diverge
-**FILE:** `crates/lightning-core/src/catalog/lazy_catalog.rs:149-157`
-**CATEGORY:** Correctness
-**ISSUE:** Clone creates new dirty AtomicBool. Clone's flag can diverge from shared inner catalog's actual dirty state.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H25 | `evaluator.rs` | 808 | Float literal truncated to `i64` for Int64 column comparison (3.7 → 3) |
+| H26 | `hash_join.rs` | 333-341 | Cross join only uses first build chunk — silently drops rows from chunk 1+ |
+| H27 | `aggregate.rs` | 360 | `.expect()` on RecordBatch creation — panics on schema mismatch |
+| H28 | `dml.rs` | 560-573 | Storage read lock held across entire delete loop — potential deadlock |
+| H29 | `registry.rs` | 99-173 | LOWER registered twice — byte-level version overwrites Unicode-aware version |
+| H30 | `all_shortest_paths.rs` | 91-101 | BFS finds only ONE shortest path, not ALL (misnamed algorithm) |
+| H31 | `subquery_unnesting.rs` | 139-161 | Only first correlated variable used in semi-join condition — incorrect results |
+| H32 | `logical_plan.rs` | 882-886 | Duplicate `Unwind` match arm — copy-paste error / dead code |
+| H33 | `recursive_join.rs` | 73 | `FixedBitSet` capacity based on `next_row_id` — unbounded memory for large graphs |
+| H34 | `logical_plan.rs` | 921 | Catch-all `_ => plan` silently drops unknown clauses from query plan |
+| H35 | `scan.rs` | 603-607 | Pushdown filter error silently swallowed — may return unfiltered rows |
+| H36 | `fusion.rs` | 487 | PageRank writeback error silently discarded |
+| H37 | `mod.rs` (processor) | 236 | i32 overflow in list offset computation |
+| H38 | `mod.rs` (processor) | 363 | Lossy i64→f64 cast in `from_arrow` |
 
----
+### Concurrency
 
-### L58. `TransactionManager` `next_tx_id` — u64::MAX Overflows
-**FILE:** `crates/lightning-core/src/transaction/transaction_manager.rs:96-102`
-**CATEGORY:** Other
-**ISSUE:** After ~18 quintillion transactions would stall. Extremely unlikely but theoretical long-running systems DoS.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H39 | `buffer_manager.rs` | 353-384 | Prefetch I/O under shard write lock — extends lock hold time |
+| H40 | `buffer_manager.rs` | 525-526 | `dirty_count` can underflow — no guard against concurrent decrement |
+| H41 | `prefetch.rs` | 140-167 | Multiple write locks acquired simultaneously — potential deadlock |
+| H42 | `ddl.rs` | 348-371 | Non-atomic DDL execution — catalog and storage modified under separate locks |
+| H43 | `transaction_manager.rs` | 371-411 | `Drop` impl acquires locks — potential deadlock if dropped during `begin()` |
 
----
+### Compression/Index
 
-### L59. `physical_plan.rs` — Missing Table Metadata Error
-**FILE:** `crates/lightning-core/src/processor/physical_plan.rs:59,65`
-**CATEGORY:** ErrorHandling
-**ISSUE:** `num_rows` defaults to 0 if catalog entries None. Scan proceeds with incorrect row count.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H44 | `compression/mod.rs` | 74-93 | Missing bounds checks in `compress_next_page`/`decompress_from_page` — panics |
+| H45 | `alp.rs` | 73 | Float precision loss in encode — values round to i64::MAX/MIN silently |
+| H46 | `delta.rs` | 71 | Unsigned to signed overflow in decompression |
+| H47 | `dict.rs` | 33,45-46 | Missing bounds check; silent failure returns `(0,0)` |
+| H48 | `rle.rs` | 24-25,74 | Missing bounds checks in compress/decompress |
+| H49 | `hnsw.rs` | 123 | Division by zero in cosine distance for zero vectors |
+| H50 | `hnsw.rs` | 210-217 | Silent node overwrite — stale neighbor references |
+| H51 | `trigram_index.rs` | 271,279,289 | O(n²) batch insert — linear search in posting lists |
+| H52 | `csr.rs` | 221,247,284 | Out-of-bounds access; OOM from corrupted file size |
 
----
+### Other
 
-### L60. `physical_plan.rs` — O(candidates x mask_size) Scan With Existing Mask
-**FILE:** `crates/lightning-core/src/processor/physical_plan.rs:105,113-118`
-**CATEGORY:** Performance
-**ISSUE:** For each candidate, `existing.contains(id)` check iterates mask via RwLock.
+| # | File | Line | Issue |
+|---|------|------|-------|
+| H53 | `memory.rs` | 446-463 | `recall_stream` spawns untracked thread per call — unbounded threads |
+| H54 | `registry.rs` | 239-903 | 40+ `.expect("type mismatch")` calls — panics on unexpected user types |
+| H55 | `recursive_join.rs` | 115-128 | Fallback full table scan loads ALL relationships into memory |
+| H56 | `logical_plan.rs` | 864-868 | f64→u64 cast for SKIP/LIMIT can truncate negative values |
 
 ---
 
-### L61. `physical_plan.rs` — `LogicalOperator => _` Silently Returns Error
-**FILE:** `crates/lightning-core/src/processor/physical_plan.rs:657`
-**CATEGORY:** Unimplemented
-**ISSUE:** New LogicalOperator variants silently fall to runtime error instead of compile-time exhaustive match.
+## MEDIUM Issues (78)
 
----
+### Server/HTTP (10)
 
-### L62. `Evaluator` — Lambda Functions Silently Fall to Generic Eval on Malformed Expression
-**FILE:** `crates/lightning-core/src/processor/evaluator.rs:374`
-**CATEGORY:** ErrorHandling
-**ISSUE:** Non-Lambda expressions silently fall through without error for lambda-type functions.
-
----
+| File | Line | Issue |
+|------|------|-------|
+| `config.rs` | 94 | Buffer pool size can overflow — no upper bound validation |
+| `config.rs` | 145-167 | TLS cert/key paths not validated for existence |
+| `error.rs` | 44-68 | Error classification via substring matching — fragile |
+| `extract.rs` | 24-26 | `ConnectionPool::acquire()` creates new connection — no actual pooling |
+| `streaming.rs` | 20-43 | `unwrap()` on `downcast_ref` — panics on unexpected Arrow types |
+| `request.rs` | 13-14 | `timeout_ms` has no maximum — client can hold connection forever |
+| `memory.rs` | 50 | `req.id` unsanitized — potential path traversal/injection |
+| `memory.rs` | 85-101 | Batch handler processes entire batch synchronously — no progress feedback |
+| `admin.rs` | 52-93 | Metrics endpoint unauthenticated — leaks operational data |
+| `subscribe.rs` | 29 | `json_data().unwrap()` — panics on serialization failure |
 
-### L63. `aggregate.rs` — Inconsistent Function Implementation Organization
-**FILE:** `crates/lightning-core/src/processor/aggregate.rs:N/A`
-**CATEGORY:** Simplification
-**ISSUE:** Collect, GroupConcat, Median in aggregate_ext.rs vs. Count, Sum in aggregate_function.rs. Inconsistent.
+### Storage (15)
 
----
+| File | Line | Issue |
+|------|------|-------|
+| `buffer_manager.rs` | 255 | `page_to_slots` Vec can accumulate stale entries |
+| `storage_manager.rs` | 286-293 | `append_row` silently ignores extra column values |
+| `storage_manager.rs` | 267,369 | Double-counting cardinality in `batch_append_rows` vs `flush_buffer` |
+| `storage_manager.rs` | 588-737 | `create_table` doesn't rollback partial file creation on error |
+| `wal.rs` | 336-340 | WAL replay applies pages before checking all commits |
+| `wal.rs` | 131,419 | `archive_seq` uses Relaxed ordering — duplicate sequence numbers |
+| `undo_buffer.rs` | 72-85 | `UpdateColumn`/`DeleteNode` undo records do nothing |
+| `undo_buffer.rs` | 202-221 | Rollback order issue with `AlterRenameTable` |
+| `overflow_file.rs` | 97 | `write_string` doesn't handle string > u32::MAX |
+| `file_handle.rs` | 122-143 | `add_new_page` doesn't extend file on disk |
+| `database_header.rs` | 56-63 | No atomic write for header save — crash corrupts header |
+| `free_space_manager.rs` | 35-46 | Same non-atomic write issue |
+| `free_space_manager.rs` | 30-33 | Free pages not zeroed — sensitive data leak |
+| `prefetch.rs` | 10-12 | Transition maps grow unbounded — memory leak |
+| `trigram_index_worker.rs` | 88-100 | `flush()` is fire-and-forget; `Drop` doesn't wait |
 
-### L64. `ScalarFunction::resolve_type` — Hardcoded Match on Function Names
-**FILE:** `crates/lightning-core/src/processor/functions/scalar_function.rs:N/A`
-**CATEGORY:** Simplification
-**ISSUE:** Duplicates registry knowledge. Will desync when functions added/removed.
+### Compression (10)
 
----
+| File | Line | Issue |
+|------|------|-------|
+| `compression/mod.rs` | 127 | `ConstantCompression` hardcodes 8-byte elements |
+| `alp.rs` | 62-88 | No validation on `fac_idx`/`exp_idx` — out-of-bounds panic |
+| `bitpacking.rs` | 17-19 | Silent truncation on bit_width==64 path |
+| `bitpacking.rs` | 7-10 | `assert!` in non-test code — should return error |
+| `dict.rs` | 58 | dict_count=0 triggers bit_width=64 overflow |
+| `dict.rs` | 87,96-97 | Missing bounds checks in decompress |
+| `rle.rs` | 27-33 | Run count can overflow u32 |
+| `analyzer.rs` | 27-28 | HLL accuracy with DefaultHasher biased for small inputs |
+| `analyzer.rs` | 67-92 | `skip_minmax` path skips `all_same` check — wrong Constant detection |
+| `analyzer.rs` | 136-151 | `Number` type cast to i64 truncates large floats |
 
-### L65. `now_micros()` Named `now_micros_for_test()` in Production API
-**FILE:** `crates/lightning/src/memory.rs:237`
-**CATEGORY:** Other
-**ISSUE:** Confusing method name in public API.
+### Index (8)
 
----
+| File | Line | Issue |
+|------|------|-------|
+| `hash_index.rs` | 460 | `allocate_overflow_page` race condition |
+| `hash_index.rs` | 480-503 | `write_entry_to_page` no bounds check |
+| `hnsw.rs` | 11 | Weak PRNG with fixed seed |
+| `hnsw.rs` | 136 | Level calculation produces usize::MAX for u=0 |
+| `hnsw.rs` | 157-161 | `visited_pool` Mutex contention bottleneck |
+| `inverted_index.rs` | 49 | Hardcoded 50MB writer memory |
+| `inverted_index.rs` | 81-83 | Write lock acquired per document in batch |
+| `vector_index.rs` | 80 | f64 fallback for dot product — 2x slower, different results |
 
----
+### Processor (15)
 
-## SUMMARY STATISTICS
-
-| Severity | Count | Primary Categories |
-|----------|-------|-------------------|
-| CRITICAL | 25    | Correctness bugs (12), Security (5), Data loss (3), Panics (4), Memory unsoundness (1) |
-| HIGH     | 38    | Unimplemented (11), Security (7), Performance (9), Error handling (6), Correctness (5) |
-| MEDIUM   | 48    | Performance (13), Correctness (10), Error handling (8), Unimplemented (8), Simplification (5), Security (4) |
-| LOW      | 65    | Simplification (17), Error handling (14), Correctness (12), Performance (9), Dead code (5), Other (5), Configuration (4) |
-| **TOTAL** | **176** | |
-
-### Top Problem Areas By Crate
-
-| Crate | Crit+High | Key Issues |
-|-------|-----------|------------|
-| lightning-server | 16 | Rate limiter leak, X-Forwarded-For spoofing, connection pool fake, error info leak, no input validation |
-| lightning-core/optimizer | 14 | 4 no-op optimizers, 6 disabled rules, broken EXISTS unnesting, O(3^n) join reordering |
-| lightning-core/storage | 8 | unsafe set_len, column clone loses nulls, macOS fsync, buffer_manager flush_all bug |
-| lightning-core/processor | 9 | Missing type handling, SUM ignores UInt64, per-row loops vs Arrow kernels, LOWER double-registration |
-| lightning-core/core | 8 | C API lifetime lie, CDC drops events, parser bugs, undo incomplete rollbacks |
-| lightning | 2 | Arrow downcast panics, connection waste |
-| lightning-arrow | 1 | RecordBatch full-clone |
+| File | Line | Issue |
+|------|------|-------|
+| `mod.rs` | 139-142 | `execute_stream` replaces root with placeholder — can't call twice |
+| `physical_plan.rs` | 261-262 | Index into empty comparisons vec — panic |
+| `evaluator.rs` | 675 | Division by zero returns error instead of NULL (non-standard SQL) |
+| `evaluator.rs` | 690-693 | `i64::MIN % -1` undefined behavior |
+| `cross_join.rs` | 141 | `left_batch.clone()` on every get_next — unnecessary allocation |
+| `aggregate.rs` | 323 | HashMap iteration non-deterministic — GROUP BY order varies |
+| `aggregate.rs` | 243-256 | Sort-based aggregation O(groups × keys) — no key caching |
+| `aggregate.rs` | 296 | Group-by keys always output as Utf8 — lossy for numbers |
+| `projection.rs` | 52-56 | String-based deduplication of expressions — false positives possible |
+| `sort.rs` | 98-103 | Hard limit on sort memory — returns error instead of external sort |
+| `union.rs` | 69 | O(collision_rows) lookup per row — O(n²) for UNION DISTINCT |
+| `limit_skip.rs` | 68-74 | `clone_box` creates new Mutex — breaks shared synchronization |
+| `nway_merge.rs` | 147-194 | Materializes all output as `Vec<Value>` — doubles memory usage |
+| `index_scan.rs` | 71 | `read_ts` from construction, not from transaction — stale data |
+| `dml.rs` | 960-967 | MERGE evaluates assignments with wrong batch context |
+
+### Optimizer (8)
+
+| File | Line | Issue |
+|------|------|-------|
+| `optimizer/mod.rs` | 39-51 | **6 optimizers disabled** due to known correctness issues |
+| `optimizer/mod.rs` | 59-63 | Fixed-point detection via `format!("{:?}")` — O(n) per iteration, fragile |
+| `filter_pushdown.rs` | 247-267 | Filter pushed into scan without validating variable ownership |
+| `cardinality_estimator.rs` | 52-54 | Clones entire plan trees just to pass to `estimate_selectivity` |
+| `subquery_unnesting.rs` | 95 | NOT EXISTS detection broken — `Function("NOT",...)` doesn't match `Not(Exists(...))` |
+| `limit_pushdown.rs` | 18-58 | Does not actually push limits down — effectively a no-op |
+| `order_by_pushdown.rs` | 18-48 | Does not actually push ORDER BY — no-op |
+| `factorization_rewriter.rs` | 19-53 | Doesn't actually factorize — no-op |
+
+### Parser/Binder (5)
+
+| File | Line | Issue |
+|------|------|-------|
+| `parser/mod.rs` | 886-889 | Variable-length bounds silently ignored |
+| `parser/mod.rs` | 1434-1511 | Unknown data types silently become `String` |
+| `parser/mod.rs` | 200 | ORDER BY parse failures silently swallowed |
+| `binder.rs` | 1267 | `RETURN *` column order non-deterministic (HashMap iteration) |
+| `binder.rs` | 1795 | Macro substitution doesn't recurse into Case/List/Map/Lambda/Exists |
+
+### Client/Other (12)
+
+| File | Line | Issue |
+|------|------|-------|
+| `memory.rs` | 150 | MinHash similarity uses wrong denominator — artificially low scores |
+| `memory.rs` | 770-784 | Consolidation O(n²) with sampling — still expensive |
+| `memory.rs` | 420,561,585 | `partial_cmp` panics on NaN scores |
+| `memory.rs` | 222-224 | `as_micros() as i64` — silent overflow |
+| `wasm_function.rs` | 361-404 | WASM string mode data leakage between rows |
+| `lazy_catalog.rs` | 99-104 | Pointer comparison for catalog identity — spurious failures |
+| `transaction_manager.rs` | 267-272 | Page merge locks accumulate if transaction abandoned |
+| `shortest_path.rs` | 213-216 | Path stored as Utf8 instead of List — wrong data type |
+| `gds_state.rs` | 12-14 | `Vec<AtomicU32>` pre-allocated per node — expensive for large graphs |
+| `registry.rs` | 320-353 | LIST_FILTER/TRANSFORM don't handle non-list inputs |
+| `registry.rs` | 1142-1143 | Debug logging of user data in CONTAINS function |
+| `column.rs` | 38 | `pending_nulls` Vec grows unbounded |
+
+---
+
+## LOW Issues (58)
+
+### Performance
+
+| # | File | Issue |
+|---|------|-------|
+| L1 | `server.rs:25-53` | Rate limiter allocates String per request |
+| L2 | `server.rs:25-53` | Rate limiter never evicts stale entries — unbounded growth |
+| L3 | `query.rs:22` | Query string cloned only for logging |
+| L4 | `hnsw.rs:296-301` | O(n²) neighbor pruning |
+| L5 | `inverted_index.rs:161-163` | Reader reload failure silently continues with stale data |
+| L6 | `column.rs:2043` | `element_size` defaults to 8 for many types |
+| L7 | `binder.rs:669-673` | StandaloneCall parameters computed but never used |
+| L8 | `binder.rs:306` | `get_type()` returns `Any` for aggregates |
+| L9 | `join_reordering.rs:198` | Cloning full plan trees in DP transitions |
+| L10 | `mod.rs:302-321` | Weak hash combination for `Value::Map` |
+| L11 | `mod.rs:170-173` | String values truncated to 64 bytes silently |
+| L12 | `arrow_utils.rs:284` | UInt64→f64 cast lossy for values > 2^53 |
+| L13 | `cross_join.rs:12-15` | Mixed atomic/non-atomic in SharedCrossJoinBuild |
+| L14 | `intersect.rs:137` | Vec cloned on each hash probe |
+| L15 | `nway_merge.rs:32-36` | HeapEntry Ord ignores child_idx tiebreaker |
+| L16 | `path_probe.rs:74` | Debug formatting used for JSON output |
+| L17 | `memory.rs:969` | `_edge_types` parameter accepted but never used |
+| L18 | `memory.rs:224` | `now_micros` returns 0 on clock error |
+| L19 | `arrow FFI:36-47` | No schema validation on FFI export |
+| L20 | `lib.rs:136` | `max_num_threads: 0` ambiguous default |
+| L21 | `mod.rs:326-338` | PartialOrd returns None for List/Struct/Map — ORDER BY silent no-op |
+| L22 | `column.rs:1617-1708` | Dead code: `bulk_append_primitive_fast` and `bulk_append_string_fast` |
+| L23 | `page_state.rs:73` | `unlock` uses `store` instead of CAS — can lose dirty bits |
+
+### Safety/Correctness
+
+| # | File | Issue |
+|---|------|-------|
+| L24 | `health.rs:3-8` | Health endpoint doesn't verify database connectivity |
+| L25 | `server.rs:96-101` | `x-request-id` from client trusted without length limit |
+| L26 | `server.rs:300-303` | TLS server has no graceful shutdown |
+| L27 | `main.rs:29` | `parse_lossy(&log_filter)` silently discards invalid filter directives |
+| L28 | `main.rs:57-65` | `expect()` panics on startup with no actionable context |
+| L29 | `config.rs:117` | `vacuum_interval_ms` silently clamped to max(100) |
+| L30 | `error.rs:71-76` | ErrorResponse never populates request_id |
+| L31 | `extract.rs:75-79` | RequestId generates UUID if middleware missing — misleading |
+| L32 | `streaming.rs:74` | Stream silently terminates if sender drops without error |
+| L33 | `streaming.rs:66` | New connection per stream — no pooling |
+| L34 | `request.rs:24` | StoreRequest.id has no validation |
+| L35 | `rag.rs:16-21` | RagConfig defaults have no upper bounds |
+| L36 | `rag.rs:28` | Empty embedding fallback silently degrades |
+| L37 | `memory.rs:281-295` | ConsolidateRequest validation is all-or-nothing |
+| L38 | `graph.rs:55-69` | Entity expansion clones every field |
+| L39 | `parser/mod.rs:729,739` | SKIP/LIMIT parse errors silently become 0 |
+| L40 | `parser/mod.rs:107` | `normalize_query` comment stripping operates on bytes, not chars |
+| L41 | `parser/mod.rs:46-67` | `preprocess_distinct_functions` O(n²) allocations |
+| L42 | `ast.rs:339` | `Literal::Number` uses f64 — precision loss for large integers |
+| L43 | `logical_plan.rs:216` | `set_child` misses `Profile` operator |
+| L44 | `logical_plan.rs:273-274` | `node_count` misses many operators |
+| L45 | `logical_plan.rs:278-297` | `get_variables` incomplete — misses Join right side, Union right side |
+| L46 | `expression_visitor.rs:151-156` | Subquery expressions not rewritten |
+| L47 | `topk_optimizer.rs:24-30` | TopK only fuses `Limit(Sort(...))` — misses Projection/Filter between |
+| L48 | `agg_key_dependency_optimizer.rs:48` | Heuristic: `prop_idx==0` assumed to be PK |
+| L49 | `pagerank.rs:120,148` | Errors during neighbor traversal silently ignored |
+| L50 | `gds_state.rs:31` | `SeqCst` ordering used where `AcqRel` suffices |
+| L51 | `column_stats.rs:83-105` | `update` doesn't track `distinct_count` |
+| L52 | `table_stats.rs:6` | `cardinality` never updated |
+| L53 | `column_stats.rs:115-117` | Unbounded `page_bounds` growth from corrupted page_idx |
+| L54 | `ivf.rs:76-78` | Non-random centroid initialization |
+| L55 | `page_state.rs:73` | `unlock` can overwrite concurrent `set_dirty` |
+| L56 | `storage_manager.rs:829-844` | `remove_table` doesn't clean up file_handles map |
+| L57 | `comprehensive_test_3.rs:69` | **FIXME: Hangs — 10K CREATE statements cause deadlock** |
+
+---
+
+## Disabled Optimizers (Known Correctness Issues)
+
+6 out of ~15 query optimizers are **disabled** due to known bugs:
+
+| Optimizer | Reason |
+|-----------|--------|
+| `index_pushdown` | (not specified) |
+| `projection_pushdown` | Needs cross-operator expression index remapping |
+| `semijoin_pushdown` | Physical planner mask lifecycle issues |
+| `acc_hash_join_optimizer` | Mask lifecycle issues |
+| `agg_key_dependency_optimizer` | Incorrect group-by dependency analysis in edge cases |
+| `count_rel_table_optimizer` | Wrong COUNT results for single-relationship tables |
+
+This means the query optimizer is operating at ~40% capability.
+
+---
+
+## Recommendations (Priority Order)
+
+### Immediate (P0) — Data Loss / Security
+1. Fix rate limiter sharing (`Arc<Mutex<RateLimiter>>`)
+2. Fix connection pool sharing
+3. Parameterize all Cypher queries in `memory.rs`
+4. Add bounds checks to all compression encode/decode paths
+5. Fix `Frame` aliasing safety in buffer manager
+6. Fix overflow file infinite loop and pin leak
+7. Fix delta compression signed/unsigned cast
+8. Validate C FFI lifetimes and add safety documentation
+
+### Short-term (P1) — Correctness
+9. Enable and fix disabled optimizers (especially `projection_pushdown`)
+10. Fix cross join multi-chunk bug
+11. Fix LOWER function duplicate registration
+12. Add CRC validation for WAL commit records
+13. Implement DropConstraint/DropIndex rollback
+14. Fix subquery unnesting multi-variable correlation
+15. Fix HNSW Ord contract violation
+16. Add error handling for all `expect()` calls in user-facing paths
+
+### Medium-term (P2) — Performance
+17. Replace O(n²) algorithms (trigram batch insert, UNION DISTINCT)
+18. Add external sort support (currently errors on large datasets)
+19. Optimize aggregation group key comparison
+20. Fix lock convoy in buffer manager eviction
+21. Replace weak hash functions with SipHash/ahash
+22. Add bounds to all user-configurable parameters (top_k, hops, timeout)
+
+### Long-term (P3) — Quality
+23. Reduce `.unwrap()` count in production code (currently ~150)
+24. Replace numeric `as` casts with `try_into()` where truncation is possible
+25. Add memory limits to WASM sandbox
+26. Implement proper connection pooling
+27. Fix all no-op optimizer passes
+28. Add comprehensive fuzz testing for compression/decompression
