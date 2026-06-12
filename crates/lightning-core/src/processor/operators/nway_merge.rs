@@ -31,7 +31,10 @@ impl PartialOrd for HeapEntry {
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse so BinaryHeap pops the *smallest* entry (min-heap).
-        compare_key_slices(&self.keys, &other.keys).reverse()
+        compare_key_slices(&self.keys, &other.keys)
+            .reverse()
+            // Tiebreaker: use child_idx for deterministic ordering
+            .then(self.child_idx.cmp(&other.child_idx).reverse())
     }
 }
 
