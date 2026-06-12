@@ -225,8 +225,18 @@ impl VectorIndex {
             )?;
             let ptr = frame.as_ptr();
             let offset = slot_in_page * entry_bytes;
+            let write_end = offset + 12 + dim * 4;
 
-            // SAFETY: SAFETY: Copying data into a CoW page frame. Frame is pinned, within pin-unpin lifecycle.
+            // Bounds check: ensure we don't write beyond the page
+            if write_end > 4096 {
+                return Err(crate::LightningError::Internal(format!(
+                    "Vector index write: entry exceeds page boundary (offset={}, dim={}, end={})",
+                    offset, dim, write_end
+                )));
+            }
+
+            // SAFETY: Bounds checked above. Copying data into a CoW page frame.
+            // Frame is pinned, within pin-unpin lifecycle.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     node_id.to_le_bytes().as_ptr(),
