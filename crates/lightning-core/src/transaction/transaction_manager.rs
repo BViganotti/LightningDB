@@ -327,6 +327,15 @@ impl TransactionManager {
             for (version_info, row_id) in modified_rows.iter() {
                 version_info.rollback_row(*row_id);
             }
+            // Clean up page merge locks for rolled-back transactions
+            let modified_pages = tx.modified_pages.lock();
+            let mut merge_locks = self.page_merge_locks.lock();
+            for &(file_id, page_idx) in modified_pages.iter() {
+                merge_locks.remove(&(file_id, page_idx));
+            }
+            drop(merge_locks);
+            drop(modified_pages);
+            drop(modified_rows);
             self.active_tx_ids.write().remove(&tx.tx_id);
         }
         self.remove_read_ts(tx.read_ts);
