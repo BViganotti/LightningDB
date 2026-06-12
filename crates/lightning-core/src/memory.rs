@@ -1032,7 +1032,7 @@ impl MemoryStore {
         if visited.is_empty() { return Ok(Vec::new()); }
 
         // Look up entities by _id
-        let ids: Vec<Value> = visited.iter().map(|&id| Value::Number(id as f64)).collect();
+        let ids: Vec<Value> = visited.iter().map(|&id| Value::Node(id)).collect();
         let lookup = format!(
             "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until"
@@ -1282,7 +1282,7 @@ impl MemoryStore {
         if internal_ids.is_empty() {
             return Vec::new();
         }
-        let ids: Vec<Value> = internal_ids.iter().map(|&id| Value::Number(id as f64)).collect();
+        let ids: Vec<Value> = internal_ids.iter().map(|&id| Value::Node(id)).collect();
         let query = format!(
             "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
