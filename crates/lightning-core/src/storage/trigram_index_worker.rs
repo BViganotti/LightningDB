@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 pub struct TrigramIndexWorker {
     task_tx: Sender<TrigramIndexTask>,
+    /// Handle to wait for worker thread completion
+    worker_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 #[derive(Debug)]
@@ -18,11 +20,19 @@ pub enum TrigramIndexTask {
 impl TrigramIndexWorker {
     pub fn new(index: Arc<TrigramIndex>) -> Result<Self> {
         let (task_tx, task_rx) = channel();
-        rayon::spawn(move || {
-            Self::worker_loop(index, task_rx);
-        });
+        let worker_handle = std::thread::Builder::new()
+            .name("trigram-index-worker".into())
+            .spawn(move || {
+                Self::worker_loop(index, task_rx);
+            })
+            .map_err(|e| crate::LightningError::Internal(format!(
+                "Failed to spawn trigram index worker: {e}"
+            )))?;
 
-        Ok(Self { task_tx })
+        Ok(Self {
+            task_tx,
+            worker_handle: Some(worker_handle),
+        })
     }
 
     fn worker_loop(index: Arc<TrigramIndex>, task_rx: Receiver<TrigramIndexTask>) {
@@ -96,6 +106,10 @@ impl Drop for TrigramIndexWorker {
     fn drop(&mut self) {
         if self.task_tx.send(TrigramIndexTask::Shutdown).is_err() {
             tracing::warn!("TrigramIndex: lost shutdown task (channel closed)");
+        }
+        // Wait for worker thread to finish
+        if let Some(handle) = self.worker_handle.take() {
+            let _ = handle.join();
         }
     }
 }
