@@ -74,15 +74,17 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        // Acquire write lock once for the entire batch to reduce lock overhead.
+        // This blocks concurrent searches during the batch but is more efficient
+        // than acquiring/releasing the lock per document.
+        let mut writer = self.writer.write();
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
             for (_name, field) in &self.content_fields {
                 doc.add_text(*field, text);
             }
-            // Acquire write lock per document to avoid holding it for the entire batch
-            // (which blocks concurrent searches that take a read lock).
-            self.writer.write()
+            writer
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
