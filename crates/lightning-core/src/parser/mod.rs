@@ -50,17 +50,15 @@ fn preprocess_distinct_functions(s: &str) -> String {
         let search = format!("{upper}(DISTINCT ");
         let replace = format!("{upper}_DISTINCT(");
 
-        // Case-insensitive replacement
+        // Case-insensitive replacement in-place
         let mut pos = 0;
-        while let Some(idx) = result[pos..].to_uppercase().find(&search) {
-            let actual_idx = pos + idx;
-            result = format!(
-                "{}{}{}",
-                &result[..actual_idx],
-                replace,
-                &result[actual_idx + search.len()..]
-            );
-            pos = actual_idx + replace.len();
+        while pos < result.len() {
+            if result[pos..].to_uppercase().starts_with(&search) {
+                result.replace_range(pos..pos + search.len(), &replace);
+                pos += replace.len();
+            } else {
+                pos += 1;
+            }
         }
     }
 
