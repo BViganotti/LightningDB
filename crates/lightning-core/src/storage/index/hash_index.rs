@@ -496,6 +496,11 @@ impl HashIndex {
         row_id: u64,
     ) -> Result<()> {
         let offset = 16 + (num_entries as usize) * ENTRY_SIZE;
+        if offset + ENTRY_SIZE > 4096 {
+            return Err(LightningError::Internal(format!(
+                "Hash index page full: entry at offset {} exceeds page size", offset
+            )));
+        }
         unsafe {
             std::ptr::copy_nonoverlapping(hash.to_le_bytes().as_ptr(), data_ptr.add(offset), 8);
         }
