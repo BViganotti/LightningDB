@@ -317,12 +317,14 @@ impl std::hash::Hash for Value {
                     })
                     .collect();
                 entries.sort_by_key(|(h, _, _)| *h);
-                let mut h = 0u64;
+                let mut h = 0xcbf29ce484222325u64; // FNV offset basis
                 for (_, k, v) in entries {
                     let mut s = std::collections::hash_map::DefaultHasher::new();
                     k.hash(&mut s);
                     v.hash(&mut s);
-                    h = h.wrapping_add(std::hash::Hasher::finish(&s));
+                    // FNV-1a style mixing for better distribution
+                    h ^= std::hash::Hasher::finish(&s);
+                    h = h.wrapping_mul(0x100000001b3); // FNV prime
                 }
                 h.hash(state);
             }
