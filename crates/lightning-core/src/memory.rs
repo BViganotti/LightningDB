@@ -401,6 +401,11 @@ impl MemoryStore {
                     }
                 }
             }
+        } else if !embedding.is_empty() {
+            tracing::warn!(
+                "MemoryStore: embedding dimension mismatch (got {}, expected {}). Vector search skipped.",
+                embedding.len(), self.embedding_dim
+            );
         }
 
         if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
