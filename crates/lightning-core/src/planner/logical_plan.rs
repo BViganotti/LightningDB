@@ -286,6 +286,10 @@ impl LogicalOperator {
                     vars.insert(item.alias.clone());
                 }
             }
+            LogicalOperator::Join(left, right, _) | LogicalOperator::Union(left, right, _) => {
+                left.get_variables(vars);
+                right.get_variables(vars);
+            }
             LogicalOperator::Aggregate { .. } => {
                 // This is slightly more complex as it depends on Projection child
             }
