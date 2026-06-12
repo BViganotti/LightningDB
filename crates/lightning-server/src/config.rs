@@ -149,6 +149,11 @@ impl ServerConfig {
         if self.buffer_pool_size < 1024 * 1024 {
             return Err("buffer_pool_size must be at least 1MB".into());
         }
+        // Cap at 1TB to prevent overflow in page calculations
+        const MAX_BUFFER_POOL: u64 = 1024 * 1024 * 1024 * 1024;
+        if self.buffer_pool_size > MAX_BUFFER_POOL {
+            return Err(format!("buffer_pool_size cannot exceed {}TB", MAX_BUFFER_POOL / (1024 * 1024 * 1024 * 1024)));
+        }
         if self.vacuum_interval_ms < 100 {
             return Err("vacuum_interval_ms must be at least 100ms".into());
         }
