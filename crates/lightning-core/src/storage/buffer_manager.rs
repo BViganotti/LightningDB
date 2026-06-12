@@ -77,7 +77,11 @@ struct BufferPool {
     capacity: usize,
     max_capacity: usize,
     wal: Option<Arc<crate::storage::WAL>>,
-    page_locks: LruCache<(u64, u64), Arc<Mutex<()>>>,
+    /// Per-page mutexes for synchronizing concurrent access to the same page.
+    /// Uses a regular HashMap (not LRU) to prevent eviction of in-use locks.
+    /// If an LRU cache evicts a lock that another thread is holding, a new
+    /// lock would be created for the same page, breaking mutual exclusion.
+    page_locks: HashMap<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
     dirty_count: AtomicU64,
     /// Free candidate queue: slot indices whose pin_count dropped to 0.
@@ -132,7 +136,7 @@ impl BufferManager {
                 capacity: initial_cap,
                 max_capacity: shard_capacity,
                 wal: wal.as_ref().map(|w| Arc::clone(w)),
-                page_locks: LruCache::new(lock_cap),
+                page_locks: HashMap::new(),
                 shutdown: AtomicBool::new(false),
                 dirty_count: AtomicU64::new(0),
                 free_candidates: VecDeque::new(),
@@ -163,7 +167,8 @@ impl BufferManager {
 
     fn get_page_lock(&self, pool: &mut BufferPool, key: (u64, u64)) -> Arc<Mutex<()>> {
         pool.page_locks
-            .get_or_insert(key, || Arc::new(Mutex::new(())))
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
 
