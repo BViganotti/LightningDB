@@ -6,7 +6,16 @@ pub struct LightningConnection {
     conn: crate::Connection,
 }
 
-fn c_str_to_str(ptr: *const c_char) -> Result<&'static str, crate::LightningError> {
+/// Convert a C string pointer to a Rust &str.
+///
+/// # Safety
+/// The caller must ensure:
+/// - `ptr` is non-null and points to a valid, null-terminated C string.
+/// - The memory pointed to by `ptr` remains valid for the lifetime of the
+///   returned `&str`. For FFI callers, this means the C caller must not free
+///   the string while the returned reference is in use.
+/// - The string content is valid UTF-8 (or the function will return an error).
+unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Result<&'a str, crate::LightningError> {
     if ptr.is_null() {
         return Err(crate::LightningError::Internal("null pointer".into()));
     }
@@ -23,7 +32,7 @@ fn c_string_from_str(s: &str) -> Result<CString, crate::LightningError> {
 
 #[no_mangle]
 pub extern "C" fn lightning_open(path: *const c_char) -> *mut LightningConnection {
-    let path_str = match c_str_to_str(path) {
+    let path_str = match unsafe { c_str_to_str(path) } {
         Ok(s) => s,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -46,7 +55,7 @@ pub extern "C" fn lightning_query(
         return std::ptr::null_mut();
     }
     let conn_wrapper = unsafe { &*conn_ptr };
-    let query_str = match c_str_to_str(query) {
+    let query_str = match unsafe { c_str_to_str(query) } {
         Ok(s) => s,
         Err(e) => {
             let err_json = format!("{{\"error\": \"{e}\"}}");
