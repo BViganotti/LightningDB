@@ -19,17 +19,30 @@ impl OrderByPushDown {
         match plan {
             LogicalOperator::Sort(child, items) => {
                 let pushed_child = self.push_down(*child)?;
-                // Simple optimization: if child is already a Sort, maybe combine or eliminate.
-                // For now, just push down through Projection/Filter if safe.
                 match pushed_child {
+                    // Eliminate redundant Sort: Sort(Sort(x, items1), items2) → Sort(x, items2)
+                    LogicalOperator::Sort(grandchild, _) => {
+                        Ok(LogicalOperator::Sort(grandchild, items))
+                    }
+                    // Push Sort past Projection when safe (all sort columns are direct references)
                     LogicalOperator::Projection(grandchild, p_items) => {
-                        // We can push Sort below Projection if all Sort items refer to columns in the grandchild.
-                        // This involves remapping indices, which is complex.
-                        // For now, keep it as is.
-                        Ok(LogicalOperator::Sort(
-                            Box::new(LogicalOperator::Projection(grandchild, p_items)),
-                            items,
-                        ))
+                        // Check if all sort items are simple PropertyLookup that
+                        // exist in the grandchild's output
+                        let can_push = items.iter().all(|item| {
+                            matches!(&item.expression, crate::planner::binder::BoundExpression::PropertyLookup(..))
+                        });
+                        if can_push {
+                            // Push Sort below Projection
+                            Ok(LogicalOperator::Projection(
+                                Box::new(LogicalOperator::Sort(grandchild, items)),
+                                p_items,
+                            ))
+                        } else {
+                            Ok(LogicalOperator::Sort(
+                                Box::new(LogicalOperator::Projection(grandchild, p_items)),
+                                items,
+                            ))
+                        }
                     }
                     _ => Ok(LogicalOperator::Sort(Box::new(pushed_child), items)),
                 }
