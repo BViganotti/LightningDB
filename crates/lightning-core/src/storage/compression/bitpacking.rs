@@ -51,7 +51,7 @@ impl BitPacker {
     }
 
     fn write_bits(val: u64, bit_width: u8, bit_offset: usize, data: &mut [u8]) {
-        if bit_width == 0 || data.is_empty() {
+        if bit_width == 0 || bit_width >= 64 || data.is_empty() {
             return;
         }
         let word_idx = bit_offset / 64;
@@ -90,7 +90,7 @@ impl BitPacker {
     }
 
     fn read_bits(bit_width: u8, bit_offset: usize, data: &[u8]) -> u64 {
-        if bit_width == 0 || data.is_empty() {
+        if bit_width == 0 || bit_width >= 64 || data.is_empty() {
             return 0;
         }
         let word_idx = bit_offset / 64;
