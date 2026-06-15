@@ -30,7 +30,7 @@
     "memory",
     "ai"
   ],
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "dependencies": {
     "uuid": "^9.0.0"
   },

@@ -40,6 +40,13 @@ LLM_REMEDIATION_PLAN.md
 PERFORMANCE_REMEDIATION_PLAN.md
 PERFORMANCE_TUNING.md
 
+# Secrets
+.env*
+*.pem
+*.key
+*.cert
+*.crt
+
 # Python
 __pycache__/
 *.pyc
@@ -47,3 +54,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 dist/
+
+# Node.js
+node_modules/
+packages/lightning-client/dist/

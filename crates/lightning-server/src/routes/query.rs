@@ -91,15 +91,19 @@ pub async fn query_stream_handler(
 
     let stream = crate::streaming::build_query_stream(db, query, params);
 
-    let sse_stream = stream.map(|result| match result {
-        Ok(row) => Ok(Event::default().json_data(row).unwrap()),
-        Err(e) => Ok(Event::default()
-            .json_data(serde_json::json!({"error": e}))
-            .unwrap()),
+    let sse_stream = stream.map(|result| {
+        let event = match result {
+            Ok(row) => Event::default().json_data(row),
+            Err(e) => Event::default().json_data(serde_json::json!({"error": e})),
+        };
+        Ok(event.unwrap_or_else(|_| Event::default().data("{}")))
     });
 
-    let final_stream =
-        futures::stream::once(async { Ok(Event::default().json_data(serde_json::json!({"done": true})).unwrap()) });
+    let final_stream = futures::stream::once(async {
+        Ok(Event::default()
+            .json_data(serde_json::json!({"done": true}))
+            .unwrap_or_else(|_| Event::default().data("{}")))
+    });
 
     let combined = sse_stream.chain(final_stream);
 
