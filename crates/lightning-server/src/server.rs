@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -7,7 +8,7 @@ use axum::extract::Request;
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use lightning::memory::MemoryStore;
 use lightning::Database;
@@ -18,43 +19,55 @@ use tower_http::compression::CompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::Level;
 
-use crate::config::ServerConfig;
+use rustls::pki_types::CertificateDer;
+
+use crate::auth::middleware::{auth_middleware, require_admin_role, require_reader_role, require_writer_role};
+use crate::auth::models::AuthMode;
+use crate::auth::store::AuthStore;
+use crate::config::{self as server_config, ServerConfig};
 use crate::extract::{ConnectionPool, RequestIdExtension};
 use crate::routes;
 
 struct RateLimiter {
-    buckets: Mutex<HashMap<std::net::IpAddr, (u32, Instant)>>,
+    windows: Mutex<HashMap<IpAddr, SlidingWindow>>,
     max_requests: u32,
     window: Duration,
+}
+
+struct SlidingWindow {
+    timestamps: VecDeque<Instant>,
 }
 
 impl RateLimiter {
     fn new(max_requests: u32, window_secs: u64) -> Self {
         Self {
-            buckets: Mutex::new(HashMap::new()),
+            windows: Mutex::new(HashMap::new()),
             max_requests,
             window: Duration::from_secs(window_secs),
         }
     }
 
-    fn check(&self, ip: std::net::IpAddr) -> bool {
-        let mut buckets = self.buckets.lock();
+    fn check(&self, ip: IpAddr) -> bool {
+        let mut windows = self.windows.lock();
         let now = Instant::now();
 
-        // Periodically evict stale entries to prevent unbounded growth
-        if buckets.len() > 1000 {
+        if windows.len() > 100_000 {
             let stale_threshold = self.window * 2;
-            buckets.retain(|_, (_, last_seen)| {
-                now.duration_since(*last_seen) < stale_threshold
+            windows.retain(|_, sw| {
+                sw.timestamps.back().map_or(false, |t| now.duration_since(*t) < stale_threshold)
             });
         }
 
-        let entry = buckets.entry(ip).or_insert((0, now));
-        if now.duration_since(entry.1) > self.window {
-            *entry = (1, now);
-            true
-        } else if entry.0 < self.max_requests {
-            entry.0 += 1;
+        let sw = windows.entry(ip).or_insert(SlidingWindow {
+            timestamps: VecDeque::new(),
+        });
+
+        while sw.timestamps.front().map_or(false, |t| now.duration_since(*t) > self.window) {
+            sw.timestamps.pop_front();
+        }
+
+        if sw.timestamps.len() < self.max_requests as usize {
+            sw.timestamps.push_back(now);
             true
         } else {
             false
@@ -68,16 +81,22 @@ pub struct AppState {
     pub config: ServerConfig,
     pub request_counter: AtomicU64,
     pub connection_pool: Arc<ConnectionPool>,
+    pub auth_store: Arc<AuthStore>,
+    pub auth_mode: AuthMode,
     rate_limiter: Arc<RateLimiter>,
-    /// Semaphore to limit concurrent query execution and prevent
-    /// spawn_blocking pool exhaustion from a single client.
     pub query_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 const MAX_CONCURRENT_QUERIES: usize = 64;
 
 impl AppState {
-    pub fn new(db: Database, store: MemoryStore, config: ServerConfig) -> Self {
+    pub fn new(
+        db: Database,
+        store: MemoryStore,
+        config: ServerConfig,
+        auth_store: Arc<AuthStore>,
+    ) -> Self {
+        let auth_mode = config.auth_mode;
         let db_arc = Arc::new(db);
         Self {
             db: Arc::clone(&db_arc),
@@ -85,7 +104,9 @@ impl AppState {
             config,
             request_counter: AtomicU64::new(0),
             connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db_arc))),
-            rate_limiter: Arc::new(RateLimiter::new(100, 1)), // 100 req/sec per IP
+            auth_store,
+            auth_mode,
+            rate_limiter: Arc::new(RateLimiter::new(100, 1)),
             query_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_QUERIES)),
         }
     }
@@ -99,6 +120,8 @@ impl Clone for AppState {
             config: self.config.clone(),
             request_counter: AtomicU64::new(self.request_counter.load(Ordering::Relaxed)),
             connection_pool: Arc::clone(&self.connection_pool),
+            auth_store: Arc::clone(&self.auth_store),
+            auth_mode: self.auth_mode,
             rate_limiter: Arc::clone(&self.rate_limiter),
             query_semaphore: Arc::clone(&self.query_semaphore),
         }
@@ -146,9 +169,6 @@ impl Server {
         req: Request,
         next: Next,
     ) -> Response {
-        // Rate limit by the direct client IP (socket address).
-        // Do NOT use x-forwarded-for for rate limiting — it is trivially
-        // spoofable and allows attackers to bypass rate limits entirely.
         let client_ip = req.extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map(|ci| ci.0.ip())
@@ -169,9 +189,6 @@ impl Server {
         let state = self.state;
 
         // Build CORS layer from configured allowed origins.
-        // When no --cors-allowed-origins is specified, defaults to localhost-only.
-        // NEVER fall back to CorsLayer::permissive() — that allows any origin,
-        // which is a security risk for a database HTTP server.
         let cors_allowed = if state.config.cors_allowed_origins.is_empty() {
             vec![
                 "http://localhost:3000".to_string(),
@@ -187,8 +204,6 @@ impl Server {
             .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
             .collect();
         let cors_layer = if origins.is_empty() {
-            // Only reachable if ALL configured origins failed to parse as HeaderValue.
-            // Log a warning and provide a restricted layer that allows nothing.
             tracing::warn!("No valid CORS origins configured; CORS will deny all cross-origin requests");
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|_origin, _parts| false))
@@ -217,59 +232,63 @@ impl Server {
                 ])
         };
 
-        // Build auth layer from config (if auth_token is set)
-        let auth_token = state.config.auth_token.clone();
-        let auth_layer = axum::middleware::from_fn(move |req: Request, next: Next| {
-            let expected = auth_token.clone();
-            async move {
-                if let Some(ref expected) = expected {
-                    let provided = req
-                        .headers()
-                        .get(axum::http::header::AUTHORIZATION)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.strip_prefix("Bearer "))
-                        .map(|s| s.trim().to_string());
-                    match provided {
-                        Some(token) if token.as_str() == expected.as_ref() => {}
-                        _ => {
-                            return Err(axum::http::StatusCode::UNAUTHORIZED);
-                        }
-                    }
-                }
-                Ok(next.run(req).await)
-            }
-        });
-
+        // Public routes (no auth required)
         let app = Router::new()
-            // Health (no auth required)
             .route("/health", get(routes::health::health_handler))
-            // Query
-            .route("/v1/query", post(routes::query::query_handler))
-            .route("/v1/query/stream", post(routes::query::query_stream_handler))
-            // Memory
-            .route("/v1/memory/store", post(routes::memory::store_handler))
-            .route("/v1/memory/store-batch", post(routes::memory::store_batch_handler))
-            .route("/v1/memory/recall", post(routes::memory::recall_handler))
-            .route("/v1/memory/recall-recent", post(routes::memory::recall_recent_handler))
-            .route("/v1/memory/recall-by-type", post(routes::memory::recall_by_type_handler))
-            .route("/v1/memory/forget", post(routes::memory::forget_handler))
-            .route("/v1/memory/decay", post(routes::memory::decay_handler))
-            .route("/v1/memory/entity-history", post(routes::memory::entity_history_handler))
-            .route("/v1/memory/consolidate", post(routes::memory::consolidate_handler))
-            // Graph
-            .route("/v1/graph/associate", post(routes::graph::associate_handler))
-            .route("/v1/graph/expand", post(routes::graph::expand_handler))
-            // RAG
-            .route("/v1/rag/query", post(routes::rag::rag_query_handler))
-            // Admin
-            .route("/v1/admin/checkpoint", post(routes::admin::checkpoint_handler))
-            .route("/v1/admin/vacuum", post(routes::admin::vacuum_handler))
-            // Metrics
             .route("/metrics", get(routes::admin::metrics_handler))
-            // CDC
-            .route("/v1/subscribe", get(routes::subscribe::subscribe_handler))
-            // Middleware (auth BEFORE all protected routes)
-            .layer(auth_layer)
+            .route("/v1/auth/login", post(routes::auth::login_handler))
+
+            // Reader-guarded routes (any authenticated user with at least Reader role)
+            .merge(
+                Router::new()
+                    .route("/v1/query", post(routes::query::query_handler))
+                    .route("/v1/query/stream", post(routes::query::query_stream_handler))
+                    .route("/v1/memory/recall", post(routes::memory::recall_handler))
+                    .route("/v1/memory/recall-recent", post(routes::memory::recall_recent_handler))
+                    .route("/v1/memory/recall-by-type", post(routes::memory::recall_by_type_handler))
+                    .route("/v1/memory/entity-history", post(routes::memory::entity_history_handler))
+                    .route("/v1/graph/expand", post(routes::graph::expand_handler))
+                    .route("/v1/rag/query", post(routes::rag::rag_query_handler))
+                    .route("/v1/subscribe", get(routes::subscribe::subscribe_handler))
+                    .route("/v1/auth/refresh", post(routes::auth::refresh_handler))
+                    .route("/v1/auth/logout", post(routes::auth::logout_handler))
+                    .route("/v1/auth/me", get(routes::auth::me_handler))
+                    .layer(middleware::from_fn(require_reader_role)),
+            )
+
+            // Writer-guarded routes
+            .merge(
+                Router::new()
+                    .route("/v1/memory/store", post(routes::memory::store_handler))
+                    .route("/v1/memory/store-batch", post(routes::memory::store_batch_handler))
+                    .route("/v1/memory/forget", post(routes::memory::forget_handler))
+                    .route("/v1/memory/decay", post(routes::memory::decay_handler))
+                    .route("/v1/memory/consolidate", post(routes::memory::consolidate_handler))
+                    .route("/v1/graph/associate", post(routes::graph::associate_handler))
+                    .layer(middleware::from_fn(require_writer_role)),
+            )
+
+            // Admin-guarded routes
+            .merge(
+                Router::new()
+                    .route("/v1/admin/checkpoint", post(routes::admin::checkpoint_handler))
+                    .route("/v1/admin/vacuum", post(routes::admin::vacuum_handler))
+                    .route("/v1/admin/users", get(routes::admin_users::list_users_handler))
+                    .route("/v1/admin/users", post(routes::admin_users::create_user_handler))
+                    .route("/v1/admin/users/{id}", post(routes::admin_users::update_user_handler))
+                    .route("/v1/admin/users/{id}", delete(routes::admin_users::delete_user_handler))
+                    .route("/v1/admin/users/{id}/reset-password", post(routes::admin_users::reset_password_handler))
+                    .route("/v1/admin/users/{id}/keys", get(routes::admin_users::list_api_keys_handler))
+                    .route("/v1/admin/users/{id}/keys", post(routes::admin_users::create_api_key_handler))
+                    .route("/v1/admin/users/{user_id}/keys/{key_id}", delete(routes::admin_users::delete_api_key_handler))
+                    .layer(middleware::from_fn(require_admin_role)),
+            )
+
+            // Auth middleware (checks JWT/API key/Token, populates AuthenticatedUser)
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ))
             .layer(middleware::from_fn(request_id_middleware))
             .layer(
                 TraceLayer::new_for_http()
@@ -278,7 +297,7 @@ impl Server {
             )
             .layer(cors_layer)
             .layer(CompressionLayer::new())
-            .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10MB max body
+            .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 Self::rate_limit_middleware,
@@ -287,11 +306,12 @@ impl Server {
 
         let addr = format!("{}:{}", state.config.host, state.config.port);
         tracing::info!(
-            "Lightning server starting on {} (read_only={}, buffer_pool_mb={}, tls={})",
+            "Lightning server starting on {} (read_only={}, buffer_pool_mb={}, tls={}, auth={})",
             addr,
             state.config.read_only,
             state.config.buffer_pool_size / (1024 * 1024),
             state.config.tls_enabled,
+            state.auth_mode,
         );
 
         if state.config.tls_enabled {
@@ -305,19 +325,45 @@ impl Server {
                 .tls_key
                 .as_ref()
                 .expect("tls_key required when tls_enabled=true");
+            let addr: std::net::SocketAddr = addr.parse().expect("Invalid address");
 
-            let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
-                .await
-                .expect("Failed to configure TLS");
+            let versions = server_config::tls_protocol_versions(
+                &state.config.tls_min_version,
+                &state.config.tls_max_version,
+            )
+            .expect("invalid TLS version configuration");
 
-            let addr: std::net::SocketAddr = format!("{}:{}", state.config.host, state.config.port)
-                .parse()
-                .expect("Invalid address");
+            if state.config.mtls_enabled {
+                let ca_path = state
+                    .config
+                    .mtls_ca
+                    .as_ref()
+                    .expect("mtls_ca required when mtls_enabled=true");
+                run_mtls_server(app, addr, cert_path, key_path, ca_path, &versions).await;
+            } else {
+                let certs = load_pem_certs(cert_path);
+                let key = load_pem_key(key_path);
 
-            axum_server::bind_rustls(addr, tls_config)
-                .serve(app.into_make_service())
-                .await
-                .expect("Server exited with error");
+                let server_config = rustls::ServerConfig::builder_with_protocol_versions(&versions)
+                    .with_no_client_auth()
+                    .with_single_cert(certs, key)
+                    .expect("failed to set server certificate");
+
+                let tls_config = axum_server::tls_rustls::RustlsConfig::from_config(
+                    std::sync::Arc::new(server_config),
+                );
+
+                let server = axum_server::bind_rustls(addr, tls_config);
+                let serve_future = server.serve(app.into_make_service());
+                tokio::select! {
+                    result = serve_future => {
+                        result.expect("Server exited with error");
+                    }
+                    _ = shutdown_signal() => {
+                        tracing::info!("Shutdown signal received, stopping server...");
+                    }
+                }
+            }
         } else {
             let listener = tokio::net::TcpListener::bind(&addr)
                 .await
@@ -331,6 +377,78 @@ impl Server {
 
         tracing::info!("Shutdown complete");
     }
+}
+
+async fn run_mtls_server(
+    app: Router,
+    addr: std::net::SocketAddr,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+    ca_path: &std::path::Path,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) {
+    use rustls::server::WebPkiClientVerifier;
+
+    let certs = load_pem_certs(cert_path);
+    let key = load_pem_key(key_path);
+    let ca_certs = load_pem_certs(ca_path);
+
+    let mut root_store = rustls::RootCertStore::empty();
+    for cert in &ca_certs {
+        root_store
+            .add(cert.clone())
+            .expect("failed to add CA certificate");
+    }
+
+    let client_verifier = WebPkiClientVerifier::builder(std::sync::Arc::new(root_store))
+        .build()
+        .expect("failed to build mTLS client verifier");
+
+    let server_config = rustls::ServerConfig::builder_with_protocol_versions(versions)
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(certs, key)
+        .expect("failed to set server certificate");
+
+    let tls_config =
+        axum_server::tls_rustls::RustlsConfig::from_config(std::sync::Arc::new(server_config));
+
+    let server = axum_server::bind_rustls(addr, tls_config);
+    let serve_future = server.serve(app.into_make_service());
+    tokio::select! {
+        result = serve_future => {
+            result.expect("Server exited with error");
+        }
+        _ = shutdown_signal() => {
+            tracing::info!("Shutdown signal received, stopping server...");
+        }
+    }
+}
+
+fn load_pem_certs(path: &std::path::Path) -> Vec<CertificateDer<'static>> {
+    let data = std::fs::read(path).expect("failed to read cert file");
+    rustls_pemfile::certs(&mut data.as_ref())
+        .collect::<Result<Vec<_>, _>>()
+        .expect("failed to parse PEM certs")
+}
+
+fn load_pem_key(path: &std::path::Path) -> rustls::pki_types::PrivateKeyDer<'static> {
+    let data = std::fs::read(path).expect("failed to read key file");
+    let mut reader = data.as_ref();
+    for item in rustls_pemfile::read_all(&mut reader) {
+        match item.expect("failed to parse PEM") {
+            rustls_pemfile::Item::Pkcs1Key(key) => {
+                return key.into();
+            }
+            rustls_pemfile::Item::Pkcs8Key(key) => {
+                return key.into();
+            }
+            rustls_pemfile::Item::Sec1Key(key) => {
+                return key.into();
+            }
+            _ => continue,
+        }
+    }
+    panic!("no private key found in {}", path.display());
 }
 
 async fn shutdown_signal() {

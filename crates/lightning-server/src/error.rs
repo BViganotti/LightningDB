@@ -10,6 +10,9 @@ pub enum AppError {
     Internal(String),
     Timeout(u64),
     BadRequest(String),
+    Unauthorized(String),
+    Forbidden(String),
+    TooManyRequests(String),
 }
 
 impl std::fmt::Display for AppError {
@@ -19,6 +22,9 @@ impl std::fmt::Display for AppError {
             AppError::Internal(s) => write!(f, "{}", s),
             AppError::Timeout(ms) => write!(f, "query timed out after {}ms", ms),
             AppError::BadRequest(s) => write!(f, "{}", s),
+            AppError::Unauthorized(s) => write!(f, "unauthorized: {}", s),
+            AppError::Forbidden(s) => write!(f, "forbidden: {}", s),
+            AppError::TooManyRequests(s) => write!(f, "too many requests: {}", s),
         }
     }
 }
@@ -37,6 +43,15 @@ impl IntoResponse for AppError {
             }
             AppError::Timeout(_) => {
                 (StatusCode::REQUEST_TIMEOUT, Some("QUERY_TIMEOUT".into()))
+            }
+            AppError::Unauthorized(_) => {
+                (StatusCode::UNAUTHORIZED, Some("UNAUTHORIZED".into()))
+            }
+            AppError::Forbidden(_) => {
+                (StatusCode::FORBIDDEN, Some("FORBIDDEN".into()))
+            }
+            AppError::TooManyRequests(_) => {
+                (StatusCode::TOO_MANY_REQUESTS, Some("TOO_MANY_REQUESTS".into()))
             }
             AppError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
@@ -68,9 +83,6 @@ impl IntoResponse for AppError {
             },
         };
 
-        // Sanitize error messages for HTTP responses.
-        // Internal errors must not leak file paths, stack traces, or
-        // implementation details to the client.
         let user_message = match &self {
             AppError::Internal(_) => "An internal error occurred".to_string(),
             AppError::Db(lightning_core::LightningError::Internal(_)) => "An internal database error occurred".to_string(),

@@ -1,4 +1,6 @@
 pub mod admin;
+pub mod admin_users;
+pub mod auth;
 pub mod graph;
 pub mod health;
 pub mod memory;

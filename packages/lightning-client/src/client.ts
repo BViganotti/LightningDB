@@ -11,6 +11,7 @@ import type {
   RagResult,
   SearchResult,
   TelemetryHooks,
+  TlsConfig,
 } from './types'
 import {
   validateBatchEntities,
@@ -25,7 +26,7 @@ import {
   type ValidationError,
 } from './validation'
 
-class LightningError extends Error {
+export class LightningError extends Error {
   constructor(
     message: string,
     public statusCode?: number,
@@ -70,6 +71,7 @@ export class LightningClient {
   private baseUrl: string
   private authToken?: string
   private authTokenProvider?: () => string | undefined
+  private tls?: TlsConfig
   private defaultTimeout: number
   private retry: RetryConfig
   private circuitBreaker: CircuitBreaker | undefined
@@ -79,12 +81,20 @@ export class LightningClient {
   private maxBatchEntities: number
   private maxTopK: number
   private userAgent: string
+  private tlsAgent: unknown
+  private _tlsAgentInit: Promise<unknown> | undefined
   private abortController?: AbortController
 
   constructor(options: ClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? 'http://127.0.0.1:8080').replace(/\/+$/, '')
     this.authToken = options.authToken
     this.authTokenProvider = options.authTokenProvider
+    this.tls = options.tls
+
+    if (options.tls) {
+      this.baseUrl = this.baseUrl.replace(/^http:/, 'https:')
+    }
+
     this.defaultTimeout = options.defaultTimeout ?? 30_000
     this.followRedirects = options.followRedirects ?? false
     this.maxContentBytes = options.maxContentBytes ?? 10 * 1024 * 1024
@@ -98,6 +108,32 @@ export class LightningClient {
 
     if (options.circuitBreaker) {
       this.circuitBreaker = new CircuitBreaker(defaults.circuitBreaker, options.telemetry)
+    }
+  }
+
+  private async ensureTlsAgent(): Promise<unknown> {
+    if (this._tlsAgentInit) return this._tlsAgentInit
+    this._tlsAgentInit = this.buildTlsAgent()
+    this.tlsAgent = await this._tlsAgentInit
+    return this.tlsAgent
+  }
+
+  private async buildTlsAgent(): Promise<unknown> {
+    if (!this.tls) return undefined
+    if (typeof process === 'undefined' || !process.versions?.node) return undefined
+
+    try {
+      const https: typeof import('https') = await import('node:https')
+      const fs: typeof import('fs') = await import('node:fs')
+      return new https.Agent({
+        rejectUnauthorized: this.tls.verify !== false,
+        ca: this.tls.caBundlePath ? fs.readFileSync(this.tls.caBundlePath) : undefined,
+        cert: this.tls.certPath ? fs.readFileSync(this.tls.certPath) : undefined,
+        key: this.tls.keyPath ? fs.readFileSync(this.tls.keyPath) : undefined,
+        servername: this.tls.serverNameOverride,
+      })
+    } catch {
+      return undefined
     }
   }
 
@@ -150,6 +186,7 @@ export class LightningClient {
     const headers = this.headers(requestId)
     const timeout = timeoutOverride ?? this.defaultTimeout
     const start = performance.now()
+    const agent = await this.ensureTlsAgent()
 
     this.telemetry.onRequestStart(requestId, method, path)
 
@@ -164,6 +201,7 @@ export class LightningClient {
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
           redirect: this.followRedirects ? 'follow' : 'error',
+          ...(agent ? { agent } : {}),
         })
 
         clearTimeout(timeoutId)
@@ -437,10 +475,7 @@ export class LightningClient {
 
   async metrics(timeout?: number): Promise<string> {
     const requestId = uuidv4()
-    const { readable, writable } = new TransformStream()
-    const writer = writable.getWriter()
-    writer.close()
-
+    const agent = await this.ensureTlsAgent()
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout ?? this.defaultTimeout)
 
@@ -449,6 +484,7 @@ export class LightningClient {
         headers: this.headers(requestId),
         signal: controller.signal,
         redirect: this.followRedirects ? 'follow' : 'error',
+        ...(agent ? { agent } : {}),
       })
       clearTimeout(timeoutId)
       if (!r.ok) throw new LightningError(await r.text(), r.status)
@@ -464,9 +500,11 @@ export class LightningClient {
 
   async *subscribe(): AsyncGenerator<ChangeEvent> {
     const requestId = uuidv4()
+    const agent = await this.ensureTlsAgent()
     const r = await fetch(`${this.baseUrl}/v1/subscribe`, {
       headers: this.headers(requestId),
       redirect: this.followRedirects ? 'follow' : 'error',
+      ...(agent ? { agent } : {}),
     })
     if (!r.ok) throw new LightningError(`subscribe failed: ${r.statusText}`, r.status)
 

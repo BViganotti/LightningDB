@@ -21,6 +21,8 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 - **WASM UDFs**: Register WAT/WASM modules callable from Cypher, fuel-metered execution
 - **CDC**: WAL-polling change data capture with subscriber channels
 - **Time-travel**: Query the database at any prior MVCC timestamp via `execute_at()`
+- **Auth**: JWT access/refresh tokens, API keys, RBAC (Reader/Writer/Admin), brute-force login protection
+- **TLS/mTLS**: Optional TLS with configurable protocol versions (1.2/1.3) and mutual TLS
 
 ## What's Partial / Disabled / Missing
 
@@ -32,7 +34,7 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 
 **Compression**: `FixedFrameOfReference` type exists in the enum but has no implementation module. BooleanBitpacking type exists but has no implementation file. IVF index module exists but is not wired into the build.
 
-**No access control, no auth, no TLS in default mode** (TLS is available via `--tls-enabled` flag in the server binary).
+**Auth is file-backed (not stored in the core database)** — `auth.json` sits next to the data directory. Token blacklisting requires a round-trip to the store on every request. Refresh token revocation is soft-delete (revoked flag), not hard-delete after rotation.
 
 ## Crates
 
@@ -42,7 +44,7 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 | `lightning-core` | Core engine: parser, planner, optimizer, processor, storage, MVCC, WASM, CDC, C FFI |
 | `lightning-arrow` | Arrow integration helpers |
 | `lightning` | Top-level Rust driver crate. Re-exports from core. |
-| `lightning-server` | Axum HTTP server with 7 route groups |
+| `lightning-server` | Axum HTTP server with JWT auth, RBAC, TLS/mTLS |
 | `@lightningDB/client` | Node.js/TypeScript HTTP client SDK |
 | `lightning` (Python) | Python HTTP client SDK (sync + async) |
 
@@ -58,11 +60,11 @@ cargo run -p lightning-server -- --data-dir /tmp/lightning-data
 docker build -t lightningdb . && docker run -p 8080:8080 -v ./data:/data lightningdb
 ```
 
-Flags: `--port` (default 8080), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--buffer-pool-size`.
+Flags: `--port` (default 8080), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--tls-min-version`, `--tls-max-version`, `--auth-mode` (`none`|`token`|`jwt`), `--auth-admin-password`, `--jwt-secret`, `--buffer-pool-size`.
 
 ### 2. Run queries
 
-**curl:**
+**curl (no auth):**
 ```bash
 curl -X POST http://localhost:8080/v1/query \
   -H 'Content-Type: application/json' \
@@ -73,6 +75,25 @@ curl -X POST http://localhost:8080/v1/query \
 curl -X POST http://localhost:8080/v1/query \
   -H 'Content-Type: application/json' \
   -d '{"query": "MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age ORDER BY n.age"}'
+```
+
+**curl (JWT auth):**
+```bash
+# Start with JWT auth enabled
+cargo run -p lightning-server -- --data-dir /tmp/lightning-data \
+  --auth-mode jwt --auth-admin-password my-secret-password --jwt-secret @/path/to/jwt-secret.txt
+
+# Login
+TOKEN=$(curl -s -X POST http://localhost:8080/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "admin", "password": "my-secret-password"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Authenticated requests
+curl -X POST http://localhost:8080/v1/query \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "MATCH (n:Person) RETURN n.name"}'
 ```
 
 **Python:**
@@ -107,15 +128,28 @@ cd packages/lightning-client && npm install
 ```typescript
 import { Client } from '@lightningDB/client';
 
+// No auth
 const client = new Client('http://localhost:8080');
-const result = await client.query(
+
+// With TLS
+const tlsClient = new Client('https://localhost:8443', {
+  tls: { caCertPath: '/path/to/ca.pem' }
+});
+
+// With JWT auth
+const authClient = new Client('http://localhost:8080', {
+  auth: { username: 'admin', password: 'secret' }
+});
+await authClient.login(); // acquire JWT
+
+const result = await authClient.query(
   'MATCH (n:Person) WHERE n.age > $th RETURN n.name, n.age',
   { th: 25 }
 );
 
 // Memory/agent API
-await client.store('msg-1', 'Hello world', 'note');
-const results = await client.recall('hello', 5);
+await authClient.store('msg-1', 'Hello world', 'note');
+const results = await authClient.recall('hello', 5);
 ```
 
 **Rust (library):**
@@ -181,6 +215,17 @@ for row in &result.rows {
 | `/v1/rag/query` | POST | RAG pipeline: retrieve + LLM prompt |
 | `/v1/admin/checkpoint` | POST | Force a WAL checkpoint |
 | `/v1/admin/vacuum` | POST | Run garbage collection |
+| `/v1/auth/login` | POST | Authenticate, get JWT + refresh token |
+| `/v1/auth/refresh` | POST | Rotate refresh token |
+| `/v1/auth/logout` | POST | Revoke refresh token |
+| `/v1/auth/me` | GET | Current user info |
+| `/v1/admin/users` | GET | List users (admin) |
+| `/v1/admin/users` | POST | Create user (admin) |
+| `/v1/admin/users/:id` | PUT | Update user role (admin) |
+| `/v1/admin/users/:id` | DELETE | Delete user (admin) |
+| `/v1/admin/api-keys` | GET | List API keys (admin) |
+| `/v1/admin/api-keys` | POST | Create API key (admin) |
+| `/v1/admin/api-keys/:id` | DELETE | Revoke API key (admin) |
 | `/metrics` | GET | Prometheus metrics |
 | `/v1/subscribe` | GET | WebSocket CDC subscription |
 
@@ -204,7 +249,8 @@ for row in &result.rows {
 - Window functions, list indexing (`list[0]`), and map literal expressions are not supported in Cypher.
 - Python and Node.js HTTP client SDKs are not published to PyPI/npm — install from source.
 - WASM functions must be re-registered after each database restart (no persistence).
-- No authentication, authorization, or multi-tenant isolation in the HTTP server.
+- Auth store is file-backed (`auth.json`), not stored in the core DB tables.
+- No multi-tenant isolation in the HTTP server.
 - No officially published Docker image (Dockerfile builds from source).
 - IVF index module exists but is not wired into the build.
 

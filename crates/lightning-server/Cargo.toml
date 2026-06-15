@@ -34,3 +34,14 @@ thiserror = { workspace = true }
 mime = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+argon2 = "0.5"
+jsonwebtoken = "9"
+rand = "0.8"
+base64 = "0.22"
+zeroize = "1"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+rustls = "0.23"
+rustls-pemfile = "2"
+rustls-pki-types = "1"
