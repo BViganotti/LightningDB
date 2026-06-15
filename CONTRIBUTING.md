@@ -15,7 +15,7 @@ improvements.
 ### Setup
 
 ```bash
-git clone https://github.com/lightning-db/lightning.git
+git clone https://github.com/lightningDB/lightning.git
 cd lightning
 cargo build --workspace
 ```
@@ -94,7 +94,7 @@ be tolerated.
 
 ## Reporting Issues
 
-Use the [GitHub Issues](https://github.com/lightning-db/lightning/issues)
+Use the [GitHub Issues](https://github.com/lightningDB/lightning/issues)
 tracker. Include:
 
 - A clear description of the problem.

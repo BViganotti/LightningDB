@@ -13,7 +13,7 @@ Lightning is a **columnar, graph-native database server** with built-in vector s
 | `lightning-core` | Core engine: storage, MVCC, Cypher parser/planner/executor, MemoryStore, Fusion | Rust |
 | `lightning` | **Rust driver crate** — ergonomic public API wrapping `lightning-core` | Rust |
 | `lightning-server` | HTTP server binary (Axum, 20+ endpoints) — the primary deployment mode | Rust |
-| `@lightning-db/client` | Node.js/TypeScript HTTP client SDK | TypeScript |
+| `@lightningDB/client` | Node.js/TypeScript HTTP client SDK | TypeScript |
 | `lightning` (Python) | Python HTTP client SDK (sync + async) | Python |
 
 ## Storage Engine

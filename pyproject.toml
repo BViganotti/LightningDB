@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lightning-db/lightning"
-Repository = "https://github.com/lightning-db/lightning"
+Homepage = "https://github.com/lightningDB/lightning"
+Repository = "https://github.com/lightningDB/lightning"
 
 [tool.setuptools.packages.find]
 where = ["python"]

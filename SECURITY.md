@@ -10,7 +10,7 @@ channels.**
 
 ### Responsible Disclosure Process
 
-1. Send a detailed report to **[security@lightning-db.org](mailto:security@lightning-db.org)**.
+1. Send a detailed report to **[viganotti.exe@gmail.com](mailto:viganotti.exe@gmail.com)**.
    Include:
    - A description of the vulnerability and its impact.
    - Steps to reproduce, including environment details.
@@ -60,4 +60,4 @@ The following areas are in scope for the security policy:
 ### Security Advisories
 
 Published advisories are available at
-[GitHub Security Advisories](https://github.com/lightning-db/lightning/security/advisories).
+[GitHub Security Advisories](https://github.com/lightningDB/lightning/security/advisories).

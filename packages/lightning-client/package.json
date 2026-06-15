@@ -1,5 +1,5 @@
 {
-  "name": "@lightning-db/client",
+  "name": "@lightningDB/client",
   "version": "0.1.0",
   "description": "HTTP client SDK for LightningDB — graph+vector+RAG database for AI agent memory",
   "main": "./dist/index.js",

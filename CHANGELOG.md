@@ -111,4 +111,4 @@ subject to breaking changes without notice. Not recommended for production use.
 - Bounds checks in dictionary decompression, hash index, and string overflow
 - Rate limiter entry eviction prevents unbounded memory growth
 
-[0.1.0]: https://github.com/lightning-db/lightning/releases/tag/v0.1.0
+[0.1.0]: https://github.com/lightningDB/lightning/releases/tag/v0.1.0

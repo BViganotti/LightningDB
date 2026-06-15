@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Benoit Viganotti"]
 license = "BUSL-1.1"
-repository = "https://github.com/lightning-db/lightning"
+repository = "https://github.com/lightningDB/lightning"
 
 [workspace.dependencies]
 lightning-types = { path = "crates/lightning-types" }

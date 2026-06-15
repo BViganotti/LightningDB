@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "LightningDB — a high-performance graph+vector database with MVCC. Rust driver crate."
-repository = "https://github.com/lightning-db/lightning"
+repository = "https://github.com/lightningDB/lightning"
 keywords = ["graph", "vector", "database", "cypher", "mvcc"]
 
 [lib]

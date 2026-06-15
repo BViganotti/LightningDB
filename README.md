@@ -43,7 +43,7 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 | `lightning-arrow` | Arrow integration helpers |
 | `lightning` | Top-level Rust driver crate. Re-exports from core. |
 | `lightning-server` | Axum HTTP server with 7 route groups |
-| `@lightning-db/client` | Node.js/TypeScript HTTP client SDK |
+| `@lightningDB/client` | Node.js/TypeScript HTTP client SDK |
 | `lightning` (Python) | Python HTTP client SDK (sync + async) |
 
 ## Quickstart
@@ -55,7 +55,7 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 cargo run -p lightning-server -- --data-dir /tmp/lightning-data
 
 # Or build the Docker image first:
-docker build -t lightning-db . && docker run -p 8080:8080 -v ./data:/data lightning-db
+docker build -t lightningdb . && docker run -p 8080:8080 -v ./data:/data lightningdb
 ```
 
 Flags: `--port` (default 8080), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--buffer-pool-size`.
@@ -105,7 +105,7 @@ cd packages/lightning-client && npm install
 ```
 
 ```typescript
-import { Client } from '@lightning-db/client';
+import { Client } from '@lightningDB/client';
 
 const client = new Client('http://localhost:8080');
 const result = await client.query(
@@ -121,13 +121,13 @@ const results = await client.recall('hello', 5);
 **Rust (library):**
 ```toml
 [dependencies]
-lightning = { git = "https://github.com/lightning-db/lightning" }
+lightning = { git = "https://github.com/lightningDB/lightning" }
 ```
 
 ```rust
 use lightning::prelude::*;
 
-let db = Database::open("/tmp/lightning-db").unwrap();
+let db = Database::open("/tmp/lightningdb").unwrap();
 let conn = db.connect();
 
 conn.execute_typed("CREATE (n:Person {name: 'Alice', age: 30})", None).unwrap();
@@ -210,7 +210,7 @@ for row in &result.rows {
 
 ## Acknowledgments
 
-LightningDB began as a fork of [KuzuDB](https://kuzudb.com/), an embedded graph database. KuzuDB's columnar storage design, MVCC architecture, and Cypher query engine were the direct inspiration for this project. The codebase has since been substantially rewritten and extended with vector search, full-text indexing, WASM UDFs, time-travel queries, and an HTTP server layer, but KuzuDB's foundational design decisions remain visible throughout the storage engine and query planner.
+LightningDB began as a fork of [KuzuDB](https://kuzudb.com/), a graph database. KuzuDB's columnar storage design, MVCC architecture, and Cypher query engine were the direct inspiration for this project. The codebase has since been substantially rewritten and extended with vector search, full-text indexing, WASM UDFs, time-travel queries, and an HTTP server layer, but KuzuDB's foundational design decisions remain visible throughout the storage engine and query planner.
 
 ## License
 
