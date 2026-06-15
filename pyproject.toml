@@ -7,16 +7,16 @@ name = "lightning-client"
 version = "0.1.0"
 requires-python = ">=3.9"
 description = "HTTP client for LightningDB — graph+vector+RAG database for AI agent memory"
-authors = [{ name = "Lightning Developers" }]
-license = { text = "MIT" }
+authors = [{ name = "Benoit Viganotti" }]
+license = { text = "BUSL-1.1" }
 readme = "README.md"
 dependencies = [
     "httpx>=0.27.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/BViganotti/lightning"
-Repository = "https://github.com/BViganotti/lightning"
+Homepage = "https://github.com/lightning-db/lightning"
+Repository = "https://github.com/lightning-db/lightning"
 
 [tool.setuptools.packages.find]
 where = ["python"]

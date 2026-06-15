@@ -20,7 +20,11 @@ target/
 
 # Runtime / session data
 .rivet_mcp.db/
+.fusion_mcp.db/
 fusion-mcp.log
+
+# Agentic / session files
+CLAUDE.md
 
 # Build artifacts
 *.rlib

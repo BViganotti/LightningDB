@@ -10,7 +10,7 @@ channels.**
 
 ### Responsible Disclosure Process
 
-1. Send a detailed report to **[security@lightning-db.dev](mailto:security@lightning-db.dev)**.
+1. Send a detailed report to **[security@lightning-db.org](mailto:security@lightning-db.org)**.
    Include:
    - A description of the vulnerability and its impact.
    - Steps to reproduce, including environment details.
