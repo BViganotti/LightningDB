@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lightning is an **embedded, columnar, graph-native database** with built-in vector search, full-text search, and AI agent memory capabilities. It runs in-process — no server, no separate processes.
+Lightning is a **columnar, graph-native database server** with built-in vector search, full-text search, and AI agent memory capabilities. It runs as a standalone HTTP server or Docker container.
 
 ## Crate Map
 
@@ -12,8 +12,9 @@ Lightning is an **embedded, columnar, graph-native database** with built-in vect
 | `lightning-arrow` | Arrow FFI bridge (C Data Interface for zero-copy interop) | Rust |
 | `lightning-core` | Core engine: storage, MVCC, Cypher parser/planner/executor, MemoryStore, Fusion | Rust |
 | `lightning` | **Rust driver crate** — ergonomic public API wrapping `lightning-core` | Rust |
-| `lightning-python` | Python bindings via PyO3 (`lightning.MemoryStore`, `lightning.LightningDatabase`) | Rust → Python |
-| `lightning-node` | Node.js bindings via napi-rs (`@lightning-db/core`) | Rust → Node.js |
+| `lightning-server` | HTTP server binary (Axum, 20+ endpoints) — the primary deployment mode | Rust |
+| `@lightning-db/client` | Node.js/TypeScript HTTP client SDK | TypeScript |
+| `lightning` (Python) | Python HTTP client SDK (sync + async) | Python |
 
 ## Storage Engine
 

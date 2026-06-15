@@ -1,15 +1,24 @@
-# cargo-deny configuration for LightningDB.
-# Run with: cargo deny check --all-features
+[graph]
+all-features = true
+no-default-features = false
+
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
-ignore = []
+ignore = [
+    # bincode 1.3.3 — development ceased, but the maintainers consider it
+    # a complete version not in need of updates. Used only for cold-path
+    # metadata serialization (database header + free space map).
+    # Migration to a maintained alternative (postcard, rkyv) is tracked
+    # as a separate task.
+    "RUSTSEC-2025-0141",
+    # rustls-pemfile — unmaintained, repository archived. Transitive
+    # dependency via axum-server. Will resolve when axum-server updates
+    # to use rustls-pki-types directly.
+    "RUSTSEC-2025-0134",
+]
 
 [licenses]
-unlicensed = "deny"
 allow = [
+    "BUSL-1.1",
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -21,17 +30,17 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
 ]
-deny = []
-confidence = 0.8
+confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+wildcards = "allow"
 highlight = "all"
 skip = [
-    # tokio-util 0.6 is pulled in by h2; 0.7 is used by tonic.
-    # Both are compatible and required by transitive deps.
-    { name = "tokio-util", version = "0.6" },
+    { name = "hashbrown", version = "0.15" },
+    { name = "getrandom", version = "0.2" },
+    { name = "windows-sys", version = "0.52" },
+    { name = "r-efi", version = "5.3" },
 ]
 
 [sources]

@@ -1,7 +1,7 @@
 # Lightning Roadmap: Pre-Alpha → Alpha → Beta
 
 > **Current state:** Pre-alpha. 400+ tests passing. Core engine works. Phase 0 critical fixes complete.
-> **Goal:** A production-grade embedded graph+vector+hybrid database that replaces 4 separate services.
+> **Goal:** A production-grade graph+vector+hybrid database server that replaces 4 separate services.
 
 ## Progress Tracker
 

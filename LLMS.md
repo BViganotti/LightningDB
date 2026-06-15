@@ -6,7 +6,7 @@
 ## Project Identity
 
 - **Name**: LightningDB (crate: `lightning`)
-- **Type**: Embedded graph+vector+hybrid database
+- **Type**: Graph+vector+hybrid database server
 - **Language**: Rust
 - **Status**: Pre-alpha (400+ tests passing)
 - **License**: MIT
@@ -14,7 +14,7 @@
 
 ## What It Does
 
-Single embedded binary that replaces 4 services:
+Single binary that replaces 4 services:
 - **Graph DB** (Neo4j-like) — Cypher query language, NODE/REL tables, CSR adjacency index
 - **Vector DB** (Pinecone-like) — SIMD dot product, 768-dim embeddings, parallel scan
 - **Full-text search** (Elasticsearch-like) — Tantivy BM25, field-level scoring
@@ -35,8 +35,11 @@ crates/
 │   ├── memory.rs        # MemoryStore: CRUD/hybrid search/RAG/graph/consolidation/CDC
 │   ├── fusion.rs        # Fusion: code graph analysis, PageRank, D3 export
 │   └── types.rs         # TypedQueryResult: Arrow → JSON rows
-├── lightning-python/    # PyO3 bindings → Python `lightning` package
-└── lightning-node/      # napi-rs bindings → Node.js `@lightning-db/core`
+└── lightning-server/    # ★ HTTP SERVER — primary deployment mode (Axum, 20+ endpoints)
+packages/
+└── lightning-client/    # Node.js/TypeScript HTTP client SDK
+python/
+└── lightning/           # Python HTTP client SDK (sync + async)
 ```
 
 ## Public API Surface (lightning crate)
@@ -248,11 +251,11 @@ cargo test --release
 # Run lightning crate tests only
 cargo test -p lightning --release
 
-# Build Python bindings
-cd crates/lightning-python && maturin develop --release
+# Build HTTP server (primary deployment)
+cargo build -p lightning-server --release
 
-# Build Node.js bindings
-cd crates/lightning-node && npm install && npm run build
+# Build Node.js client SDK
+cd packages/lightning-client && npm install && npm run build
 
 # Build docs
 cargo doc -p lightning --no-deps --open
@@ -278,6 +281,6 @@ cargo doc -p lightning --no-deps --open
 - List indexing/slicing syntax: `list[0]`, `list[1..3]` not yet exposed in Cypher
 - Map/struct literal expressions: `{key: value}` not supported in RETURN clauses
 - Variable-length path aggregation: `RETURN p`, `nodes(p)` return raw IDs, not structured path objects
-- Python bindings not published to PyPI (install from source)
-- Node.js bindings not published to npm (install from source)
+- Python HTTP client SDK not published to PyPI (install from source)
+- Node.js HTTP client SDK not published to npm (install from source)
 - String overflow file `write_string()` is a no-op (production writes use `append_to_overflow()` in column.rs)

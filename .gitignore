@@ -1,4 +1,45 @@
 .opencode/
+.opencode.local/
+.forge/
 target/
 .analyst_data/
 .analyst_data.bak/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursorrules
+
+# Agentic / config
+.aer.yml
+.analyst.yml
+.analyst.yml.bak
+.ralph-plan-prompt.md
+
+# Runtime / session data
+.rivet_mcp.db/
+fusion-mcp.log
+
+# Build artifacts
+*.rlib
+
+# Audit / findings
+findings.jsonl
+findings.md
+top20-findings.md
+AUDIT.md
+AUDIT_FULL_REPORT.md
+DEEP_AUDIT_REPORT.md
+LLM_REMEDIATION_PLAN.md
+PERFORMANCE_REMEDIATION_PLAN.md
+PERFORMANCE_TUNING.md
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+dist/

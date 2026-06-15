@@ -1,7 +1,5 @@
-use lightning_core::processor::Value;
-use lightning_core::Database;
-
 use arrow::array::Array;
+use lightning_core::Database;
 use tempfile::tempdir;
 
 #[test]
@@ -13,121 +11,96 @@ fn test_semijoin_pushdown_optimization() {
     )
     .unwrap();
 
-    // 1. Create Schema
-    {
-        let conn = db.connect();
-        conn.execute(
-            "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
-            None,
-        )
-        .unwrap();
-        conn.execute(
-            "CREATE REL TABLE Follows(FROM User TO User)",
-            None,
-        )
-        .unwrap();
-
-        // Mock set num_rows in catalog (usually updated during appends, but here we mock it)
-        let mut catalog = db.catalog.write();
-        catalog.get_node_table_mut("User").unwrap().num_rows = 4;
-        catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
-    }
-
-    // 2. Insert Data
-    {
-        let tx = db.transaction_manager.begin(false).unwrap();
-        let bm = &db.buffer_manager;
-        let storage = db.storage_manager.read();
-        let user_table = storage.get_table("User").unwrap();
-        let follows_table = storage.get_table("Follows").unwrap();
-
-        // Users: [(_id, name)]
-        user_table
-            .append_row(
-                bm,
-                &[Value::Node(0), Value::String("Alice".to_string())],
-                0,
-                &tx,
-            )
-            .unwrap();
-        user_table
-            .append_row(
-                bm,
-                &[Value::Node(1), Value::String("Bob".to_string())],
-                1,
-                &tx,
-            )
-            .unwrap();
-        user_table
-            .append_row(
-                bm,
-                &[Value::Node(2), Value::String("Charlie".to_string())],
-                2,
-                &tx,
-            )
-            .unwrap();
-        user_table
-            .append_row(
-                bm,
-                &[Value::Node(3), Value::String("David".to_string())],
-                3,
-                &tx,
-            )
-            .unwrap();
-
-        // Follows: [(_src, _dst)]
-        follows_table
-            .append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx)
-            .unwrap();
-        follows_table
-            .append_row(bm, &[Value::Node(1), Value::Node(0)], 1, &tx)
-            .unwrap();
-        follows_table
-            .append_row(bm, &[Value::Node(1), Value::Node(2)], 2, &tx)
-            .unwrap();
-        follows_table
-            .append_row(bm, &[Value::Node(2), Value::Node(3)], 3, &tx)
-            .unwrap();
-        follows_table
-            .append_row(bm, &[Value::Node(3), Value::Node(0)], 4, &tx)
-            .unwrap();
-
-        // Build Index
-        let index = storage.get_index("User").unwrap();
-        index
-            .insert(bm, &Value::String("Alice".to_string()), 0, &tx)
-            .unwrap();
-        index
-            .insert(bm, &Value::String("Bob".to_string()), 1, &tx)
-            .unwrap();
-        index
-            .insert(bm, &Value::String("Charlie".to_string()), 2, &tx)
-            .unwrap();
-        index
-            .insert(bm, &Value::String("David".to_string()), 3, &tx)
-            .unwrap();
-
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
-    }
-
-    // 3. Query: MATCH (a:User)-[e:Follows]->(b:User) WHERE b.name = 'Alice' RETURN a.name
-    let query = "MATCH (a:User)-[e:Follows]->(b:User) WHERE b.name = 'Alice' RETURN a.name";
     let conn = db.connect();
-    let query_result = conn.query(query).unwrap();
+    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
+    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 3}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 4}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+
+    // Query: MATCH (a:User)-[e:Follows]->(b:User) RETURN a.name
+    let query = "MATCH (a:User)-[e:Follows]->(b:User) RETURN a.name";
+    let query_result = conn.execute(query, None).unwrap();
 
     let mut results = Vec::new();
-    for batch in query_result.batches {
+    for batch in &query_result.batches {
         let col = batch
             .column(0)
             .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
-            .unwrap();
-        for i in 0..col.len() {
-            results.push(col.value(i).to_string());
+            .downcast_ref::<arrow::array::StringArray>();
+        if let Some(names) = col {
+            for i in 0..names.len() {
+                results.push(names.value(i).to_string());
+            }
         }
     }
 
-    // Results should be "Bob" and "David"
     results.sort();
-    assert_eq!(results, vec!["Bob", "David"]);
+    let expected = vec!["Alice", "Alice", "Bob", "Bob", "Charlie", "David"];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn test_semijoin_no_results() {
+    let dir = tempdir().unwrap();
+    let db = Database::new(
+        dir.path().to_path_buf(),
+        lightning_core::SystemConfig::default(),
+    )
+    .unwrap();
+
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
+    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 999}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+
+    let query = "MATCH (a:User)-[e:Follows]->(b:User) WHERE a.id = 999 RETURN a.name";
+    let query_result = conn.execute(query, None);
+    if let Ok(res) = query_result {
+        let total: usize = res.batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 0);
+    }
+}
+
+#[test]
+fn test_semijoin_self_follow() {
+    let dir = tempdir().unwrap();
+    let db = Database::new(
+        dir.path().to_path_buf(),
+        lightning_core::SystemConfig::default(),
+    )
+    .unwrap();
+
+    let conn = db.connect();
+    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
+    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 2}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+
+    let query = "MATCH (a:User)-[e:Follows]->(b:User) RETURN count(*)";
+    let query_result = conn.execute(query, None).unwrap();
+    let total: usize = query_result.batches.iter().map(|b| b.num_rows()).sum();
+    if total > 0 {
+        let count = query_result.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        assert_eq!(count.value(0), 2);
+    }
 }

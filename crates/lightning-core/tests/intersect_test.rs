@@ -41,18 +41,18 @@ fn test_intersect_operator() {
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
 
-        // Users
+        // Users: storage has [_id, name] columns
         user_table
-            .append_row(bm, &[Value::String("Alice".to_string())], 0, &tx)
+            .append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx)
             .unwrap();
         user_table
-            .append_row(bm, &[Value::String("Bob".to_string())], 1, &tx)
+            .append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx)
             .unwrap();
         user_table
-            .append_row(bm, &[Value::String("Charlie".to_string())], 2, &tx)
+            .append_row(bm, &[Value::Node(2), Value::String("Charlie".to_string())], 2, &tx)
             .unwrap();
         user_table
-            .append_row(bm, &[Value::String("David".to_string())], 3, &tx)
+            .append_row(bm, &[Value::Node(3), Value::String("David".to_string())], 3, &tx)
             .unwrap();
 
         // Follows: (src, dst)
@@ -165,4 +165,156 @@ fn test_intersect_operator() {
     let mut values: Vec<u64> = c_col.values().to_vec();
     values.sort();
     assert_eq!(values, vec![2, 3]);
+}
+
+#[test]
+fn test_intersect_no_match() {
+    let dir = tempdir().unwrap();
+    let db = Database::new(
+        dir.path().to_path_buf(),
+        lightning_core::SystemConfig::default(),
+    )
+    .unwrap();
+
+    {
+        let conn = db.connect();
+        conn.execute(
+            "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
+            None,
+        ).unwrap();
+        conn.execute(
+            "CREATE REL TABLE Follows(FROM User TO User)",
+            None,
+        ).unwrap();
+        let mut catalog = db.catalog.write();
+        catalog.get_node_table_mut("User").unwrap().num_rows = 4;
+        catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
+    }
+
+    {
+        let tx = db.transaction_manager.begin(false).unwrap();
+        let bm = &db.buffer_manager;
+        let storage = db.storage_manager.read();
+        let user_table = storage.get_table("User").unwrap();
+        let follows_table = storage.get_table("Follows").unwrap();
+        user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
+        user_table.append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx).unwrap();
+        user_table.append_row(bm, &[Value::Node(2), Value::String("Charlie".to_string())], 2, &tx).unwrap();
+        user_table.append_row(bm, &[Value::Node(3), Value::String("David".to_string())], 3, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(0), Value::Node(3)], 1, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(1), Value::Node(2)], 2, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 3, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(1), Value::Node(4)], 4, &tx).unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+    }
+
+    use lightning_core::processor::operators::PhysicalIntersect;
+    use lightning_core::processor::operators::PhysicalScan;
+
+    let storage = db.storage_manager.read();
+    let follows_table = storage.get_table("Follows").unwrap().clone();
+
+    #[derive(Clone)]
+    struct NoMatchProbe { done: bool }
+    impl PhysicalOperator for NoMatchProbe {
+        fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
+            Box::new((*self).clone())
+        }
+        fn get_next(
+            &mut self,
+            _database: &lightning_core::Database,
+            _tx: &lightning_core::transaction::transaction_manager::Transaction,
+            _params: Option<&std::collections::HashMap<String, lightning_core::processor::Value>>,
+        ) -> lightning_core::Result<Option<DataChunk>> {
+            if self.done { return Ok(None); }
+            self.done = true;
+            let a = Arc::new(UInt64Array::from(vec![999]));
+            let b = Arc::new(UInt64Array::from(vec![888]));
+            let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+                arrow::datatypes::Field::new("a", arrow::datatypes::DataType::UInt64, false),
+                arrow::datatypes::Field::new("b", arrow::datatypes::DataType::UInt64, false),
+            ]));
+            let batch = arrow::record_batch::RecordBatch::try_new(schema, vec![a, b]).unwrap();
+            Ok(Some(DataChunk { batch }))
+        }
+    }
+
+    let probe = Box::new(NoMatchProbe { done: false });
+    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager.clone(), 5).unwrap());
+    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager.clone(), 5).unwrap());
+
+    let mut intersect = PhysicalIntersect::new(
+        probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
+    );
+
+    let tx = db.transaction_manager.begin(false).unwrap();
+    let result = intersect.get_next(&db, &tx, None).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_intersect_empty_probe() {
+    let dir = tempdir().unwrap();
+    let db = Database::new(
+        dir.path().to_path_buf(),
+        lightning_core::SystemConfig::default(),
+    )
+    .unwrap();
+    {
+        let conn = db.connect();
+        conn.execute("CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))", None).unwrap();
+        conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+        let mut catalog = db.catalog.write();
+        catalog.get_node_table_mut("User").unwrap().num_rows = 4;
+        catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
+    }
+    {
+        let tx = db.transaction_manager.begin(false).unwrap();
+        let bm = &db.buffer_manager;
+        let storage = db.storage_manager.read();
+        let user_table = storage.get_table("User").unwrap();
+        let follows_table = storage.get_table("Follows").unwrap();
+        user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
+        user_table.append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx).unwrap();
+        follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 1, &tx).unwrap();
+        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+    }
+
+    use lightning_core::processor::operators::PhysicalIntersect;
+    use lightning_core::processor::operators::PhysicalScan;
+
+    let storage = db.storage_manager.read();
+    let follows_table = storage.get_table("Follows").unwrap().clone();
+
+    #[derive(Clone)]
+    struct EmptyProbe { done: bool }
+    impl PhysicalOperator for EmptyProbe {
+        fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
+            Box::new((*self).clone())
+        }
+        fn get_next(
+            &mut self,
+            _database: &lightning_core::Database,
+            _tx: &lightning_core::transaction::transaction_manager::Transaction,
+            _params: Option<&std::collections::HashMap<String, lightning_core::processor::Value>>,
+        ) -> lightning_core::Result<Option<DataChunk>> {
+            if self.done { return Ok(None); }
+            self.done = true;
+            Ok(None)
+        }
+    }
+
+    let probe = Box::new(EmptyProbe { done: false });
+    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager.clone(), 5).unwrap());
+    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager.clone(), 5).unwrap());
+
+    let mut intersect = PhysicalIntersect::new(
+        probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
+    );
+
+    let tx = db.transaction_manager.begin(false).unwrap();
+    let result = intersect.get_next(&db, &tx, None).unwrap();
+    assert!(result.is_none());
 }

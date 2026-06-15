@@ -1,6 +1,6 @@
 # LightningDB
 
-An embedded graph+vector database with Cypher queries, MVCC, and full-text search. Written in Rust.
+A graph+vector database server with Cypher queries, MVCC, and full-text search. Written in Rust.
 
 ## Status
 
@@ -8,7 +8,7 @@ An embedded graph+vector database with Cypher queries, MVCC, and full-text searc
 
 ## What It Is
 
-LightningDB is a single-process embedded database that stores graph nodes and relationships in columnar pages with MVCC. It runs in-process (no server needed) or as a standalone HTTP server.
+LightningDB is a standalone HTTP server that stores graph nodes and relationships in columnar pages with MVCC. It runs as a single binary or Docker container — deploy it anywhere, access it from any language via HTTP.
 
 - **Graph model**: Node and relationship tables with Cypher MATCH/CREATE/SET/DELETE/MERGE
 - **Vector search**: Flat cosine similarity (SIMD via auto-detected AVX2/SSE), configurable dimensions
@@ -36,23 +36,92 @@ LightningDB is a single-process embedded database that stores graph nodes and re
 
 ## Crates
 
-| Crate | Description |
-|---|---|
+| Crate/Package | Description |
+|---|---|---|
 | `lightning-types` | Shared type definitions (LogicalType, etc.) |
 | `lightning-core` | Core engine: parser, planner, optimizer, processor, storage, MVCC, WASM, CDC, C FFI |
 | `lightning-arrow` | Arrow integration helpers |
 | `lightning` | Top-level Rust driver crate. Re-exports from core. |
-| `lightning-python` | Python bindings via PyO3 (20+ MemoryStore methods) |
-| `lightning-node` | Node.js bindings via napi-rs (full API) |
 | `lightning-server` | Axum HTTP server with 7 route groups |
+| `@lightning-db/client` | Node.js/TypeScript HTTP client SDK |
+| `lightning` (Python) | Python HTTP client SDK (sync + async) |
 
 ## Quickstart
 
-### Rust
+### 1. Start the server
 
+```bash
+# From source:
+cargo run -p lightning-server -- --data-dir /tmp/lightning-data
+
+# Or build the Docker image first:
+docker build -t lightning-db . && docker run -p 8080:8080 -v ./data:/data lightning-db
+```
+
+Flags: `--port` (default 8080), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--buffer-pool-size`.
+
+### 2. Run queries
+
+**curl:**
+```bash
+curl -X POST http://localhost:8080/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "CREATE (n:Person {name: $name, age: $age}) RETURN n.id"}'
+```
+
+```bash
+curl -X POST http://localhost:8080/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age ORDER BY n.age"}'
+```
+
+**Python:**
+```bash
+# Install from source:
+cd python && pip install .
+```
+
+```python
+from lightning import Client
+
+client = Client(base_url="http://localhost:8080")
+
+# Graph query
+result = client.query("MATCH (n:Person) WHERE n.age > $th RETURN n.name, n.age",
+                      params={"th": 25})
+for row in result:
+    print(row["n.name"], row["n.age"])
+
+# Memory/agent API
+client.store(id="msg-1", content="Hello world", entity_type="note")
+results = client.recall("hello", top_k=5)
+print(results[0].content, results[0].score)
+```
+
+**TypeScript:**
+```bash
+# Install from source:
+cd packages/lightning-client && npm install
+```
+
+```typescript
+import { Client } from '@lightning-db/client';
+
+const client = new Client('http://localhost:8080');
+const result = await client.query(
+  'MATCH (n:Person) WHERE n.age > $th RETURN n.name, n.age',
+  { th: 25 }
+);
+
+// Memory/agent API
+await client.store('msg-1', 'Hello world', 'note');
+const results = await client.recall('hello', 5);
+```
+
+**Rust (library):**
 ```toml
 [dependencies]
-lightning = { git = "https://github.com/BViganotti/lightning" }
+lightning = { git = "https://github.com/lightning-db/lightning" }
 ```
 
 ```rust
@@ -60,54 +129,23 @@ use lightning::prelude::*;
 
 let db = Database::open("/tmp/lightning-db").unwrap();
 let conn = db.connect();
-let store = MemoryStore::new(conn, DEFAULT_EMBEDDING_DIM);
 
-let entity = MemoryEntity {
-    id: "msg-1".into(),
-    entity_type: "note".into(),
-    content: "User prefers Rust".into(),
-    ..Default::default()
-};
-store.store(entity).unwrap();
+conn.execute_typed("CREATE (n:Person {name: 'Alice', age: 30})", None).unwrap();
 
-let results = store.recall("rust", &[], 5).unwrap();
-for r in &results {
-    println!("{} (score={})", r.entity.content, r.score);
+let result = conn.execute_typed(
+    "MATCH (n:Person) RETURN n.name, n.age", None
+).unwrap();
+for row in &result.rows {
+    println!("{}: {}", row["n.name"], row["n.age"]);
 }
-```
-
-### Python
-
-```bash
-pip install lightning-memory
-```
-
-```python
-from lightning import MemoryStore
-
-store = MemoryStore("/tmp/lightning-db")
-store.store(id="msg-1", content="Hello world", entity_type="note")
-results = store.recall("hello", top_k=5)
-print(results[0].content, results[0].score)
-```
-
-### HTTP Server
-
-```bash
-cargo run -p lightning-server -- --db-path /tmp/lightning-db --port 8080
-```
-
-```bash
-curl -X POST http://localhost:8080/v1/query \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "MATCH (e:Entity) RETURN e.id, e.content LIMIT 5"}'
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│   Client: Rust · Python · Node.js · C · HTTP    │
+│  Client: Rust driver · Python SDK · Node.js SDK │
+│         C FFI · curl / any HTTP client          │
 ├─────────────────────────────────────────────────┤
 │              Cypher Query Engine                 │
 │  PEG Parser → Binder → Planner → 6 Optimizers   │
@@ -122,12 +160,36 @@ curl -X POST http://localhost:8080/v1/query \
 └─────────────────────────────────────────────────┘
 ```
 
+## HTTP API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Server health check |
+| `/v1/query` | POST | Run a Cypher query |
+| `/v1/query/stream` | POST | Stream query results as NDJSON |
+| `/v1/memory/store` | POST | Store a memory entity |
+| `/v1/memory/store-batch` | POST | Batch store entities |
+| `/v1/memory/recall` | POST | Semantic recall via hybrid search |
+| `/v1/memory/recall-recent` | POST | Recall most recent entities |
+| `/v1/memory/recall-by-type` | POST | Recall entities by type |
+| `/v1/memory/forget` | POST | Delete a memory entity |
+| `/v1/memory/decay` | POST | Decay memory scores |
+| `/v1/memory/entity-history` | POST | Get entity version history |
+| `/v1/memory/consolidate` | POST | Consolidate short-term → long-term |
+| `/v1/graph/associate` | POST | Create an association between entities |
+| `/v1/graph/expand` | POST | Expand from an entity via associations |
+| `/v1/rag/query` | POST | RAG pipeline: retrieve + LLM prompt |
+| `/v1/admin/checkpoint` | POST | Force a WAL checkpoint |
+| `/v1/admin/vacuum` | POST | Run garbage collection |
+| `/metrics` | GET | Prometheus metrics |
+| `/v1/subscribe` | GET | WebSocket CDC subscription |
+
 ## Test Coverage (32 test files, 400+ tests)
 
 | Suite | Scope |
 |---|---|
-| Comprehensive (4 files) | End-to-end CRUD, DML, DDL, queries |
-| Hash join, intersect, semi-mask, union | Join operator correctness |
+| Comprehensive (13 files) | End-to-end CRUD, DML, DDL, queries, schema evolution, transactions |
+| Join operators | Hash join, intersect, semi-mask, union |
 | Fuzz, torture, crash recovery | Random queries, WAL replay, concurrency, memory pressure |
 | Optimizer | Correctness of 6 active optimizer passes |
 | Expression, function, date | Scalar evaluation, type handling |
@@ -140,12 +202,18 @@ curl -X POST http://localhost:8080/v1/query \
 - 6 optimizer passes are disabled (documented bugs). Projection pushdown, semi-join pushdown, and several others do not run.
 - `CREATE VECTOR INDEX`, `CREATE FULLTEXT INDEX`, `CREATE SEQUENCE`, `CREATE MACRO` cannot be parsed from Cypher text (no grammar rules).
 - Window functions, list indexing (`list[0]`), and map literal expressions are not supported in Cypher.
-- Python and Node.js bindings are not published to PyPI/npm — install from source.
+- Python and Node.js HTTP client SDKs are not published to PyPI/npm — install from source.
 - WASM functions must be re-registered after each database restart (no persistence).
 - No authentication, authorization, or multi-tenant isolation in the HTTP server.
-- No Docker image.
+- No officially published Docker image (Dockerfile builds from source).
 - IVF index module exists but is not wired into the build.
+
+## Acknowledgments
+
+LightningDB began as a fork of [KuzuDB](https://kuzudb.com/), an embedded graph database. KuzuDB's columnar storage design, MVCC architecture, and Cypher query engine were the direct inspiration for this project. The codebase has since been substantially rewritten and extended with vector search, full-text indexing, WASM UDFs, time-travel queries, and an HTTP server layer, but KuzuDB's foundational design decisions remain visible throughout the storage engine and query planner.
 
 ## License
 
-MIT
+Business Source License 1.1 (BUSL-1.1) — see [LICENSE](LICENSE).
+
+You may use LightningDB for non-production purposes (testing, evaluation, research) and for production use as long as you do not offer it as a Database Service. Upon 2030-06-15, the project automatically converts to MIT.

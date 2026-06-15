@@ -11,8 +11,8 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Lightning Developers"]
-license = "MIT"
+authors = ["Benoit Viganotti"]
+license = "BUSL-1.1"
 repository = "https://github.com/lightning-db/lightning"
 
 [workspace.dependencies]

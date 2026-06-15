@@ -2,9 +2,9 @@
 
 ## Overview
 
-Lightning is an embedded graph+vector+RAG database for AI agents. This plan adds a
+Lightning is a graph+vector+RAG database for AI agents. This plan adds a
 lightweight HTTP server on top of the existing engine, enabling `docker run` usage
-and language-agnostic access. The existing embedded library stays unchanged.
+and language-agnostic access. The existing Rust library stays available for direct use.
 
 ```ascii
   curl / Python requests / any HTTP client
