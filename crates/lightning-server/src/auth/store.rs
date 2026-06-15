@@ -740,6 +740,7 @@ impl AuthStore {
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to create API key: {e}"))?;
 
+        self.token_bloom.insert(&api_key.key_hash);
         self.api_keys_cache
             .write()
             .insert(api_key.key_hash.clone(), api_key.clone());
