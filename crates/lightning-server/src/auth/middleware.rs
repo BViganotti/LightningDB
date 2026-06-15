@@ -88,7 +88,17 @@ pub async fn auth_middleware(
                 .get(header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
-                .map(|s| s.trim().to_string());
+                .map(|s| s.trim().to_string())
+                .or_else(|| {
+                    req.uri().query().and_then(|q| {
+                        q.split('&').find_map(|pair| {
+                            let mut parts = pair.splitn(2, '=');
+                            let key = parts.next()?;
+                            let val = parts.next().unwrap_or("");
+                            if key == "access_token" { Some(val.to_string()) } else { None }
+                        })
+                    })
+                });
 
             match provided {
                 Some(token) if token == expected => {

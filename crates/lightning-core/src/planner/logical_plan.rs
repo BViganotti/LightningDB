@@ -753,13 +753,32 @@ impl LogicalPlanner {
                                             group_by_exprs.len() + aggregate_arg_exprs.len() - 1
                                         } else {
                                             let arg_expr = args[0].clone();
-                                            let idx =
-                                                group_by_exprs.len() + aggregate_arg_exprs.len();
-                                            aggregate_arg_exprs.push(BoundProjectionItem {
-                                                expression: arg_expr,
-                                                alias: "".to_string(),
-                                            });
-                                            idx
+                                            // Bare Variable references (e.g. `count(p)` where p is a
+                                            // node/rel pattern variable) cannot be resolved to columns
+                                            // in the input batch — the schema uses property names, not
+                                            // variable names. Treat them like count(*) via a dummy
+                                            // non-null literal.
+                                            let is_bare_variable = matches!(
+                                                &arg_expr,
+                                                BoundExpression::Variable(_, _)
+                                            );
+                                            if is_bare_variable {
+                                                aggregate_arg_exprs.push(BoundProjectionItem {
+                                                    expression: BoundExpression::Literal(
+                                                        crate::parser::ast::Literal::Number(1.0),
+                                                    ),
+                                                    alias: "_dummy".to_string(),
+                                                });
+                                                group_by_exprs.len() + aggregate_arg_exprs.len() - 1
+                                            } else {
+                                                let idx = group_by_exprs.len()
+                                                    + aggregate_arg_exprs.len();
+                                                aggregate_arg_exprs.push(BoundProjectionItem {
+                                                    expression: arg_expr,
+                                                    alias: "".to_string(),
+                                                });
+                                                idx
+                                            }
                                         };
                                         aggregates.push((func, input_idx));
                                     }

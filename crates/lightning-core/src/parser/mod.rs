@@ -135,7 +135,20 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
                     (None, None) => order_rest.len(),
                 }
             };
-            ord = Some(order_rest[..end].trim().to_string());
+            let raw = order_rest[..end].trim().to_string();
+            // Strip trailing ASC/DESC so the expression parser can handle it
+            let upper_raw = raw.to_uppercase();
+            let desc = upper_raw.ends_with(" DESC");
+            let cleaned = if desc {
+                raw[..raw.len() - 5].trim().to_string()
+            } else if upper_raw.ends_with(" ASC") {
+                raw[..raw.len() - 4].trim().to_string()
+            } else {
+                raw.clone()
+            };
+            // Store expression + direction as "expr|DIR" for inject_modifiers
+            let direction = if desc { "DESC" } else { "ASC" };
+            ord = Some(format!("{}|{}", cleaned, direction));
             let removed_len = 9 + end;
             result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
         }
@@ -152,7 +165,8 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
             let skip_rest = &result[skip_val_start..];
             let skip_upper = &upper[skip_val_start..];
             let end = skip_upper.find(" LIMIT ").unwrap_or(skip_rest.len());
-            if let Ok(v) = skip_rest[..end].trim().parse::<f64>() {
+            let raw = skip_rest[..end].trim();
+            if let Ok(v) = raw.parse::<f64>() {
                 skp = Some(v);
             }
             result = format!("{}{}", &result[..skip_pos], &result[skip_val_start + end..]);
@@ -195,10 +209,19 @@ fn inject_modifiers(
     lmt: Option<f64>,
 ) -> Result<(), ParserError> {
     if let Some(ref e) = ord {
-        let p = CypherParser::parse(Rule::expression, e)
-            .map_err(|_| ParserError::Internal(format!("Failed to parse ORDER BY expression: '{}'", e)))?;
-        let expr = parse_expression(p.into_iter().next().expect("expected next element"))?;
-        let desc = e.to_uppercase().contains("DESC");
+        // Format is "expr|DIR" where DIR is "ASC" or "DESC"
+        let (expr_str, desc) = if let Some(pipe) = e.rfind('|') {
+            let dir = &e[pipe + 1..];
+            let clean_expr = &e[..pipe];
+            (clean_expr.to_string(), dir == "DESC")
+        } else {
+            (e.clone(), e.to_uppercase().contains("DESC"))
+        };
+        let p = CypherParser::parse(Rule::expression, &expr_str)
+            .map_err(|_| ParserError::Internal(format!("Failed to parse ORDER BY expression: '{expr_str}'")))?;
+        let expr = parse_expression(p.into_iter().next().ok_or_else(|| {
+            ParserError::Internal("empty ORDER BY expression".to_string())
+        })?)?;
         for u in &mut q.union_queries {
             if let Statement::Match(_, _, cs) = &mut u.statement {
                 for c in cs.iter_mut() {

@@ -152,8 +152,23 @@ export class LightningClient {
     if (typeof process === 'undefined' || !process.versions?.node) return undefined
 
     try {
-      const https: typeof import('https') = await import('node:https')
       const fs: typeof import('fs') = await import('node:fs')
+      const connectOpts: Record<string, unknown> = {
+        rejectUnauthorized: this.tls.verify !== false,
+      }
+      if (this.tls.caBundlePath) {
+        connectOpts.ca = fs.readFileSync(this.tls.caBundlePath, 'utf-8')
+      }
+      if (this.tls.certPath && this.tls.keyPath) {
+        connectOpts.cert = fs.readFileSync(this.tls.certPath, 'utf-8')
+        connectOpts.key = fs.readFileSync(this.tls.keyPath, 'utf-8')
+      }
+      if (this.tls.serverNameOverride) {
+        connectOpts.servername = this.tls.serverNameOverride
+      }
+
+      // Use https.Agent for Node.js — compatible with all versions
+      const https: typeof import('https') = await import('node:https')
       return new https.Agent({
         rejectUnauthorized: this.tls.verify !== false,
         ca: this.tls.caBundlePath ? fs.readFileSync(this.tls.caBundlePath) : undefined,
