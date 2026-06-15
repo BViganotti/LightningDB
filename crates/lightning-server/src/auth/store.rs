@@ -437,18 +437,19 @@ impl AuthStore {
         role: Option<Role>,
         enabled: Option<bool>,
     ) -> Result<User, String> {
-        let user = {
-            let mut users = self.users_cache.write();
+        let updated = {
+            let users = self.users_cache.read();
             let u = users
-                .get_mut(user_id)
+                .get(user_id)
                 .ok_or_else(|| format!("user '{user_id}' not found"))?;
+            let mut u = u.clone();
             if let Some(r) = role {
                 u.role = r;
             }
             if let Some(e) = enabled {
                 u.enabled = e;
             }
-            u.clone()
+            u
         };
 
         let mut params = HashMap::new();
@@ -472,7 +473,12 @@ impl AuthStore {
                 .execute(&q, Some(params))
                 .map_err(|e| format!("failed to update user: {e}"))?;
         }
-        Ok(user)
+
+        {
+            let mut users = self.users_cache.write();
+            users.insert(user_id.to_string(), updated.clone());
+        }
+        Ok(updated)
     }
 
     pub fn delete_user(&self, user_id: &str) -> Result<(), String> {
@@ -482,20 +488,6 @@ impl AuthStore {
                 format!("user '{user_id}' not found")
             })?
         };
-
-        {
-            let mut tcache = self.tokens_cache.write();
-            tcache.retain(|_, t| t.user_id != user_id);
-        }
-        {
-            let mut kcache = self.api_keys_cache.write();
-            kcache.retain(|_, k| k.user_id != user_id);
-        }
-        {
-            let mut users = self.users_cache.write();
-            users.remove(user_id);
-            self.usernames_cache.write().remove(&user.username);
-        }
 
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(user_id.to_string()));
@@ -518,11 +510,42 @@ impl AuthStore {
             .execute(&delete_user, Some(params))
             .map_err(|e| format!("failed to delete user: {e}"))?;
 
+        {
+            let mut tcache = self.tokens_cache.write();
+            tcache.retain(|_, t| t.user_id != user_id);
+        }
+        {
+            let mut kcache = self.api_keys_cache.write();
+            kcache.retain(|_, k| k.user_id != user_id);
+        }
+        {
+            let mut users = self.users_cache.write();
+            users.remove(user_id);
+            self.usernames_cache.write().remove(&user.username);
+        }
+
         Ok(())
     }
 
     pub fn reset_password(&self, user_id: &str, new_password: &str) -> Result<(), String> {
         let password_hash = password::hash_password(new_password)?;
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user_id.to_string()));
+        params.insert("ph".to_string(), Value::String(password_hash.clone()));
+        let q = format!(
+            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.password_hash = $ph"
+        );
+        self.conn
+            .execute(&q, Some(params.clone()))
+            .map_err(|e| format!("failed to update password: {e}"))?;
+
+        let delete_tokens = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
+        );
+        self.conn
+            .execute(&delete_tokens, Some(params))
+            .map_err(|e| format!("failed to revoke user tokens: {e}"))?;
 
         {
             let mut tcache = self.tokens_cache.write();
@@ -540,26 +563,9 @@ impl AuthStore {
         {
             let mut users = self.users_cache.write();
             if let Some(u) = users.get_mut(user_id) {
-                u.password_hash = password_hash.clone();
+                u.password_hash = password_hash;
             }
         }
-
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), Value::String(user_id.to_string()));
-        params.insert("ph".to_string(), Value::String(password_hash));
-        let q = format!(
-            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.password_hash = $ph"
-        );
-        self.conn
-            .execute(&q, Some(params.clone()))
-            .map_err(|e| format!("failed to update password: {e}"))?;
-
-        let delete_tokens = format!(
-            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
-        );
-        self.conn
-            .execute(&delete_tokens, Some(params))
-            .map_err(|e| format!("failed to revoke user tokens: {e}"))?;
 
         Ok(())
     }
@@ -661,24 +667,24 @@ impl AuthStore {
     pub fn revoke_refresh_token(&self, raw_token: &str) -> Result<(), String> {
         let token_hash = jwt::hmac_hash(raw_token, &self.jwt_secret);
 
-        let was_present = {
-            let mut tcache = self.tokens_cache.write();
-            tcache.remove(&token_hash).is_some()
-        };
-        if !was_present {
-            return Err("refresh token not found".to_string());
+        {
+            let tcache = self.tokens_cache.read();
+            if !tcache.contains_key(&token_hash) {
+                return Err("refresh token not found".to_string());
+            }
         }
 
-        self.token_bloom.mark_revoked(&token_hash);
-
         let mut params = HashMap::new();
-        params.insert("hash".to_string(), Value::String(token_hash));
+        params.insert("hash".to_string(), Value::String(token_hash.clone()));
         let q = format!(
             "MATCH (t:{AUTH_TOKENS_TABLE} {{token_hash: $hash}}) DELETE t"
         );
         self.conn
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to revoke refresh token: {e}"))?;
+
+        self.tokens_cache.write().remove(&token_hash);
+        self.token_bloom.mark_revoked(&token_hash);
         Ok(())
     }
 
@@ -758,28 +764,24 @@ impl AuthStore {
 
     pub fn revoke_api_key(&self, key_id: &str) -> Result<(), String> {
         let key_hash = {
-            let mut kcache = self.api_keys_cache.write();
-            let pos = kcache
+            let kcache = self.api_keys_cache.read();
+            kcache
                 .iter()
                 .find(|(_, k)| k.id == key_id)
-                .map(|(h, k)| (h.clone(), k.clone()));
-            match pos {
-                Some((hash, _)) => {
-                    kcache.remove(&hash);
-                    hash
-                }
-                None => return Err(format!("API key '{key_id}' not found")),
-            }
-        };
+                .map(|(h, _)| h.clone())
+                .ok_or_else(|| format!("API key '{key_id}' not found"))
+        }?;
 
         let mut params = HashMap::new();
-        params.insert("hash".to_string(), Value::String(key_hash));
+        params.insert("hash".to_string(), Value::String(key_hash.clone()));
         let q = format!(
             "MATCH (k:{AUTH_API_KEYS_TABLE} {{key_hash: $hash}}) DELETE k"
         );
         self.conn
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to revoke API key: {e}"))?;
+
+        self.api_keys_cache.write().remove(&key_hash);
         Ok(())
     }
 
@@ -831,17 +833,6 @@ impl AuthStore {
     pub fn purge_expired(&self) -> Result<(), String> {
         let now = now_secs();
 
-        {
-            let mut tcache = self.tokens_cache.write();
-            tcache.retain(|_, t| t.expires_at > now);
-        }
-        {
-            let mut kcache = self.api_keys_cache.write();
-            kcache.retain(|_, k| {
-                k.expires_at.map_or(true, |exp| exp > now)
-            });
-        }
-
         let mut params = HashMap::new();
         params.insert("now".to_string(), Value::Number(now as f64));
         let del_tokens = format!(
@@ -856,6 +847,17 @@ impl AuthStore {
         self.conn
             .execute(&del_keys, Some(params))
             .map_err(|e| format!("failed to purge expired API keys: {e}"))?;
+
+        {
+            let mut tcache = self.tokens_cache.write();
+            tcache.retain(|_, t| t.expires_at > now);
+        }
+        {
+            let mut kcache = self.api_keys_cache.write();
+            kcache.retain(|_, k| {
+                k.expires_at.map_or(true, |exp| exp > now)
+            });
+        }
 
         self.rebuild_cache();
         Ok(())

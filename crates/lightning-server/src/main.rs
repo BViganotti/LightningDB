@@ -159,10 +159,9 @@ async fn main() {
 
     // Start background GC for expired tokens
     let gc_store = Arc::clone(&auth_store);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+    tokio::task::spawn_blocking(move || {
         loop {
-            interval.tick().await;
+            std::thread::sleep(std::time::Duration::from_secs(300));
             if let Err(e) = gc_store.purge_expired() {
                 tracing::warn!("Token GC failed: {}", e);
             }
