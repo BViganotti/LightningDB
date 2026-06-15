@@ -88,11 +88,42 @@ export interface RagResult {
   warnings: string[]
 }
 
+export interface LinkDetail {
+  sourceId: string
+  targetId: string
+  relType: string
+  score: number
+  reason: string
+}
+
+export interface ContradictionDetail {
+  entityId: string
+  sourceId: string
+  targetId: string
+  fields: string[]
+  cosineSim: number
+  jaccardSim: number
+  reason: string
+}
+
+export interface ConsolidationDetail {
+  links: LinkDetail[]
+  contradictions: ContradictionDetail[]
+}
+
 export interface ConsolidationReport {
   linksCreated: number
   contradictionsFound: number
   totalEntities: number
   warnings: string[]
+  links?: LinkDetail[]
+  contradictions?: ContradictionDetail[]
+}
+
+export interface SnapshotSelector {
+  iso?: string
+  relative?: string
+  label?: string
 }
 
 export interface ChangeEvent {

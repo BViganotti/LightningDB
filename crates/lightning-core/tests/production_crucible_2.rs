@@ -5,7 +5,6 @@
 /// buffer pool pressure, correlated subqueries, and cross-table joins at scale.
 
 use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
-use lightning_core::fusion::FusionApp;
 use lightning_core::{Database, SystemConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -53,106 +52,7 @@ macro_rules! assert_val {
 }
 
 // ============================================================================
-// 1. FUSION MODULE — init, code nodes, paths, PageRank
-// ============================================================================
-
-#[test]
-fn crucible_fusion_module() -> TestResult {
-    let (_dir, db) = setup_db()?;
-    let conn = db.connect();
-
-    // Initialize fusion schema
-    FusionApp::init_fusion_schema(&conn)?;
-
-    // Create code nodes (simulating what the indexer would create)
-    conn.execute(
-        "CREATE NODE TABLE CodeNode(id STRING, name STRING, node_type STRING, file_path STRING, PRIMARY KEY (id))",
-        None,
-    )?;
-    conn.execute(
-        "CREATE REL TABLE CodeEdge(FROM CodeNode TO CodeNode, edge_type STRING)",
-        None,
-    )?;
-
-    // Insert code nodes
-    let nodes = vec![
-        ("main.rs", "main", "function", "/src/main.rs"),
-        ("lib.rs", "lib", "module", "/src/lib.rs"),
-        ("utils.rs", "utils", "module", "/src/utils.rs"),
-        ("db.rs", "db", "module", "/src/db.rs"),
-        ("handler.rs", "handler", "function", "/src/handler.rs"),
-    ];
-    for (id, name, node_type, path) in &nodes {
-        conn.execute(
-            &format!("CREATE (:CodeNode {{id: '{}', name: '{}', node_type: '{}', file_path: '{}'}})", id, name, node_type, path),
-            None,
-        )?;
-    }
-
-    // Insert edges
-    let edges = vec![
-        ("main.rs", "lib.rs", "calls"),
-        ("lib.rs", "utils.rs", "imports"),
-        ("lib.rs", "db.rs", "imports"),
-        ("main.rs", "handler.rs", "calls"),
-        ("handler.rs", "db.rs", "calls"),
-    ];
-    for (src, dst, etype) in &edges {
-        conn.execute(
-            &format!("MATCH (a:CodeNode {{id: '{}'}}), (b:CodeNode {{id: '{}'}}) CREATE (a)-[:CodeEdge {{edge_type: '{}'}}]->(b)", src, dst, etype),
-            None,
-        )?;
-    }
-
-    // Fusion find_node_by_name
-    let found = FusionApp::find_node_by_name(&conn, "main")?;
-    assert!(!found.is_empty(), "should find node by name 'main'");
-    println!("  Fusion find_node_by_name('main'): {:?}", found);
-
-    // Fusion find_paths
-    let paths = FusionApp::find_paths(&conn, "main.rs", "db.rs", &[])?;
-    println!("  Fusion paths from main.rs to db.rs: {:?}", paths);
-    assert!(!paths.is_empty(), "should find paths from main to db");
-
-    // Fusion find_connected_nodes
-    use lightning_core::fusion::ConnectedDirection;
-    let connected = FusionApp::find_connected_nodes(&conn, "lib.rs", &[], ConnectedDirection::Incoming)?;
-    println!("  Fusion incoming connections to lib.rs: {:?}", connected);
-    assert!(!connected.is_empty(), "lib.rs should have incoming connections");
-
-    // Fusion lookup_node_names
-    let ids: Vec<String> = nodes.iter().map(|(id, _, _, _)| id.to_string()).collect();
-    let names = FusionApp::lookup_node_names(&conn, &ids)?;
-    assert_eq!(names.len(), nodes.len(), "should look up all node names");
-    println!("  Fusion lookup_node_names: {} results", names.len());
-
-    // Fusion add_observation + get_recent_observations
-    FusionApp::add_observation(&conn, "obs_1", "Found a potential bug in db.rs", None)?;
-    FusionApp::add_observation(&conn, "obs_2", "Performance bottleneck in handler.rs", Some("obs_1"))?;
-    let observations = FusionApp::get_recent_observations(&conn, 10)?;
-    assert_eq!(observations.len(), 2, "should have 2 observations");
-    println!("  Fusion observations: {:?}", observations);
-
-    // Fusion compute_architecture_cohesion (needs proper module graph)
-    // Just verify it returns without error
-    let _ = FusionApp::compute_architecture_cohesion(&conn)?;
-
-    // Fusion materialize_pagerank
-    FusionApp::materialize_pagerank(&conn)?;
-    println!("  Fusion PageRank: computed successfully");
-
-    // Fusion export_to_d3_json
-    let d3_json = FusionApp::export_to_d3_json(&conn)?;
-    assert!(!d3_json.is_empty(), "D3 export should produce JSON");
-    assert!(d3_json.contains("nodes"), "D3 JSON should contain 'nodes'");
-    assert!(d3_json.contains("links"), "D3 JSON should contain 'links'");
-    println!("  Fusion D3 export: {} chars", d3_json.len());
-
-    Ok(())
-}
-
-// ============================================================================
-// 2. COMPLEX CYPHER QUERIES — joins, aggregations, subqueries, UNION
+// 1. COMPLEX CYPHER QUERIES — joins, aggregations, subqueries, UNION
 // ============================================================================
 
 #[test]

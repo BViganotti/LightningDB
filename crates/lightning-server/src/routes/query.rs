@@ -7,7 +7,7 @@ use lightning::types::TypedQueryResult;
 
 use crate::error::AppError;
 use crate::extract::{DbConnection, RequestId};
-use crate::models::request::QueryRequest;
+use crate::models::request::{QueryRequest, SnapshotSelector};
 use crate::models::response::{ApiResponse, QueryResponse, ResponseMeta};
 use crate::server::AppState;
 
@@ -29,12 +29,19 @@ pub async fn query_handler(
             .collect::<std::collections::HashMap<_, _>>()
     });
 
+    // Resolve snapshot timestamp from either explicit snapshot_ts or snapshot selector
+    let resolved_snapshot_ts: Option<u64> = if let Some(sel) = &req.snapshot {
+        resolve_snapshot_selector(sel).map(|ts| ts as u64)
+    } else {
+        req.snapshot_ts
+    };
+
     // Acquire concurrency permit to prevent spawn_blocking pool exhaustion
     let _permit = state.query_semaphore.acquire().await
         .map_err(|_| AppError::Internal("Query concurrency limit exceeded".into()))?;
 
     let result = tokio::time::timeout(timeout_dur, tokio::task::spawn_blocking(move || {
-        if let Some(ts) = req.snapshot_ts {
+        if let Some(ts) = resolved_snapshot_ts {
             conn.execute_at(&req.query, ts, params)
         } else {
             conn.execute(&req.query, params)
@@ -110,4 +117,53 @@ pub async fn query_stream_handler(
     Ok(axum::response::sse::Sse::new(combined).keep_alive(
         KeepAlive::new().interval(std::time::Duration::from_secs(15)),
     ))
+}
+
+fn resolve_snapshot_selector(sel: &SnapshotSelector) -> Option<i64> {
+    let now_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+
+    if let Some(iso) = &sel.iso {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
+            return Some(dt.timestamp_micros());
+        }
+    }
+
+    if let Some(relative) = &sel.relative {
+        if let Some(dur) = parse_relative_duration(relative) {
+            return Some(now_micros - dur);
+        }
+    }
+
+    if let Some(label) = &sel.label {
+        let day_micros: i64 = 86_400_000_000;
+        return match label.as_str() {
+            "current" => Some(now_micros),
+            "yesterday" => Some(now_micros - day_micros),
+            "oldest" => Some(0),
+            "7d_ago" => Some(now_micros - 7 * day_micros),
+            "30d_ago" => Some(now_micros - 30 * day_micros),
+            _ => None,
+        };
+    }
+
+    None
+}
+
+fn parse_relative_duration(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.len() < 2 {
+        return None;
+    }
+    let (num_str, unit) = s.split_at(s.len() - 1);
+    let num: i64 = num_str.parse().ok()?;
+    match unit {
+        "s" => Some(num * 1_000_000),
+        "m" => Some(num * 60_000_000),
+        "h" => Some(num * 3_600_000_000),
+        "d" => Some(num * 86_400_000_000),
+        _ => None,
+    }
 }

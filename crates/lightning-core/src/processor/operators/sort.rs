@@ -68,6 +68,8 @@ impl PhysicalSort {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
+            // Another thread is sorting. Wait for it by returning Ok(())
+            // and letting get_next check sort_done via the condvar.
             return Ok(());
         }
 
@@ -77,6 +79,10 @@ impl PhysicalSort {
         {
             let shared = self.shared.read();
             if shared.batches.is_empty() {
+                // No data to sort. Signal sort_done so get_next doesn't hang.
+                let (ref lock, ref cvar) = &*self.sort_done;
+                *lock.lock() = true;
+                cvar.notify_all();
                 return Ok(());
             }
             schema = shared.batches[0].schema();
@@ -197,7 +203,7 @@ impl PhysicalOperator for PhysicalSort {
     }
 
     fn is_parallel_safe(&self) -> bool {
-        true
+        false
     }
 
     fn try_parallelize(

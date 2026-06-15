@@ -120,35 +120,67 @@ pub async fn auth_middleware(
                 .get(header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok());
 
-            match auth_header {
-                Some(header_value) => {
-                    if let Some(token) = header_value.strip_prefix("Bearer ") {
-                        let token = token.trim();
-                        let auth_result = authenticate_jwt(token, &state.auth_store).await;
-                        match auth_result {
-                            Ok(user) => {
-                                req.extensions_mut().insert(user);
-                                Ok(next.run(req).await)
+            let token_from_query = req.uri().query()
+                .and_then(|q| {
+                    q.split('&')
+                        .find_map(|pair| {
+                            let mut parts = pair.splitn(2, '=');
+                            let key = parts.next()?;
+                            let val = parts.next().unwrap_or("");
+                            if key == "access_token" {
+                                Some(percent_decode(val))
+                            } else {
+                                None
                             }
-                            Err(_) => {
-                                let api_key_result =
-                                    state.auth_store.authenticate_api_key(token);
-                                match api_key_result {
-                                    Ok(user) => {
-                                        req.extensions_mut().insert(user);
-                                        Ok(next.run(req).await)
-                                    }
-                                    Err(e) => Err(unauthorized_response(&e)),
-                                }
-                            }
-                        }
+                        })
+                });
+
+            fn percent_decode(s: &str) -> String {
+                let mut out = String::with_capacity(s.len());
+                let mut chars = s.chars();
+                while let Some(c) = chars.next() {
+                    if c == '%' {
+                        let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                        let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                        out.push((hi as u8 * 16 + lo as u8) as char);
+                    } else if c == '+' {
+                        out.push(' ');
                     } else {
-                        Err(unauthorized_response(
-                            "invalid authorization header format",
-                        ))
+                        out.push(c);
                     }
                 }
-                None => Err(unauthorized_response("authorization header required")),
+                out
+            }
+
+            let token = match auth_header {
+                Some(header_value) => {
+                    header_value.strip_prefix("Bearer ").map(|s| s.trim().to_string())
+                }
+                None => token_from_query,
+            };
+
+            match token {
+                Some(token) => {
+                    let auth_result = authenticate_jwt(&token, &state.auth_store).await;
+                    match auth_result {
+                        Ok(user) => {
+                            req.extensions_mut().insert(user);
+                            Ok(next.run(req).await)
+                        }
+                        Err(_) => {
+                            let api_key_result =
+                                state.auth_store.authenticate_api_key(&token);
+                            match api_key_result {
+                                Ok(user) => {
+                                    req.extensions_mut().insert(user);
+                                    Ok(next.run(req).await)
+                                }
+                                Err(e) => Err(unauthorized_response(&e)),
+                            }
+                        }
+                    }
+                }
+                None => Err(unauthorized_response("authorization header or access_token query param required")),
             }
         }
     }

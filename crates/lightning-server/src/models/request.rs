@@ -4,12 +4,25 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SnapshotSelector {
+    #[serde(default)]
+    pub iso: Option<String>,
+    #[serde(default)]
+    pub relative: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueryRequest {
     pub query: String,
     #[serde(default)]
     pub params: Option<HashMap<String, serde_json::Value>>,
     #[serde(default)]
     pub snapshot_ts: Option<u64>,
+    #[serde(default)]
+    pub snapshot: Option<SnapshotSelector>,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
 }
@@ -241,6 +254,8 @@ pub struct ConsolidateRequest {
     pub contradiction_length_sim_min: Option<f64>,
     #[serde(default)]
     pub max_comparisons_per_entity: Option<usize>,
+    #[serde(default)]
+    pub include_details: bool,
 }
 
 #[derive(Debug, Deserialize)]

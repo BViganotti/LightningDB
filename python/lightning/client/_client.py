@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Union
 
 from lightning.client._transport import (
     LightningTransportError,
@@ -11,11 +11,14 @@ from lightning.client._types import (
     ChangeEvent,
     ClientConfig,
     ConsolidationReport,
+    ContradictionDetail,
     DecayResult,
     Entity,
+    LinkDetail,
     QueryResult,
     RagResult,
     SearchResult,
+    SnapshotSelector,
     SourceRef,
     StoreBatchResult,
 )
@@ -37,6 +40,8 @@ class Client:
     def __init__(self, config: ClientConfig):
         self._config = config
         self._transport = SyncTransport(config)
+        self._access_token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
 
     @property
     def config(self) -> ClientConfig:
@@ -55,6 +60,19 @@ class Client:
         timeout: Optional[float] = None,
     ) -> Any:
         return self._post(path, body, timeout=timeout)
+
+    # ── Auth ───────────────────────────────────────────────────────────
+
+    def login(self, username: str, password: str) -> None:
+        body = {"username": username, "password": password}
+        result = self._post("/v1/auth/login", body)
+        self._access_token = result["accessToken"]
+        self._refresh_token = result["refreshToken"]
+        self._config.auth_token = self._access_token
+        self._config.auth_token_provider = lambda: self._access_token
+
+    def login_with_api_key(self, api_key: str) -> None:
+        self._config.auth_token = api_key
 
     # ── Memory ─────────────────────────────────────────────────────────
 
@@ -186,6 +204,7 @@ class Client:
         contradiction_cosine_min: Optional[float] = None,
         contradiction_length_sim_min: Optional[float] = None,
         max_comparisons_per_entity: Optional[int] = None,
+        include_details: bool = False,
         timeout: Optional[float] = None,
     ) -> ConsolidationReport:
         body: dict[str, Any] = {}
@@ -199,8 +218,23 @@ class Client:
             body["contradictionLengthSimMin"] = contradiction_length_sim_min
         if max_comparisons_per_entity is not None:
             body["maxComparisonsPerEntity"] = max_comparisons_per_entity
+        if include_details:
+            body["includeDetails"] = True
         result = self._post("/v1/memory/consolidate", body, timeout=timeout)
-        return ConsolidationReport(**result)
+        links = None
+        contradictions = None
+        if "links" in result and result["links"] is not None:
+            links = [LinkDetail(**l) for l in result["links"]]
+        if "contradictions" in result and result["contradictions"] is not None:
+            contradictions = [ContradictionDetail(**c) for c in result["contradictions"]]
+        return ConsolidationReport(
+            links_created=result["linksCreated"],
+            contradictions_found=result["contradictionsFound"],
+            total_entities=result["totalEntities"],
+            warnings=result.get("warnings", []),
+            links=links,
+            contradictions=contradictions,
+        )
 
     # ── Graph ─────────────────────────────────────────────────────────
 
@@ -287,7 +321,7 @@ class Client:
         self,
         query: str,
         params: Optional[dict[str, Any]] = None,
-        snapshot_ts: Optional[int] = None,
+        snapshot_ts: Optional[Union[int, SnapshotSelector]] = None,
         timeout_ms: int = 30000,
         timeout: Optional[float] = None,
     ) -> QueryResult:
@@ -296,7 +330,18 @@ class Client:
         if params:
             body["params"] = params
         if snapshot_ts is not None:
-            body["snapshotTs"] = snapshot_ts
+            if isinstance(snapshot_ts, SnapshotSelector):
+                sel: SnapshotSelector = snapshot_ts
+                sel_body: dict[str, Any] = {}
+                if sel.iso is not None:
+                    sel_body["iso"] = sel.iso
+                if sel.relative is not None:
+                    sel_body["relative"] = sel.relative
+                if sel.label is not None:
+                    sel_body["label"] = sel.label
+                body["snapshot"] = sel_body
+            else:
+                body["snapshotTs"] = snapshot_ts
         result = self._post("/v1/query", body, timeout=timeout)
         return QueryResult.from_dict(result)
 

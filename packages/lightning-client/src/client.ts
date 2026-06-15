@@ -5,11 +5,13 @@ import type {
   ChangeEvent,
   CircuitBreakerConfig,
   ClientOptions,
+  ConsolidationDetail,
   ConsolidationReport,
   Entity,
   QueryResult,
   RagResult,
   SearchResult,
+  SnapshotSelector,
   TelemetryHooks,
   TlsConfig,
 } from './types'
@@ -71,6 +73,8 @@ export class LightningClient {
   private baseUrl: string
   private authToken?: string
   private authTokenProvider?: () => string | undefined
+  private accessToken?: string
+  private refreshToken?: string
   private tls?: TlsConfig
   private defaultTimeout: number
   private retry: RetryConfig
@@ -109,6 +113,31 @@ export class LightningClient {
     if (options.circuitBreaker) {
       this.circuitBreaker = new CircuitBreaker(defaults.circuitBreaker, options.telemetry)
     }
+  }
+
+  async login(username: string, password: string): Promise<void> {
+    const r = await fetch(`${this.baseUrl}/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}))
+      const data = (body as Record<string, unknown>)?.data as Record<string, unknown> | undefined
+      throw new LightningError(
+        (data?.error as string) ?? 'login failed',
+        r.status,
+      )
+    }
+    const body = await r.json()
+    const data = (body as Record<string, unknown>)?.data as Record<string, unknown> ?? body
+    this.accessToken = data.accessToken as string
+    this.refreshToken = data.refreshToken as string
+    this.authTokenProvider = () => this.accessToken
+  }
+
+  async loginWithApiKey(apiKey: string): Promise<void> {
+    this.authToken = apiKey
   }
 
   private async ensureTlsAgent(): Promise<unknown> {
@@ -220,6 +249,26 @@ export class LightningClient {
           const errorMsg = (errBody.error as string) ?? r.statusText
           const code = errBody.code as string | undefined
           const reqId = errBody.requestId as string | undefined
+
+          // Token refresh on 401
+          if (r.status === 401 && this.refreshToken) {
+            try {
+              const refreshRes = await fetch(`${this.baseUrl}/v1/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken: this.refreshToken }),
+              })
+              if (refreshRes.ok) {
+                const refreshBody = await refreshRes.json()
+                const refreshData = (refreshBody as Record<string, unknown>)?.data as Record<string, unknown> ?? refreshBody
+                this.accessToken = refreshData.accessToken as string
+                this.refreshToken = refreshData.refreshToken as string
+                return attempt(retryCount)
+              }
+            } catch {
+              // refresh failed, fall through to normal error handling
+            }
+          }
 
           if (shouldRetry(r.status, retryCount, this.retry)) {
             this.telemetry.onRetry(requestId, method, path, retryCount + 1, 0)
@@ -377,6 +426,7 @@ export class LightningClient {
       contradictionCosineMin?: number
       contradictionLengthSimMin?: number
       maxComparisonsPerEntity?: number
+      includeDetails?: boolean
     },
     timeout?: number,
   ): Promise<ConsolidationReport> {
@@ -446,14 +496,20 @@ export class LightningClient {
   async query(
     query: string,
     params?: Record<string, unknown>,
-    snapshotTs?: number,
+    snapshotTsOrSelector?: number | SnapshotSelector,
     timeoutMs = 30000,
     timeout?: number,
   ): Promise<QueryResult> {
     validateQueryString(query)
     const body: Record<string, unknown> = { query, timeoutMs }
     if (params) body.params = params
-    if (snapshotTs !== undefined) body.snapshotTs = snapshotTs
+    if (snapshotTsOrSelector !== undefined) {
+      if (typeof snapshotTsOrSelector === 'number') {
+        body.snapshotTs = snapshotTsOrSelector
+      } else {
+        body.snapshot = snapshotTsOrSelector
+      }
+    }
     return this.post('/v1/query', body, timeout)
   }
 

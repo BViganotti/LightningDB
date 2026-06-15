@@ -337,6 +337,18 @@ impl PhysicalPlanner {
                     crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
                 ))
             }
+            LogicalOperator::TopK(child, items, limit) => {
+                let planned_child = self.plan(*child)?;
+                let sort = Box::new(
+                    crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
+                );
+                Ok(Box::new(
+                    crate::processor::operators::limit_skip::PhysicalLimit::new(
+                        sort,
+                        limit as usize,
+                    ),
+                ))
+            }
             LogicalOperator::Unwind(child, expr, alias) => {
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(

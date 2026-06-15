@@ -249,6 +249,7 @@ impl Server {
                     .route("/v1/graph/expand", post(routes::graph::expand_handler))
                     .route("/v1/rag/query", post(routes::rag::rag_query_handler))
                     .route("/v1/subscribe", get(routes::subscribe::subscribe_handler))
+                    .route("/v1/snapshots", get(routes::snapshots::snapshots_handler))
                     .route("/v1/auth/refresh", post(routes::auth::refresh_handler))
                     .route("/v1/auth/logout", post(routes::auth::logout_handler))
                     .route("/v1/auth/me", get(routes::auth::me_handler))

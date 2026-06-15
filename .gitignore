@@ -20,8 +20,6 @@ target/
 
 # Runtime / session data
 .rivet_mcp.db/
-.fusion_mcp.db/
-fusion-mcp.log
 
 # Agentic / session files
 CLAUDE.md
@@ -46,6 +44,19 @@ PERFORMANCE_TUNING.md
 *.key
 *.cert
 *.crt
+
+# External test apps
+lightning-external-app/
+lightning-external-app/certs/
+lightning-external-app/data/
+lightning-external-app/node_modules/
+lightning-external-app/dist/
+
+# Psychologist app
+lightning-psych-app/
+lightning-psych-app/certs/
+lightning-psych-app/data/
+lightning-psych-app/.env
 
 # Python
 __pycache__/

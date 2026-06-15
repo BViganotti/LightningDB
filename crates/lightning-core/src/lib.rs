@@ -3,7 +3,6 @@ pub mod catalog;
 pub mod cdc;
 pub use api::*;
 pub mod capi;
-pub mod fusion;
 pub mod memory;
 pub mod optimizer;
 pub mod wasm_function;
@@ -1541,36 +1540,36 @@ impl Connection {
         }
 
         // Index all FixedSizeList(Float32) columns as vector embeddings
+        // Iterate over final_batch columns (skip _id at index 0) to catch
+        // dynamic embedding columns not present in the table catalog definition.
         if let Some(vec_idx) = vec_opt {
             let idx_dim = vec_idx.dimension();
-            for (col_idx, _col) in table.columns.iter().enumerate() {
-                if col_idx < final_batch.num_columns() {
-                    let array = final_batch.column(col_idx);
-                    if let Some(list_arr) = array
-                        .as_any()
-                        .downcast_ref::<arrow::array::FixedSizeListArray>()
-                    {
-                        let arr_dim = list_arr.value_length() as usize;
-                        if arr_dim == idx_dim {
-                            if let Some(values) = list_arr
-                                .values()
-                                .as_any()
-                                .downcast_ref::<arrow::array::Float32Array>()
-                            {
-                                let mut batch_vecs = Vec::with_capacity(num_rows);
-                                for i in 0..num_rows {
-                                    let start = i * arr_dim;
-                                    let end = (i + 1) * arr_dim;
-                                    let emb = values.values()[start..end].to_vec();
-                                    batch_vecs.push((start_id + i as u64, emb));
-                                }
-                                if let Err(e) = vec_idx.insert_batch(&batch_vecs, &bm, &tx) {
-                                    tracing::warn!(
-                                        "vector index insert_batch failed for table {}: {}",
-                                        table_name,
-                                        e,
-                                    );
-                                }
+            for col_idx in 1..final_batch.num_columns() {
+                let array = final_batch.column(col_idx);
+                if let Some(list_arr) = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()
+                {
+                    let arr_dim = list_arr.value_length() as usize;
+                    if arr_dim == idx_dim {
+                        if let Some(values) = list_arr
+                            .values()
+                            .as_any()
+                            .downcast_ref::<arrow::array::Float32Array>()
+                        {
+                            let mut batch_vecs = Vec::with_capacity(num_rows);
+                            for i in 0..num_rows {
+                                let start = i * arr_dim;
+                                let end = (i + 1) * arr_dim;
+                                let emb = values.values()[start..end].to_vec();
+                                batch_vecs.push((start_id + i as u64, emb));
+                            }
+                            if let Err(e) = vec_idx.insert_batch(&batch_vecs, &bm, &tx) {
+                                tracing::warn!(
+                                    "vector index insert_batch failed for table {}: {}",
+                                    table_name,
+                                    e,
+                                );
                             }
                         }
                     }

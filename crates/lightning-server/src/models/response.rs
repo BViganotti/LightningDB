@@ -123,11 +123,60 @@ pub struct EntityHistoryResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkDetailResponse {
+    pub source_id: String,
+    pub target_id: String,
+    pub rel_type: String,
+    pub score: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContradictionDetailResponse {
+    pub entity_id: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub fields: Vec<String>,
+    pub cosine_sim: f64,
+    pub jaccard_sim: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolidationDetailResponse {
+    pub links: Vec<LinkDetailResponse>,
+    pub contradictions: Vec<ContradictionDetailResponse>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConsolidationReportResponse {
     pub links_created: usize,
     pub contradictions_found: usize,
     pub total_entities: usize,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<LinkDetailResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contradictions: Option<Vec<ContradictionDetailResponse>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotInfo {
+    pub ts: i64,
+    pub iso: String,
+    pub age_days: i64,
+    pub label: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotsResponse {
+    pub snapshots: Vec<SnapshotInfo>,
 }
 
 #[derive(Debug, Serialize)]

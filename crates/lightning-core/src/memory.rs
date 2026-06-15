@@ -6,6 +6,7 @@ use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Arr
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crossbeam::channel::Receiver;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -696,17 +697,20 @@ impl MemoryStore {
 
     pub fn recall_by_type(&self, entity_type: &str, top_k: usize) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
+        let limit_clause = if top_k < usize::MAX {
+            format!(" LIMIT {top_k}")
+        } else {
+            String::new()
+        };
         let query = format!(
             "MATCH (e:{ENTITY_TABLE}) WHERE e.type = $type AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until \
-             ORDER BY e.last_accessed DESC LIMIT $top_k"
+             ORDER BY e.last_accessed DESC{limit_clause}"
         );
-        tracing::debug!("query: {query}");
         let mut params = HashMap::new();
         params.insert("type".to_string(), Value::String(entity_type.to_string()));
-        params.insert("top_k".to_string(), Value::Number(top_k as f64));
         let res = self.conn.execute(&query, Some(params))?;
         Ok(self.batches_to_entities(&res.batches))
     }
@@ -732,17 +736,21 @@ impl MemoryStore {
     /// Return the full version history of a specific entity across time
     pub fn entity_history(&self, entity_id: &str) -> Result<Vec<MemoryEntity>> {
         self.ensure_schema()?;
+        // Note: ORDER BY with Cypher parameters has a known engine issue.
+        // We sort in-memory instead.
         let query = format!(
             "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $entity_id \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until \
-             ORDER BY e.valid_from DESC"
+             e.valid_from, e.valid_until"
         );
         let mut params = HashMap::new();
         params.insert("entity_id".to_string(), Value::String(entity_id.to_string()));
         let res = self.conn.execute(&query, Some(params))?;
-        Ok(self.batches_to_entities(&res.batches))
+        let mut entities = self.batches_to_entities(&res.batches);
+        // Sort by valid_from descending (most recent first)
+        entities.sort_by(|a, b| b.valid_from.cmp(&a.valid_from));
+        Ok(entities)
     }
 
     // ============================================================
@@ -776,6 +784,8 @@ impl MemoryStore {
 
         let mut links_created = 0usize;
         let mut contradictions_found = 0usize;
+        let mut link_details: Vec<LinkDetail> = Vec::new();
+        let mut contradiction_details: Vec<ContradictionDetail> = Vec::new();
         let mut adjacency: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
         // Step 1-2: Compute content-based similarity (MinHash signature comparison)
@@ -812,6 +822,14 @@ impl MemoryStore {
                             let msg = format!("MemoryStore: failed to associate RelatedTo link: {e}");
                             tracing::warn!("{msg}");
                             warnings.push(msg);
+                        } else if cfg.collect_details {
+                            link_details.push(LinkDetail {
+                                source_id: all[i].id.clone(),
+                                target_id: all[j].id.clone(),
+                                rel_type: "similar_to".to_string(),
+                                score: jaccard,
+                                reason: format!("jaccard_similarity > threshold ({})", cfg.similarity_threshold),
+                            });
                         }
                         adjacency[i].push((j, jaccard));
                         adjacency[j].push((i, jaccard));
@@ -838,6 +856,19 @@ impl MemoryStore {
                                 let msg = format!("MemoryStore: failed to associate Contradicts link: {e}");
                                 tracing::warn!("{msg}");
                                 warnings.push(msg);
+                            } else if cfg.collect_details {
+                                contradiction_details.push(ContradictionDetail {
+                                    entity_id: all[i].id.clone(),
+                                    source_id: all[i].id.clone(),
+                                    target_id: all[j].id.clone(),
+                                    fields: vec!["content".to_string()],
+                                    cosine_sim: cosine,
+                                    jaccard_sim: jaccard,
+                                    reason: format!(
+                                        "high cosine similarity ({:.4}) but low Jaccard content overlap ({:.4})",
+                                        cosine, jaccard
+                                    ),
+                                });
                             }
                             contradictions_found += 1;
                         }
@@ -915,11 +946,21 @@ impl MemoryStore {
         let now = Self::now_micros();
         self.last_consolidation_ts.store(now, std::sync::atomic::Ordering::Relaxed);
 
+        let details = if cfg.collect_details {
+            Some(ConsolidationDetail {
+                links: link_details,
+                contradictions: contradiction_details,
+            })
+        } else {
+            None
+        };
+
         Ok(ConsolidationReport {
             links_created,
             contradictions_found,
             total_entities: n,
             warnings,
+            details,
         })
     }
 
@@ -1054,14 +1095,13 @@ impl MemoryStore {
         if visited.is_empty() { return Ok(Vec::new()); }
 
         // Look up entities by _id
-        let ids: Vec<Value> = visited.iter().map(|&id| Value::Node(id)).collect();
+        let id_list: Vec<String> = visited.iter().map(|id| id.to_string()).collect();
         let lookup = format!(
-            "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
-             RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until"
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+             RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until",
+            id_list.join(", "),
         );
-        let mut params = std::collections::HashMap::new();
-        params.insert("ids".to_string(), Value::List(ids));
-        match self.conn.execute(&lookup, Some(params)) {
+        match self.conn.execute(&lookup, None) {
             Ok(r) => Ok(self.batches_to_entities(&r.batches)),
             Err(_) => Ok(Vec::new()),
         }
@@ -1120,6 +1160,28 @@ impl MemoryStore {
         params.insert("created_at".to_string(), Value::Number(now as f64));
 
         self.conn.execute(&query, Some(params))?;
+
+        // Update the CSR index so graph traversal (expand) can find this edge.
+        let db = self.conn.client_context.database.clone();
+        if let (Some(src_node_id), Some(dst_node_id)) =
+            (self.resolve_to_internal_id(src_id), self.resolve_to_internal_id(dst_id))
+        {
+            let bm = &db.buffer_manager;
+            if let Ok(tx) = db.transaction_manager.begin(false) {
+                let storage = db.storage_manager.read();
+                if let Some(csr) = storage.fwd_csr.get(RELATES_TABLE) {
+                    csr.insert_edge(src_node_id, dst_node_id);
+                    // Also store the reverse edge so backward traversal works
+                    if let Some(bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
+                        bwd_csr.insert_edge(dst_node_id, src_node_id);
+                    }
+                    let _ = db.transaction_manager.commit(&tx, bm, &db);
+                } else {
+                    let _ = db.transaction_manager.rollback(&db, &tx);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1169,29 +1231,44 @@ impl MemoryStore {
     fn forget_inner(&self, entity_id: &str) -> Result<bool> {
         let db = self.conn.client_context.database.clone();
 
-        // Resolve entity ID to internal _id using storage API directly.
-        // Cypher parameterized queries are unreliable in this context.
+        // Resolve entity ID to internal _id. Prefer the hash index, fall back to Cypher.
         let internal_id = {
             let storage = db.storage_manager.read();
             let index_opt = storage.get_index(ENTITY_TABLE);
-            let index = match index_opt {
-                Some(idx) => idx,
-                None => return Ok(false),
-            };
-            let bm = &db.buffer_manager;
-            let tx = match db.transaction_manager.begin(true) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("MemoryStore: forget begin tx failed: {}", e);
-                    return Ok(false);
+            if let Some(index) = index_opt {
+                let bm = &db.buffer_manager;
+                let tx = match db.transaction_manager.begin(true) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::warn!("MemoryStore: forget begin tx failed: {}", e);
+                        return Ok(false);
+                    }
+                };
+                let pk_value = Value::String(entity_id.to_string());
+                let row_id = index.lookup(bm, &pk_value, &tx);
+                let _ = db.transaction_manager.rollback(&db, &tx);
+                match row_id {
+                    Ok(Some(id)) => Some(id),
+                    _ => None
                 }
-            };
-            let pk_value = Value::String(entity_id.to_string());
-            let row_id = index.lookup(bm, &pk_value, &tx);
-            let _ = db.transaction_manager.rollback(&db, &tx);
-            match row_id {
-                Ok(Some(id)) => Some(id),
-                _ => None
+            } else {
+                // Hash index not loaded (e.g. after restart). Resolve via Cypher.
+                drop(storage);
+                let query = format!(
+                    "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
+                );
+                let mut params = std::collections::HashMap::new();
+                params.insert("id".to_string(), Value::String(entity_id.to_string()));
+                match self.conn.execute(&query, Some(params)) {
+                    Ok(res) => {
+                        res.batches.first().and_then(|batch| {
+                            if batch.num_rows() == 0 { return None; }
+                            batch.column(0).as_any().downcast_ref::<arrow::array::UInt64Array>()
+                                .and_then(|arr| if arr.is_null(0) { None } else { Some(arr.value(0)) })
+                        })
+                    }
+                    Err(_) => None
+                }
             }
         };
 
@@ -1304,19 +1381,21 @@ impl MemoryStore {
         if internal_ids.is_empty() {
             return Vec::new();
         }
-        let ids: Vec<Value> = internal_ids.iter().map(|&id| Value::Node(id)).collect();
+        let id_list: Vec<String> = internal_ids.iter().map(|id| id.to_string()).collect();
+        let id_list_str = id_list.join(", ");
         let query = format!(
-            "UNWIND $ids AS id MATCH (e:{ENTITY_TABLE}) WHERE e._id = id AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
-             e.valid_from, e.valid_until"
+             e.valid_from, e.valid_until",
+            id_list_str,
         );
-        let mut params = std::collections::HashMap::new();
-        params.insert("ids".to_string(), Value::List(ids));
-        if let Ok(res) = self.conn.execute(&query, Some(params)) {
-            self.batches_to_entities(&res.batches)
-        } else {
-            Vec::new()
+        match self.conn.execute(&query, None) {
+            Ok(res) => self.batches_to_entities(&res.batches),
+            Err(e) => {
+                tracing::warn!("MemoryStore: lookup_by_internal_ids query failed: {e}");
+                Vec::new()
+            }
         }
     }
 
@@ -1384,6 +1463,32 @@ pub struct ChangeEvent {
     pub operation_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkDetail {
+    pub source_id: String,
+    pub target_id: String,
+    pub rel_type: String,
+    pub score: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContradictionDetail {
+    pub entity_id: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub fields: Vec<String>,
+    pub cosine_sim: f64,
+    pub jaccard_sim: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationDetail {
+    pub links: Vec<LinkDetail>,
+    pub contradictions: Vec<ContradictionDetail>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConsolidationConfig {
     pub similarity_threshold: f64,
@@ -1392,9 +1497,11 @@ pub struct ConsolidationConfig {
     pub contradiction_length_sim_min: f64,
     /// Maximum number of existing entities to compare each new entity against.
     /// When the entity count exceeds this threshold, a random sample is used
-    /// to bound the O(n�) comparison cost. 0 means unlimited (all-vs-all).
+    /// to bound the O(n²) comparison cost. 0 means unlimited (all-vs-all).
     /// Default 5000 limits 100K new entities to ~500M comparisons vs ~10B.
     pub max_comparisons_per_entity: usize,
+    /// When true, populate ConsolidationReport.details with per-link and per-contradiction info.
+    pub collect_details: bool,
 }
 
 impl Default for ConsolidationConfig {
@@ -1405,6 +1512,7 @@ impl Default for ConsolidationConfig {
             contradiction_cosine_min: 0.7,
             contradiction_length_sim_min: 0.8,
             max_comparisons_per_entity: 5000,
+            collect_details: false,
         }
     }
 }
@@ -1415,6 +1523,7 @@ pub struct ConsolidationReport {
     pub contradictions_found: usize,
     pub total_entities: usize,
     pub warnings: Vec<String>,
+    pub details: Option<ConsolidationDetail>,
 }
 
 #[derive(Debug, Clone, Default)]

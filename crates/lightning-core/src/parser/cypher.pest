@@ -37,7 +37,7 @@ data_type = { ^"INT64" | ^"INT32" | ^"DOUBLE" | ^"FLOAT" | ^"STRING" | ^"BOOL" |
 list_type = { ^"LIST" ~ "(" ~ data_type ~ ")" }
 struct_type = { ^"STRUCT" ~ "(" ~ variable ~ data_type ~ ("," ~ variable ~ data_type)* ~ ")" }
 primary_key_def = { ^"PRIMARY" ~ ^"KEY" ~ "(" ~ variable ~ ")" }
-table_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+table_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 clause = _{ match_clause | optional_match_clause | with_clause | unwind_clause | create_clause | merge_clause | delete_clause | set_clause | call_clause | return_clause }
 
 optional_match_clause = { ^"OPTIONAL" ~ ^"MATCH" ~ pattern ~ ("," ~ pattern)* }
@@ -75,7 +75,7 @@ left_arrow = { "<" }
 right_arrow = { ">" }
 
 labels = { ":" ~ label_name ~ ("|" ~ label_name)* }
-label_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+label_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 variable = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 

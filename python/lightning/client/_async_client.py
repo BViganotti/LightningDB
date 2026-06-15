@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, Union
 
 from lightning.client._transport import (
     AsyncTransport,
@@ -10,11 +10,14 @@ from lightning.client._types import (
     ChangeEvent,
     ClientConfig,
     ConsolidationReport,
+    ContradictionDetail,
     DecayResult,
     Entity,
+    LinkDetail,
     QueryResult,
     RagResult,
     SearchResult,
+    SnapshotSelector,
     SourceRef,
 )
 from lightning.client._validation import (
@@ -34,6 +37,8 @@ class AsyncClient:
     def __init__(self, config: ClientConfig):
         self._config = config
         self._transport = AsyncTransport(config)
+        self._access_token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
 
     @property
     def config(self) -> ClientConfig:
@@ -44,6 +49,19 @@ class AsyncClient:
 
     async def _get(self, path: str, timeout: Optional[float] = None) -> Any:
         return await self._transport.request("GET", path, timeout=timeout)
+
+    # ── Auth ───────────────────────────────────────────────────────────
+
+    async def login(self, username: str, password: str) -> None:
+        body = {"username": username, "password": password}
+        result = await self._post("/v1/auth/login", body)
+        self._access_token = result["accessToken"]
+        self._refresh_token = result["refreshToken"]
+        self._config.auth_token = self._access_token
+        self._config.auth_token_provider = lambda: self._access_token
+
+    async def login_with_api_key(self, api_key: str) -> None:
+        self._config.auth_token = api_key
 
     # ── Memory ─────────────────────────────────────────────────────────
 
@@ -209,7 +227,7 @@ class AsyncClient:
         self,
         query: str,
         params: Optional[dict[str, Any]] = None,
-        snapshot_ts: Optional[int] = None,
+        snapshot_ts: Optional[Union[int, SnapshotSelector]] = None,
         timeout_ms: int = 30000,
         timeout: Optional[float] = None,
     ) -> QueryResult:
@@ -218,7 +236,18 @@ class AsyncClient:
         if params:
             body["params"] = params
         if snapshot_ts is not None:
-            body["snapshotTs"] = snapshot_ts
+            if isinstance(snapshot_ts, SnapshotSelector):
+                sel: SnapshotSelector = snapshot_ts
+                sel_body: dict[str, Any] = {}
+                if sel.iso is not None:
+                    sel_body["iso"] = sel.iso
+                if sel.relative is not None:
+                    sel_body["relative"] = sel.relative
+                if sel.label is not None:
+                    sel_body["label"] = sel.label
+                body["snapshot"] = sel_body
+            else:
+                body["snapshotTs"] = snapshot_ts
         result = await self._post("/v1/query", body, timeout=timeout)
         return QueryResult.from_dict(result)
 

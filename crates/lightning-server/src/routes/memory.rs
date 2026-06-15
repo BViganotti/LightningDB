@@ -8,8 +8,9 @@ use crate::models::request::{
     RecallRecentRequest, RecallRequest, StoreBatchRequest, StoreRequest,
 };
 use crate::models::response::{
-    ApiResponse, ConsolidationReportResponse, DecayResponse, EntitiesResponse,
-    EntityHistoryResponse, EntityItem, ForgetResponse, RecallResponse, ResponseMeta,
+    ApiResponse, ConsolidationReportResponse, ContradictionDetailResponse,
+    DecayResponse, EntitiesResponse, EntityHistoryResponse, EntityItem,
+    ForgetResponse, LinkDetailResponse, RecallResponse, ResponseMeta,
     SearchResultItem, StoreBatchResponse,
 };
 
@@ -298,6 +299,12 @@ pub async fn consolidate_handler(
             max_comparisons_per_entity: req.max_comparisons_per_entity.ok_or_else(|| {
                 AppError::BadRequest("max_comparisons_per_entity is required".into())
             })?,
+            collect_details: req.include_details,
+        })
+    } else if req.include_details {
+        Some(lightning_core::memory::ConsolidationConfig {
+            collect_details: true,
+            ..Default::default()
         })
     } else {
         None
@@ -313,12 +320,37 @@ pub async fn consolidate_handler(
         "Consolidation completed"
     );
 
+    let (links, contradictions) = match report.details {
+        Some(d) => {
+            let l: Vec<LinkDetailResponse> = d.links.into_iter().map(|ld| LinkDetailResponse {
+                source_id: ld.source_id,
+                target_id: ld.target_id,
+                rel_type: ld.rel_type,
+                score: ld.score,
+                reason: ld.reason,
+            }).collect();
+            let c: Vec<ContradictionDetailResponse> = d.contradictions.into_iter().map(|cd| ContradictionDetailResponse {
+                entity_id: cd.entity_id,
+                source_id: cd.source_id,
+                target_id: cd.target_id,
+                fields: cd.fields,
+                cosine_sim: cd.cosine_sim,
+                jaccard_sim: cd.jaccard_sim,
+                reason: cd.reason,
+            }).collect();
+            (Some(l), Some(c))
+        }
+        None => (None, None),
+    };
+
     Ok(Json(ApiResponse {
         data: ConsolidationReportResponse {
             links_created: report.links_created,
             contradictions_found: report.contradictions_found,
             total_entities: report.total_entities,
             warnings: report.warnings,
+            links,
+            contradictions,
         },
         meta: ResponseMeta {
             request_id,

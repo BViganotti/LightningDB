@@ -10,7 +10,7 @@ Lightning is a **columnar, graph-native database server** with built-in vector s
 |---|---|---|
 | `lightning-types` | Common types (`LogicalType`, `Value`) shared across the stack | Rust |
 | `lightning-arrow` | Arrow FFI bridge (C Data Interface for zero-copy interop) | Rust |
-| `lightning-core` | Core engine: storage, MVCC, Cypher parser/planner/executor, MemoryStore, Fusion | Rust |
+| `lightning-core` | Core engine: storage, MVCC, Cypher parser/planner/executor, MemoryStore | Rust |
 | `lightning` | **Rust driver crate** — ergonomic public API wrapping `lightning-core` | Rust |
 | `lightning-server` | HTTP server binary (Axum, 20+ endpoints) — the primary deployment mode | Rust |
 | `@lightningDB/client` | Node.js/TypeScript HTTP client SDK | TypeScript |

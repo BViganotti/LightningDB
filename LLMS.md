@@ -26,14 +26,13 @@ Single binary that replaces 4 services:
 crates/
 ├── lightning-types/     # LogicalType, Value, StructField — shared enums
 ├── lightning-arrow/     # Arrow C Data Interface bridge (FFI_ArrowArray)
-├── lightning-core/      # Core engine (storage, MVCC, Cypher, MemoryStore, Fusion)
+├── lightning-core/      # Core engine (storage, MVCC, Cypher, MemoryStore)
 │   └── lib.rs           # Database, Connection, SystemConfig, QueryResult
 ├── lightning/           # ★ RUST DRIVER — ergonomic wrapper, the crate users depend on
 │   ├── lib.rs           # Prelude, re-exports
 │   ├── database.rs      # Database: open/checkpoint/vacuum/WASM/metrics
 │   ├── connection.rs    # Connection: query/execute/typed/JSON/DDL/bulk/transactions
 │   ├── memory.rs        # MemoryStore: CRUD/hybrid search/RAG/graph/consolidation/CDC
-│   ├── fusion.rs        # Fusion: code graph analysis, PageRank, D3 export
 │   └── types.rs         # TypedQueryResult: Arrow → JSON rows
 └── lightning-server/    # ★ HTTP SERVER — primary deployment mode (Axum, 20+ endpoints)
 packages/
@@ -123,19 +122,6 @@ MemoryStore::now_micros() -> i64
 store.inner() -> &CoreMemoryStore
 ```
 
-### Fusion (code graph analysis)
-```rust
-Fusion::init_schema(&conn) -> Result<()>
-Fusion::find_node_by_name(&conn, name) -> Result<Vec<String>>
-Fusion::find_paths(&conn, src_id, tgt_id, &[edge_types]) -> Result<Vec<String>>
-Fusion::find_connected_nodes(&conn, node_id, &[edge_types], ConnectedDirection) -> Result<Vec<String>>
-Fusion::lookup_node_names(&conn, &[String]) -> Result<Vec<(id, name, node_type)>>
-Fusion::add_observation(&conn, id, content, parent_id) -> Result<()>
-Fusion::get_recent_observations(&conn, limit) -> Result<Vec<String>>
-Fusion::compute_architecture_cohesion(&conn) -> Result<Vec<ModuleCohesion>>
-Fusion::materialize_pagerank(&conn) -> Result<()>
-Fusion::export_to_d3_json(&conn) -> Result<String>    // D3.js visualization JSON
-```
 
 ### Key Types
 ```rust

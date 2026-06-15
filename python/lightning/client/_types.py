@@ -96,11 +96,46 @@ class RagResult:
 
 
 @dataclass(frozen=True)
+class LinkDetail:
+    source_id: str
+    target_id: str
+    rel_type: str
+    score: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class ContradictionDetail:
+    entity_id: str
+    source_id: str
+    target_id: str
+    fields: list[str]
+    cosine_sim: float
+    jaccard_sim: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class ConsolidationDetail:
+    links: list[LinkDetail]
+    contradictions: list[ContradictionDetail]
+
+
+@dataclass(frozen=True)
 class ConsolidationReport:
     links_created: int
     contradictions_found: int
     total_entities: int
     warnings: list[str]
+    links: Optional[list[LinkDetail]] = None
+    contradictions: Optional[list[ContradictionDetail]] = None
+
+
+@dataclass(frozen=True)
+class SnapshotSelector:
+    iso: Optional[str] = None
+    relative: Optional[str] = None
+    label: Optional[str] = None
 
 
 @dataclass(frozen=True)

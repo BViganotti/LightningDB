@@ -16,9 +16,9 @@ use crate::auth::models::{
 };
 use crate::auth::password;
 
-const AUTH_USERS_TABLE: &str = "__auth_users";
-const AUTH_TOKENS_TABLE: &str = "__auth_refresh_tokens";
-const AUTH_API_KEYS_TABLE: &str = "__auth_api_keys";
+const AUTH_USERS_TABLE: &str = "auth_users";
+const AUTH_TOKENS_TABLE: &str = "auth_refresh_tokens";
+const AUTH_API_KEYS_TABLE: &str = "auth_api_keys";
 
 const MAX_LOGIN_ATTEMPTS: u32 = 5;
 const LOGIN_WINDOW_SECS: i64 = 900;
