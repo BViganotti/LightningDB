@@ -133,25 +133,6 @@ pub struct ApiKey {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredData {
-    pub version: u32,
-    pub users: Vec<User>,
-    pub refresh_tokens: Vec<StoredRefreshToken>,
-    pub api_keys: Vec<ApiKey>,
-}
-
-impl Default for StoredData {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            users: Vec::new(),
-            refresh_tokens: Vec::new(),
-            api_keys: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtClaims {
     pub sub: String,
     pub role: Role,

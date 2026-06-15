@@ -91,19 +91,18 @@ const MAX_CONCURRENT_QUERIES: usize = 64;
 
 impl AppState {
     pub fn new(
-        db: Database,
+        db: Arc<Database>,
         store: MemoryStore,
         config: ServerConfig,
         auth_store: Arc<AuthStore>,
     ) -> Self {
         let auth_mode = config.auth_mode;
-        let db_arc = Arc::new(db);
         Self {
-            db: Arc::clone(&db_arc),
+            db: Arc::clone(&db),
             store: Arc::new(store),
             config,
             request_counter: AtomicU64::new(0),
-            connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db_arc))),
+            connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db))),
             auth_store,
             auth_mode,
             rate_limiter: Arc::new(RateLimiter::new(100, 1)),

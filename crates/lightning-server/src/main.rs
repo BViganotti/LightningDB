@@ -87,11 +87,31 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Initialize auth store
+    let db_path = config.db_path.clone();
+
+    tracing::info!(
+        db_path = %db_path.display(),
+        host = %config.host,
+        port = config.port,
+        buffer_pool_mb = config.buffer_pool_size / (1024 * 1024),
+        read_only = config.read_only,
+        embedding_dim = config.embedding_dim,
+        auth_mode = %config.auth_mode,
+        "Opening Lightning database"
+    );
+
+    let db = Arc::new(
+        Database::open_with_config(&db_path, config.system_config())
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to open database at '{}': {}", db_path.display(), e);
+                std::process::exit(1);
+            }),
+    );
+
     let jwt_secret = resolve_jwt_secret(&args);
     let auth_store = Arc::new(
         auth::store::AuthStore::new(
-            config.auth_file.clone(),
+            Arc::clone(&db),
             jwt_secret,
             config.jwt_access_ttl_secs,
             config.jwt_refresh_ttl_secs,
@@ -134,26 +154,20 @@ async fn main() {
                 tracing::warn!("Admin bootstrap skipped: {}", e);
             }
         }
+
     }
 
-    let db_path = config.db_path.clone();
-
-    tracing::info!(
-        db_path = %db_path.display(),
-        host = %config.host,
-        port = config.port,
-        buffer_pool_mb = config.buffer_pool_size / (1024 * 1024),
-        read_only = config.read_only,
-        embedding_dim = config.embedding_dim,
-        auth_mode = %config.auth_mode,
-        "Opening Lightning database"
-    );
-
-    let db = Database::open_with_config(&db_path, config.system_config())
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to open database at '{}': {}", db_path.display(), e);
-            std::process::exit(1);
-        });
+    // Start background GC for expired tokens
+    let gc_store = Arc::clone(&auth_store);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            if let Err(e) = gc_store.purge_expired() {
+                tracing::warn!("Token GC failed: {}", e);
+            }
+        }
+    });
 
     let conn = db.connect();
     let store = MemoryStore::new(conn, config.embedding_dim);

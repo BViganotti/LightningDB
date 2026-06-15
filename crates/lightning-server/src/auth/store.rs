@@ -1,24 +1,38 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
+use arrow::array::{Array, BooleanArray, Int64Array, StringArray};
+use lightning::Database;
+use lightning::Connection;
+use lightning_core::Value;
 use parking_lot::RwLock;
 use rand::RngCore;
 use zeroize::Zeroize;
 
+use crate::auth::cache::{CacheResult, TokenCache};
 use crate::auth::jwt;
 use crate::auth::models::{
-    ApiKey, AuthenticatedUser, AuthMethod, Role, StoredData, StoredRefreshToken, User,
+    ApiKey, AuthenticatedUser, AuthMethod, Role, StoredRefreshToken, User,
 };
 use crate::auth::password;
+
+const AUTH_USERS_TABLE: &str = "__auth_users";
+const AUTH_TOKENS_TABLE: &str = "__auth_refresh_tokens";
+const AUTH_API_KEYS_TABLE: &str = "__auth_api_keys";
 
 const MAX_LOGIN_ATTEMPTS: u32 = 5;
 const LOGIN_WINDOW_SECS: i64 = 900;
 const LOCKOUT_DURATION_SECS: i64 = 900;
 
 pub struct AuthStore {
-    data: Arc<RwLock<StoredData>>,
-    path: PathBuf,
+    #[allow(dead_code)]
+    db: Arc<Database>,
+    conn: Connection,
+    users_cache: RwLock<HashMap<String, User>>,
+    usernames_cache: RwLock<HashMap<String, String>>,
+    tokens_cache: RwLock<HashMap<String, StoredRefreshToken>>,
+    api_keys_cache: RwLock<HashMap<String, ApiKey>>,
+    token_bloom: TokenCache,
     jwt_secret: Vec<u8>,
     access_token_ttl_secs: u64,
     refresh_token_ttl_secs: u64,
@@ -32,28 +46,47 @@ struct LoginRecord {
 
 impl AuthStore {
     pub fn new(
-        path: PathBuf,
+        db: Arc<Database>,
         jwt_secret: Vec<u8>,
         access_token_ttl_secs: u64,
         refresh_token_ttl_secs: u64,
     ) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create auth data directory: {e}"))?;
+        let conn = db.connect();
+        Self::ensure_system_tables(&conn)?;
+
+        let users = Self::load_users(&conn)?;
+        let tokens = Self::load_tokens(&conn)?;
+        let api_keys = Self::load_api_keys(&conn)?;
+
+        let mut users_cache = HashMap::new();
+        let mut usernames_cache = HashMap::new();
+        for u in &users {
+            users_cache.insert(u.id.clone(), u.clone());
+            usernames_cache.insert(u.username.clone(), u.id.clone());
         }
 
-        let data = if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| format!("failed to read auth data file: {e}"))?;
-            serde_json::from_str(&content)
-                .map_err(|e| format!("failed to parse auth data file: {e}"))?
-        } else {
-            StoredData::default()
-        };
+        let mut tokens_cache = HashMap::new();
+        for t in &tokens {
+            tokens_cache.insert(t.token_hash.clone(), t.clone());
+        }
+
+        let mut api_keys_cache = HashMap::new();
+        for k in &api_keys {
+            api_keys_cache.insert(k.key_hash.clone(), k.clone());
+        }
+
+        let token_bloom = TokenCache::new();
+        let all_hashes: Vec<String> = tokens.iter().map(|t| t.token_hash.clone()).collect();
+        token_bloom.rebuild(&all_hashes, &[]);
 
         Ok(Self {
-            data: Arc::new(RwLock::new(data)),
-            path,
+            db,
+            conn,
+            users_cache: RwLock::new(users_cache),
+            usernames_cache: RwLock::new(usernames_cache),
+            tokens_cache: RwLock::new(tokens_cache),
+            api_keys_cache: RwLock::new(api_keys_cache),
+            token_bloom,
             jwt_secret,
             access_token_ttl_secs,
             refresh_token_ttl_secs,
@@ -73,29 +106,164 @@ impl AuthStore {
         self.refresh_token_ttl_secs
     }
 
-    fn persist(&self) -> Result<(), String> {
-        let data = self.data.read();
-        let content = serde_json::to_string_pretty(&*data)
-            .map_err(|e| format!("failed to serialize auth data: {e}"))?;
-        let tmp_path = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, &content)
-            .map_err(|e| format!("failed to write auth data: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perm = std::fs::Permissions::from_mode(0o600);
-            let _ = std::fs::set_permissions(&tmp_path, perm);
+    fn ensure_system_tables(conn: &Connection) -> Result<(), String> {
+        let db = conn.client_context().database.clone();
+        let storage = db.storage_manager.read();
+        let users_exist = storage.node_tables.contains_key(AUTH_USERS_TABLE);
+        let tokens_exist = storage.node_tables.contains_key(AUTH_TOKENS_TABLE);
+        let keys_exist = storage.node_tables.contains_key(AUTH_API_KEYS_TABLE);
+        drop(storage);
+
+        if !users_exist {
+            let q = format!(
+                "CREATE NODE TABLE {AUTH_USERS_TABLE} (id STRING, username STRING, \
+                 password_hash STRING, role STRING, enabled BOOL, \
+                 created_at INT64, last_login INT64, PRIMARY KEY (id))"
+            );
+            conn.execute(&q, None)
+                .map_err(|e| format!("failed to create auth users table: {e}"))?;
         }
-        std::fs::rename(&tmp_path, &self.path)
-            .map_err(|e| format!("failed to rename auth data file: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perm = std::fs::Permissions::from_mode(0o600);
-            let _ = std::fs::set_permissions(&self.path, perm);
+        if !tokens_exist {
+            let q = format!(
+                "CREATE NODE TABLE {AUTH_TOKENS_TABLE} (id STRING, user_id STRING, \
+                 token_hash STRING, expires_at INT64, created_at INT64, PRIMARY KEY (id))"
+            );
+            conn.execute(&q, None)
+                .map_err(|e| format!("failed to create auth tokens table: {e}"))?;
+        }
+        if !keys_exist {
+            let q = format!(
+                "CREATE NODE TABLE {AUTH_API_KEYS_TABLE} (id STRING, user_id STRING, \
+                 key_hash STRING, name STRING, prefix STRING, role_override STRING, \
+                 expires_at INT64, created_at INT64, PRIMARY KEY (id))"
+            );
+            conn.execute(&q, None)
+                .map_err(|e| format!("failed to create auth api keys table: {e}"))?;
         }
         Ok(())
     }
+
+    fn load_users(conn: &Connection) -> Result<Vec<User>, String> {
+        let q = format!(
+            "MATCH (u:{AUTH_USERS_TABLE}) \
+             RETURN u.id, u.username, u.password_hash, u.role, \
+             u.enabled, u.created_at, u.last_login"
+        );
+        let result = conn
+            .execute(&q, None)
+            .map_err(|e| format!("failed to load users: {e}"))?;
+        let mut users = Vec::new();
+        for batch in &result.batches {
+            let ids = as_string_array(batch.column(0))?;
+            let usernames = as_string_array(batch.column(1))?;
+            let passwords = as_string_array(batch.column(2))?;
+            let roles = as_string_array(batch.column(3))?;
+            let enabled = as_bool_array(batch.column(4))?;
+            let created = as_int_array(batch.column(5))?;
+            let last_login = as_int_array(batch.column(6))?;
+            for i in 0..batch.num_rows() {
+                let ll = last_login.value(i);
+                users.push(User {
+                    id: ids.value(i).to_string(),
+                    username: usernames.value(i).to_string(),
+                    password_hash: passwords.value(i).to_string(),
+                    role: roles
+                        .value(i)
+                        .parse::<Role>()
+                        .map_err(|e| format!("invalid role in auth store: {e}"))?,
+                    enabled: enabled.value(i),
+                    created_at: created.value(i),
+                    last_login: if ll == 0 { None } else { Some(ll) },
+                });
+            }
+        }
+        Ok(users)
+    }
+
+    fn load_tokens(conn: &Connection) -> Result<Vec<StoredRefreshToken>, String> {
+        let q = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE}) \
+             RETURN t.id, t.user_id, t.token_hash, t.expires_at, t.created_at"
+        );
+        let result = conn
+            .execute(&q, None)
+            .map_err(|e| format!("failed to load tokens: {e}"))?;
+        let mut tokens = Vec::new();
+        let now = now_secs();
+        for batch in &result.batches {
+            let ids = as_string_array(batch.column(0))?;
+            let user_ids = as_string_array(batch.column(1))?;
+            let hashes = as_string_array(batch.column(2))?;
+            let expires = as_int_array(batch.column(3))?;
+            let created = as_int_array(batch.column(4))?;
+            for i in 0..batch.num_rows() {
+                if expires.value(i) <= now {
+                    continue;
+                }
+                tokens.push(StoredRefreshToken {
+                    id: ids.value(i).to_string(),
+                    user_id: user_ids.value(i).to_string(),
+                    token_hash: hashes.value(i).to_string(),
+                    expires_at: expires.value(i),
+                    revoked: false,
+                    created_at: created.value(i),
+                });
+            }
+        }
+        Ok(tokens)
+    }
+
+    fn load_api_keys(conn: &Connection) -> Result<Vec<ApiKey>, String> {
+        let q = format!(
+            "MATCH (k:{AUTH_API_KEYS_TABLE}) \
+             RETURN k.id, k.user_id, k.key_hash, k.name, k.prefix, \
+             k.role_override, k.expires_at, k.created_at"
+        );
+        let result = conn
+            .execute(&q, None)
+            .map_err(|e| format!("failed to load api keys: {e}"))?;
+        let mut keys = Vec::new();
+        let now = now_secs();
+        for batch in &result.batches {
+            let ids = as_string_array(batch.column(0))?;
+            let user_ids = as_string_array(batch.column(1))?;
+            let hashes = as_string_array(batch.column(2))?;
+            let names = as_string_array(batch.column(3))?;
+            let prefixes = as_string_array(batch.column(4))?;
+            let overrides = as_string_array(batch.column(5))?;
+            let expires = as_int_array(batch.column(6))?;
+            let created = as_int_array(batch.column(7))?;
+            for i in 0..batch.num_rows() {
+                let exp = expires.value(i);
+                if exp != 0 && exp <= now {
+                    continue;
+                }
+                keys.push(ApiKey {
+                    id: ids.value(i).to_string(),
+                    user_id: user_ids.value(i).to_string(),
+                    key_hash: hashes.value(i).to_string(),
+                    name: names.value(i).to_string(),
+                    prefix: prefixes.value(i).to_string(),
+                    role_override: {
+                        let r = overrides.value(i);
+                        if r.is_empty() {
+                            None
+                        } else {
+                            Some(r.parse::<Role>().map_err(|e| format!("invalid role in api key: {e}"))?)
+                        }
+                    },
+                    expires_at: if exp == 0 { None } else { Some(exp) },
+                    created_at: created.value(i),
+                    revoked: false,
+                });
+            }
+        }
+        Ok(keys)
+    }
+
+    // ------------------------------------------------------------------
+    //  Login / Lockout
+    // ------------------------------------------------------------------
 
     pub fn try_login(&self, username: &str, password: &str) -> Result<User, String> {
         let user = {
@@ -109,9 +277,14 @@ impl AuthStore {
 
             if let Some(locked_until) = record.locked_until {
                 if now < locked_until {
-                    return Err("account temporarily locked due to too many failed attempts".to_string());
+                    return Err(
+                        "account temporarily locked due to too many failed attempts".to_string(),
+                    );
                 }
-                *record = LoginRecord { timestamps: Vec::new(), locked_until: None };
+                *record = LoginRecord {
+                    timestamps: Vec::new(),
+                    locked_until: None,
+                };
             }
 
             record.timestamps.retain(|t| *t > now - LOGIN_WINDOW_SECS);
@@ -120,11 +293,14 @@ impl AuthStore {
             if record.timestamps.len() as u32 >= MAX_LOGIN_ATTEMPTS {
                 record.locked_until = Some(now + LOCKOUT_DURATION_SECS);
                 record.timestamps.clear();
-                return Err("account temporarily locked due to too many failed attempts".to_string());
+                return Err(
+                    "account temporarily locked due to too many failed attempts".to_string(),
+                );
             }
 
-            let data = self.data.read();
-            let user = data.users.iter()
+            let users = self.users_cache.read();
+            let user = users
+                .values()
                 .find(|u| u.username == username && u.enabled)
                 .ok_or_else(|| "invalid username or password".to_string())?;
             if !password::verify_password(password, &user.password_hash)
@@ -139,18 +315,46 @@ impl AuthStore {
         Ok(user)
     }
 
+    pub fn record_login(&self, user_id: &str) -> Result<(), String> {
+        let now = now_secs();
+        {
+            let mut users = self.users_cache.write();
+            if let Some(user) = users.get_mut(user_id) {
+                user.last_login = Some(now);
+            } else {
+                return Ok(());
+            }
+        }
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user_id.to_string()));
+        params.insert("last_login".to_string(), Value::Number(now as f64));
+        let q = format!(
+            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.last_login = $last_login"
+        );
+        self.conn
+            .execute(&q, Some(params))
+            .map_err(|e| format!("failed to record login: {e}"))?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    //  User CRUD
+    // ------------------------------------------------------------------
+
     pub fn bootstrap_admin(
         &self,
         username: &str,
         password: &str,
         role: Role,
     ) -> Result<User, String> {
-        let mut data = self.data.write();
-        if data.users.iter().any(|u| u.username == username) {
-            return Err(format!("user '{username}' already exists"));
-        }
-        if data.users.iter().any(|u| u.role == Role::Admin) {
-            return Err("an admin user already exists, cannot bootstrap another".to_string());
+        {
+            let users = self.users_cache.read();
+            if users.values().any(|u| u.username == username) {
+                return Err(format!("user '{username}' already exists"));
+            }
+            if users.values().any(|u| u.role == Role::Admin) {
+                return Err("an admin user already exists, cannot bootstrap another".to_string());
+            }
         }
 
         let password_hash = password::hash_password(password)?;
@@ -163,35 +367,32 @@ impl AuthStore {
             created_at: now_secs(),
             last_login: None,
         };
-        data.users.push(user.clone());
-        drop(data);
-        self.persist()?;
+
+        Self::db_create_user(&self.conn, &user)?;
+        self.users_cache
+            .write()
+            .insert(user.id.clone(), user.clone());
+        self.usernames_cache
+            .write()
+            .insert(user.username.clone(), user.id.clone());
         Ok(user)
     }
 
-    pub fn record_login(&self, user_id: &str) -> Result<(), String> {
-        let mut data = self.data.write();
-        if let Some(user) = data.users.iter_mut().find(|u| u.id == user_id) {
-            user.last_login = Some(now_secs());
-        }
-        drop(data);
-        self.persist()
-    }
-
     pub fn get_user_by_id(&self, user_id: &str) -> Option<User> {
-        let data = self.data.read();
-        data.users.iter().find(|u| u.id == user_id).cloned()
+        self.users_cache.read().get(user_id).cloned()
     }
 
     #[allow(dead_code)]
     pub fn get_user_by_username(&self, username: &str) -> Option<User> {
-        let data = self.data.read();
-        data.users.iter().find(|u| u.username == username).cloned()
+        let guard = self.usernames_cache.read();
+        let id = guard.get(username)?.clone();
+        drop(guard);
+        self.users_cache.read().get(&id).cloned()
     }
 
     pub fn list_users(&self) -> Vec<User> {
-        let data = self.data.read();
-        let mut users = data.users.clone();
+        let users = self.users_cache.read();
+        let mut users: Vec<User> = users.values().cloned().collect();
         users.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         users
     }
@@ -202,10 +403,13 @@ impl AuthStore {
         password: &str,
         role: Role,
     ) -> Result<User, String> {
-        let mut data = self.data.write();
-        if data.users.iter().any(|u| u.username == username) {
-            return Err(format!("user '{username}' already exists"));
+        {
+            let users = self.users_cache.read();
+            if users.values().any(|u| u.username == username) {
+                return Err(format!("user '{username}' already exists"));
+            }
         }
+
         let password_hash = password::hash_password(password)?;
         let user = User {
             id: generate_id("u"),
@@ -216,9 +420,14 @@ impl AuthStore {
             created_at: now_secs(),
             last_login: None,
         };
-        data.users.push(user.clone());
-        drop(data);
-        self.persist()?;
+
+        Self::db_create_user(&self.conn, &user)?;
+        self.users_cache
+            .write()
+            .insert(user.id.clone(), user.clone());
+        self.usernames_cache
+            .write()
+            .insert(user.username.clone(), user.id.clone());
         Ok(user)
     }
 
@@ -228,58 +437,162 @@ impl AuthStore {
         role: Option<Role>,
         enabled: Option<bool>,
     ) -> Result<User, String> {
-        let mut data = self.data.write();
-        let user = data
-            .users
-            .iter_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| format!("user '{user_id}' not found"))?;
-        if let Some(role) = role {
-            user.role = role;
+        let user = {
+            let mut users = self.users_cache.write();
+            let u = users
+                .get_mut(user_id)
+                .ok_or_else(|| format!("user '{user_id}' not found"))?;
+            if let Some(r) = role {
+                u.role = r;
+            }
+            if let Some(e) = enabled {
+                u.enabled = e;
+            }
+            u.clone()
+        };
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user_id.to_string()));
+        if let Some(r) = role {
+            params.insert("role".to_string(), Value::String(r.to_string()));
         }
-        if let Some(enabled) = enabled {
-            user.enabled = enabled;
+        if let Some(e) = enabled {
+            params.insert("enabled".to_string(), Value::Boolean(e));
         }
-        let result = user.clone();
-        drop(data);
-        self.persist()?;
-        Ok(result)
+
+        let sets: Vec<&str> = role.iter().map(|_| "u.role = $role").chain(
+            enabled.iter().map(|_| "u.enabled = $enabled"),
+        ).collect();
+        if !sets.is_empty() {
+            let q = format!(
+                "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET {}",
+                sets.join(", ")
+            );
+            self.conn
+                .execute(&q, Some(params))
+                .map_err(|e| format!("failed to update user: {e}"))?;
+        }
+        Ok(user)
     }
 
     pub fn delete_user(&self, user_id: &str) -> Result<(), String> {
-        let mut data = self.data.write();
-        let len_before = data.users.len();
-        data.users.retain(|u| u.id != user_id);
-        data.refresh_tokens.retain(|t| t.user_id != user_id);
-        data.api_keys.retain(|k| k.user_id != user_id);
-        if data.users.len() == len_before {
-            return Err(format!("user '{user_id}' not found"));
+        let user = {
+            let users = self.users_cache.read();
+            users.get(user_id).cloned().ok_or_else(|| {
+                format!("user '{user_id}' not found")
+            })?
+        };
+
+        {
+            let mut tcache = self.tokens_cache.write();
+            tcache.retain(|_, t| t.user_id != user_id);
         }
-        drop(data);
-        self.persist()
+        {
+            let mut kcache = self.api_keys_cache.write();
+            kcache.retain(|_, k| k.user_id != user_id);
+        }
+        {
+            let mut users = self.users_cache.write();
+            users.remove(user_id);
+            self.usernames_cache.write().remove(&user.username);
+        }
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user_id.to_string()));
+        let delete_tokens = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
+        );
+        let delete_keys = format!(
+            "MATCH (k:{AUTH_API_KEYS_TABLE}) WHERE k.user_id = $id DELETE k"
+        );
+        let delete_user = format!(
+            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) DELETE u"
+        );
+        self.conn
+            .execute(&delete_tokens, Some(params.clone()))
+            .map_err(|e| format!("failed to delete user tokens: {e}"))?;
+        self.conn
+            .execute(&delete_keys, Some(params.clone()))
+            .map_err(|e| format!("failed to delete user keys: {e}"))?;
+        self.conn
+            .execute(&delete_user, Some(params))
+            .map_err(|e| format!("failed to delete user: {e}"))?;
+
+        Ok(())
     }
 
     pub fn reset_password(&self, user_id: &str, new_password: &str) -> Result<(), String> {
         let password_hash = password::hash_password(new_password)?;
-        let mut data = self.data.write();
-        let user = data
-            .users
-            .iter_mut()
-            .find(|u| u.id == user_id)
-            .ok_or_else(|| format!("user '{user_id}' not found"))?;
-        user.password_hash = password_hash;
-        for token in data.refresh_tokens.iter_mut().filter(|t| t.user_id == user_id) {
-            token.revoked = true;
+
+        {
+            let mut tcache = self.tokens_cache.write();
+            let hashes: Vec<String> = tcache
+                .values()
+                .filter(|t| t.user_id == user_id)
+                .map(|t| t.token_hash.clone())
+                .collect();
+            for h in &hashes {
+                self.token_bloom.mark_revoked(h);
+            }
+            tcache.retain(|_, t| t.user_id != user_id);
         }
-        drop(data);
-        self.persist()
+
+        {
+            let mut users = self.users_cache.write();
+            if let Some(u) = users.get_mut(user_id) {
+                u.password_hash = password_hash.clone();
+            }
+        }
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user_id.to_string()));
+        params.insert("ph".to_string(), Value::String(password_hash));
+        let q = format!(
+            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.password_hash = $ph"
+        );
+        self.conn
+            .execute(&q, Some(params.clone()))
+            .map_err(|e| format!("failed to update password: {e}"))?;
+
+        let delete_tokens = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
+        );
+        self.conn
+            .execute(&delete_tokens, Some(params))
+            .map_err(|e| format!("failed to revoke user tokens: {e}"))?;
+
+        Ok(())
     }
 
-    pub fn store_refresh_token(&self, user_id: &str, token_hash: &str, ttl_secs: u64) -> Result<String, String> {
-        let mut data = self.data.write();
+    fn db_create_user(conn: &Connection, user: &User) -> Result<(), String> {
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(user.id.clone()));
+        params.insert("username".to_string(), Value::String(user.username.clone()));
+        params.insert("ph".to_string(), Value::String(user.password_hash.clone()));
+        params.insert("role".to_string(), Value::String(user.role.to_string()));
+        params.insert("enabled".to_string(), Value::Boolean(user.enabled));
+        params.insert("created_at".to_string(), Value::Number(user.created_at as f64));
+        let q = format!(
+            "CREATE (u:{AUTH_USERS_TABLE} {{id: $id, username: $username, \
+             password_hash: $ph, role: $role, enabled: $enabled, \
+             created_at: $created_at, last_login: 0}}) RETURN u.id"
+        );
+        conn.execute(&q, Some(params))
+            .map_err(|e| format!("failed to create user: {e}"))?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    //  Refresh Tokens
+    // ------------------------------------------------------------------
+
+    pub fn store_refresh_token(
+        &self,
+        user_id: &str,
+        token_hash: &str,
+        ttl_secs: u64,
+    ) -> Result<String, String> {
         let now = now_secs();
-        data.refresh_tokens
-            .retain(|t| t.expires_at > now || t.user_id != user_id);
         let id = generate_id("rt");
         let stored = StoredRefreshToken {
             id: id.clone(),
@@ -289,9 +602,25 @@ impl AuthStore {
             revoked: false,
             created_at: now,
         };
-        data.refresh_tokens.push(stored);
-        drop(data);
-        self.persist()?;
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(stored.id.clone()));
+        params.insert("user_id".to_string(), Value::String(stored.user_id.clone()));
+        params.insert("hash".to_string(), Value::String(stored.token_hash.clone()));
+        params.insert("exp".to_string(), Value::Number(stored.expires_at as f64));
+        params.insert("now".to_string(), Value::Number(stored.created_at as f64));
+        let q = format!(
+            "CREATE (t:{AUTH_TOKENS_TABLE} {{id: $id, user_id: $user_id, \
+             token_hash: $hash, expires_at: $exp, created_at: $now}}) RETURN t.id"
+        );
+        self.conn
+            .execute(&q, Some(params))
+            .map_err(|e| format!("failed to store refresh token: {e}"))?;
+
+        self.token_bloom.insert(&stored.token_hash);
+        self.tokens_cache
+            .write()
+            .insert(stored.token_hash.clone(), stored);
         Ok(id)
     }
 
@@ -300,33 +629,62 @@ impl AuthStore {
         raw_token: &str,
     ) -> Result<(User, String), String> {
         let token_hash = jwt::hmac_hash(raw_token, &self.jwt_secret);
-        let data = self.data.read();
+
+        match self.token_bloom.check(&token_hash) {
+            CacheResult::DefinitelyNotIssued => {
+                return Err("invalid or expired refresh token".to_string());
+            }
+            CacheResult::Revoked => {
+                return Err("refresh token has been revoked".to_string());
+            }
+            CacheResult::MaybeValid => {}
+        }
+
         let now = now_secs();
-        let stored = data
-            .refresh_tokens
-            .iter()
-            .find(|t| t.token_hash == token_hash && !t.revoked && t.expires_at > now)
+        let tcache = self.tokens_cache.read();
+        let stored = tcache
+            .get(&token_hash)
+            .filter(|t| t.expires_at > now)
             .ok_or_else(|| "invalid or expired refresh token".to_string())?;
-        let user = data
-            .users
-            .iter()
-            .find(|u| u.id == stored.user_id && u.enabled)
+        let user_id = stored.user_id.clone();
+        let token_id = stored.id.clone();
+        drop(tcache);
+
+        let users = self.users_cache.read();
+        let user = users
+            .values()
+            .find(|u| u.id == user_id && u.enabled)
             .ok_or_else(|| "user not found or disabled".to_string())?;
-        Ok((user.clone(), stored.id.clone()))
+        Ok((user.clone(), token_id))
     }
 
     pub fn revoke_refresh_token(&self, raw_token: &str) -> Result<(), String> {
         let token_hash = jwt::hmac_hash(raw_token, &self.jwt_secret);
-        let mut data = self.data.write();
-        let stored = data
-            .refresh_tokens
-            .iter_mut()
-            .find(|t| t.token_hash == token_hash)
-            .ok_or_else(|| "refresh token not found".to_string())?;
-        stored.revoked = true;
-        drop(data);
-        self.persist()
+
+        let was_present = {
+            let mut tcache = self.tokens_cache.write();
+            tcache.remove(&token_hash).is_some()
+        };
+        if !was_present {
+            return Err("refresh token not found".to_string());
+        }
+
+        self.token_bloom.mark_revoked(&token_hash);
+
+        let mut params = HashMap::new();
+        params.insert("hash".to_string(), Value::String(token_hash));
+        let q = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE} {{token_hash: $hash}}) DELETE t"
+        );
+        self.conn
+            .execute(&q, Some(params))
+            .map_err(|e| format!("failed to revoke refresh token: {e}"))?;
+        Ok(())
     }
+
+    // ------------------------------------------------------------------
+    //  API Keys
+    // ------------------------------------------------------------------
 
     pub fn create_api_key(
         &self,
@@ -335,12 +693,16 @@ impl AuthStore {
         role_override: Option<Role>,
         expires_at: Option<i64>,
     ) -> Result<(String, ApiKey), String> {
-        let mut data = self.data.write();
-        if !data.users.iter().any(|u| u.id == user_id && u.enabled) {
-            return Err("user not found or disabled".to_string());
+        {
+            let users = self.users_cache.read();
+            if !users.values().any(|u| u.id == user_id && u.enabled) {
+                return Err("user not found or disabled".to_string());
+            }
         }
+
         let (key, key_hash) = jwt::generate_api_key(&self.jwt_secret);
         let prefix = key.chars().take(12).collect::<String>();
+        let now = now_secs();
         let api_key = ApiKey {
             id: generate_id("ak"),
             user_id: user_id.to_string(),
@@ -349,55 +711,110 @@ impl AuthStore {
             prefix,
             role_override,
             expires_at,
-            created_at: now_secs(),
+            created_at: now,
             revoked: false,
         };
-        data.api_keys.push(api_key.clone());
-        drop(data);
-        self.persist()?;
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(api_key.id.clone()));
+        params.insert("user_id".to_string(), Value::String(api_key.user_id.clone()));
+        params.insert("hash".to_string(), Value::String(api_key.key_hash.clone()));
+        params.insert("name".to_string(), Value::String(api_key.name.clone()));
+        params.insert("prefix".to_string(), Value::String(api_key.prefix.clone()));
+        params.insert("ro".to_string(), {
+            match &api_key.role_override {
+                Some(r) => Value::String(r.to_string()),
+                None => Value::String(String::new()),
+            }
+        });
+        params.insert("exp".to_string(), {
+            Value::Number(api_key.expires_at.unwrap_or(0) as f64)
+        });
+        params.insert("now".to_string(), Value::Number(api_key.created_at as f64));
+        let q = format!(
+            "CREATE (k:{AUTH_API_KEYS_TABLE} {{id: $id, user_id: $user_id, \
+             key_hash: $hash, name: $name, prefix: $prefix, \
+             role_override: $ro, expires_at: $exp, created_at: $now}}) RETURN k.id"
+        );
+        self.conn
+            .execute(&q, Some(params))
+            .map_err(|e| format!("failed to create API key: {e}"))?;
+
+        self.api_keys_cache
+            .write()
+            .insert(api_key.key_hash.clone(), api_key.clone());
         Ok((key, api_key))
     }
 
     pub fn list_api_keys(&self, user_id: &str) -> Vec<ApiKey> {
-        let data = self.data.read();
-        data.api_keys
-            .iter()
+        let kcache = self.api_keys_cache.read();
+        kcache
+            .values()
             .filter(|k| k.user_id == user_id)
             .cloned()
             .collect()
     }
 
     pub fn revoke_api_key(&self, key_id: &str) -> Result<(), String> {
-        let mut data = self.data.write();
-        let key = data
-            .api_keys
-            .iter_mut()
-            .find(|k| k.id == key_id)
-            .ok_or_else(|| format!("API key '{key_id}' not found"))?;
-        key.revoked = true;
-        drop(data);
-        self.persist()
+        let key_hash = {
+            let mut kcache = self.api_keys_cache.write();
+            let pos = kcache
+                .iter()
+                .find(|(_, k)| k.id == key_id)
+                .map(|(h, k)| (h.clone(), k.clone()));
+            match pos {
+                Some((hash, _)) => {
+                    kcache.remove(&hash);
+                    hash
+                }
+                None => return Err(format!("API key '{key_id}' not found")),
+            }
+        };
+
+        let mut params = HashMap::new();
+        params.insert("hash".to_string(), Value::String(key_hash));
+        let q = format!(
+            "MATCH (k:{AUTH_API_KEYS_TABLE} {{key_hash: $hash}}) DELETE k"
+        );
+        self.conn
+            .execute(&q, Some(params))
+            .map_err(|e| format!("failed to revoke API key: {e}"))?;
+        Ok(())
     }
 
     pub fn authenticate_api_key(&self, key: &str) -> Result<AuthenticatedUser, String> {
         let key_hash = jwt::api_key_hash(key, &self.jwt_secret);
-        let data = self.data.read();
-        let stored = data
-            .api_keys
-            .iter()
-            .find(|k| k.key_hash == key_hash && !k.revoked)
+
+        match self.token_bloom.check(&key_hash) {
+            CacheResult::DefinitelyNotIssued => {
+                return Err("invalid API key".to_string());
+            }
+            CacheResult::Revoked => {
+                return Err("API key has been revoked".to_string());
+            }
+            CacheResult::MaybeValid => {}
+        }
+
+        let now = now_secs();
+        let kcache = self.api_keys_cache.read();
+        let stored = kcache
+            .get(&key_hash)
             .ok_or_else(|| "invalid API key".to_string())?;
         if let Some(expires) = stored.expires_at {
-            if now_secs() > expires {
+            if now > expires {
                 return Err("API key expired".to_string());
             }
         }
-        let user = data
-            .users
-            .iter()
-            .find(|u| u.id == stored.user_id && u.enabled)
+        let user_id = stored.user_id.clone();
+        let role_override = stored.role_override;
+        drop(kcache);
+
+        let users = self.users_cache.read();
+        let user = users
+            .values()
+            .find(|u| u.id == user_id && u.enabled)
             .ok_or_else(|| "user not found or disabled".to_string())?;
-        let role = stored.role_override.unwrap_or(user.role);
+        let role = role_override.unwrap_or(user.role);
         Ok(AuthenticatedUser {
             user_id: user.id.clone(),
             username: user.username.clone(),
@@ -406,18 +823,55 @@ impl AuthStore {
         })
     }
 
-    #[allow(dead_code)]
-    pub fn cleanup_expired_refresh_tokens(&self) -> Result<(), String> {
-        let mut data = self.data.write();
+    // ------------------------------------------------------------------
+    //  Garbage Collection
+    // ------------------------------------------------------------------
+
+    pub fn purge_expired(&self) -> Result<(), String> {
         let now = now_secs();
-        let before = data.refresh_tokens.len();
-        data.refresh_tokens.retain(|t| t.expires_at > now);
-        if data.refresh_tokens.len() < before {
-            drop(data);
-            self.persist()
-        } else {
-            Ok(())
+
+        {
+            let mut tcache = self.tokens_cache.write();
+            tcache.retain(|_, t| t.expires_at > now);
         }
+        {
+            let mut kcache = self.api_keys_cache.write();
+            kcache.retain(|_, k| {
+                k.expires_at.map_or(true, |exp| exp > now)
+            });
+        }
+
+        let mut params = HashMap::new();
+        params.insert("now".to_string(), Value::Number(now as f64));
+        let del_tokens = format!(
+            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.expires_at <= $now DELETE t"
+        );
+        let del_keys = format!(
+            "MATCH (k:{AUTH_API_KEYS_TABLE}) WHERE k.expires_at > 0 AND k.expires_at <= $now DELETE k"
+        );
+        self.conn
+            .execute(&del_tokens, Some(params.clone()))
+            .map_err(|e| format!("failed to purge expired tokens: {e}"))?;
+        self.conn
+            .execute(&del_keys, Some(params))
+            .map_err(|e| format!("failed to purge expired API keys: {e}"))?;
+
+        self.rebuild_cache();
+        Ok(())
+    }
+
+    fn rebuild_cache(&self) {
+        let tcache = self.tokens_cache.read();
+        let all_hashes: Vec<String> = tcache.values().map(|t| t.token_hash.clone()).collect();
+        drop(tcache);
+
+        let kcache = self.api_keys_cache.read();
+        let all_key_hashes: Vec<String> = kcache.values().map(|k| k.key_hash.clone()).collect();
+        drop(kcache);
+
+        let mut combined = all_hashes;
+        combined.extend(all_key_hashes);
+        self.token_bloom.rebuild(&combined, &[]);
     }
 }
 
@@ -443,4 +897,22 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn as_string_array(col: &Arc<dyn Array>) -> Result<&StringArray, String> {
+    col.as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| "expected string array column".to_string())
+}
+
+fn as_int_array(col: &Arc<dyn Array>) -> Result<&Int64Array, String> {
+    col.as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| "expected int64 array column".to_string())
+}
+
+fn as_bool_array(col: &Arc<dyn Array>) -> Result<&BooleanArray, String> {
+    col.as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| "expected boolean array column".to_string())
 }

@@ -144,7 +144,6 @@ pub struct ServerConfig {
     pub jwt_secret: Option<String>,
     pub jwt_access_ttl_secs: u64,
     pub jwt_refresh_ttl_secs: u64,
-    pub auth_file: PathBuf,
     #[allow(dead_code)]
     pub query_timeout_ms: Option<u64>,
 }
@@ -188,8 +187,6 @@ impl ServerConfig {
             }
         };
 
-        let auth_file = args.db_path.join("auth.json");
-
         Self {
             host: args.host.clone(),
             port: args.port,
@@ -215,7 +212,6 @@ impl ServerConfig {
             jwt_secret: args.jwt_secret.clone(),
             jwt_access_ttl_secs: args.jwt_access_ttl_secs,
             jwt_refresh_ttl_secs: args.jwt_refresh_ttl_secs,
-            auth_file,
             query_timeout_ms: Some(args.query_timeout_ms),
         }
     }

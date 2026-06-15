@@ -34,7 +34,7 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 
 **Compression**: `FixedFrameOfReference` type exists in the enum but has no implementation module. BooleanBitpacking type exists but has no implementation file. IVF index module exists but is not wired into the build.
 
-**Auth is file-backed (not stored in the core database)** — `auth.json` sits next to the data directory. Token blacklisting requires a round-trip to the store on every request. Refresh token revocation is soft-delete (revoked flag), not hard-delete after rotation.
+**Auth is stored in core DB system tables** (`__auth_users`, `__auth_refresh_tokens`, `__auth_api_keys`) with full MVCC, WAL durability, and transactional consistency. Tokens are hard-deleted on revocation (no soft-delete). A bloom filter + revoked HashMap provides fast-path validation without hitting the DB. Expired tokens are purged by a background GC task every 5 minutes.
 
 ## Crates
 
@@ -249,7 +249,7 @@ for row in &result.rows {
 - Window functions, list indexing (`list[0]`), and map literal expressions are not supported in Cypher.
 - Python and Node.js HTTP client SDKs are not published to PyPI/npm — install from source.
 - WASM functions must be re-registered after each database restart (no persistence).
-- Auth store is file-backed (`auth.json`), not stored in the core DB tables.
+- Auth uses core DB system tables (MVCC, WAL) but login rate limiting is in-memory only (resets on restart).
 - No multi-tenant isolation in the HTTP server.
 - No officially published Docker image (Dockerfile builds from source).
 - IVF index module exists but is not wired into the build.
