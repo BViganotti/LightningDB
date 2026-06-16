@@ -51,7 +51,7 @@ export function createSkipLimitSuite(client: LightningClient) {
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name LIMIT 3`
         );
         assertEq(r.data.numRows, 3);
-        const names = r.data.rows.map((r) => r["n.name"]);
+        const names = r.data.rows.map((r) => r["name"]);
         assertEq(names[0], "User01");
         assertEq(names[1], "User02");
         assertEq(names[2], "User03");
@@ -69,7 +69,7 @@ export function createSkipLimitSuite(client: LightningClient) {
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name SKIP 5 LIMIT 5`
         );
         assertEq(r.data.numRows, 5);
-        const names = r.data.rows.map((r) => r["n.name"]);
+        const names = r.data.rows.map((r) => r["name"]);
         assertEq(names[0], "User06");
         assertEq(names[4], "User10");
       }),
@@ -79,7 +79,7 @@ export function createSkipLimitSuite(client: LightningClient) {
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name DESC LIMIT 3`
         );
         assertEq(r.data.numRows, 3);
-        const names = r.data.rows.map((r) => r["n.name"]);
+        const names = r.data.rows.map((r) => r["name"]);
         assertEq(names[0], "User20");
         assertEq(names[2], "User18");
       }),

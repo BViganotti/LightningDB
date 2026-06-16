@@ -58,7 +58,7 @@ impl IntoResponse for AppError {
             }
             AppError::Db(db_err) => match db_err {
                 lightning_core::LightningError::Query(msg) => {
-                    if msg.contains("not found") || msg.contains("does not exist") {
+                    if msg.contains("Variable") && msg.contains("not found") {
                         (StatusCode::NOT_FOUND, Some("NOT_FOUND".into()))
                     } else if msg.contains("already exists") {
                         (StatusCode::CONFLICT, Some("ALREADY_EXISTS".into()))

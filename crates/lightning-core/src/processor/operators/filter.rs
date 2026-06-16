@@ -2,7 +2,7 @@ use crate::planner::binder::BoundExpression;
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator};
 use crate::Result;
-use arrow::array::AsArray;
+use arrow::array::{Array, AsArray, BooleanArray};
 use arrow::compute::filter_record_batch;
 
 pub struct PhysicalFilter {
@@ -37,7 +37,19 @@ impl PhysicalOperator for PhysicalFilter {
                 &database.function_registry,
                 database,
             )?;
-            let mask = eval_res.as_boolean();
+            let mask_raw = eval_res.as_boolean();
+
+            // Arrow's filter_record_batch reads only the data bits of the
+            // BooleanArray mask, ignoring null bits. This means null entries
+            // in the mask (produced by comparisons like null = true) would
+            // be treated as "true" (their underlying data bit value), causing
+            // rows with null comparisons to pass the filter incorrectly.
+            // Replace nulls with false to ensure correct filtering.
+            let mask: &BooleanArray = if mask_raw.null_count() > 0 {
+                &mask_raw.iter().map(|v| v.unwrap_or(false)).collect::<BooleanArray>()
+            } else {
+                mask_raw
+            };
 
             let filtered_batch = filter_record_batch(&chunk.batch, mask)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;

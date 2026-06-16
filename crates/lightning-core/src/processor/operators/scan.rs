@@ -384,7 +384,10 @@ impl PhysicalOperator for PhysicalScan {
                     }
 
                     // Track that filter was already checked — skip re-evaluation on full batch
-                    if mask.false_count() == 0 {
+                    // Must also check null_count: null mask entries (from comparisons like
+                    // null = true) are not counted as false by Arrow's false_count(), so a
+                    // mask with only nulls would incorrectly trigger all_pass.
+                    if mask.false_count() == 0 && mask.null_count() == 0 {
                         filter_all_pass = true;
                     }
                 }
@@ -619,7 +622,15 @@ impl PhysicalOperator for PhysicalScan {
                             }
 
                             if mask.null_count() > 0 || set_bits != mask.len() {
-                                batch = arrow::compute::filter_record_batch(&batch, mask)
+                                // Arrow's filter_record_batch ignores null bits in the mask.
+                                // Convert null entries to false so that rows with null comparisons
+                                // (e.g., null = true) are correctly excluded.
+                                let cleaned_mask: BooleanArray = if mask.null_count() > 0 {
+                                    mask.iter().map(|v| v.unwrap_or(false)).collect()
+                                } else {
+                                    mask.clone()
+                                };
+                                batch = arrow::compute::filter_record_batch(&batch, &cleaned_mask)
                                     .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                             }
                         }

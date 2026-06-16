@@ -1305,6 +1305,17 @@ impl<'a> Binder<'a> {
             }
         }
 
+        // Register RETURN aliases as variables so ORDER BY can reference them
+        // (e.g., `RETURN sum(n.salary) AS total ORDER BY total DESC`)
+        for item in &items {
+            if !item.alias.is_empty() && !self.variables.contains_key(&item.alias) {
+                self.variables.insert(item.alias.clone(), BoundVariable {
+                    table_name: String::new(),
+                    type_: item.expression.get_type(),
+                });
+            }
+        }
+
         let order_by = if let Some(items) = &return_clause.order_by {
             let mut bound_items = Vec::new();
             for item in items {

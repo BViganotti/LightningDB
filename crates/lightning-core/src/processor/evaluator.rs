@@ -1,5 +1,6 @@
 use crate::parser::ast::Literal;
 use crate::planner::binder::BoundExpression;
+use crate::processor::arrow_utils::values_to_array;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
@@ -846,6 +847,60 @@ impl ExpressionEvaluator {
                 let res = match op {
                     Equal => eq(arr, &scalar_s),
                     NotEqual => neq(arr, &scalar_s),
+                    _ => return None,
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+        }
+        if let Literal::Boolean(b) = lit {
+            let bool_val_i64 = if *b { 1i64 } else { 0i64 };
+            // Convert BooleanArray to Float64 (0.0/1.0) with proper null propagation,
+            // avoiding Arrow Boolean comparison kernel issues.
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                let num_rows = arr.len();
+                let mut int_vals: Vec<Value> = Vec::with_capacity(num_rows);
+                for i in 0..num_rows {
+                    if arr.is_null(i) {
+                        int_vals.push(Value::Null);
+                    } else {
+                        int_vals.push(Value::Number(if arr.value(i) { 1.0 } else { 0.0 }));
+                    }
+                }
+                let int_arr = values_to_array(&int_vals, &DataType::Float64);
+                let scalar_f = arrow::array::Float64Array::new_scalar(bool_val_i64 as f64);
+                let res = match op {
+                    Equal => eq(&int_arr, &scalar_f),
+                    NotEqual => neq(&int_arr, &scalar_f),
+                    _ => return None,
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+            // Handle booleans stored as Int64 (0/1)
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                let scalar_i = arrow::array::Int64Array::new_scalar(bool_val_i64);
+                let res = match op {
+                    Equal => eq(arr, &scalar_i),
+                    NotEqual => neq(arr, &scalar_i),
+                    _ => return None,
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+            // Handle booleans stored as Float64 (0.0/1.0)
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                let scalar_f = arrow::array::Float64Array::new_scalar(bool_val_i64 as f64);
+                let res = match op {
+                    Equal => eq(arr, &scalar_f),
+                    NotEqual => neq(arr, &scalar_f),
+                    _ => return None,
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+            // Handle booleans stored as Float64 (0.0/1.0)
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                let scalar_f = arrow::array::Float64Array::new_scalar(if *b { 1.0 } else { 0.0 });
+                let res = match op {
+                    Equal => eq(arr, &scalar_f),
+                    NotEqual => neq(arr, &scalar_f),
                     _ => return None,
                 };
                 return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));

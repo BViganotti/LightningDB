@@ -1,23 +1,106 @@
 use crate::catalog::LazyCatalog;
 use crate::planner::binder::{BoundExpression, BoundNodePattern, BoundPropertyAssignment};
+use crate::processor::arrow_utils::{logical_type_to_arrow_type, values_to_array};
 use crate::processor::evaluator::ExpressionEvaluator;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
 use crate::storage::undo_buffer::{UndoBuffer, UndoRecord};
+use crate::LightningError;
 use crate::Result;
-use arrow::array::Float64Array;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::ArrayRef;
+use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// Convert in-memory row data (Vec<Vec<Value>> ordered by table columns)
+/// into a RecordBatch matching the table schema. Used by DML operators
+/// to yield affected data to downstream RETURN projections.
+fn rows_to_batch(rows: &[Vec<Value>], table: &Table) -> Result<RecordBatch> {
+    let num_rows = rows.len();
+    if num_rows == 0 {
+        return Ok(RecordBatch::new_empty(Arc::new(Schema::new(
+            table.columns.iter().map(|c| {
+                Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
+            }).collect::<Vec<_>>(),
+        ))));
+    }
+    let mut arrow_cols: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
+    for (col_idx, col) in table.columns.iter().enumerate() {
+        let mut col_values: Vec<Value> = Vec::with_capacity(num_rows);
+        for row in rows.iter() {
+            let val = row.get(col_idx).cloned().unwrap_or(Value::Null);
+            col_values.push(val);
+        }
+        eprintln!("DEBUG rows_to_batch: col={} name={} values={:?}",
+            col_idx, col.name, col_values);
+        let dt = logical_type_to_arrow_type(&col.data_type);
+        let arr = values_to_array(&col_values, &dt);
+        eprintln!("DEBUG rows_to_batch: col={} arrow_type={:?} arr_len={} arr_val={:?}",
+            col_idx, dt, arr.len(), if arr.len() > 0 { arr.as_any().downcast_ref::<arrow::array::StringArray>().map(|a| a.value(0)) } else { None });
+        arrow_cols.push(arr);
+    }
+    let schema = Arc::new(Schema::new(
+        table.columns.iter().map(|c| {
+            Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
+        }).collect::<Vec<_>>(),
+    ));
+    RecordBatch::try_new(schema, arrow_cols)
+        .map_err(|e| LightningError::Internal(format!("Failed to build DML result batch: {e}")))
+}
+
+/// Read the current row data from storage and produce a RecordBatch.
+/// Used for operators where the in-memory data may be stale (SET, DELETE)
+/// since columns are mutated in-place.
+fn read_node_batch(
+    table: &Table,
+    ids: &[u64],
+    bm: &BufferManager,
+    tx: &crate::transaction::transaction_manager::Transaction,
+) -> Result<RecordBatch> {
+    let num_rows = ids.len();
+    if num_rows == 0 {
+        return Ok(RecordBatch::new_empty(Arc::new(Schema::new(
+            table.columns.iter().map(|c| {
+                Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
+            }).collect::<Vec<_>>(),
+        ))));
+    }
+    let mut arrow_cols: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
+    for col in &table.columns {
+        let mut col_values: Vec<Value> = Vec::with_capacity(num_rows);
+        for &id in ids {
+            let val = col.get_value(bm, id, tx)?;
+            col_values.push(val);
+        }
+        let arr = values_to_array(&col_values, &logical_type_to_arrow_type(&col.data_type));
+        arrow_cols.push(arr);
+    }
+    let schema = Arc::new(Schema::new(
+        table.columns.iter().map(|c| {
+            Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
+        }).collect::<Vec<_>>(),
+    ));
+    RecordBatch::try_new(schema, arrow_cols)
+        .map_err(|e| LightningError::Internal(format!("Failed to build DML result batch: {e}")))
+}
 
 pub struct SharedDMLState {
     pub total_affected: AtomicU64,
     pub results_returned: AtomicU64,
     pub is_built: AtomicBool,
     pub final_result: RwLock<Option<RecordBatch>>,
+    /// Internal IDs of nodes created/affected by the DML operation,
+    /// collected during the mutation phase and used to build the
+    /// output batch for downstream RETURN projections.
+    pub affected_ids: RwLock<Vec<u64>>,
+    /// In-memory row data for nodes created by this DML operation.
+    /// Used instead of reading from storage when the data was just
+    /// constructed in-memory (CREATE, MERGE create case) and may
+    /// not yet be visible via get_value.
+    pub affected_rows: RwLock<Vec<Vec<Value>>>,
 }
 
 pub struct PhysicalCreate {
@@ -65,6 +148,8 @@ impl PhysicalCreate {
                 results_returned: AtomicU64::new(0),
                 is_built: AtomicBool::new(false),
                 final_result: RwLock::new(None),
+                affected_ids: RwLock::new(Vec::new()),
+                affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
         }
@@ -122,6 +207,14 @@ impl PhysicalOperator for PhysicalCreate {
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
                     }
+                    {
+                        let mut ids = self.shared_state.affected_ids.write();
+                        let mut rdat = self.shared_state.affected_rows.write();
+                        for (i, row) in rows.iter().enumerate() {
+                            ids.push(start_id + i as u64);
+                            rdat.push(row.clone());
+                        }
+                    }
                     self.table
                         .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
 
@@ -176,6 +269,8 @@ impl PhysicalOperator for PhysicalCreate {
                     let val = Value::from_arrow(&v, 0);
                     row_data[*idx] = val;
                 }
+                self.shared_state.affected_ids.write().push(next_id);
+                self.shared_state.affected_rows.write().push(row_data.clone());
                 {
                     let storage = self.storage_manager.read();
                     if let Some(table) = storage.get_table(&self.table_name) {
@@ -217,7 +312,6 @@ impl PhysicalOperator for PhysicalCreate {
                 if let Some(t) = cat.get_node_table_mut(&self.table_name) {
                     t.num_rows += total;
                 }
-                // Catalog will be saved at commit time, not per statement
             }
         }
         if self
@@ -226,18 +320,12 @@ impl PhysicalOperator for PhysicalCreate {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let total = self.shared_state.total_affected.load(Ordering::SeqCst);
-            return Ok(Some(DataChunk {
-                batch: RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "count",
-                        DataType::Float64,
-                        true,
-                    )])),
-                    vec![Arc::new(Float64Array::from(vec![total as f64]))],
-                )
-                .expect("internal invariant violated"),
-            }));
+            let rows = self.shared_state.affected_rows.read().clone();
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let batch = rows_to_batch(&rows, &self.table)?;
+            return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
     }
@@ -292,6 +380,8 @@ impl PhysicalSet {
                 results_returned: AtomicU64::new(0),
                 is_built: AtomicBool::new(false),
                 final_result: RwLock::new(None),
+                affected_ids: RwLock::new(Vec::new()),
+                affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
         }
@@ -312,6 +402,15 @@ impl PhysicalOperator for PhysicalSet {
             let mut modified_nodes: Vec<(u64, Vec<usize>)> = Vec::new();
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let num_rows = chunk.num_rows();
+                // Collect affected node IDs for output batch construction
+                {
+                    let mut ids = self.shared_state.affected_ids.write();
+                    for i in 0..num_rows {
+                        if let Value::Node(id) = Value::from_arrow(chunk.batch.column(0), i) {
+                            ids.push(id);
+                        }
+                    }
+                }
                 // Track which property indices were updated per node
                 let mut node_updates: std::collections::HashMap<u64, Vec<usize>> =
                     std::collections::HashMap::new();
@@ -465,18 +564,12 @@ impl PhysicalOperator for PhysicalSet {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let total = self.shared_state.total_affected.load(Ordering::SeqCst);
-            return Ok(Some(DataChunk {
-                batch: RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "count",
-                        DataType::Float64,
-                        true,
-                    )])),
-                    vec![Arc::new(Float64Array::from(vec![total as f64]))],
-                )
-                .expect("internal invariant violated"),
-            }));
+            let ids = self.shared_state.affected_ids.read().clone();
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            let batch = read_node_batch(&self.table, &ids, &self.buffer_manager, tx)?;
+            return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
     }
@@ -521,6 +614,8 @@ impl PhysicalDelete {
                 results_returned: AtomicU64::new(0),
                 is_built: AtomicBool::new(false),
                 final_result: RwLock::new(None),
+                affected_ids: RwLock::new(Vec::new()),
+                affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
             detach,
@@ -548,6 +643,7 @@ impl PhysicalOperator for PhysicalDelete {
                         Value::Node(id) => id,
                         _ => continue,
                     };
+                    self.shared_state.affected_ids.write().push(id);
                     deleted_ids.push(id);
                     self.undo_buffer
                         .push(UndoRecord::DeleteNode(self.table.name.clone(), id));
@@ -566,7 +662,7 @@ impl PhysicalOperator for PhysicalDelete {
                             tracing::warn!("FTS commit error after delete: {e}");
                         }
                     }
-                    if let Some(vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
+                    if let Some(_vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
                         // VectorIndex doesn't have a delete-by-node-id method,
                         // but setting the embedding to zero vector is effectively a delete
                         // since zero-vector matches nothing in cosine/ip distance.
@@ -641,18 +737,12 @@ impl PhysicalOperator for PhysicalDelete {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let total = self.shared_state.total_affected.load(Ordering::SeqCst);
-            return Ok(Some(DataChunk {
-                batch: RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "count",
-                        DataType::Float64,
-                        true,
-                    )])),
-                    vec![Arc::new(Float64Array::from(vec![total as f64]))],
-                )
-                .expect("internal invariant violated"),
-            }));
+            let ids = self.shared_state.affected_ids.read().clone();
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            let batch = read_node_batch(&self.table, &ids, &self.buffer_manager, tx)?;
+            return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
     }
@@ -707,6 +797,8 @@ impl PhysicalCreateRel {
                 results_returned: AtomicU64::new(0),
                 is_built: AtomicBool::new(false),
                 final_result: RwLock::new(None),
+                affected_ids: RwLock::new(Vec::new()),
+                affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
         }
@@ -784,6 +876,13 @@ impl PhysicalOperator for PhysicalCreateRel {
                     if !rows.is_empty() {
                         self.table
                             .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
+                        // Track created rel IDs for output batch
+                        {
+                            let mut ids = self.shared_state.affected_ids.write();
+                            for i in 0..rows.len() {
+                                ids.push(start_id + i as u64);
+                            }
+                        }
                         // Flush the table's write buffer to persist column data.
                         // Without this, buffered data is held only in the cloned
                         // Table handle and lost when the operator finishes —
@@ -813,18 +912,12 @@ impl PhysicalOperator for PhysicalCreateRel {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let total = self.shared_state.total_affected.load(Ordering::SeqCst);
-            return Ok(Some(DataChunk {
-                batch: RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "count",
-                        DataType::Float64,
-                        true,
-                    )])),
-                    vec![Arc::new(Float64Array::from(vec![total as f64]))],
-                )
-                .expect("internal invariant violated"),
-            }));
+            let ids = self.shared_state.affected_ids.read().clone();
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            let batch = read_node_batch(&self.table, &ids, &self.buffer_manager, tx)?;
+            return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
     }
@@ -892,6 +985,8 @@ impl PhysicalMerge {
                 results_returned: AtomicU64::new(0),
                 is_built: AtomicBool::new(false),
                 final_result: RwLock::new(None),
+                affected_ids: RwLock::new(Vec::new()),
+                affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
             read_ts,
@@ -942,20 +1037,30 @@ impl PhysicalOperator for PhysicalMerge {
                     let index_opt = database.storage_manager.read().get_index(&self.table_name);
 
                     if let Some(index) = index_opt {
-                        // Only use _id (primary key, column 0) for index lookup.
-                        // Using all pattern properties would match on any single
-                        // property instead of requiring all to match.
-                        if let Some(&(first_idx, _)) = self.pattern.properties.first() {
-                            if first_idx == 0 {
-                                let pk_val = Value::from_arrow(&prop_arrays[0], row_idx);
-                                if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
-                                    existing_id = Some(id);
+                        // Find the primary key column index from the catalog and
+                        // look up the corresponding pattern property value.
+                        let pk_col_idx = database.catalog.read()
+                            .get_node_table(&self.table_name)
+                            .and_then(|t| t.primary_key.clone())
+                            .and_then(|pk| {
+                                self.table.columns.iter().position(|c| c.name == pk)
+                            });
+                        if let Some(pk_idx) = pk_col_idx {
+                            // Find the pattern property that matches the PK column
+                            for (i, (prop_idx, _)) in self.pattern.properties.iter().enumerate() {
+                                if *prop_idx == pk_idx {
+                                    let pk_val = Value::from_arrow(&prop_arrays[i], row_idx);
+                                    if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
+                                        existing_id = Some(id);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
 
                     if let Some(id) = existing_id {
+                        self.shared_state.affected_ids.write().push(id);
                         for assign in &self.on_match_assignments {
                             let v = ExpressionEvaluator::evaluate(
                                 &assign.expression,
@@ -982,11 +1087,38 @@ impl PhysicalOperator for PhysicalMerge {
                                 tx,
                             )?;
                         }
+                        // Build output row for the matched node.
+                        {
+                            let mut row_data = vec![Value::Null; self.table.columns.len()];
+                            row_data[0] = Value::Node(id);
+                            // Populate pattern property values
+                            for (i, (idx, _)) in self.pattern.properties.iter().enumerate() {
+                                if *idx < row_data.len() {
+                                    row_data[*idx] = Value::from_arrow(&prop_arrays[i], row_idx);
+                                }
+                            }
+                            // Overwrite with assignment values
+                            for assign in &self.on_match_assignments {
+                                let v = ExpressionEvaluator::evaluate(
+                                    &assign.expression,
+                                    batch_ref,
+                                    params,
+                                    num_rows,
+                                    &database.function_registry,
+                                    database,
+                                )?;
+                                if assign.property_idx < row_data.len() {
+                                    row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
+                                }
+                            }
+                            self.shared_state.affected_rows.write().push(row_data);
+                        }
                         self.shared_state
                             .total_affected
                             .fetch_add(0, Ordering::SeqCst);
                     } else {
                         let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                        self.shared_state.affected_ids.write().push(next_id);
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
                         row_data[0] = Value::Node(next_id);
 
@@ -1005,8 +1137,14 @@ impl PhysicalOperator for PhysicalMerge {
                             row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
                         }
 
-                        self.table
-                            .append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                        {
+                            let storage = database.storage_manager.read();
+                            if let Some(t) = storage.get_table(&self.table_name) {
+                                t.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                            } else {
+                                self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                            }
+                        }
 
                         let storage = database.storage_manager.read();
 
@@ -1053,6 +1191,7 @@ impl PhysicalOperator for PhysicalMerge {
                             }
                         }
 
+                        self.shared_state.affected_rows.write().push(row_data.clone());
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
                         self.shared_state
@@ -1073,18 +1212,12 @@ impl PhysicalOperator for PhysicalMerge {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let total = self.shared_state.total_affected.load(Ordering::SeqCst);
-            return Ok(Some(DataChunk {
-                batch: RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "count",
-                        DataType::Float64,
-                        true,
-                    )])),
-                    vec![Arc::new(Float64Array::from(vec![total as f64]))],
-                )
-                .expect("internal invariant violated"),
-            }));
+            let rows = self.shared_state.affected_rows.read().clone();
+            if rows.is_empty() {
+                return Ok(None);
+            }
+            let batch = rows_to_batch(&rows, &self.table)?;
+            return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
     }

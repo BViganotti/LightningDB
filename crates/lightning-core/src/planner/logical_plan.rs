@@ -329,6 +329,100 @@ impl LogicalOperator {
 pub struct LogicalPlanner;
 
 impl LogicalPlanner {
+    /// Remap an ORDER BY expression from binder-relative indices/aliases to
+    /// aggregate-output-relative indices.
+    ///
+    /// Group-by columns occupy output indices 0..group_by_count.
+    /// Aggregate columns occupy output indices group_by_count..group_by_count+agg_count.
+    ///
+    /// The `ret_items` contains the RETURN clause's BoundProjectionItems, which
+    /// provide the alias mapping (e.g., `sum(n.salary) AS total` → alias="total").
+    fn remap_agg_order_by(
+        expr: &mut BoundExpression,
+        group_by_exprs: &[BoundProjectionItem],
+        group_by_count: usize,
+        ret_items: &[BoundProjectionItem],
+    ) {
+        match expr {
+            BoundExpression::PropertyLookup(var, idx, _) => {
+                // Find which group-by expression this property corresponds to
+                // by matching the property name/index in the group_by list
+                for (gi, gb) in group_by_exprs.iter().enumerate() {
+                    if let BoundExpression::PropertyLookup(gb_var, gb_idx, _) = &gb.expression {
+                        if gb_var == var && gb_idx == idx {
+                            *idx = gi;
+                            return;
+                        }
+                    }
+                }
+                // If not found in group_by, check if it's an aggregate column
+                // by matching against RETURN items
+                for (ri, item) in ret_items.iter().enumerate() {
+                    if let BoundExpression::PropertyLookup(ri_var, ri_idx, _) = &item.expression {
+                        if ri_var == var && ri_idx == idx {
+                            // This is an aggregate column — find its position
+                            // in the aggregate output by counting non-group-by items
+                            let mut agg_offset = 0;
+                            for prev in 0..ri {
+                                if ret_items[prev].expression.is_aggregate() || matches!(&ret_items[prev].expression, BoundExpression::PropertyLookup(_, _, _)) {
+                                    let is_gb = group_by_exprs.iter().any(|gb| {
+                                        matches!(&gb.expression, BoundExpression::PropertyLookup(gv, gi, _) if gv == ri_var && gi == ri_idx)
+                                    });
+                                    if !is_gb {
+                                        agg_offset += 1;
+                                    }
+                                }
+                            }
+                            *idx = group_by_count + agg_offset;
+                            return;
+                        }
+                    }
+                }
+            }
+            BoundExpression::Variable(name, _) => {
+                // Variable expressions like `total` (from `sum(...) AS total`)
+                // need to be resolved to the aggregate output column index.
+                // Match the variable name against RETURN item aliases.
+                for (ri, item) in ret_items.iter().enumerate() {
+                    if item.alias == *name {
+                        // Determine if this is a group-by or aggregate column
+                        let is_gb = group_by_exprs.iter().any(|gb| {
+                            gb.alias == item.alias
+                        });
+                        if is_gb {
+                            // Find its position among group-by columns
+                            for (gi, gb) in group_by_exprs.iter().enumerate() {
+                                if gb.alias == item.alias {
+                                    *expr = BoundExpression::PropertyLookup(
+                                        String::new(), gi, item.expression.get_type(),
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
+                            // Aggregate column — count how many non-group-by
+                            // RETURN items precede this one
+                            let mut agg_idx = 0;
+                            for prev in 0..ri {
+                                let prev_is_gb = group_by_exprs.iter().any(|gb| {
+                                    gb.alias == ret_items[prev].alias
+                                });
+                                if !prev_is_gb {
+                                    agg_idx += 1;
+                                }
+                            }
+                            *expr = BoundExpression::PropertyLookup(
+                                String::new(), group_by_count + agg_idx, item.expression.get_type(),
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn plan_query(query: BoundQuery) -> Result<LogicalOperator> {
         let mut plan = if query.union_queries.is_empty() {
             LogicalOperator::SingleRow
@@ -805,15 +899,32 @@ impl LogicalPlanner {
                                     aggregates: aggregates,
                                 };
 
-                                // After aggregate, we need a final projection to match the RETURN items
-                                match &ret.order_by {
-                                    Some(order_by) => {
+                                // After aggregate, we need a final projection to match the RETURN items.
+                                // The Sort's ORDER BY expressions use binder-relative PropertyLookup
+                                // indices that reference the original scan schema, not the aggregate
+                                // output schema. Remap them to aggregate-output-relative indices:
+                                //   group_by_exprs → indices 0..group_by_exprs.len()-1
+                                //   aggregate ags  → indices group_by_exprs.len()..
+                                let group_by_count = group_by_exprs.len();
+                                let remapped_order_by = ret.order_by.as_ref().map(|items| {
+                                    items.iter().map(|item| {
+                                        let mut new_item = item.clone();
+                                        Self::remap_agg_order_by(
+                                            &mut new_item.expression,
+                                            &group_by_exprs,
+                                            group_by_count,
+                                            &ret.items,
+                                        );
+                                        new_item
+                                    }).collect::<Vec<_>>()
+                                });
+                                if let Some(order_by) = &remapped_order_by {
+                                    if !order_by.is_empty() {
                                         current_plan = LogicalOperator::Sort(
                                             Box::new(current_plan),
                                             order_by.clone(),
                                         );
                                     }
-                                    None => {}
                                 }
 
                                 let mut final_items = Vec::new();
