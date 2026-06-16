@@ -1,0 +1,17 @@
+{
+  "name": "lightning-feature-test",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Comprehensive feature test suite for LightningDB",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/runner.js",
+    "dev": "tsc && node dist/runner.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}
