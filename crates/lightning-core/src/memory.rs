@@ -194,17 +194,40 @@ impl MemoryStore {
                 "CREATE REL TABLE {RELATES_TABLE} (FROM {ENTITY_TABLE} TO {ENTITY_TABLE}, type STRING, weight DOUBLE, created_at TIMESTAMP)"
             );
             self.conn.execute(&create_relates, None)?;
+        }
 
-            {
-                let mut storage = db.storage_manager.write();
+        // Ensure all indexes exist (they are not persisted across restarts)
+        {
+            let mut storage = db.storage_manager.write();
+            if storage.fts_indexes.get(ENTITY_TABLE).is_none() {
                 if let Err(e) = storage.create_fts_index(ENTITY_TABLE) {
-                    tracing::warn!("MemoryStore: failed to create FTS index for {}: {}", ENTITY_TABLE, e);
+                    tracing::warn!("MemoryStore: failed to create FTS index: {e}");
                 }
+            }
+            if storage.vector_indexes.get(ENTITY_TABLE).map(|v| v.dimension() != self.embedding_dim).unwrap_or(true) {
+                storage.vector_indexes.remove(ENTITY_TABLE);
                 if let Err(e) = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim) {
-                    tracing::warn!("MemoryStore: failed to create vector index for {}: {}", ENTITY_TABLE, e);
+                    tracing::warn!("MemoryStore: failed to create vector index: {e}");
                 }
+            }
+            if storage.get_index(ENTITY_TABLE).is_none() {
+                if let Err(e) = storage.create_index(ENTITY_TABLE) {
+                    tracing::warn!("MemoryStore: failed to create hash index: {e}");
+                }
+            }
+            if storage.fwd_csr.get(RELATES_TABLE).is_none() {
                 if let Err(e) = storage.create_csr(RELATES_TABLE) {
-                    tracing::warn!("MemoryStore: failed to create CSR for {}: {}", RELATES_TABLE, e);
+                    tracing::warn!("MemoryStore: failed to create CSR: {e}");
+                }
+            }
+            // Recover CSR base edge count from existing files after restart
+            if let Some(csr) = storage.fwd_csr.get(RELATES_TABLE) {
+                if let Ok(tx) = db.transaction_manager.begin(true) {
+                    let bm = &db.buffer_manager;
+                    if let Err(e) = csr.recover_from_base(bm, &tx) {
+                        tracing::warn!("MemoryStore: CSR recover failed: {e}");
+                    }
+                    let _ = db.transaction_manager.rollback(&db, &tx);
                 }
             }
         }
@@ -234,11 +257,64 @@ impl MemoryStore {
     pub fn store(&self, entity: MemoryEntity) -> Result<()> {
         self.ensure_schema()?;
         let entity_id = entity.id.clone();
-        if let Err(e) = self.forget_inner(&entity_id) {
-            tracing::warn!("MemoryStore: failed to forget entity {} before storing: {}", entity_id, e);
+
+        if let Some(internal_id) = self.resolve_to_internal_id(&entity_id) {
+            self.update_entity(&entity, internal_id)?;
+            self.emit_cdc_event(Some(entity_id), Some("UPDATE".to_string()));
+        } else {
+            self.store_batch(vec![entity])?;
+            self.emit_cdc_event(Some(entity_id), Some("INSERT".to_string()));
         }
-        self.store_batch(vec![entity])?;
-        self.emit_cdc_event(Some(entity_id), Some("INSERT".to_string()));
+        Ok(())
+    }
+
+    fn update_entity(&self, entity: &MemoryEntity, internal_id: u64) -> Result<()> {
+        let now = Self::now_micros();
+
+        let query = format!(
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND e.valid_until > $now \
+             SET e.type = $type, e.content = $content, e.last_accessed = $last_accessed, \
+                 e.access_count = e.access_count + 1, e.ttl_seconds = $ttl, e.metadata = $metadata"
+        );
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), Value::String(entity.id.clone()));
+        params.insert("type".to_string(), Value::String(entity.entity_type.clone()));
+        params.insert("content".to_string(), Value::String(entity.content.clone()));
+        params.insert("last_accessed".to_string(), Value::Number(now as f64));
+        params.insert("ttl".to_string(), Value::Number(entity.ttl_seconds as f64));
+        params.insert("metadata".to_string(), Value::String(entity.metadata.clone()));
+        params.insert("now".to_string(), Value::Number(now as f64));
+
+        if let Err(e) = self.conn.execute(&query, Some(params)) {
+            return Err(e);
+        }
+
+        if !entity.embedding.is_empty() {
+            let db = self.conn.client_context.database.clone();
+            let vec_idx = {
+                let storage = db.storage_manager.read();
+                storage.vector_indexes.get(ENTITY_TABLE).cloned()
+            };
+            if let Some(ref vec_idx) = vec_idx {
+                if entity.embedding.len() == vec_idx.dimension() {
+                    if let Ok(tx) = db.transaction_manager.begin(false) {
+                        let bm = &db.buffer_manager;
+                        let _ = vec_idx.delete(internal_id, bm, &tx);
+                        let _ = vec_idx.insert_batch(
+                            &[(internal_id, entity.embedding.clone())],
+                            bm,
+                            &tx,
+                        );
+                        if let Err(e) = db.transaction_manager.commit(&tx, bm, &db) {
+                            tracing::warn!(
+                                "MemoryStore: vector index commit failed after update: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1094,49 +1170,132 @@ impl MemoryStore {
         visited.remove(&start_id);
         if visited.is_empty() { return Ok(Vec::new()); }
 
-        // Look up entities by _id
+        // Look up entities by _id, filtering for active (non-expired) entities.
         let id_list: Vec<String> = visited.iter().map(|id| id.to_string()).collect();
+        let now = Self::now_micros();
         let lookup = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until > $now) \
              RETURN e.id, e.type, e.content, e.created_at, e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, e.valid_from, e.valid_until",
             id_list.join(", "),
         );
-        match self.conn.execute(&lookup, None) {
-            Ok(r) => Ok(self.batches_to_entities(&r.batches)),
-            Err(_) => Ok(Vec::new()),
+        let mut params = HashMap::new();
+        params.insert("now".to_string(), Value::Number(now as f64));
+        let mut result = match self.conn.execute(&lookup, Some(params)) {
+            Ok(r) => self.batches_to_entities(&r.batches),
+            Err(_) => Vec::new(),
+        };
+
+        // If CSR neighbors are all expired (e.g. after forget+re-store), fall back
+        // to Cypher to find the latest active relationships.
+        if result.is_empty() {
+            // Find connected entity IDs via Cypher, then look up each individually.
+            // Using RETURN b.id only avoids Arrow batch column-length mismatches
+            // that can occur with multi-column RETURN on tables with soft-deleted rows.
+            let mut connected_ids: Vec<String> = Vec::new();
+            let cypher_fwd = format!(
+                "MATCH (a:{ENTITY_TABLE})-[r:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) \
+                 WHERE a.id = $id RETURN b.id"
+            );
+            let mut params = HashMap::new();
+            params.insert("id".to_string(), Value::String(entity_id.to_string()));
+            if let Ok(r) = self.conn.execute(&cypher_fwd, Some(params)) {
+                for batch in &r.batches {
+                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
+                        for i in 0..batch.num_rows() {
+                            if !arr.is_null(i) {
+                                connected_ids.push(arr.value(i).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            let cypher_rev = format!(
+                "MATCH (a:{ENTITY_TABLE})-[r:{RELATES_TABLE}]->(b:{ENTITY_TABLE}) \
+                 WHERE b.id = $id RETURN a.id"
+            );
+            let mut params = HashMap::new();
+            params.insert("id".to_string(), Value::String(entity_id.to_string()));
+            if let Ok(r) = self.conn.execute(&cypher_rev, Some(params)) {
+                for batch in &r.batches {
+                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
+                        for i in 0..batch.num_rows() {
+                            if !arr.is_null(i) {
+                                connected_ids.push(arr.value(i).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            connected_ids.sort();
+            connected_ids.dedup();
+            for cid in &connected_ids {
+                if let Ok(Some(e)) = self.get(cid) {
+                    result.push(e);
+                }
+            }
         }
+
+        Ok(result)
     }
 
     fn resolve_to_internal_id(&self, entity_id: &str) -> Option<u64> {
         let db = self.conn.client_context.database.clone();
 
-        // Use the hash index directly (same approach as forget_inner).
+        // Try the hash index first (fast path).
         let storage = db.storage_manager.read();
         let index_opt = storage.get_index(ENTITY_TABLE);
-        let index = match index_opt {
-            Some(idx) => idx,
-            None => {
-                tracing::warn!("MemoryStore: resolve {} - no hash index for Entity", entity_id);
-                return None;
+        if let Some(index) = index_opt {
+            let bm = &db.buffer_manager;
+            drop(storage);
+            let tx = db.transaction_manager.begin(true).ok()?;
+            let pk_value = Value::String(entity_id.to_string());
+            let result = index.lookup(bm, &pk_value, &tx);
+            let _ = db.transaction_manager.rollback(&db, &tx);
+            match result {
+                Ok(Some(id)) => {
+                    return Some(id);
+                }
+                Ok(None) => {
+                }
+                Err(e) => {
+                }
             }
-        };
-        let bm = &db.buffer_manager;
-        drop(storage);
-        let tx = db.transaction_manager.begin(true).ok()?;
-        let pk_value = Value::String(entity_id.to_string());
-        match index.lookup(bm, &pk_value, &tx) {
-            Ok(Some(id)) => {
-                let _ = db.transaction_manager.rollback(&db, &tx);
-                Some(id)
-            }
-            Ok(None) => {
-                tracing::warn!("MemoryStore: resolve {} - hash index lookup returned None", entity_id);
-                let _ = db.transaction_manager.rollback(&db, &tx);
+        } else {
+            drop(storage);
+        }
+
+        // Fallback: resolve via Cypher query (works after forget+re-store cycles
+        // where the hash index may have stale entries due to tombstones).
+        let now = Self::now_micros();
+        let query = format!(
+            "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id AND (e.valid_until = 0 OR e.valid_until > $now) RETURN e._id LIMIT 1"
+        );
+        let mut params = std::collections::HashMap::new();
+        params.insert("id".to_string(), Value::String(entity_id.to_string()));
+        params.insert("now".to_string(), Value::Number(now as f64));
+        match self.conn.execute(&query, Some(params)) {
+            Ok(res) => {
+                for batch in &res.batches {
+                    if batch.num_rows() == 0 { continue; }
+                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                        if !arr.is_null(0) {
+                            let id = arr.value(0);
+                            // Re-insert into hash index for future lookups
+                            if let Some(idx) = db.storage_manager.read().get_index(ENTITY_TABLE) {
+                                if let Ok(tx) = db.transaction_manager.begin(false) {
+                                    let bm = &db.buffer_manager;
+                                    let pk_value = Value::String(entity_id.to_string());
+                                    let _ = idx.insert(bm, &pk_value, id, &tx);
+                                    let _ = db.transaction_manager.commit(&tx, bm, &db);
+                                }
+                            }
+                            return Some(id);
+                        }
+                    }
+                }
                 None
             }
             Err(e) => {
-                tracing::warn!("MemoryStore: resolve {} - hash index lookup failed: {}", entity_id, e);
-                let _ = db.transaction_manager.rollback(&db, &tx);
                 None
             }
         }
@@ -1171,9 +1330,15 @@ impl MemoryStore {
                 let storage = db.storage_manager.read();
                 if let Some(csr) = storage.fwd_csr.get(RELATES_TABLE) {
                     csr.insert_edge(src_node_id, dst_node_id);
-                    // Also store the reverse edge so backward traversal works
                     if let Some(bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
                         bwd_csr.insert_edge(dst_node_id, src_node_id);
+                    }
+                    // Always compact to ensure pending edges are persisted to base files.
+                    // Graph writes (associate) are relatively rare compared to entity writes,
+                    // and compaction is O(E) where E is total edges.
+                    let _ = csr.compact(bm, &tx);
+                    if let Some(ref bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
+                        let _ = bwd_csr.compact(bm, &tx);
                     }
                     let _ = db.transaction_manager.commit(&tx, bm, &db);
                 } else {

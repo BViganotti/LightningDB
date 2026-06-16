@@ -19,6 +19,7 @@ pub struct SharedSort {
     pub sorted_result: Option<RecordBatch>,
     pub sort_started: AtomicBool,
     pub results_returned: AtomicUsize,
+    pub num_collected: AtomicUsize,
 }
 
 pub struct PhysicalSort {
@@ -27,6 +28,7 @@ pub struct PhysicalSort {
     shared: Arc<RwLock<SharedSort>>,
     sort_done: Arc<(Mutex<bool>, Condvar)>,
     collected: bool,
+    num_partitions: AtomicUsize,
 }
 
 impl PhysicalSort {
@@ -39,9 +41,11 @@ impl PhysicalSort {
                 sorted_result: None,
                 sort_started: AtomicBool::new(false),
                 results_returned: AtomicUsize::new(0),
+                num_collected: AtomicUsize::new(0),
             })),
             sort_done: Arc::new((Mutex::new(false), Condvar::new())),
             collected: false,
+            num_partitions: AtomicUsize::new(1),
         }
     }
 
@@ -59,6 +63,12 @@ impl PhysicalSort {
         {
             let mut shared = self.shared.write();
             shared.batches.extend(local_batches);
+            let prev = shared.num_collected.fetch_add(1, Ordering::Release);
+            let num_parts = self.num_partitions.load(Ordering::Acquire);
+            if prev + 1 < num_parts {
+                // Other workers still collecting. If we win the CAS, we wait
+                // for them before checking batches.
+            }
         }
 
         if self
@@ -71,6 +81,13 @@ impl PhysicalSort {
             // Another thread is sorting. Wait for it by returning Ok(())
             // and letting get_next check sort_done via the condvar.
             return Ok(());
+        }
+
+        // We won the CAS — responsible for sorting. Wait until all partitions
+        // have contributed their data before checking or processing batches.
+        let num_parts = self.num_partitions.load(Ordering::Acquire);
+        while self.shared.read().num_collected.load(Ordering::Acquire) < num_parts {
+            std::hint::spin_loop();
         }
 
         let schema;
@@ -206,6 +223,11 @@ impl PhysicalOperator for PhysicalSort {
         false
     }
 
+    fn set_partition(&mut self, index: usize, total: usize) {
+        self.num_partitions.store(total, Ordering::Release);
+        self.child.set_partition(index, total);
+    }
+
     fn try_parallelize(
         &self,
         num_workers: usize,
@@ -222,9 +244,11 @@ impl PhysicalOperator for PhysicalSort {
                     sorted_result: None,
                     sort_started: ::std::sync::atomic::AtomicBool::new(false),
                     results_returned: ::std::sync::atomic::AtomicUsize::new(0),
+                    num_collected: ::std::sync::atomic::AtomicUsize::new(0),
                 })),
                 sort_done: Arc::new((::parking_lot::Mutex::new(false), ::parking_lot::Condvar::new())),
                 collected: false,
+                num_partitions: ::std::sync::atomic::AtomicUsize::new(1),
             });
             children.push(sort_clone as Box<dyn PhysicalOperator + Send + Sync>);
         }
@@ -236,9 +260,16 @@ impl PhysicalOperator for PhysicalSort {
         Box::new(Self {
             child: self.child.clone_box(),
             order_by: self.order_by.clone(),
-            shared: self.shared.clone(),
-            sort_done: self.sort_done.clone(),
+            shared: Arc::new(RwLock::new(SharedSort {
+                batches: Vec::new(),
+                sorted_result: None,
+                sort_started: AtomicBool::new(false),
+                results_returned: AtomicUsize::new(0),
+                num_collected: AtomicUsize::new(0),
+            })),
+            sort_done: Arc::new((Mutex::new(false), Condvar::new())),
             collected: false,
+            num_partitions: AtomicUsize::new(self.num_partitions.load(Ordering::Acquire)),
         })
     }
 }

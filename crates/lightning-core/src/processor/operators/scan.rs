@@ -15,7 +15,6 @@ pub struct ScanState {
     pub has_modifications: bool,
 }
 
-#[derive(Clone)]
 pub struct PhysicalScan {
     pub table: Table,
     pub variable: String,
@@ -42,6 +41,30 @@ pub struct PhysicalScan {
     partition_start_row: u64,
     /// End of this partition's row range (exclusive). Equal to state.num_rows when not partitioned.
     partition_end_row: u64,
+}
+
+impl Clone for PhysicalScan {
+    fn clone(&self) -> Self {
+        Self {
+            table: self.table.clone(),
+            variable: self.variable.clone(),
+            bm: Arc::clone(&self.bm),
+            state: Arc::clone(&self.state),
+            mask: self.mask.clone(),
+            mask_column_idx: self.mask_column_idx,
+            projected_idxs: self.projected_idxs.clone(),
+            cached_schema: Arc::clone(&self.cached_schema),
+            filter_cached_schema: Arc::clone(&self.filter_cached_schema),
+            pushdown_filter: self.pushdown_filter.clone(),
+            filter_column_idxs: self.filter_column_idxs.clone(),
+            column_buffer: Vec::new(),
+            scratch_mask: Vec::new(),
+            partition_position: Arc::new(AtomicU64::new(self.partition_start_row)),
+            morsel_size: self.morsel_size,
+            partition_start_row: self.partition_start_row,
+            partition_end_row: self.partition_end_row,
+        }
+    }
 }
 
 impl PhysicalScan {

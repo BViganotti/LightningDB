@@ -30,6 +30,10 @@ impl PhysicalLimit {
 }
 
 impl PhysicalOperator for PhysicalLimit {
+    fn is_parallel_safe(&self) -> bool {
+        false
+    }
+
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -68,7 +72,10 @@ impl PhysicalOperator for PhysicalLimit {
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
             child: self.child.clone_box(),
-            shared: self.shared.clone(),
+            shared: Arc::new(SharedLimit {
+                count: AtomicUsize::new(0),
+                limit: self.shared.limit,
+            }),
             mutex: Mutex::new(()),
         })
     }
@@ -97,6 +104,10 @@ impl PhysicalSkip {
 }
 
 impl PhysicalOperator for PhysicalSkip {
+    fn is_parallel_safe(&self) -> bool {
+        false
+    }
+
     fn get_next(
         &mut self,
         database: &crate::Database,
@@ -129,7 +140,10 @@ impl PhysicalOperator for PhysicalSkip {
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
         Box::new(Self {
             child: self.child.clone_box(),
-            shared: self.shared.clone(),
+            shared: Arc::new(SharedSkip {
+                count: AtomicUsize::new(0),
+                skip: self.shared.skip,
+            }),
         })
     }
 }

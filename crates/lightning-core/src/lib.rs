@@ -349,6 +349,12 @@ impl Database {
                     false,
                     Some(stats),
                 )?;
+                // Restore next_row_id from catalog so new inserts don't overwrite existing rows.
+                if table_entry.num_rows > 0 {
+                    if let Some(table) = storage_manager.node_tables.get_mut(&table_entry.name) {
+                        table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                    }
+                }
                 if table_entry.primary_key.is_some() {
                     storage_manager.create_index(&table_entry.name)?;
                 }
@@ -373,6 +379,12 @@ impl Database {
                     true,
                     Some(stats),
                 )?;
+                // Restore next_row_id from catalog so new inserts don't overwrite existing rows.
+                if table_entry.num_rows > 0 {
+                    if let Some(table) = storage_manager.rel_tables.get_mut(&table_entry.name) {
+                        table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                    }
+                }
             }
         }
 

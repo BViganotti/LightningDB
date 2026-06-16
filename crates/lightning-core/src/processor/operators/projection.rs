@@ -84,7 +84,7 @@ impl PhysicalOperator for PhysicalProjection {
     }
 
     fn is_parallel_safe(&self) -> bool {
-        true
+        self.child.is_parallel_safe()
     }
 
     fn set_partition(&mut self, index: usize, total: usize) {

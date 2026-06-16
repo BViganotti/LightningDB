@@ -106,6 +106,15 @@ impl CSRIndex {
         }
     }
 
+    /// Recover `base_edge_count` from the base CSR files after restart.
+    /// Called during `ensure_schema` so that `needs_compaction` makes correct
+    /// decisions and `for_each_base_neighbor` reports existing edges.
+    pub fn recover_from_base(&self, bm: &BufferManager, tx: &crate::transaction::transaction_manager::Transaction) -> Result<()> {
+        let edges = self.scan_edges_from_csr(bm, tx)?;
+        self.base_edge_count.store(edges.len() as u64, Ordering::Release);
+        Ok(())
+    }
+
     /// Insert a single edge into the pending buffer.
     /// Does not rebuild the base CSR — lightweight O(1) operation.
     pub fn insert_edge(&self, src: u64, dst: u64) {
@@ -122,11 +131,10 @@ impl CSRIndex {
     pub fn compact_if_needed(
         &self,
         bm: &crate::storage::buffer_manager::BufferManager,
-        num_nodes: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         if self.needs_compaction() {
-            self.compact(bm, num_nodes, tx)?;
+            self.compact(bm, tx)?;
         }
         Ok(())
     }
@@ -154,11 +162,16 @@ impl CSRIndex {
     pub fn compact(
         &self,
         bm: &BufferManager,
-        num_nodes: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let pending = self.pending_edges.read().clone();
         let all_edges = self.collect_all_edges(bm, tx)?;
+        if all_edges.is_empty() {
+            return Ok(());
+        }
+
+        // Compute num_nodes from actual edges so that node IDs with gaps
+        // (e.g. after forget+re-store) are not silently dropped.
+        let num_nodes = all_edges.iter().map(|e| e.0).max().unwrap_or(0);
 
         Self::build(bm, self.offset_fh.clone(), self.adj_node_fh.clone(), &all_edges, num_nodes, tx)?;
 
@@ -191,6 +204,30 @@ impl CSRIndex {
 
     /// Read all edges from the base CSR by scanning the offset and adjacency files.
     /// Returns (src, dst) pairs. Skips adjacency entries with DELETED_BIT set.
+    fn read_u64_at(&self, bm: &BufferManager, fh: &Arc<FileHandle>, byte_pos: u64, tx: &crate::transaction::transaction_manager::Transaction) -> Result<u64> {
+        let page_idx = byte_pos / PAGE_SIZE as u64;
+        let offset_in_page = byte_pos as usize % PAGE_SIZE;
+        if offset_in_page + 8 <= PAGE_SIZE {
+            let frame = bm.pin_page(fh.clone(), page_idx, tx)?;
+            return Ok(u64::from_le_bytes(
+                frame.as_slice()[offset_in_page..offset_in_page + 8]
+                    .try_into()
+                    .expect("infallible: u64 read"),
+            ));
+        }
+        let mut buf = [0u8; 8];
+        let first_part = PAGE_SIZE - offset_in_page;
+        {
+            let frame = bm.pin_page(fh.clone(), page_idx, tx)?;
+            buf[..first_part].copy_from_slice(&frame.as_slice()[offset_in_page..]);
+        }
+        {
+            let frame = bm.pin_page(fh.clone(), page_idx + 1, tx)?;
+            buf[first_part..8].copy_from_slice(&frame.as_slice()[..8 - first_part]);
+        }
+        Ok(u64::from_le_bytes(buf))
+    }
+
     fn scan_edges_from_csr(
         &self,
         bm: &BufferManager,
@@ -205,42 +242,44 @@ impl CSRIndex {
         let header_frame = bm.pin_page(self.offset_fh.clone(), 0, tx)?;
         let mut header_buf = [0u8; PAGE_SIZE];
         header_buf.copy_from_slice(header_frame.as_slice());
-        validate_csr_header(&header_buf, CSR_OFFSET_MAGIC)?;
+        if let Err(e) = validate_csr_header(&header_buf, CSR_OFFSET_MAGIC) {
+            return Err(e);
+        }
 
         // Validate adjacency file header if it has pages
         if self.adj_node_fh.get_num_pages() > 0 {
             let adj_header = bm.pin_page(self.adj_node_fh.clone(), 0, tx)?;
             let mut adj_buf = [0u8; PAGE_SIZE];
             adj_buf.copy_from_slice(adj_header.as_slice());
-            validate_csr_header(&adj_buf, CSR_ADJ_MAGIC)?;
+            if let Err(e) = validate_csr_header(&adj_buf, CSR_ADJ_MAGIC) {
+                return Err(e);
+            }
         }
 
-        // Read all offsets using header-aware positions
-        let data_bytes_per_page = PAGE_SIZE as u64;
-        let max_nodes = ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
-        let mut offsets = vec![0u64; (max_nodes + 1) as usize];
-        for i in 0..=max_nodes as usize {
+        // Read all offsets using header-aware positions with page-boundary safety
+        let max_entries = ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
+        let mut offsets = Vec::with_capacity(max_entries as usize + 1);
+        for i in 0..=max_entries as usize {
             let byte_pos = csr_offset_byte(i as u64);
-            let page_idx = byte_pos / data_bytes_per_page;
+            let page_idx = byte_pos / PAGE_SIZE as u64;
             if page_idx >= self.offset_fh.get_num_pages() {
                 break;
             }
-            let offset_in_page = byte_pos % data_bytes_per_page;
-            // Need to pin the page. We can't borrow self.offset_fh in the loop
-            // because we'd re-borrow. Let's read the frame data directly.
-            let frame = bm.pin_page(self.offset_fh.clone(), page_idx, tx)?;
-            offsets[i] = u64::from_le_bytes(
-                frame.as_slice()[offset_in_page as usize..offset_in_page as usize + 8]
-                    .try_into()
-                    .expect("infallible: fixed-size array conversion"),
-            );
+            match self.read_u64_at(bm, &self.offset_fh, byte_pos, tx) {
+                Ok(val) => offsets.push(val),
+                Err(_) => break,
+            }
+        }
+        if offsets.len() < 2 {
+            return Ok(Vec::new());
         }
 
         // Find the actual number of active nodes by looking at the last non-zero offset
+        let num_entries = offsets.len() - 1;
         let mut num_nodes = 0u64;
-        for i in 0..max_nodes {
-            if offsets[i as usize] < offsets[(i + 1) as usize] {
-                num_nodes = i + 1;
+        for i in 0..num_entries {
+            if i + 1 < offsets.len() && offsets[i] < offsets[i + 1] {
+                num_nodes = i as u64 + 1;
             }
         }
 
@@ -251,30 +290,16 @@ impl CSRIndex {
 
         // Read all adjacency values using header-aware positions
         let mut adj_values = Vec::with_capacity(total_adj as usize);
-        let mut adj_idx = 0u64;
-        while adj_idx < total_adj {
+        for adj_idx in 0..total_adj {
             let adj_byte = (CSR_HEADER_SIZE as u64) + adj_idx * 8;
-            let page_idx = adj_byte / PAGE_SIZE as u64;
-            let offset_in_page = adj_byte % PAGE_SIZE as u64;
-            if page_idx >= self.adj_node_fh.get_num_pages() {
-                break;
-            }
-            let frame = bm.pin_page(self.adj_node_fh.clone(), page_idx, tx)?;
-            let remaining_in_page = (PAGE_SIZE as u64 - offset_in_page) / 8;
-            let to_read = std::cmp::min(total_adj - adj_idx, remaining_in_page) as usize;
-
-            for j in 0..to_read {
-                let off = (offset_in_page as usize) + (j * 8);
-                let val = u64::from_le_bytes(
-                    frame.as_slice()[off..off + 8]
-                        .try_into()
-                        .expect("infallible: fixed-size array conversion"),
-                );
-                if val & DELETED_BIT == 0 {
-                    adj_values.push(val);
+            match self.read_u64_at(bm, &self.adj_node_fh, adj_byte, tx) {
+                Ok(val) => {
+                    if val & DELETED_BIT == 0 {
+                        adj_values.push(val);
+                    }
                 }
+                Err(_) => break,
             }
-            adj_idx += to_read as u64;
         }
 
         // Pair adjacency values with their src nodes using the offset array
