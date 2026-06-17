@@ -60,7 +60,7 @@ pub async fn auth_middleware(
 ) -> Result<Response, Response> {
     let path = req.uri().path();
 
-    if PUBLIC_PATHS.iter().any(|p| path == *p || path.starts_with(p)) {
+    if PUBLIC_PATHS.iter().any(|p| path == *p || path.starts_with(&format!("{p}/"))) {
         return Ok(next.run(req).await);
     }
 
@@ -105,16 +105,6 @@ pub async fn auth_middleware(
                     let user = AuthenticatedUser {
                         user_id: String::new(),
                         username: "token-user".to_string(),
-                        role: Role::Admin,
-                        auth_method: AuthMethod::Token,
-                    };
-                    req.extensions_mut().insert(user);
-                    Ok(next.run(req).await)
-                }
-                _ if expected.is_empty() => {
-                    let user = AuthenticatedUser {
-                        user_id: String::new(),
-                        username: "anonymous".to_string(),
                         role: Role::Admin,
                         auth_method: AuthMethod::Token,
                     };

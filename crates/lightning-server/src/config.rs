@@ -260,8 +260,12 @@ impl ServerConfig {
                 return Err("mtls_ca is required when mtls_enabled is true".into());
             }
         }
-        if self.auth_mode == AuthMode::Token && self.auth_token.is_none() {
-            return Err("auth_token is required when auth_mode is 'token'".into());
+        if self.auth_mode == AuthMode::Token {
+            match &self.auth_token {
+                None => return Err("auth_token is required when auth_mode is 'token'".into()),
+                Some(t) if t.is_empty() => return Err("auth_token must not be empty when auth_mode is 'token'".into()),
+                _ => {}
+            }
         }
         Ok(())
     }
