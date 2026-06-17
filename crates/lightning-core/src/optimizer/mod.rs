@@ -41,14 +41,46 @@ impl Optimizer {
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
                 Box::new(order_by_pushdown::OrderByPushDown::new()),
-                // NOTE: projection_pushdown disabled — needs cross-operator
-                //   expression index remapping in all expression-bearing ops.
-                // NOTE: semijoin_pushdown + acc_hash_join_optimizer disabled —
-                //   physical planner mask lifecycle issues with rel table scans.
-                // NOTE: agg_key_dependency_optimizer disabled — incorrect group-by
-                //   dependency analysis in edge cases.
-                // NOTE: count_rel_table_optimizer disabled — wrong COUNT results
-                //   for single-relationship tables.
+                // #59: IndexPushDown disabled — creates IndexScan nodes with
+                //   pk_value expressions that the physical planner evaluates
+                //   as Constant expressions. When the pk_value references
+                //   columns from outer scopes (correlated subqueries), the
+                //   constant folding returns wrong values, causing incorrect
+                //   results. Fix would require parameterized index scans.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: ProjectionPushDown disabled — requires cross-operator
+                //   expression index remapping in Projection, Filter, Sort,
+                //   Aggregate, Set, and Merge operators. Without remapping,
+                //   PropertyLookup indices reference pre-projection column
+                //   positions and produce wrong values or out-of-bounds reads.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: SemiJoinPushDown disabled — physical planner mask
+                //   lifecycle issues: SemiMasker adds mask columns to the
+                //   probe side but downstream operators (Projection, Sort)
+                //   don't account for the extra mask column, producing
+                //   wrong column offsets. Rel table scans also lose the
+                //   mask during property resolution.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: AccHashJoinOptimizer disabled — same mask lifecycle
+                //   issue as SemiJoinPushDown. Accumulator hash join
+                //   introduces a build-side mask that isn't propagated
+                //   through subsequent operators correctly.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: AggKeyDependencyOptimizer disabled — incorrect
+                //   group-by dependency analysis when an aggregate key
+                //   transitively depends on another through a join column.
+                //   Produces wrong GROUP BY keys, causing wrong aggregation
+                //   results. DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: CountRelTableOptimizer disabled — produces wrong
+                //   COUNT results for single-relationship tables because
+                //   it replaces a full scan+count with a table-level row
+                //   count that doesn't account for relationship filtering.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
             ],
         }
     }
