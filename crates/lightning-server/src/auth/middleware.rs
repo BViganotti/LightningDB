@@ -69,7 +69,7 @@ pub async fn auth_middleware(
             let anonymous = AuthenticatedUser {
                 user_id: String::new(),
                 username: "anonymous".to_string(),
-                role: Role::Admin,
+                role: Role::Reader,
                 auth_method: AuthMethod::Token,
             };
             req.extensions_mut().insert(anonymous);

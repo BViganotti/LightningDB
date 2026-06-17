@@ -680,6 +680,28 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     }
                 }
             }
+            Rule::copy_statement => {
+                let mut inner = i.into_inner();
+                let table_name = required_pair(inner.next(), "copy table_name")?.as_str().to_string();
+                let sub = required_pair(inner.next(), "copy sub-rule")?;
+                let is_from = sub.as_rule() == Rule::copy_from;
+                let mut sub_inner = sub.into_inner();
+                let file_path = required_pair(sub_inner.next(), "copy file_path")?.as_str().to_string();
+                let mut options = std::collections::HashMap::new();
+                for opt in sub_inner {
+                    if opt.as_rule() == Rule::copy_option {
+                        let mut opt_parts = opt.into_inner();
+                        let key = required_pair(opt_parts.next(), "copy option key")?.as_str().to_string();
+                        let val = parse_literal(required_pair(opt_parts.next(), "copy option val")?)?;
+                        options.insert(key, val);
+                    }
+                }
+                return if is_from {
+                    Ok(Statement::CopyFrom { table_name, file_path, options })
+                } else {
+                    Ok(Statement::CopyTo { table_name, file_path, options })
+                };
+            }
             _ => {}
         }
     }
