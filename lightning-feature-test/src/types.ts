@@ -4,10 +4,6 @@ export interface QueryResult {
     rows: Record<string, unknown>[];
     numRows: number;
   };
-  meta: {
-    requestId: string;
-    durationMs: number;
-  };
 }
 
 export interface TestCase {

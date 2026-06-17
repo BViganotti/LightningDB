@@ -34,13 +34,27 @@ impl WasmExecMode {
         }
     }
 
-    fn from_u8(v: u8, arg_count: usize) -> Self {
+    fn from_u8(v: u8) -> Self {
         match v {
-            1 => Self::MultiArgF64(arg_count),
+            1 => Self::MultiArgF64(0), // arity set at call time via check_arity
             2 => Self::MemoryF32,
             3 => Self::MemoryString,
             _ => Self::ScalarF64,
         }
+    }
+}
+
+impl WasmExecMode {
+    fn check_arity(&self, actual: usize) -> Result<()> {
+        if let Self::MultiArgF64(expected) = self {
+            if *expected != 0 && *expected != actual {
+                return Err(crate::LightningError::Internal(format!(
+                    "WASM function expected {} arguments, got {}",
+                    expected, actual
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -180,7 +194,8 @@ impl WasmFunction {
 
     let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
         move |args: &[ArrayRef], num_rows: usize| -> Result<ArrayRef> {
-            let exec_mode = WasmExecMode::from_u8(exec_mode, args.len());
+            let exec_mode = WasmExecMode::from_u8(exec_mode);
+            exec_mode.check_arity(args.len())?;
 
             match exec_mode {
                     WasmExecMode::ScalarF64 | WasmExecMode::MultiArgF64(_) => {
@@ -334,18 +349,18 @@ impl WasmFunction {
                                 crate::LightningError::Internal(msg)
                             })?;
 
-                        // Validate output offset: must be within the originally written
-                        // input region to prevent reading uninitialized WASM memory.
+                        // Validate output offset against total WASM memory, not just
+                        // the written input region. WASM functions often write the
+                        // output at input_byte_len (immediately after the input).
                         let mut results = vec![f32::NAN; num_rows];
                         {
                             let mem_data = mem.data(&store);
                             let read_offset = output_offset as usize;
                             let output_byte_len = num_rows * 4;
-                            if read_offset >= input_byte_len
-                                || read_offset.saturating_add(output_byte_len) > input_byte_len
+                            if read_offset >= mem_size
+                                || read_offset.saturating_add(output_byte_len) > mem_size
                             {
-                                // Output offset is outside the written input region —
-                                // the WASM function tried to read uninitialized memory.
+                                // Output offset or range is outside valid WASM memory.
                                 // Return NaN for all values.
                             } else {
                                 for j in 0..num_rows {
