@@ -45,39 +45,15 @@ impl Optimizer {
                 Box::new(projection_pushdown::ProjectionPushDown::new()),
                 Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
                 Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
-                // #59: ProjectionPushDown — pushes column projections closer to
-                //   Scan/IndexScan to reduce column count early. Includes full
-                //   expression index remapping for all operator types.
+                // #59: CountRelTableOptimizer — replaces COUNT(*) on a rel table
+                //   with a direct catalog row count. Now guarded against filtered
+                //   scans: only applied when the Scan has no WHERE filter.
                 //   DEEP_AUDIT_FULL_2024.md item #59.
                 //
-                // #59: SemiJoinPushDown disabled — physical planner mask
-                //   lifecycle issues: SemiMasker adds mask columns to the
-                //   probe side but downstream operators (Projection, Sort)
-                //   don't account for the extra mask column, producing
-                //   wrong column offsets. Rel table scans also lose the
-                //   mask during property resolution.
-                //   DEEP_AUDIT_FULL_2024.md item #59.
-                //
-                // #59: AccHashJoinOptimizer disabled — same mask lifecycle
-                //   issue as SemiJoinPushDown. Accumulator hash join
-                //   introduces a build-side mask that isn't propagated
-                //   through subsequent operators correctly.
-                //   DEEP_AUDIT_FULL_2024.md item #59.
-                //
-                // #59: SemiJoinPushDown disabled — physical planner mask
-                //   lifecycle issues: SemiMasker adds mask columns to the
-                //   probe side but downstream operators (Projection, Sort)
-                //   don't account for the extra mask column, producing
-                //   wrong column offsets. Rel table scans also lose the
-                //   mask during property resolution.
-                //   DEEP_AUDIT_FULL_2024.md item #59.
-                //
-                // #59: AccHashJoinOptimizer disabled — same mask lifecycle
-                //   issue as SemiJoinPushDown. Accumulator hash join
-                //   introduces a build-side mask that isn't propagated
-                //   through subsequent operators correctly.
-                //   DEEP_AUDIT_FULL_2024.md item #59.
-                //
+                Box::new(semijoin_pushdown::SemiJoinPushDown::new()),
+                Box::new(acc_hash_join_optimizer::AccHashJoinOptimizer::new()),
+                Box::new(factorization_rewriter::FactorizationRewriter::new()),
+                Box::new(foreign_join_pushdown::ForeignJoinPushDown::new()),
             ],
         }
     }

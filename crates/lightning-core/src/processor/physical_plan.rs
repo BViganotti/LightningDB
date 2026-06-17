@@ -780,10 +780,13 @@ impl PhysicalPlanner {
         positions: &mut std::collections::HashMap<String, usize>,
     ) -> Result<usize> {
         match op {
-            LogicalOperator::Scan(table_name, var, ..) => {
+            LogicalOperator::Scan(table_name, var, mask_opt, ..) => {
                 let num_cols = self.get_table_num_columns(table_name);
+                // If a semi-join mask column is appended to the Scan output,
+                // account for it so downstream operators compute correct offsets.
+                let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
                 positions.insert(var.clone(), start_col);
-                Ok(num_cols)
+                Ok(num_cols + mask_extra)
             }
             LogicalOperator::Filter(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
@@ -932,7 +935,11 @@ impl PhysicalPlanner {
 
     fn compute_subtree_num_cols(&self, op: &LogicalOperator) -> usize {
         match op {
-            LogicalOperator::Scan(table_name, ..) => self.get_table_num_columns(table_name),
+            LogicalOperator::Scan(table_name, _, mask_opt, ..) => {
+                let base = self.get_table_num_columns(table_name);
+                let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
+                base + mask_extra
+            }
             LogicalOperator::IndexScan(table_name, ..) => {
                 let cat = self.db.catalog.read();
                 if let Some(t) = cat.get_node_table(table_name) {
