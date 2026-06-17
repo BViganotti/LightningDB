@@ -662,15 +662,7 @@ impl Database {
         if self._config.read_only {
             return Err(LightningError::Config("Database is opened as read-only".into()));
         }
-        let validated = self.validate_wasm_path(wasm_path.as_ref())?;
-        // Read the file immediately after validation (within the same scope)
-        // to eliminate the TOCTOU race between path validation and file I/O.
-        // The validated path is the canonical, sandboxed path.
-        let wat_bytes = std::fs::read(&validated)
-            .map_err(|e| LightningError::Database(format!(
-                "Failed to read WASM file '{}': {e}",
-                validated.display()
-            )))?;
+        let wat_bytes = self.read_wasm_file(wasm_path.as_ref())?;
         let wasm_func = crate::wasm_function::WasmFunction::from_wat_bytes(wat_bytes, func_name)?;
         let scalar = wasm_func.to_scalar_function();
         self.function_registry.register_scalar(scalar);
@@ -682,12 +674,14 @@ impl Database {
         self._path.join("catalog.lbug")
     }
 
-    /// Validate that `user_path` resolves within `base_dir` (or the database directory).
-    fn validate_wasm_path(
-        &self,
-        user_path: &Path,
-    ) -> Result<PathBuf> {
+    /// Open and read a WASM file with path traversal validation and O_NOFOLLOW
+    /// to prevent symlink-based TOCTOU attacks. The file is opened within the
+    /// validation scope so there is no gap between path validation and file I/O.
+    fn read_wasm_file(&self, user_path: &Path) -> Result<Vec<u8>> {
+        use std::os::unix::fs::OpenOptionsExt;
         use std::path::Component;
+        use std::io::Read;
+
         let base_dir = self._config.wasm_base_dir.as_deref();
         let database_path = &self._path;
 
@@ -732,7 +726,31 @@ impl Database {
                 canonical_base.display()
             )));
         }
-        Ok(canonical)
+
+        // Open with O_NOFOLLOW so symlinks in the final component are rejected.
+        // This closes the symlink-based TOCTOU: even if the file is a symlink
+        // to /etc/passwd, the open fails with ELOOP.
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&canonical)
+            .map_err(|e| LightningError::Database(format!(
+                "Failed to open WASM file '{}': {e}",
+                canonical.display()
+            )))?;
+
+        // O_NOFOLLOW guarantees on all supported platforms (Linux, macOS)
+        // that we didn't follow a trailing symlink. The open would have failed
+        // with ELOOP if the final component was a symlink.
+
+        let mut wat_bytes = Vec::new();
+        file.read_to_end(&mut wat_bytes)
+            .map_err(|e| LightningError::Database(format!(
+                "Failed to read WASM file '{}': {e}",
+                canonical.display()
+            )))?;
+
+        Ok(wat_bytes)
     }
 
     pub fn checkpoint(&self) -> Result<()> {
