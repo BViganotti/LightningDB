@@ -1108,7 +1108,15 @@ impl PhysicalOperator for PhysicalMerge {
                     }
 
                     if let Some(id) = existing_id {
+                        // Dedup: skip if this node was already matched in a prior chunk
+                        if self.shared_state.affected_ids.read().contains(&id) {
+                            continue;
+                        }
                         self.shared_state.affected_ids.write().push(id);
+                        // Evaluate assignment expressions once, reuse for both the
+                        // actual write and the output row construction.
+                        let mut assign_results: Vec<(usize, arrow::array::ArrayRef)> =
+                            Vec::with_capacity(self.on_match_assignments.len());
                         for assign in &self.on_match_assignments {
                             let v = ExpressionEvaluator::evaluate(
                                 &assign.expression,
@@ -1134,6 +1142,7 @@ impl PhysicalOperator for PhysicalMerge {
                                 id,
                                 tx,
                             )?;
+                            assign_results.push((assign.property_idx, v));
                         }
                         // Build output row for the matched node.
                         {
@@ -1147,17 +1156,9 @@ impl PhysicalOperator for PhysicalMerge {
                                 }
                             }
                             // Overwrite with assignment values (takes precedence)
-                            for assign in &self.on_match_assignments {
-                                let v = ExpressionEvaluator::evaluate(
-                                    &assign.expression,
-                                    batch_ref,
-                                    params,
-                                    num_rows,
-                                    &database.function_registry,
-                                    database,
-                                )?;
-                                if assign.property_idx < row_data.len() {
-                                    row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
+                            for (prop_idx, arr) in &assign_results {
+                                if *prop_idx < row_data.len() {
+                                    row_data[*prop_idx] = Value::from_arrow(arr, row_idx);
                                 }
                             }
                             self.shared_state.affected_rows.write().push(row_data);
