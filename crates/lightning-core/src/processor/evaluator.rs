@@ -247,8 +247,13 @@ impl ExpressionEvaluator {
 
                 match op {
                     crate::parser::ast::LogicalOperator::And => {
-                        let true_count = l_bool.values().count_set_bits();
-                        if true_count == 0 {
+                        // Short-circuit: if every non-null left value is FALSE the
+                        // result is FALSE regardless of the right side. NULLs on the
+                        // left still need right-side evaluation since FALSE AND NULL = FALSE.
+                        let any_true_or_null = (0..l_bool.len()).any(|i| {
+                            !l_bool.is_valid(i) || l_bool.value(i)
+                        });
+                        if !any_true_or_null {
                             return Ok(Arc::new(l_bool.clone()));
                         }
                         let r = cast(
@@ -1182,15 +1187,19 @@ impl ExpressionEvaluator {
                 .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
 
             let mut true_count = 0;
+            let mut non_null_count = 0;
             for k in 0..bool_arr.len() {
-                if bool_arr.value(k) {
-                    true_count += 1;
+                if bool_arr.is_valid(k) {
+                    non_null_count += 1;
+                    if bool_arr.value(k) {
+                        true_count += 1;
+                    }
                 }
             }
 
             results.push(match op {
                 "LIST_ANY" => true_count > 0,
-                "LIST_ALL" => true_count == values.len(),
+                "LIST_ALL" => non_null_count > 0 && true_count == non_null_count,
                 "LIST_SINGLE" => true_count == 1,
                 "LIST_NONE" => true_count == 0,
                 _ => false,

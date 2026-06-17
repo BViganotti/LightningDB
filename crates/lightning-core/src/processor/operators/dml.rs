@@ -34,12 +34,14 @@ fn rows_to_batch(rows: &[Vec<Value>], table: &Table) -> Result<RecordBatch> {
             let val = row.get(col_idx).cloned().unwrap_or(Value::Null);
             col_values.push(val);
         }
-        eprintln!("DEBUG rows_to_batch: col={} name={} values={:?}",
+        #[cfg(debug_assertions)]
+        tracing::debug!("rows_to_batch: col={} name={} values={:?}",
             col_idx, col.name, col_values);
         let dt = logical_type_to_arrow_type(&col.data_type);
         let arr = values_to_array(&col_values, &dt);
-        eprintln!("DEBUG rows_to_batch: col={} arrow_type={:?} arr_len={} arr_val={:?}",
-            col_idx, dt, arr.len(), if arr.len() > 0 { arr.as_any().downcast_ref::<arrow::array::StringArray>().map(|a| a.value(0)) } else { None });
+        #[cfg(debug_assertions)]
+        tracing::debug!("rows_to_batch: col={} arrow_type={:?} arr_len={}",
+            col_idx, dt, arr.len());
         arrow_cols.push(arr);
     }
     let schema = Arc::new(Schema::new(
@@ -669,6 +671,14 @@ impl PhysicalOperator for PhysicalDelete {
                         Value::Node(id) => id,
                         _ => continue,
                     };
+                    // Snapshot pre-deletion values for the RETURN output
+                    let mut row_data = Vec::with_capacity(self.table.columns.len());
+                    row_data.push(Value::Node(id));
+                    for col in self.table.columns.iter().skip(1) {
+                        let v = col.get_value(&self.buffer_manager, id, tx).unwrap_or(Value::Null);
+                        row_data.push(v);
+                    }
+                    self.shared_state.affected_rows.write().push(row_data);
                     self.shared_state.affected_ids.write().push(id);
                     deleted_ids.push(id);
                     self.undo_buffer
@@ -769,11 +779,13 @@ impl PhysicalOperator for PhysicalDelete {
             .fetch_add(1, Ordering::SeqCst)
             == 0
         {
-            let ids = self.shared_state.affected_ids.read().clone();
-            if ids.is_empty() {
+            // Use snapshotted pre-deletion rows so DELETE n RETURN n
+            // returns the original values, not post-deletion nulls.
+            let rows = self.shared_state.affected_rows.read();
+            if rows.is_empty() {
                 return Ok(None);
             }
-            let batch = read_node_batch(&self.table, &ids, &self.buffer_manager, tx)?;
+            let batch = rows_to_batch(&rows, &self.table)?;
             return Ok(Some(DataChunk { batch }));
         }
         Ok(None)
