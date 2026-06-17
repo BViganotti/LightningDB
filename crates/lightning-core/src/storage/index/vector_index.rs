@@ -149,6 +149,14 @@ impl VectorIndex {
         total
     }
 
+    // #47: TODO — WAL/MVCC integration for vector index.
+    // Rollback does NOT revert vector index changes (insert/delete/update).
+    // When a transaction is rolled back, the vector index retains changes
+    // from the aborted transaction, causing persistent index corruption.
+    // Fix: (1) store UndoRecord for each vector index mutation alongside
+    // the data undo buffer, (2) replay undo records on rollback to revert
+    // vector index to its pre-transaction state.
+    // DEEP_AUDIT_FULL_2024.md item #47.
     pub fn insert(
         &self,
         node_id: u64,

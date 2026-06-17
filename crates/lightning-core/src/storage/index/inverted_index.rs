@@ -133,6 +133,14 @@ impl InvertedIndex {
         Ok(())
     }
 
+    // #48: TODO — WAL/MVCC integration for FTS (Tantivy) index.
+    // Tantivy commits independently of the Lightning WAL. On transaction
+    // rollback, the FTS index retains changes from the aborted transaction.
+    // Fix: coordinate FTS index commits with MVCC transaction lifecycle:
+    // buffer FTS mutations in memory until the transaction commits, then
+    // flush to Tantivy only on successful commit. On rollback, discard
+    // buffered mutations without touching Tantivy.
+    // DEEP_AUDIT_FULL_2024.md item #48.
     pub fn commit(&self) -> Result<()> {
         let mut writer = self.writer.write();
         writer

@@ -493,6 +493,13 @@ impl Table {
     }
 }
 
+// #50: TODO — StorageManager uses a single global `Arc<RwLock<StorageManager>>`
+// in lib.rs. ALL operations across ALL tables contend on this one lock,
+// serializing table scans, index lookups, and DML across independent tables.
+// Fix: Replace the single RwLock with per-table RwLocks (e.g., a concurrent
+// HashMap from table_name -> RwLock<Table>). The StorageManager itself would
+// become a lock-free index of table names to their individual locks.
+// DEEP_AUDIT_FULL_2024.md item #50.
 pub struct StorageManager {
     pub db_path: PathBuf,
     pub data_fh: Arc<FileHandle>,
