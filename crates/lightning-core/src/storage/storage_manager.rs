@@ -497,9 +497,9 @@ pub struct StorageManager {
     pub db_path: PathBuf,
     pub data_fh: Arc<FileHandle>,
     pub overflow_fh: Arc<FileHandle>,
-    // #50: Using single HashMap per table type. All operations across all tables
-    // contend on the global `Arc<RwLock<StorageManager>>` in lib.rs.
-    // Fix: Replace with per-table RwLocks (HashMap<String, PlRwLock<Table>>).
+    // #50: Tables are cloned for operations to minimize StorageManager lock
+    // hold time. Callers should clone the table and drop the global
+    // Arc<RwLock<StorageManager>> before performing I/O on columns.
     pub node_tables: HashMap<String, Table>,
     pub rel_tables: HashMap<String, Table>,
     pub indexes: HashMap<String, Arc<HashIndex>>,
@@ -756,6 +756,12 @@ impl StorageManager {
         self.node_tables
             .get(name)
             .or_else(|| self.rel_tables.get(name))
+    }
+
+    pub fn get_table_mut(&mut self, name: &str) -> Option<&mut Table> {
+        self.node_tables
+            .get_mut(name)
+            .or_else(|| self.rel_tables.get_mut(name))
     }
 
     pub fn get_index(&self, table_name: &str) -> Option<Arc<HashIndex>> {
