@@ -482,7 +482,7 @@ impl Value {
                 } else {
                     serde_json::Value::Number(
                         serde_json::Number::from_f64(*n)
-                            .unwrap_or(serde_json::Number::from_f64(0.0).unwrap()),
+                            .unwrap_or(serde_json::Number::from(0)),
                     )
                 }
             }

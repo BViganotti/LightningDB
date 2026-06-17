@@ -309,7 +309,7 @@ impl PhysicalPlanner {
                                 crate::parser::ast::LogicalOperator::And,
                                 Box::new(cond),
                             )
-                        }).unwrap();
+                        }).ok_or_else(|| crate::LightningError::Internal("Empty filter conditions in join".into()))?;
                         Ok(Box::new(
                             crate::processor::operators::filter::PhysicalFilter::new(Box::new(join_op), filter),
                         ))

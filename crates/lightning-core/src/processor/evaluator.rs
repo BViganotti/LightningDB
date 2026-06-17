@@ -1024,7 +1024,7 @@ impl ExpressionEvaluator {
         let mut input_pos = 0usize;
         for (elem_idx, &orig_len) in element_lens.iter().enumerate() {
             if orig_len == 0 {
-                new_offsets.push(*new_offsets.last().unwrap());
+                new_offsets.push(*new_offsets.last().unwrap_or(&0));
                 continue;
             }
             let mask_slice = result_arr.slice(input_pos, orig_len);
@@ -1034,7 +1034,7 @@ impl ExpressionEvaluator {
             let original_vals = list_arr.value(elem_idx);
             let filtered = arrow::compute::filter(&original_vals, mask)
                 .map_err(|e| LightningError::Internal(e.to_string()))?;
-            let prev = *new_offsets.last().unwrap();
+            let prev = *new_offsets.last().unwrap_or(&0);
             new_offsets.push(prev + filtered.len() as i32);
             filtered_pieces.push(filtered);
             input_pos += orig_len;
@@ -1124,9 +1124,9 @@ impl ExpressionEvaluator {
         let mut transformed_pieces: Vec<ArrayRef> = Vec::new();
         for &orig_len in &element_orig_lens {
             if orig_len == 0 {
-                new_offsets.push(*new_offsets.last().unwrap());
+                new_offsets.push(*new_offsets.last().unwrap_or(&0));
             } else {
-                let prev = *new_offsets.last().unwrap();
+                let prev = *new_offsets.last().unwrap_or(&0);
                 new_offsets.push(prev + orig_len as i32);
                 transformed_pieces.push(result_arr.slice(input_pos, orig_len));
                 input_pos += orig_len;
