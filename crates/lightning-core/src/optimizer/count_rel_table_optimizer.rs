@@ -34,7 +34,11 @@ impl CountRelTableOptimizer {
                     let (func, _) = &aggregates[0];
                     if *func == AggregateFunction::Count {
                         match &pushed_child {
-                            LogicalOperator::Scan(rel_table, rel_alias, _, _, _) => {
+                            LogicalOperator::Scan(rel_table, rel_alias, _, _, Some(_)) => {
+                                // Scan has a filter — cannot use pre-computed total count
+                                // since filtered rows must be excluded.
+                            }
+                            LogicalOperator::Scan(rel_table, rel_alias, _, _, None) => {
                                 if self.is_rel_table(rel_table) {
                                     return Ok(LogicalOperator::CountRelTable {
                                         rel_table: rel_table.clone(),

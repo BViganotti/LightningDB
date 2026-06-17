@@ -30,22 +30,21 @@ pub struct Optimizer {
 
 impl Optimizer {
     pub fn new(catalog: Arc<RwLock<Catalog>>) -> Self {
-        let cat1 = Arc::clone(&catalog);
-        let cat2 = Arc::clone(&catalog);
+        let cat_jr = Arc::clone(&catalog);
+        let cat_ipd = Arc::clone(&catalog);
+        let cat_crt = Arc::clone(&catalog);
         Self {
             rules: vec![
                 Box::new(subquery_unnesting::SubqueryUnnesting::new()),
                 Box::new(filter_pushdown::FilterPushDown::new()),
-                Box::new(index_pushdown::IndexPushDown::new(cat2)),
-                Box::new(join_reordering::JoinReordering::new(cat1)),
+                Box::new(index_pushdown::IndexPushDown::new(cat_ipd)),
+                Box::new(join_reordering::JoinReordering::new(cat_jr)),
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
                 Box::new(order_by_pushdown::OrderByPushDown::new()),
-                // #59: ProjectionPushDown — pushes column projections closer to
-                //   Scan/IndexScan to reduce column count early. Includes full
-                //   expression index remapping for all operator types.
-                //   DEEP_AUDIT_FULL_2024.md item #59.
                 Box::new(projection_pushdown::ProjectionPushDown::new()),
+                Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
+                Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
                 // #59: ProjectionPushDown — pushes column projections closer to
                 //   Scan/IndexScan to reduce column count early. Includes full
                 //   expression index remapping for all operator types.
@@ -65,17 +64,20 @@ impl Optimizer {
                 //   through subsequent operators correctly.
                 //   DEEP_AUDIT_FULL_2024.md item #59.
                 //
-                // #59: AggKeyDependencyOptimizer disabled — incorrect
-                //   group-by dependency analysis when an aggregate key
-                //   transitively depends on another through a join column.
-                //   Produces wrong GROUP BY keys, causing wrong aggregation
-                //   results. DEEP_AUDIT_FULL_2024.md item #59.
-                //
-                // #59: CountRelTableOptimizer disabled — produces wrong
-                //   COUNT results for single-relationship tables because
-                //   it replaces a full scan+count with a table-level row
-                //   count that doesn't account for relationship filtering.
+                // #59: SemiJoinPushDown disabled — physical planner mask
+                //   lifecycle issues: SemiMasker adds mask columns to the
+                //   probe side but downstream operators (Projection, Sort)
+                //   don't account for the extra mask column, producing
+                //   wrong column offsets. Rel table scans also lose the
+                //   mask during property resolution.
                 //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
+                // #59: AccHashJoinOptimizer disabled — same mask lifecycle
+                //   issue as SemiJoinPushDown. Accumulator hash join
+                //   introduces a build-side mask that isn't propagated
+                //   through subsequent operators correctly.
+                //   DEEP_AUDIT_FULL_2024.md item #59.
+                //
             ],
         }
     }

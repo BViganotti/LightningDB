@@ -33,24 +33,29 @@ impl AggKeyDependencyOptimizer {
 
                 // This information is usually available in the Projection child.
                 if let LogicalOperator::Projection(_, ref items) = pushed_child {
-                    let mut primary_vars = HashSet::new();
-                    // First pass: identify primary variables in group_by
-                    for &idx in &group_by_cols {
-                        if idx < items.len() {
-                            let item = &items[idx];
-                            if let crate::planner::binder::BoundExpression::PropertyLookup(
-                                var_name,
-                                prop_idx,
-                                _,
-                            ) = &item.expression
-                            {
-                                // Assume 0 is always internal ID or Primary Key for now as a heuristic
-                                if *prop_idx == 0 || item.alias.ends_with("._id") {
-                                    primary_vars.insert(var_name.clone());
+                    // Only consider a GROUP BY column as a primary key if it
+                    // references property index 0 (the internal _id column).
+                    // Property index 0 is guaranteed to be unique per table,
+                    // so any other column from the same variable is functionally
+                    // dependent on it.
+                    let primary_vars: HashSet<String> = group_by_cols
+                        .iter()
+                        .filter_map(|&idx| {
+                            if idx < items.len() {
+                                if let crate::planner::binder::BoundExpression::PropertyLookup(
+                                    var_name,
+                                    prop_idx,
+                                    _,
+                                ) = &items[idx].expression
+                                {
+                                    if *prop_idx == 0 {
+                                        return Some(var_name.clone());
+                                    }
                                 }
                             }
-                        }
-                    }
+                            None
+                        })
+                        .collect();
 
                     let mut new_group_by = Vec::new();
                     let mut dependent_group_by = Vec::new();
@@ -58,13 +63,17 @@ impl AggKeyDependencyOptimizer {
                     for idx in group_by_cols {
                         let mut is_dependent = false;
                         if idx < items.len() {
-                            let item = &items[idx];
                             if let crate::planner::binder::BoundExpression::PropertyLookup(
                                 v_name,
                                 p_idx,
                                 _,
-                            ) = &item.expression
+                            ) = &items[idx].expression
                             {
+                                // Only mark as dependent when:
+                                // 1. The same variable's PK (prop 0) is in group_by
+                                // 2. This is a non-PK property of the same variable
+                                // This avoids incorrect transitive dependencies
+                                // through join columns across different tables.
                                 if *p_idx != 0 && primary_vars.contains(v_name) {
                                     is_dependent = true;
                                 }
