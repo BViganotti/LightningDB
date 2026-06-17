@@ -9,10 +9,8 @@ export class LightningClient {
 
   async health(): Promise<number> {
     try {
-      const res = await fetch(`${this.baseUrl}/v1/query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: "RETURN 1 AS ping" }),
+      const res = await fetch(`${this.baseUrl}/health`, {
+        method: "GET",
         signal: AbortSignal.timeout(3000),
       });
       return res.status;

@@ -208,8 +208,7 @@ fn inject_modifiers(
     skp: Option<f64>,
     lmt: Option<f64>,
 ) -> Result<(), ParserError> {
-    if let Some(ref e) = ord {
-        // Format is "expr|DIR" where DIR is "ASC" or "DESC"
+    let order_by_item = if let Some(ref e) = ord {
         let (expr_str, desc) = if let Some(pipe) = e.rfind('|') {
             let dir = &e[pipe + 1..];
             let clean_expr = &e[..pipe];
@@ -222,35 +221,28 @@ fn inject_modifiers(
         let expr = parse_expression(p.into_iter().next().ok_or_else(|| {
             ParserError::Internal("empty ORDER BY expression".to_string())
         })?)?;
-        for u in &mut q.union_queries {
-            if let Statement::Match(_, _, cs) = &mut u.statement {
-                for c in cs.iter_mut() {
-                    if let Clause::Return(ref mut r) = c {
-                        r.order_by = Some(vec![OrderByItem {
-                            expression: expr.clone(),
-                            descending: desc,
-                        }]);
+        Some(OrderByItem {
+            expression: expr,
+            descending: desc,
+        })
+    } else {
+        None
+    };
+    for u in &mut q.union_queries {
+        let clauses = match &mut u.statement {
+            Statement::Match(_, _, cs) => Some(cs),
+            _ => None,
+        };
+        if let Some(cs) = clauses {
+            for c in cs.iter_mut() {
+                if let Clause::Return(ref mut r) = c {
+                    if let Some(ref item) = order_by_item {
+                        r.order_by = Some(vec![item.clone()]);
                     }
-                }
-            }
-        }
-    }
-    if let Some(v) = skp {
-        for u in &mut q.union_queries {
-            if let Statement::Match(_, _, cs) = &mut u.statement {
-                for c in cs.iter_mut() {
-                    if let Clause::Return(ref mut r) = c {
+                    if let Some(v) = skp {
                         r.skip = Some(v);
                     }
-                }
-            }
-        }
-    }
-    if let Some(v) = lmt {
-        for u in &mut q.union_queries {
-            if let Statement::Match(_, _, cs) = &mut u.statement {
-                for c in cs.iter_mut() {
-                    if let Clause::Return(ref mut r) = c {
+                    if let Some(v) = lmt {
                         r.limit = Some(v);
                     }
                 }

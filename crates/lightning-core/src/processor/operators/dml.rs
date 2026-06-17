@@ -572,10 +572,9 @@ impl PhysicalOperator for PhysicalSet {
                                             })
                                             .collect();
                                         if emb_f32.len() == vec_idx.dimension() {
-                                            // VectorIndex::search doesn't have delete-by-id,
-                                            // but insert_batch is the flat-array variant.
-                                            // For simplicity, skip vector index update for SET
-                                            // since VectorIndex is a flat array without node_id lookup.
+                                            if let Err(e) = vec_idx.update(*node_id, &emb_f32, &self.buffer_manager, tx) {
+                                                tracing::warn!("Vector index update failed for node {node_id}: {e}");
+                                            }
                                         }
                                     }
                                 }
@@ -689,10 +688,10 @@ impl PhysicalOperator for PhysicalDelete {
                             tracing::warn!("FTS commit error after delete: {e}");
                         }
                     }
-                    if let Some(_vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
-                        // VectorIndex doesn't have a delete-by-node-id method,
-                        // but setting the embedding to zero vector is effectively a delete
-                        // since zero-vector matches nothing in cosine/ip distance.
+                    if let Some(vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
+                        if let Err(e) = vec_idx.delete(id, &self.buffer_manager, tx) {
+                            tracing::warn!("Vector index delete error for node {}: {e}", id);
+                        }
                     }
                 }
                 self.shared_state

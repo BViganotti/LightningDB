@@ -6,7 +6,7 @@ import ssl
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 import httpx
 
@@ -453,25 +453,27 @@ class AsyncTransport:
         method: str,
         path: str,
         json_body: Optional[dict] = None,
-    ) -> Any:
+    ) -> AsyncIterator[dict]:
         self._check_circuit_breaker(path)
         request_id = str(uuid.uuid4())
         auth_token = _resolve_auth(self._config)
         headers = _make_headers(self._config, request_id, auth_token)
 
-        resp = await self._client.request(
+        async with self._client.stream(
             method,
             path,
             json=json_body,
             headers=headers,
-        )
-        if resp.is_error:
-            raise LightningTransportError(
-                f"stream error: {resp.status_code}",
-                status_code=resp.status_code,
-                request_id=request_id,
-            )
-        return resp
+        ) as resp:
+            if resp.is_error:
+                raise LightningTransportError(
+                    f"stream error: {resp.status_code}",
+                    status_code=resp.status_code,
+                    request_id=request_id,
+                )
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    yield json.loads(line[6:])
 
     async def close(self) -> None:
         await self._client.aclose()

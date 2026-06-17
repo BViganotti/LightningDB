@@ -151,34 +151,29 @@ export class LightningClient {
     if (!this.tls) return undefined
     if (typeof process === 'undefined' || !process.versions?.node) return undefined
 
-    try {
-      const fs: typeof import('fs') = await import('node:fs')
-      const connectOpts: Record<string, unknown> = {
-        rejectUnauthorized: this.tls.verify !== false,
-      }
-      if (this.tls.caBundlePath) {
-        connectOpts.ca = fs.readFileSync(this.tls.caBundlePath, 'utf-8')
-      }
-      if (this.tls.certPath && this.tls.keyPath) {
-        connectOpts.cert = fs.readFileSync(this.tls.certPath, 'utf-8')
-        connectOpts.key = fs.readFileSync(this.tls.keyPath, 'utf-8')
-      }
-      if (this.tls.serverNameOverride) {
-        connectOpts.servername = this.tls.serverNameOverride
-      }
+    let ca: Buffer | undefined
+    let cert: Buffer | undefined
+    let key: Buffer | undefined
 
-      // Use https.Agent for Node.js — compatible with all versions
-      const https: typeof import('https') = await import('node:https')
-      return new https.Agent({
-        rejectUnauthorized: this.tls.verify !== false,
-        ca: this.tls.caBundlePath ? fs.readFileSync(this.tls.caBundlePath) : undefined,
-        cert: this.tls.certPath ? fs.readFileSync(this.tls.certPath) : undefined,
-        key: this.tls.keyPath ? fs.readFileSync(this.tls.keyPath) : undefined,
-        servername: this.tls.serverNameOverride,
-      })
-    } catch {
-      return undefined
+    const fs: typeof import('fs') = await import('node:fs')
+    if (this.tls.caBundlePath) {
+      ca = fs.readFileSync(this.tls.caBundlePath)
     }
+    if (this.tls.certPath) {
+      cert = fs.readFileSync(this.tls.certPath)
+    }
+    if (this.tls.keyPath) {
+      key = fs.readFileSync(this.tls.keyPath)
+    }
+
+    const https: typeof import('https') = await import('node:https')
+    return new https.Agent({
+      rejectUnauthorized: this.tls.verify !== false,
+      ca,
+      cert,
+      key,
+      servername: this.tls.serverNameOverride,
+    })
   }
 
   private resolveAuth(): string | undefined {

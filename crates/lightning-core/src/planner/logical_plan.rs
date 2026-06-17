@@ -345,8 +345,6 @@ impl LogicalPlanner {
     ) {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
-                // Find which group-by expression this property corresponds to
-                // by matching the property name/index in the group_by list
                 for (gi, gb) in group_by_exprs.iter().enumerate() {
                     if let BoundExpression::PropertyLookup(gb_var, gb_idx, _) = &gb.expression {
                         if gb_var == var && gb_idx == idx {
@@ -355,18 +353,19 @@ impl LogicalPlanner {
                         }
                     }
                 }
-                // If not found in group_by, check if it's an aggregate column
-                // by matching against RETURN items
                 for (ri, item) in ret_items.iter().enumerate() {
                     if let BoundExpression::PropertyLookup(ri_var, ri_idx, _) = &item.expression {
                         if ri_var == var && ri_idx == idx {
-                            // This is an aggregate column — find its position
-                            // in the aggregate output by counting non-group-by items
                             let mut agg_offset = 0;
                             for prev in 0..ri {
                                 if ret_items[prev].expression.is_aggregate() || matches!(&ret_items[prev].expression, BoundExpression::PropertyLookup(_, _, _)) {
+                                    let prev_var_idx = match &ret_items[prev].expression {
+                                        BoundExpression::PropertyLookup(pv, pi, _) => Some((pv.as_str(), *pi)),
+                                        _ => None,
+                                    };
                                     let is_gb = group_by_exprs.iter().any(|gb| {
-                                        matches!(&gb.expression, BoundExpression::PropertyLookup(gv, gi, _) if gv == ri_var && gi == ri_idx)
+                                        matches!(&gb.expression, BoundExpression::PropertyLookup(gv, gi, _)
+                                            if prev_var_idx.map_or(false, |(pv, pi)| gv.as_str() == pv && *gi == pi))
                                     });
                                     if !is_gb {
                                         agg_offset += 1;
@@ -402,6 +401,53 @@ impl LogicalPlanner {
                         } else {
                             // Aggregate column — count how many non-group-by
                             // RETURN items precede this one
+                            let mut agg_idx = 0;
+                            for prev in 0..ri {
+                                let prev_is_gb = group_by_exprs.iter().any(|gb| {
+                                    gb.alias == ret_items[prev].alias
+                                });
+                                if !prev_is_gb {
+                                    agg_idx += 1;
+                                }
+                            }
+                            *expr = BoundExpression::PropertyLookup(
+                                String::new(), group_by_count + agg_idx, item.expression.get_type(),
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            BoundExpression::Function(name, args, _) => {
+                for (ri, item) in ret_items.iter().enumerate() {
+                    let item_is_match = match &item.expression {
+                        BoundExpression::Function(iname, iargs, _) => {
+                            iname.eq_ignore_ascii_case(name)
+                                && args.len() == iargs.len()
+                                && args.iter().zip(iargs.iter()).all(|(a, b)| {
+                                    matches!((a, b),
+                                        (BoundExpression::PropertyLookup(va, ia, _),
+                                         BoundExpression::PropertyLookup(vb, ib, _))
+                                        if va == vb && ia == ib
+                                    )
+                                })
+                        }
+                        _ => false,
+                    };
+                    if item_is_match || item.alias.eq_ignore_ascii_case(name) {
+                        let is_gb = group_by_exprs.iter().any(|gb| {
+                            gb.alias == item.alias
+                        });
+                        if is_gb {
+                            for (gi, gb) in group_by_exprs.iter().enumerate() {
+                                if gb.alias == item.alias {
+                                    *expr = BoundExpression::PropertyLookup(
+                                        String::new(), gi, item.expression.get_type(),
+                                    );
+                                    return;
+                                }
+                            }
+                        } else {
                             let mut agg_idx = 0;
                             for prev in 0..ri {
                                 let prev_is_gb = group_by_exprs.iter().any(|gb| {
