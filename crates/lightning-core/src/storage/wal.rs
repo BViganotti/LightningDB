@@ -59,6 +59,10 @@ pub struct WAL {
     /// Pending group-commit buffer: serialized WAL bytes not yet written to disk.
     /// Accumulated by `log_page_update`, flushed by `log_commit`.
     pending_buf: Mutex<Vec<u8>>,
+    /// Read-write lock for CDC coordination: CDC readers acquire read lock,
+    /// writers (log_commit) acquire write lock. Ensures the CDC thread never
+    /// observes a partially-written commit batch.
+    cdc_lock: parking_lot::RwLock<()>,
 }
 
 impl WAL {
@@ -88,6 +92,7 @@ impl WAL {
             archive_path: None,
             archive_seq: AtomicU64::new(0),
             pending_buf: Mutex::new(Vec::with_capacity(65536)),
+            cdc_lock: parking_lot::RwLock::new(()),
         })
     }
 
@@ -225,8 +230,11 @@ impl WAL {
         // Write commit record and flush while holding file lock (fast path).
         // Obtain the raw fd under the lock, then release before sync_all()
         // so concurrent WAL writers are NOT blocked during the slow fsync call.
+        // The cdc_lock write guard ensures CDC readers never observe a
+        // partially-written commit batch.
         #[cfg(unix)]
         let sync_fd = {
+            let _cdc_guard = self.cdc_lock.write();
             use std::os::unix::io::AsRawFd;
             let mut file = self.file.lock();
             if !commit_record.is_empty() {
@@ -238,6 +246,7 @@ impl WAL {
         };
         #[cfg(not(unix))]
         {
+            let _cdc_guard = self.cdc_lock.write();
             let mut file = self.file.lock();
             if !commit_record.is_empty() {
                 file.write_all(&commit_record)?;
@@ -463,6 +472,9 @@ impl WAL {
     const MAX_WAL_READ_SIZE: usize = 64 * 1024 * 1024; // 64 MB
 
     pub fn read_records_from(&self, offset: u64) -> Result<WALRecordIter> {
+        // Acquire CDC read lock to prevent concurrent log_commit from
+        // writing partial data while we read.
+        let _cdc_guard = self.cdc_lock.read();
         let (buf, start) = {
             let mut file = self.file.lock();
             let file_len = file.metadata()?.len();
