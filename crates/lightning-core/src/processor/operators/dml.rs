@@ -204,6 +204,14 @@ impl PhysicalOperator for PhysicalCreate {
                         }
 
                         rows.push(row_data);
+                    }
+                    self.table
+                        .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
+                    // Push undo records ONLY after the write succeeds, so a failed
+                    // write does not leave dangling undo records that attempt to
+                    // delete nodes that were never created.
+                    for i in 0..rows.len() {
+                        let next_id = start_id + i as u64;
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
                     }
@@ -215,8 +223,6 @@ impl PhysicalOperator for PhysicalCreate {
                             rdat.push(row.clone());
                         }
                     }
-                    self.table
-                        .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
 
                     // Index new rows in FTS and vector indexes (same pattern as MERGE)
                     let storage_guard = database.storage_manager.read();
@@ -414,6 +420,17 @@ impl PhysicalOperator for PhysicalSet {
                 // Track which property indices were updated per node
                 let mut node_updates: std::collections::HashMap<u64, Vec<usize>> =
                     std::collections::HashMap::new();
+
+                // Phase 1: Evaluate all assignment expressions and snapshot original column values
+                // BEFORE any writes. This prevents undo corruption when multiple assignments target
+                // the same column (e.g., SET n.x = 1, n.x = 2) — the undo records must capture the
+                // original pre-SET value, not the intermediate value from an earlier assignment.
+                let mut assignment_snapshots: Vec<(
+                    usize,                           // property_idx
+                    arrow::array::ArrayRef,           // evaluated expression result
+                    Vec<(u64, Value)>,                // (node_id, original_value) for each row
+                )> = Vec::with_capacity(self.assignments.len());
+
                 for assignment in &self.assignments {
                     let eval_res = ExpressionEvaluator::evaluate(
                         &assignment.expression,
@@ -425,24 +442,34 @@ impl PhysicalOperator for PhysicalSet {
                     )?;
                     let col = &self.table.columns[assignment.property_idx];
                     let prop_idx = assignment.property_idx;
+                    let mut row_originals: Vec<(u64, Value)> = Vec::with_capacity(num_rows);
                     for i in 0..num_rows {
                         let id = match Value::from_arrow(chunk.batch.column(0), i) {
                             Value::Node(id) => id,
                             _ => continue,
                         };
                         let old_val = col.get_value(&self.buffer_manager, id, tx)?;
+                        row_originals.push((id, old_val));
+                    }
+                    assignment_snapshots.push((prop_idx, eval_res, row_originals));
+                }
+
+                // Phase 2: Push undo records (using original snapshots) and apply writes
+                for (prop_idx, eval_res, row_originals) in &assignment_snapshots {
+                    let col = &self.table.columns[*prop_idx];
+                    for (i, (id, old_val)) in row_originals.iter().enumerate() {
                         self.undo_buffer.push(UndoRecord::UpdateColumn(
                             self.table.name.clone(),
-                            id,
-                            old_val,
+                            *id,
+                            old_val.clone(),
                         ));
                         col.append_value(
                             &self.buffer_manager,
-                            &Value::from_arrow(&eval_res, i),
-                            id,
+                            &Value::from_arrow(eval_res, i),
+                            *id,
                             tx,
                         )?;
-                        node_updates.entry(id).or_default().push(prop_idx);
+                        node_updates.entry(*id).or_default().push(*prop_idx);
                     }
                 }
                 for (id, updated_props) in &node_updates {
@@ -870,12 +897,16 @@ impl PhysicalOperator for PhysicalCreateRel {
                         row_data[*idx] = Value::from_arrow(arr, i);
                     }
                         rows.push(row_data);
-                        self.undo_buffer
-                            .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
                     }
                     if !rows.is_empty() {
                         self.table
                             .batch_append_rows(&self.buffer_manager, &rows, start_id, tx)?;
+                        // Push undo records ONLY after the write succeeds.
+                        for i in 0..rows.len() {
+                            let next_id = start_id + i as u64;
+                            self.undo_buffer
+                                .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
+                        }
                         // Track created rel IDs for output batch
                         {
                             let mut ids = self.shared_state.affected_ids.write();
@@ -1115,7 +1146,7 @@ impl PhysicalOperator for PhysicalMerge {
                         }
                         self.shared_state
                             .total_affected
-                            .fetch_add(0, Ordering::SeqCst);
+                            .fetch_add(1, Ordering::SeqCst);
                     } else {
                         let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
                         self.shared_state.affected_ids.write().push(next_id);
