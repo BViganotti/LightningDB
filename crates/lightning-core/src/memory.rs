@@ -299,12 +299,16 @@ impl MemoryStore {
                 if entity.embedding.len() == vec_idx.dimension() {
                     if let Ok(tx) = db.transaction_manager.begin(false) {
                         let bm = &db.buffer_manager;
-                        let _ = vec_idx.delete(internal_id, bm, &tx);
-                        let _ = vec_idx.insert_batch(
+                        if let Err(e) = vec_idx.delete(internal_id, bm, &tx) {
+                            tracing::warn!("MemoryStore: vector index delete failed: {e}");
+                        }
+                        if let Err(e) = vec_idx.insert_batch(
                             &[(internal_id, entity.embedding.clone())],
                             bm,
                             &tx,
-                        );
+                        ) {
+                            tracing::warn!("MemoryStore: vector index insert_batch failed: {e}");
+                        }
                         if let Err(e) = db.transaction_manager.commit(&tx, bm, &db) {
                             tracing::warn!(
                                 "MemoryStore: vector index commit failed after update: {e}"
@@ -638,8 +642,10 @@ impl MemoryStore {
                     }
                 }
             }
-            let _ = db.transaction_manager.rollback(&db, &tx);
-        }
+                    if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                        tracing::warn!("MemoryStore: recovery rollback failed: {e}");
+                    }
+                }
 
         // Phase 4: Rerank by configurable composite score
         let now_secs = Self::now_micros() / 1_000_000;
@@ -1285,8 +1291,12 @@ impl MemoryStore {
                                 if let Ok(tx) = db.transaction_manager.begin(false) {
                                     let bm = &db.buffer_manager;
                                     let pk_value = Value::String(entity_id.to_string());
-                                    let _ = idx.insert(bm, &pk_value, id, &tx);
-                                    let _ = db.transaction_manager.commit(&tx, bm, &db);
+                                    if let Err(e) = idx.insert(bm, &pk_value, id, &tx) {
+                                        tracing::warn!("MemoryStore: hash index insert failed: {e}");
+                                    }
+                                    if let Err(e) = db.transaction_manager.commit(&tx, bm, &db) {
+                                        tracing::warn!("MemoryStore: hash index insert commit failed: {e}");
+                                    }
                                 }
                             }
                             return Some(id);
@@ -1336,11 +1346,17 @@ impl MemoryStore {
                     // Always compact to ensure pending edges are persisted to base files.
                     // Graph writes (associate) are relatively rare compared to entity writes,
                     // and compaction is O(E) where E is total edges.
-                    let _ = csr.compact(bm, &tx);
-                    if let Some(ref bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
-                        let _ = bwd_csr.compact(bm, &tx);
+                    if let Err(e) = csr.compact(bm, &tx) {
+                        tracing::warn!("MemoryStore: fwd CSR compact failed: {e}");
                     }
-                    let _ = db.transaction_manager.commit(&tx, bm, &db);
+                    if let Some(ref bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
+                        if let Err(e) = bwd_csr.compact(bm, &tx) {
+                            tracing::warn!("MemoryStore: bwd CSR compact failed: {e}");
+                        }
+                    }
+                    if let Err(e) = db.transaction_manager.commit(&tx, bm, &db) {
+                        tracing::warn!("MemoryStore: associate compact commit failed: {e}");
+                    }
                 } else {
                     let _ = db.transaction_manager.rollback(&db, &tx);
                 }
