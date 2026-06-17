@@ -1419,7 +1419,14 @@ fn parse_literal(p: pest::iterators::Pair<Rule>) -> Result<Literal, ParserError>
             let s = i.as_str();
             Ok(Literal::String(s[1..s.len() - 1].to_string()))
         }
-        Rule::number_literal => Ok(Literal::Number(i.as_str().parse().unwrap_or(0.0))),
+        Rule::number_literal => {
+            let s = i.as_str();
+            if s.contains('.') || s.contains('e') || s.contains('E') {
+                Ok(Literal::Number(s.parse().unwrap_or(0.0)))
+            } else {
+                Ok(Literal::Integer(s.parse().unwrap_or(0)))
+            }
+        },
         Rule::boolean_literal => Ok(Literal::Boolean(i.as_str().to_uppercase() == "TRUE")),
         Rule::null_literal => Ok(Literal::Null),
         _ => Err(ParserError::Internal("bad lit".into())),

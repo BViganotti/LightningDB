@@ -50,7 +50,7 @@ pub extern "C" fn lightning_open(path: *const c_char) -> *mut LightningConnectio
 pub extern "C" fn lightning_query(
     conn_ptr: *mut LightningConnection,
     query: *const c_char,
-) -> *const c_char {
+) -> *mut c_char {
     if conn_ptr.is_null() {
         return std::ptr::null_mut();
     }

@@ -179,6 +179,7 @@ impl PhysicalScan {
                     (BoundExpression::PropertyLookup(_, prop_idx, _), BoundExpression::Literal(lit)) => {
                         let val = match lit {
                             crate::parser::ast::Literal::String(s) => crate::processor::Value::String(s.clone()),
+                            crate::parser::ast::Literal::Integer(n) => crate::processor::Value::Number(*n as f64),
                             crate::parser::ast::Literal::Number(n) => crate::processor::Value::Number(*n),
                             crate::parser::ast::Literal::Boolean(b) => crate::processor::Value::Boolean(*b),
                             crate::parser::ast::Literal::Null => crate::processor::Value::Null,
@@ -188,6 +189,7 @@ impl PhysicalScan {
                     (BoundExpression::Literal(lit), BoundExpression::PropertyLookup(_, prop_idx, _)) => {
                         let val = match lit {
                             crate::parser::ast::Literal::String(s) => crate::processor::Value::String(s.clone()),
+                            crate::parser::ast::Literal::Integer(n) => crate::processor::Value::Number(*n as f64),
                             crate::parser::ast::Literal::Number(n) => crate::processor::Value::Number(*n),
                             crate::parser::ast::Literal::Boolean(b) => crate::processor::Value::Boolean(*b),
                             crate::parser::ast::Literal::Null => crate::processor::Value::Null,

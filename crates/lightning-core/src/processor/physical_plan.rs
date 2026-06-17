@@ -1165,7 +1165,25 @@ impl PhysicalPlanner {
             BoundExpression::Arithmetic(left, arith_op, right) => {
                 let l = self.plan_expression(op, left)?;
                 let r = self.plan_expression(op, right)?;
-                if let (BoundExpression::Literal(Literal::Number(a)),
+                if let (BoundExpression::Literal(Literal::Integer(a)),
+                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                {
+                    let result = match arith_op {
+                        ArithmeticOperator::Add => (*a + *b) as f64,
+                        ArithmeticOperator::Subtract => (*a - *b) as f64,
+                        ArithmeticOperator::Multiply => (*a * *b) as f64,
+                        ArithmeticOperator::Divide => {
+                            if *b == 0 {
+                                return Err(LightningError::Internal(
+                                    "Division by zero in constant expression".into(),
+                                ));
+                            }
+                            *a as f64 / *b as f64
+                        }
+                        ArithmeticOperator::Modulo => (*a % *b) as f64,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Number(result)));
+                } else if let (BoundExpression::Literal(Literal::Number(a)),
                         BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
                 {
                     let result = match arith_op {
@@ -1183,12 +1201,61 @@ impl PhysicalPlanner {
                         ArithmeticOperator::Modulo => a % b,
                     };
                     return Ok(BoundExpression::Literal(Literal::Number(result)));
+                } else if let (BoundExpression::Literal(Literal::Integer(a)),
+                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                {
+                    let result = match arith_op {
+                        ArithmeticOperator::Add => *a as f64 + b,
+                        ArithmeticOperator::Subtract => *a as f64 - b,
+                        ArithmeticOperator::Multiply => *a as f64 * b,
+                        ArithmeticOperator::Divide => {
+                            if *b == 0.0 {
+                                return Err(LightningError::Internal(
+                                    "Division by zero in constant expression".into(),
+                                ));
+                            }
+                            *a as f64 / b
+                        }
+                        ArithmeticOperator::Modulo => *a as f64 % b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Number(result)));
+                } else if let (BoundExpression::Literal(Literal::Number(a)),
+                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                {
+                    let result = match arith_op {
+                        ArithmeticOperator::Add => a + *b as f64,
+                        ArithmeticOperator::Subtract => a - *b as f64,
+                        ArithmeticOperator::Multiply => a * *b as f64,
+                        ArithmeticOperator::Divide => {
+                            if *b == 0 {
+                                return Err(LightningError::Internal(
+                                    "Division by zero in constant expression".into(),
+                                ));
+                            }
+                            a / *b as f64
+                        }
+                        ArithmeticOperator::Modulo => a % *b as f64,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Number(result)));
                 }
                 Ok(BoundExpression::Arithmetic(Box::new(l), *arith_op, Box::new(r)))
             }
             BoundExpression::Comparison(left, cmp_op, right) => {
                 let l = self.plan_expression(op, left)?;
                 let r = self.plan_expression(op, right)?;
+                if let (BoundExpression::Literal(Literal::Integer(a)),
+                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                {
+                    let result = match cmp_op {
+                        ComparisonOperator::Equal => a == b,
+                        ComparisonOperator::NotEqual => a != b,
+                        ComparisonOperator::LessThan => a < b,
+                        ComparisonOperator::LessThanOrEqual => a <= b,
+                        ComparisonOperator::GreaterThan => a > b,
+                        ComparisonOperator::GreaterThanOrEqual => a >= b,
+                    };
+                    return Ok(BoundExpression::Literal(Literal::Boolean(result)));
+                }
                 if let (BoundExpression::Literal(Literal::Number(a)),
                         BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
                 {

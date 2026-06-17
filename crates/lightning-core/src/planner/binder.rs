@@ -289,6 +289,7 @@ impl BoundExpression {
     pub fn get_type(&self) -> LogicalType {
         match self {
             BoundExpression::Literal(lit) => match lit {
+                Literal::Integer(_) => LogicalType::Int64,
                 Literal::Number(_) => LogicalType::Double,
                 Literal::String(_) => LogicalType::String,
                 Literal::Boolean(_) => LogicalType::Bool,
@@ -428,12 +429,8 @@ impl<'a> Binder<'a> {
             }
 
             for (left, right) in left_columns.iter().zip(right_columns.iter()) {
-                if left.0 != right.0 {
-                    return Err(LightningError::Query(format!(
-                        "Column name mismatch in UNION: {} vs {}",
-                        left.0, right.0
-                    )));
-                }
+                // Cypher/SQL allows UNION with different column names —
+                // the first query's column names are used.
                 if left.1 != right.1 {
                     return Err(LightningError::Query(format!(
                         "Column type mismatch in UNION for column {}: {:?} vs {:?}",

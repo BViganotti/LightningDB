@@ -29,6 +29,7 @@ impl ExpressionEvaluator {
     ) -> Result<ArrayRef> {
         match expr {
             BoundExpression::Literal(lit) => match lit {
+                Literal::Integer(n) => Ok(Arc::new(Int64Array::from_value(*n, num_rows))),
                 Literal::Number(n) => Ok(Arc::new(Float64Array::from_value(*n, num_rows))),
                 Literal::String(s) => Ok(Arc::new(StringArray::from_iter_values(
                     std::iter::repeat_n(s.as_str(), num_rows),
@@ -800,12 +801,57 @@ impl ExpressionEvaluator {
         _num_rows: usize,
     ) -> Option<Result<ArrayRef>> {
         use crate::parser::ast::ComparisonOperator::*;
+        if let Literal::Integer(n) = lit {
+            let scalar_i = arrow::array::Int64Array::new_scalar(*n);
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                let res = match op {
+                    Equal => eq(arr, &scalar_i),
+                    NotEqual => neq(arr, &scalar_i),
+                    LessThan => lt(arr, &scalar_i),
+                    LessThanOrEqual => lt_eq(arr, &scalar_i),
+                    GreaterThan => gt(arr, &scalar_i),
+                    GreaterThanOrEqual => gt_eq(arr, &scalar_i),
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                if *n < 0 {
+                    let num_rows = arr.len();
+                    let all_false = {
+                        let byte_count = num_rows.div_ceil(8);
+                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                        Arc::new(BooleanArray::new(values, None)) as ArrayRef
+                    };
+                    let all_true = {
+                        let byte_count = num_rows.div_ceil(8);
+                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        buf.as_mut().fill(0xFF);
+                        let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                        Arc::new(BooleanArray::new(values, None)) as ArrayRef
+                    };
+                    let res = match op {
+                        Equal | GreaterThan | GreaterThanOrEqual => Ok(all_false),
+                        NotEqual | LessThan | LessThanOrEqual => Ok(all_true),
+                    };
+                    return Some(res);
+                }
+                let scalar_u = arrow::array::UInt64Array::new_scalar(*n as u64);
+                let res = match op {
+                    Equal => eq(arr, &scalar_u),
+                    NotEqual => neq(arr, &scalar_u),
+                    LessThan => lt(arr, &scalar_u),
+                    LessThanOrEqual => lt_eq(arr, &scalar_u),
+                    GreaterThan => gt(arr, &scalar_u),
+                    GreaterThanOrEqual => gt_eq(arr, &scalar_u),
+                };
+                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+            }
+        }
         if let Literal::Number(n) = lit {
             let val = *n as f64;
             let scalar = arrow::array::Float64Array::new_scalar(val);
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
-                // Cast int column to float64 for comparison to avoid rounding surprises:
-                //   WHERE int_col = 3.7  should not match rows where int_col = 4.
                 let f64_arr = arrow::compute::cast(arr, &DataType::Float64)
                     .ok()?;
                 let f64_arr = f64_arr.as_any().downcast_ref::<arrow::array::Float64Array>()?;
@@ -900,16 +946,6 @@ impl ExpressionEvaluator {
                 let res = match op {
                     Equal => eq(arr, &scalar_i),
                     NotEqual => neq(arr, &scalar_i),
-                    _ => return None,
-                };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
-            }
-            // Handle booleans stored as Float64 (0.0/1.0)
-            if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
-                let scalar_f = arrow::array::Float64Array::new_scalar(bool_val_i64 as f64);
-                let res = match op {
-                    Equal => eq(arr, &scalar_f),
-                    NotEqual => neq(arr, &scalar_f),
                     _ => return None,
                 };
                 return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));

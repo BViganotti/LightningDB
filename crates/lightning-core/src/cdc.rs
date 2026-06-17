@@ -50,7 +50,7 @@ impl CdcManager {
     }
 
     pub fn subscribe(&self, wal: &WAL) -> Result<CdcSubscriber> {
-        let current_size = wal.size().unwrap_or(0);
+        let current_size = wal.size()?;
         let (tx, rx) = bounded(64);
 
         // Replay any records written before subscribe() returns to close the
@@ -87,6 +87,11 @@ impl CdcManager {
     }
 
     pub fn start(&self, wal: Arc<WAL>) {
+        // Prevent starting twice — second call would overwrite handle and leak the first thread
+        if self.handle.lock().is_some() {
+            tracing::warn!("CDC manager already started, ignoring duplicate start() call");
+            return;
+        }
         self.inner.running.store(true, Ordering::Release);
         let inner = Arc::clone(&self.inner);
 

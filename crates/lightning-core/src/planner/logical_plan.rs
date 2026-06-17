@@ -886,7 +886,7 @@ impl LogicalPlanner {
                                             // GROUP BY values instead of all rows.
                                             aggregate_arg_exprs.push(BoundProjectionItem {
                                                 expression: BoundExpression::Literal(
-                                                    crate::parser::ast::Literal::Number(1.0),
+                                                    crate::parser::ast::Literal::Integer(1),
                                                 ),
                                                 alias: "_dummy".to_string(),
                                             });
@@ -905,7 +905,7 @@ impl LogicalPlanner {
                                             if is_bare_variable {
                                                 aggregate_arg_exprs.push(BoundProjectionItem {
                                                     expression: BoundExpression::Literal(
-                                                        crate::parser::ast::Literal::Number(1.0),
+                                                        crate::parser::ast::Literal::Integer(1),
                                                     ),
                                                     alias: "_dummy".to_string(),
                                                 });

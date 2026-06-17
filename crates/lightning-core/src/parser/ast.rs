@@ -340,6 +340,7 @@ pub enum ComparisonOperator {
 pub enum Literal {
     String(String),
     Number(f64),
+    Integer(i64),
     Boolean(bool),
     Null,
 }
