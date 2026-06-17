@@ -64,7 +64,105 @@ use crate::processor::Processor;
 use crate::storage::WAL;
 use crate::transaction::transaction_manager::Transaction;
 use crate::transaction::TransactionManager;
+use crate::parser::ast::{Clause, NodePattern, Pattern, Query, Statement};
 use regex::Regex;
+
+/// System table names that must not be accessible via Cypher queries.
+/// These tables store authentication data (password hashes, tokens, API keys)
+/// and are managed exclusively through the auth store API.
+const SYSTEM_AUTH_TABLES: &[&str] = &["auth_users", "auth_refresh_tokens", "auth_api_keys"];
+
+/// Extract all table label references from a parsed Query AST and check
+/// that none of them target system auth tables. This prevents privilege
+/// escalation via Cypher queries (e.g., `MATCH (u:auth_users) RETURN u.password_hash`).
+fn validate_no_auth_table_access(query: &Query) -> Result<()> {
+    for union_q in &query.union_queries {
+        validate_statement_no_auth_tables(&union_q.statement)?;
+    }
+    Ok(())
+}
+
+fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
+    match stmt {
+        Statement::Match(match_clause, _where, clauses) => {
+            if let Some(ref mc) = match_clause {
+                for pattern in &mc.patterns {
+                    validate_pattern_no_auth_tables(pattern)?;
+                }
+            }
+            for clause in clauses {
+                validate_clause_no_auth_tables(clause)?;
+            }
+        }
+        Statement::Create(pattern) => {
+            validate_pattern_no_auth_tables(pattern)?;
+        }
+        Statement::Merge(mc) => {
+            validate_pattern_no_auth_tables(&mc.pattern)?;
+        }
+        Statement::CreateTableNode { name, .. }
+        | Statement::AlterTable { name, .. }
+        | Statement::DropTable(name, _)
+        | Statement::CreateIndex { table_label: name, .. }
+        | Statement::CreateConstraint { table_label: name, .. }
+        | Statement::CreateVectorIndex { table_name: name, .. } => {
+            if SYSTEM_AUTH_TABLES.contains(&name.as_str()) {
+                return Err(LightningError::Query(format!(
+                    "Access to system table '{}' is not allowed via Cypher", name
+                )));
+            }
+        }
+        Statement::CopyFrom { table_name, .. } | Statement::CopyTo { table_name, .. } => {
+            if SYSTEM_AUTH_TABLES.contains(&table_name.as_str()) {
+                return Err(LightningError::Query(format!(
+                    "Access to system table '{}' is not allowed via Cypher", table_name
+                )));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_pattern_no_auth_tables(pattern: &Pattern) -> Result<()> {
+    validate_node_labels_no_auth(&pattern.node_pattern)?;
+    for chain in &pattern.relationship_chains {
+        validate_node_labels_no_auth(&chain.node_pattern)?;
+    }
+    if let Some(ref start) = pattern.shortest_path_start {
+        validate_node_labels_no_auth(start)?;
+    }
+    if let Some(ref end) = pattern.shortest_path_end {
+        validate_node_labels_no_auth(end)?;
+    }
+    Ok(())
+}
+
+fn validate_node_labels_no_auth(node: &NodePattern) -> Result<()> {
+    for label in &node.labels {
+        if SYSTEM_AUTH_TABLES.contains(&label.as_str()) {
+            return Err(LightningError::Query(format!(
+                "Access to system table '{}' is not allowed via Cypher", label
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_clause_no_auth_tables(clause: &Clause) -> Result<()> {
+    match clause {
+        Clause::Create(pattern) => validate_pattern_no_auth_tables(pattern)?,
+        Clause::Merge(mc) => validate_pattern_no_auth_tables(&mc.pattern)?,
+        Clause::Match(mc) | Clause::OptionalMatch(mc) => {
+            for pattern in &mc.patterns {
+                validate_pattern_no_auth_tables(pattern)?;
+            }
+        }
+        Clause::Subquery(sub_q) => validate_no_auth_table_access(sub_q)?,
+        _ => {}
+    }
+    Ok(())
+}
 
 #[derive(Error, Debug)]
 pub enum LightningError {
@@ -1258,6 +1356,7 @@ impl Connection {
                 drop(cache);
                 let query = parse(query_str)
                     .map_err(|e| LightningError::Query(e.to_string()))?;
+                validate_no_auth_table_access(&query)?;
                 let catalog = self.client_context.database.catalog.read();
                 let mut binder = Binder::new(
                     &catalog,
