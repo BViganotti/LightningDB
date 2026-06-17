@@ -520,11 +520,20 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 }
             }
             Rule::call_clause => {
-                let mut it = i.into_inner();
-                return Ok(Statement::StandaloneCall(
-                    required_pair(it.next(), "pair")?.as_str().to_string(),
-                    Vec::new(),
-                ));
+                let inner: Vec<_> = i.into_inner().collect();
+                let name = inner.first()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default();
+                let mut args = Vec::new();
+                for token in inner.into_iter().skip(1) {
+                    match token.as_rule() {
+                        Rule::expression => {
+                            args.push(parse_literal(token)?);
+                        }
+                        _ => {} // yield_clause and others are skipped for StandaloneCall
+                    }
+                }
+                return Ok(Statement::StandaloneCall(name, args));
             }
             Rule::set_clause => {
                 let mut assignments = Vec::new();

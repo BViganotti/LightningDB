@@ -52,6 +52,33 @@ impl CdcManager {
     pub fn subscribe(&self, wal: &WAL) -> Result<CdcSubscriber> {
         let current_size = wal.size().unwrap_or(0);
         let (tx, rx) = bounded(64);
+
+        // Replay any records written before subscribe() returns to close the
+        // race window between capturing the offset and the poll thread starting.
+        if current_size > 0 {
+            let mut iter = wal.read_records_from(current_size)?;
+            loop {
+                match iter.next_record() {
+                    Some(WALRecord::PageUpdate { tx_id, file_id, page_idx, .. }) => {
+                        let event = CdcEvent {
+                            timestamp: now_micros(),
+                            tx_id,
+                            file_id,
+                            page_idx,
+                        };
+                        if tx.try_send(event).is_err() {
+                            tracing::warn!("CDC subscribe replay channel full, dropping event");
+                        }
+                    }
+                    Some(WALRecord::Commit { .. }) => {}
+                    Some(WALRecord::Corrupt { msg }) => {
+                        tracing::warn!("CDC subscribe detected corrupt WAL record: {}", msg);
+                    }
+                    None => break,
+                }
+            }
+        }
+
         self.inner.subscribers.lock().push(SubscriberEntry {
             tx,
             start_offset: current_size,
@@ -60,13 +87,13 @@ impl CdcManager {
     }
 
     pub fn start(&self, wal: Arc<WAL>) {
-        self.inner.running.store(true, Ordering::Relaxed);
+        self.inner.running.store(true, Ordering::Release);
         let inner = Arc::clone(&self.inner);
 
         let handle = std::thread::spawn(move || {
             let mut last_positions: Vec<u64> = Vec::new();
 
-            while inner.running.load(Ordering::Relaxed) {
+            while inner.running.load(Ordering::Acquire) {
                 // Snapshot subscribers under lock, then release before I/O
                 let snapshot: Vec<(Sender<CdcEvent>, u64)> = {
                     let subs = inner.subscribers.lock();
@@ -98,7 +125,9 @@ impl CdcManager {
                                         file_id,
                                         page_idx,
                                     };
-                                    let _ = tx.try_send(event);
+                                    if tx.try_send(event).is_err() {
+                                        tracing::warn!("CDC subscriber channel full, dropping event");
+                                    }
                                 }
                                 Some(WALRecord::Commit { .. }) => {}
                                 Some(WALRecord::Corrupt { msg }) => {
@@ -119,7 +148,7 @@ impl CdcManager {
     }
 
     pub fn stop(&self) {
-        self.inner.running.store(false, Ordering::Relaxed);
+        self.inner.running.store(false, Ordering::Release);
         if let Some(handle) = self.handle.lock().take() {
             let _ = handle.join();
         }

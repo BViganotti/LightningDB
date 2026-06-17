@@ -136,20 +136,32 @@ pub async fn auth_middleware(
                 });
 
             fn percent_decode(s: &str) -> String {
-                let mut out = String::with_capacity(s.len());
-                let mut chars = s.chars();
-                while let Some(c) = chars.next() {
-                    if c == '%' {
-                        let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-                        let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-                        out.push((hi as u8 * 16 + lo as u8) as char);
-                    } else if c == '+' {
-                        out.push(' ');
+                let mut out = Vec::with_capacity(s.len());
+                let mut bytes = s.bytes();
+                while let Some(b) = bytes.next() {
+                    if b == b'%' {
+                        let hi = bytes.next().and_then(hex_val);
+                        let lo = bytes.next().and_then(hex_val);
+                        match (hi, lo) {
+                            (Some(h), Some(l)) => out.push(h * 16 + l),
+                            _ => out.push(b'%'),
+                        }
+                    } else if b == b'+' {
+                        out.push(b' ');
                     } else {
-                        out.push(c);
+                        out.push(b);
                     }
                 }
-                out
+                String::from_utf8(out).unwrap_or_default()
+            }
+
+            fn hex_val(b: u8) -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
             }
 
             let token = match auth_header {

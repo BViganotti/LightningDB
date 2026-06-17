@@ -731,6 +731,12 @@ impl PhysicalOperator for PhysicalDelete {
                         };
                         if deleted_set.contains(&from_val) || deleted_set.contains(&to_val) {
                             for col in &rel_table.columns {
+                                let old_val = col.get_value(bm, row_idx as u64, tx)?;
+                                self.undo_buffer.push(UndoRecord::UpdateColumn(
+                                    rel_name.clone(),
+                                    row_idx as u64,
+                                    old_val,
+                                ));
                                 col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
                             }
                             let storage_guard = database.storage_manager.read();
