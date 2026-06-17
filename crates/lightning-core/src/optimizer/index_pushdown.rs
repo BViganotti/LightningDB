@@ -53,6 +53,11 @@ impl IndexPushDown {
                                             ) = &**left
                                             {
                                                 if *lookup_idx == pk_idx {
+                                                // Only apply IndexScan when the pk_value is a simple
+                                                // literal. If it references outer-scope variables
+                                                // (correlated subquery), constant folding produces
+                                                // wrong values. In that case, keep the Filter+Scan.
+                                                if !expr_has_outer_variables(&*right) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
@@ -61,6 +66,7 @@ impl IndexPushDown {
                                                         proj.clone(),
                                                     ));
                                                 }
+                                            }
                                             }
                                         }
                                     }
@@ -80,6 +86,7 @@ impl IndexPushDown {
                                             ) = &**right
                                             {
                                                 if *lookup_idx == pk_idx {
+                                                if !expr_has_outer_variables(&*left) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
@@ -88,6 +95,7 @@ impl IndexPushDown {
                                                         proj.clone(),
                                                     ));
                                                 }
+                                            }
                                             }
                                         }
                                     }
@@ -239,5 +247,38 @@ impl IndexPushDown {
 impl Rule for IndexPushDown {
     fn apply(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
         self.apply_recursive(plan)
+    }
+}
+
+/// Check if a BoundExpression references outer-scope variables (not simple literals).
+/// IndexScan pk_value expressions must be pure literals; correlated subquery references
+/// produce incorrect results when constant-folded by the physical planner.
+fn expr_has_outer_variables(expr: &BoundExpression) -> bool {
+    match expr {
+        BoundExpression::Literal(_) => false,
+        BoundExpression::Variable(_, _) => true,
+        BoundExpression::PropertyLookup(_, _, _) => true,
+        BoundExpression::Function(_, args, _) => args.iter().any(|a| expr_has_outer_variables(a)),
+        BoundExpression::Aggregate(_, args, _) => args.iter().any(|a| expr_has_outer_variables(a)),
+        BoundExpression::Arithmetic(left, _, right) => {
+            expr_has_outer_variables(left) || expr_has_outer_variables(right)
+        }
+        BoundExpression::Comparison(left, _, right) => {
+            expr_has_outer_variables(left) || expr_has_outer_variables(right)
+        }
+        BoundExpression::Logical(left, _, right) => {
+            expr_has_outer_variables(left) || expr_has_outer_variables(right)
+        }
+        BoundExpression::Not(inner) => expr_has_outer_variables(inner),
+        BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => true,
+        BoundExpression::List(items, _) => items.iter().any(|i| expr_has_outer_variables(i)),
+        BoundExpression::Map(entries, _) => entries.iter().any(|(_, v)| expr_has_outer_variables(v)),
+        BoundExpression::Lambda(_, body) => expr_has_outer_variables(body),
+        BoundExpression::Case { expression, when_then, else_expression, .. } => {
+            expression.as_ref().map_or(false, |e| expr_has_outer_variables(e))
+                || when_then.iter().any(|(w, t)| expr_has_outer_variables(w) || expr_has_outer_variables(t))
+                || else_expression.as_ref().map_or(false, |e| expr_has_outer_variables(e))
+        }
+        _ => false,
     }
 }

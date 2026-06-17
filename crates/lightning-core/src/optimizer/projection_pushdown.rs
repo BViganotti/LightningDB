@@ -110,10 +110,45 @@ impl ProjectionPushDown {
             BoundExpression::Lambda(_, body) => {
                 Self::extract_property_indices(body, indices);
             }
+            BoundExpression::Not(inner) => Self::extract_property_indices(inner, indices),
+            BoundExpression::Exists(steps) => {
+                for (m, w) in steps {
+                    for el in &m.elements {
+                        if let crate::planner::binder::BoundMatchElement::Node(_, var, props) = el {
+                            indices.entry(var.clone()).or_default().insert(0);
+                            for (idx, _) in props {
+                                indices.entry(var.clone()).or_default().insert(*idx);
+                            }
+                        }
+                    }
+                    if let Some(w) = w {
+                        Self::extract_property_indices(&w.expression, indices);
+                    }
+                }
+            }
+            BoundExpression::CountSubquery(steps) => {
+                for (m, w) in steps {
+                    for el in &m.elements {
+                        if let crate::planner::binder::BoundMatchElement::Node(_, var, props) = el {
+                            indices.entry(var.clone()).or_default().insert(0);
+                            for (idx, _) in props {
+                                indices.entry(var.clone()).or_default().insert(*idx);
+                            }
+                        }
+                    }
+                    if let Some(w) = w {
+                        Self::extract_property_indices(&w.expression, indices);
+                    }
+                }
+            }
+            BoundExpression::Map(entries, _) => {
+                for (_, e) in entries {
+                    Self::extract_property_indices(e, indices);
+                }
+            }
             BoundExpression::Parameter(_)
             | BoundExpression::Literal(_)
             | BoundExpression::NextVal(_) => {}
-            _ => {}
         }
     }
 
@@ -181,6 +216,17 @@ impl ProjectionPushDown {
             }
             BoundExpression::Lambda(_, body) => {
                 Self::remap_expression_indices(body, column_usage);
+            }
+            BoundExpression::Not(inner) => Self::remap_expression_indices(inner, column_usage),
+            BoundExpression::Exists(steps) | BoundExpression::CountSubquery(steps) => {
+                // Exists/CountSubquery expressions reference outer-scope variables
+                // but their internal expressions are evaluated in a subquery scope
+                // and do not need index remapping in the parent plan.
+            }
+            BoundExpression::Map(entries, _) => {
+                for (_, e) in entries {
+                    Self::remap_expression_indices(e, column_usage);
+                }
             }
             _ => {}
         }

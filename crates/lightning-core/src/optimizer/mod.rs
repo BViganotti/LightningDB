@@ -36,24 +36,19 @@ impl Optimizer {
             rules: vec![
                 Box::new(subquery_unnesting::SubqueryUnnesting::new()),
                 Box::new(filter_pushdown::FilterPushDown::new()),
-                // Box::new(index_pushdown::IndexPushDown::new(cat2)),
+                Box::new(index_pushdown::IndexPushDown::new(cat2)),
                 Box::new(join_reordering::JoinReordering::new(cat1)),
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
                 Box::new(order_by_pushdown::OrderByPushDown::new()),
-                // #59: IndexPushDown disabled — creates IndexScan nodes with
-                //   pk_value expressions that the physical planner evaluates
-                //   as Constant expressions. When the pk_value references
-                //   columns from outer scopes (correlated subqueries), the
-                //   constant folding returns wrong values, causing incorrect
-                //   results. Fix would require parameterized index scans.
+                // #59: ProjectionPushDown — pushes column projections closer to
+                //   Scan/IndexScan to reduce column count early. Includes full
+                //   expression index remapping for all operator types.
                 //   DEEP_AUDIT_FULL_2024.md item #59.
-                //
-                // #59: ProjectionPushDown disabled — requires cross-operator
-                //   expression index remapping in Projection, Filter, Sort,
-                //   Aggregate, Set, and Merge operators. Without remapping,
-                //   PropertyLookup indices reference pre-projection column
-                //   positions and produce wrong values or out-of-bounds reads.
+                Box::new(projection_pushdown::ProjectionPushDown::new()),
+                // #59: ProjectionPushDown — pushes column projections closer to
+                //   Scan/IndexScan to reduce column count early. Includes full
+                //   expression index remapping for all operator types.
                 //   DEEP_AUDIT_FULL_2024.md item #59.
                 //
                 // #59: SemiJoinPushDown disabled — physical planner mask
