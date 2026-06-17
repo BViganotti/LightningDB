@@ -1,11 +1,7 @@
-use crate::storage::buffer_manager::BufferManager;
-use crate::storage::file_handle::FileHandle;
-use crate::Result;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::sync::Arc;
 
 thread_local! {
     // Use a unique seed per thread based on time + thread address

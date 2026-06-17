@@ -1,8 +1,7 @@
 use crate::processor::Value;
 use crate::storage::compression::{
-    CompressionAlg, CompressionMetadata, CompressionType, Uncompressed,
+    CompressionMetadata, CompressionType,
 };
-use crate::Result;
 use lightning_types::LogicalType;
 use std::hash::{Hash, Hasher};
 

@@ -1,6 +1,5 @@
 use crate::storage::file_handle::FileHandle;
 use crate::{LightningError, Result};
-use lru::LruCache;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rayon::prelude::*;

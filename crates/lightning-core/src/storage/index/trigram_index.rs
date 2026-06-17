@@ -259,10 +259,6 @@ impl TrigramIndex {
         let mut bigram_count = 0u64;
         let mut unigram_count = 0u64;
 
-        let mut tri_map = self.trigrams.write();
-        let mut bi_map = self.bigrams.write();
-        let mut uni_map = self.unigrams.write();
-
         // Use HashSet for O(1) deduplication during batch insert
         let mut tri_map: HashMap<[u8; 3], HashSet<u64>> = HashMap::new();
         let mut bi_map: HashMap<[u8; 2], HashSet<u64>> = HashMap::new();
