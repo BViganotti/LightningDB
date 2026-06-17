@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -356,7 +356,9 @@ impl Server {
                 );
 
                 let server = axum_server::bind_rustls(addr, tls_config);
-                let serve_future = server.serve(app.into_make_service());
+                let serve_future = server.serve(
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                );
                 tokio::select! {
                     result = serve_future => {
                         result.expect("Server exited with error");
@@ -371,7 +373,10 @@ impl Server {
                 .await
                 .expect("Failed to bind address");
 
-            axum::serve(listener, app)
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
                 .with_graceful_shutdown(shutdown_signal())
                 .await
                 .expect("Server exited with error");
@@ -415,7 +420,9 @@ async fn run_mtls_server(
         axum_server::tls_rustls::RustlsConfig::from_config(std::sync::Arc::new(server_config));
 
     let server = axum_server::bind_rustls(addr, tls_config);
-    let serve_future = server.serve(app.into_make_service());
+    let serve_future = server.serve(
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
     tokio::select! {
         result = serve_future => {
             result.expect("Server exited with error");

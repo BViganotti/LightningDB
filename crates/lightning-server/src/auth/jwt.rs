@@ -19,12 +19,18 @@ pub fn create_access_token(
         .map_err(|e| format!("time error: {e}"))?
         .as_secs() as usize;
 
+    // Derive deployment-specific aud/iss from the JWT secret to prevent
+    // cross-deployment token reuse when aud/iss are not explicitly configured.
+    let deployment_id = jwt_deployment_id(secret);
+
     let claims = JwtClaims {
         sub: user_id.to_string(),
         role: *role,
         exp: now + ttl_secs as usize,
         iat: now,
         jti: uuid::Uuid::new_v4().to_string(),
+        aud: Some(deployment_id.clone()),
+        iss: Some(deployment_id),
     };
 
     encode(
@@ -36,11 +42,11 @@ pub fn create_access_token(
 }
 
 pub fn validate_access_token(token: &str, secret: &[u8]) -> Result<JwtClaims, String> {
-    // Per-deployment aud/iss validation should be added here when
-    // LIGHTNING_JWT_AUDIENCE / LIGHTNING_JWT_ISSUER configs are introduced.
-    // Until then, the token's exp, iat, and signature are still validated.
+    let deployment_id = jwt_deployment_id(secret);
     let mut validation = Validation::default();
     validation.leeway = 0;
+    validation.set_audience(&[&deployment_id]);
+    validation.set_issuer(&[&deployment_id]);
     let token_data = decode::<JwtClaims>(
         token,
         &DecodingKey::from_secret(secret),
@@ -49,10 +55,23 @@ pub fn validate_access_token(token: &str, secret: &[u8]) -> Result<JwtClaims, St
     .map_err(|e| match e.kind() {
         jsonwebtoken::errors::ErrorKind::ExpiredSignature => "token expired".to_string(),
         jsonwebtoken::errors::ErrorKind::InvalidToken => "invalid token".to_string(),
+        jsonwebtoken::errors::ErrorKind::InvalidAudience => "token audience mismatch".to_string(),
+        jsonwebtoken::errors::ErrorKind::InvalidIssuer => "token issuer mismatch".to_string(),
         _ => format!("token validation failed: {e}"),
     })?;
 
     Ok(token_data.claims)
+}
+
+/// Derive a deployment-specific identifier from the JWT secret.
+/// This prevents token reuse across deployments unless they share the
+/// aud/iss configuration explicitly.
+fn jwt_deployment_id(secret: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"lightning-jwt-deployment-v1");
+    hasher.update(secret);
+    hex::encode(hasher.finalize())
 }
 
 pub fn hmac_hash(input: &str, secret: &[u8]) -> String {

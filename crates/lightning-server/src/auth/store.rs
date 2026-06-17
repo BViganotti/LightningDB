@@ -39,6 +39,7 @@ pub struct AuthStore {
     access_token_ttl_secs: u64,
     refresh_token_ttl_secs: u64,
     login_attempts: parking_lot::Mutex<HashMap<String, LoginRecord>>,
+    login_ip_attempts: parking_lot::Mutex<HashMap<std::net::IpAddr, LoginRecord>>,
 }
 
 struct LoginRecord {
@@ -93,6 +94,7 @@ impl AuthStore {
             access_token_ttl_secs,
             refresh_token_ttl_secs,
             login_attempts: parking_lot::Mutex::new(HashMap::new()),
+            login_ip_attempts: parking_lot::Mutex::new(HashMap::new()),
         })
     }
 
@@ -267,7 +269,33 @@ impl AuthStore {
     //  Login / Lockout
     // ------------------------------------------------------------------
 
-    pub fn try_login(&self, username: &str, password: &str) -> Result<User, String> {
+    pub fn try_login(&self, username: &str, password: &str, client_ip: std::net::IpAddr) -> Result<User, String> {
+        // Check per-IP rate before per-username lockout to prevent IP-based brute force
+        {
+            let mut ip_attempts = self.login_ip_attempts.lock();
+            let now = now_secs();
+            let entry = ip_attempts.entry(client_ip).or_insert(LoginRecord {
+                timestamps: Vec::new(),
+                locked_until: None,
+            });
+            if let Some(locked_until) = entry.locked_until {
+                if now < locked_until {
+                    return Err("too many login attempts from this IP".to_string());
+                }
+                *entry = LoginRecord {
+                    timestamps: Vec::new(),
+                    locked_until: None,
+                };
+            }
+            entry.timestamps.retain(|t| *t > now - LOGIN_WINDOW_SECS);
+            entry.timestamps.push(now);
+            if entry.timestamps.len() as u32 >= MAX_LOGIN_ATTEMPTS {
+                entry.locked_until = Some(now + LOCKOUT_DURATION_SECS);
+                entry.timestamps.clear();
+                return Err("too many login attempts from this IP".to_string());
+            }
+        }
+
         let user = {
             let mut attempts = self.login_attempts.lock();
             let now = now_secs();

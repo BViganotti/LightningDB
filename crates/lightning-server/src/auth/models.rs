@@ -139,6 +139,16 @@ pub struct JwtClaims {
     pub exp: usize,
     pub iat: usize,
     pub jti: String,
+    /// Deployment-specific audience to prevent cross-deployment token reuse.
+    /// Set via env LIGHTNING_JWT_AUDIENCE when configured, otherwise defaults
+    /// to a hash of the JWT secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
+    /// Deployment-specific issuer to prevent cross-deployment token reuse.
+    /// Set via env LIGHTNING_JWT_ISSUER when configured, otherwise defaults
+    /// to a hash of the JWT secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
 }
 
 #[derive(Debug, Clone)]

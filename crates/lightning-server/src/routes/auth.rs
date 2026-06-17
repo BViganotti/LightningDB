@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::Json;
+use std::net::SocketAddr;
 
 use crate::auth::jwt;
 use crate::auth::models::AuthMode;
@@ -13,6 +14,7 @@ use crate::server::AppState;
 
 pub async fn login_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     RequestId(request_id): RequestId,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<LoginResponse>>, AppError> {
@@ -26,7 +28,7 @@ pub async fn login_handler(
         return Err(AppError::BadRequest("username and password are required".to_string()));
     }
 
-    let user = state.auth_store.try_login(&req.username, &req.password).map_err(|e| {
+    let user = state.auth_store.try_login(&req.username, &req.password, remote_addr.ip()).map_err(|e| {
         if e.contains("locked") {
             AppError::TooManyRequests(e)
         } else {
