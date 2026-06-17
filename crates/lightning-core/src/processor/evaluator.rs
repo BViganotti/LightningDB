@@ -812,16 +812,43 @@ impl ExpressionEvaluator {
                 return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                let scalar_u = arrow::array::UInt64Array::new_scalar(val as u64);
-                let res = match op {
-                    Equal => eq(arr, &scalar_u),
-                    NotEqual => neq(arr, &scalar_u),
-                    LessThan => lt(arr, &scalar_u),
-                    LessThanOrEqual => lt_eq(arr, &scalar_u),
-                    GreaterThan => gt(arr, &scalar_u),
-                    GreaterThanOrEqual => gt_eq(arr, &scalar_u),
+                let num_rows = arr.len();
+                let res = if val < 0 {
+                    // A negative literal compared against UInt64: well-defined semantics:
+                    //   Equal -> always false (no unsigned value equals a negative)
+                    //   NotEqual, LessThan -> always true
+                    //   GreaterThan -> always false
+                    let all_true = {
+                        let byte_count = num_rows.div_ceil(8);
+                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        buf.as_mut().fill(0xFF);
+                        let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                        Arc::new(BooleanArray::new(values, None)) as ArrayRef
+                    };
+                    let all_false = {
+                        let byte_count = num_rows.div_ceil(8);
+                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        buf.as_mut().fill(0x00);
+                        let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                        Arc::new(BooleanArray::new(values, None)) as ArrayRef
+                    };
+                    match op {
+                        Equal | GreaterThan | GreaterThanOrEqual => Ok(all_false),
+                        NotEqual | LessThan | LessThanOrEqual => Ok(all_true),
+                    }
+                } else {
+                    let scalar_u = arrow::array::UInt64Array::new_scalar(val as u64);
+                    let res = match op {
+                        Equal => eq(arr, &scalar_u),
+                        NotEqual => neq(arr, &scalar_u),
+                        LessThan => lt(arr, &scalar_u),
+                        LessThanOrEqual => lt_eq(arr, &scalar_u),
+                        GreaterThan => gt(arr, &scalar_u),
+                        GreaterThanOrEqual => gt_eq(arr, &scalar_u),
+                    };
+                    res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string()))
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(res);
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
                 let scalar_f = arrow::array::Float64Array::new_scalar(*n);
