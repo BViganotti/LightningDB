@@ -51,7 +51,9 @@ impl RateLimiter {
         let mut windows = self.windows.lock();
         let now = Instant::now();
 
-        if windows.len() > 100_000 {
+        // Always prune stale entries to prevent memory exhaustion.
+        // Evict entries that haven't been active within 2x the window.
+        if windows.len() > 1000 {
             let stale_threshold = self.window * 2;
             windows.retain(|_, sw| {
                 sw.timestamps.back().map_or(false, |t| now.duration_since(*t) < stale_threshold)

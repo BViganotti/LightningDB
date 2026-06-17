@@ -1127,13 +1127,14 @@ impl PhysicalOperator for PhysicalMerge {
                         {
                             let mut row_data = vec![Value::Null; self.table.columns.len()];
                             row_data[0] = Value::Node(id);
-                            // Populate pattern property values
-                            for (i, (idx, _)) in self.pattern.properties.iter().enumerate() {
-                                if *idx < row_data.len() {
-                                    row_data[*idx] = Value::from_arrow(&prop_arrays[i], row_idx);
+                            // Read actual stored column values so non-pattern, non-assigned
+                            // columns reflect the real node state instead of remaining Null.
+                            for (ci, col) in self.table.columns.iter().enumerate().skip(1) {
+                                if let Ok(v) = col.get_value(&self.buffer_manager, id, tx) {
+                                    row_data[ci] = v;
                                 }
                             }
-                            // Overwrite with assignment values
+                            // Overwrite with assignment values (takes precedence)
                             for assign in &self.on_match_assignments {
                                 let v = ExpressionEvaluator::evaluate(
                                     &assign.expression,
