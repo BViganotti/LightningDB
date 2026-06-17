@@ -882,21 +882,23 @@ impl PhysicalPlanner {
             LogicalOperator::SemiJoin(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
             }
-            LogicalOperator::IndexScan(table_name, _var, _pk_name, _pk_val, projected_idxs) => {
-                if let Some(idxs) = projected_idxs {
-                    Ok(idxs.len())
+            LogicalOperator::IndexScan(table_name, var, _pk_name, _pk_val, projected_idxs) => {
+                let num_cols = if let Some(idxs) = projected_idxs {
+                    idxs.len()
                 } else {
                     let cat = self.db.catalog.read();
                     if let Some(t) = cat.get_node_table(table_name) {
                         // IndexScan includes the internal _id column in its physical
                         // output (same as Scan), so the column count must match.
-                        Ok(t.properties.len() + 1)
+                        t.properties.len() + 1
                     } else if let Some(t) = cat.get_rel_table(table_name) {
-                        Ok(t.properties.len())
+                        t.properties.len()
                     } else {
-                        Ok(0)
+                        0
                     }
-                }
+                };
+                positions.insert(var.clone(), start_col);
+                Ok(num_cols)
             }
             LogicalOperator::CreateRel(child_opt, _) => {
                 if let Some(child) = child_opt {

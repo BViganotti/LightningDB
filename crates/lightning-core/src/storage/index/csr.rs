@@ -63,7 +63,12 @@ fn validate_csr_header(buf: &[u8; PAGE_SIZE], expected_magic: [u8; 4]) -> Result
             buf[4], CSR_VERSION
         )));
     }
-    let stored_crc = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+    if buf.len() < 12 {
+        return Err(crate::LightningError::Internal(
+            "CSR header too short: expected at least 12 bytes".into(),
+        ));
+    }
+    let stored_crc = u32::from_le_bytes(buf[8..12].try_into().expect("infallible: checked buf.len() >= 12"));
     let mut digest = CRC32C.digest();
     digest.update(&buf[..8]);
     if digest.finalize() != stored_crc {

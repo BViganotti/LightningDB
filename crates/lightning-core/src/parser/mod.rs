@@ -767,7 +767,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                 let val = i
                     .into_inner()
                     .next()
-                    .expect("internal invariant violated")
+                    .ok_or_else(|| ParserError::Internal("SKIP clause missing value".into()))?
                     .as_str()
                     .parse::<f64>()
                     .map_err(|e| ParserError::Internal(format!("Invalid SKIP value: {e}")))?;
@@ -777,7 +777,7 @@ fn parse_return_clause(p: pest::iterators::Pair<Rule>) -> Result<ReturnClause, P
                 let val = i
                     .into_inner()
                     .next()
-                    .expect("internal invariant violated")
+                    .ok_or_else(|| ParserError::Internal("LIMIT clause missing value".into()))?
                     .as_str()
                     .parse::<f64>()
                     .map_err(|e| ParserError::Internal(format!("Invalid LIMIT value: {e}")))?;
@@ -1048,7 +1048,9 @@ fn parse_not(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> 
         }
     }
 
-    let mut expr = parse_comparison(comparison_pair.expect("internal invariant violated"))?;
+    let mut expr = parse_comparison(comparison_pair.ok_or_else(|| {
+        ParserError::Internal("NOT expression missing comparison operand".into())
+    })?)?;
 
     // Apply NOT operators (each NOT inverts the expression)
     for _ in 0..not_count {
@@ -1071,8 +1073,12 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
             Box::new(parse_term(ps[2].clone())?),
         ));
     } else if ps[1].as_rule() == Rule::string_predicate {
-        let op_pair = ps[1].clone().into_inner().next().expect("expected next element");
-        let right_expr = op_pair.clone().into_inner().next().expect("expected next element");
+        let op_pair = ps[1].clone().into_inner().next().ok_or_else(|| {
+            ParserError::Internal("string predicate missing operator".into())
+        })?;
+        let right_expr = op_pair.clone().into_inner().next().ok_or_else(|| {
+            ParserError::Internal("string predicate missing operand".into())
+        })?;
 
         let func_name = match op_pair.as_rule() {
             Rule::contains_op => "CONTAINS",
@@ -1351,7 +1357,9 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         Rule::cast_expression => {
             let mut inner = i.into_inner();
             let expr = parse_expression(required_pair(inner.next(), "pair")?)?;
-            let type_literal = inner.last().expect("expected last element").as_str().to_uppercase();
+            let type_literal = inner.last().ok_or_else(|| {
+                ParserError::Internal("CAST expression missing target type".into())
+            })?.as_str().to_uppercase();
             Ok(Expression::Function(
                 "CAST".to_string(),
                 vec![expr, Expression::Literal(Literal::String(type_literal))],

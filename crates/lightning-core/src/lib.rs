@@ -613,7 +613,8 @@ impl Database {
                                     let query_str = queries.value(i);
                                     let mut best_score = 0.0f32;
                                     for fts in storage.fts_indexes.values() {
-                                        if let Ok(res) = fts.search(query_str, 1, &db.buffer_manager, &db.transaction_manager.begin(true).unwrap()) {
+                                        let Ok(tx) = db.transaction_manager.begin(true) else { continue };
+                                        if let Ok(res) = fts.search(query_str, 1, &db.buffer_manager, &tx) {
                                             if let Some(&(_, s)) = res.first() {
                                                 if s > best_score { best_score = s; }
                                             }

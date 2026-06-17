@@ -1,7 +1,12 @@
+//! #58: This optimizer is currently dead code — it traverses the plan tree but
+//! never modifies it. The factorization rewrite (factorizing Cartesian products
+//! in correlated subqueries) requires the physical planner to support a
+//! `FactorizedJoin` operator. Until that operator exists, this rule is a no-op.
+//! Tracked in: DEEP_AUDIT_FULL_2024.md item #58.
+
 use crate::optimizer::Rule;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::Result;
-use std::collections::HashSet;
 
 pub struct FactorizationRewriter;
 
@@ -11,6 +16,7 @@ impl Default for FactorizationRewriter {
     }
 }
 
+#[allow(dead_code)]
 impl FactorizationRewriter {
     pub fn new() -> Self {
         Self
@@ -21,19 +27,6 @@ impl FactorizationRewriter {
             LogicalOperator::Join(left, right, cond) => {
                 let left_rewritten = self.rewrite(*left)?;
                 let right_rewritten = self.rewrite(*right)?;
-
-                // If the join condition is constant true and there are common variables?
-                // Actually, factorization is most useful for Cartesian products in subqueries.
-
-                let mut left_vars = HashSet::new();
-                left_rewritten.get_variables(&mut left_vars);
-
-                let mut right_vars = HashSet::new();
-                right_rewritten.get_variables(&mut right_vars);
-
-                // If they are disjoint, we can potentially factorize (Ladybug specific)
-                // In Lightning, we just keep the Join for now, but mark it for factorization in physical plan
-
                 Ok(LogicalOperator::Join(
                     Box::new(left_rewritten),
                     Box::new(right_rewritten),
@@ -53,6 +46,7 @@ impl FactorizationRewriter {
     }
 }
 
+#[allow(dead_code)]
 impl Rule for FactorizationRewriter {
     fn apply(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
         self.rewrite(plan)

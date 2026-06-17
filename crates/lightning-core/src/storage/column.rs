@@ -1911,7 +1911,9 @@ impl Column {
                     let len = u32::from_le_bytes(data[17..21].try_into().expect("infallible: fixed-size array conversion")) as usize;
                     let read_len = std::cmp::min(len, 4096 - offset as usize);
                     let overflow_page =
-                        bm.pin_page(self.overflow_fh.as_ref().expect("overflow file handle required").clone(), page_idx, tx)?;
+                        bm.pin_page(self.overflow_fh.as_ref().ok_or_else(|| {
+                            crate::LightningError::Internal("overflow file handle required but missing — possible data corruption".into())
+                        })?.clone(), page_idx, tx)?;
                     let end = std::cmp::min(offset as usize + read_len, 4096);
                     let raw = &overflow_page.as_slice()[offset as usize..end];
                     let s = if let Ok(s) = std::str::from_utf8(raw) {

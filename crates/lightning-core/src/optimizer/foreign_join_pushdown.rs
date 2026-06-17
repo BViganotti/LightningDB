@@ -1,3 +1,10 @@
+//! #58: This optimizer is currently dead code — it traverses the plan tree but
+//! never modifies it. Foreign join push-down would push Join operations into
+//! remote storage backends (e.g., joining two tables on a foreign data source).
+//! Lightning's scan operators don't yet support remote push-down. Until they do,
+//! this rule is a no-op.
+//! Tracked in: DEEP_AUDIT_FULL_2024.md item #58.
+
 use crate::optimizer::Rule;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::Result;
@@ -10,6 +17,7 @@ impl Default for ForeignJoinPushDown {
     }
 }
 
+#[allow(dead_code)]
 impl ForeignJoinPushDown {
     pub fn new() -> Self {
         Self
@@ -20,12 +28,6 @@ impl ForeignJoinPushDown {
             LogicalOperator::Join(left, right, cond) => {
                 let pushed_left = self.rewrite(*left)?;
                 let pushed_right = self.rewrite(*right)?;
-
-                // Pattern for Foreign Join Push-Down:
-                // If both tables are ForeignScans to the same source, they can be joined there.
-                // Currently, lightning scans are generic.
-                // In the future, we will check if the storage source supports push-down joins.
-
                 Ok(LogicalOperator::Join(
                     Box::new(pushed_left),
                     Box::new(pushed_right),
@@ -46,6 +48,7 @@ impl ForeignJoinPushDown {
     }
 }
 
+#[allow(dead_code)]
 impl Rule for ForeignJoinPushDown {
     fn apply(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
         self.rewrite(plan)
