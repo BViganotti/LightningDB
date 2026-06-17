@@ -13,6 +13,7 @@ use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Field, Schema};
 use lightning_types::LogicalType;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 pub struct ExpressionEvaluator;
@@ -566,24 +567,18 @@ impl ExpressionEvaluator {
                     ))),
                 }
             }
+            BoundExpression::Exists(steps) => {
+                let exists = evaluate_subquery_exists(steps, database, registry)?;
+                let fill = if exists { 0xFFu8 } else { 0x00 };
+                let byte_count = num_rows.div_ceil(8);
+                let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                buf.as_mut().fill(fill);
+                let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
+                Ok(Arc::new(BooleanArray::new(values, None)))
+            }
             BoundExpression::CountSubquery(steps) => {
-                let count = if let Some((sub_match, _sub_where)) = steps.first() {
-                    // Count by scanning the first node table in the subquery
-                    let mut total: i64 = 0;
-                    for element in &sub_match.elements {
-                        if let crate::planner::binder::BoundMatchElement::Node(table_name, _, _) = element {
-                            let storage = database.storage_manager.read();
-                            if let Some(table) = storage.get_table(table_name) {
-                                let num_rows = table.next_row_id.load(std::sync::atomic::Ordering::Relaxed);
-                                total += num_rows as i64;
-                            }
-                        }
-                    }
-                    total
-                } else {
-                    0
-                };
-                Ok(Arc::new(arrow::array::Int64Array::from_value(count, num_rows)))
+                let count = evaluate_subquery_count(steps, database, registry)?;
+                Ok(Arc::new(Int64Array::from_value(count, num_rows)))
             }
             _ => Err(LightningError::Internal(format!(
                 "Expression evaluation not implemented: {expr:?}"
@@ -1177,4 +1172,156 @@ impl ExpressionEvaluator {
 
         Ok(Arc::new(BooleanArray::from(results)))
     }
+}
+
+/// Evaluate a `COUNT { MATCH ... WHERE ... }` subquery by scanning the target table,
+/// building a RecordBatch, evaluating the WHERE expression, and counting matching rows.
+fn evaluate_subquery_count(
+    steps: &[(crate::planner::binder::BoundMatchClause, Option<crate::planner::binder::BoundWhereClause>)],
+    database: &crate::Database,
+    registry: &crate::processor::functions::FunctionRegistry,
+) -> Result<i64> {
+    let (sub_match, sub_where) = match steps.first() {
+        Some(s) => s,
+        None => return Ok(0),
+    };
+
+    let table_name = match sub_match.elements.iter().find_map(|el| {
+        if let crate::planner::binder::BoundMatchElement::Node(name, _, _) = el {
+            Some(name.clone())
+        } else {
+            None
+        }
+    }) {
+        Some(name) => name,
+        None => return Ok(0),
+    };
+
+    let bm = &database.buffer_manager;
+    let tx = database.transaction_manager.begin(true)?;
+
+    let table = {
+        let storage = database.storage_manager.read();
+        storage.get_table(&table_name).cloned()
+    };
+
+    let result = match table {
+        Some(table) => {
+            let num_table_rows = table.next_row_id.load(Ordering::SeqCst) as usize;
+            if num_table_rows == 0 {
+                0
+            } else if let Some(where_clause) = sub_where {
+                let count = scan_table_with_where(
+                    &table, bm, &tx, num_table_rows, &where_clause.expression, database, registry,
+                )?;
+                count
+            } else {
+                num_table_rows as i64
+            }
+        }
+        None => 0,
+    };
+
+    database.transaction_manager.rollback(database, &tx)?;
+    Ok(result)
+}
+
+/// Evaluate an `EXISTS { MATCH ... WHERE ... }` subquery by scanning the target table,
+/// building a RecordBatch, evaluating the WHERE expression, and checking if any row matches.
+fn evaluate_subquery_exists(
+    steps: &[(crate::planner::binder::BoundMatchClause, Option<crate::planner::binder::BoundWhereClause>)],
+    database: &crate::Database,
+    registry: &crate::processor::functions::FunctionRegistry,
+) -> Result<bool> {
+    let (sub_match, sub_where) = match steps.first() {
+        Some(s) => s,
+        None => return Ok(false),
+    };
+
+    let table_name = match sub_match.elements.iter().find_map(|el| {
+        if let crate::planner::binder::BoundMatchElement::Node(name, _, _) = el {
+            Some(name.clone())
+        } else {
+            None
+        }
+    }) {
+        Some(name) => name,
+        None => return Ok(false),
+    };
+
+    let bm = &database.buffer_manager;
+    let tx = database.transaction_manager.begin(true)?;
+
+    let table = {
+        let storage = database.storage_manager.read();
+        storage.get_table(&table_name).cloned()
+    };
+
+    let result = match table {
+        Some(table) => {
+            let num_table_rows = table.next_row_id.load(Ordering::SeqCst) as usize;
+            if num_table_rows == 0 {
+                false
+            } else if let Some(where_clause) = sub_where {
+                let count = scan_table_with_where(
+                    &table, bm, &tx, num_table_rows, &where_clause.expression, database, registry,
+                )?;
+                count > 0
+            } else {
+                true
+            }
+        }
+        None => false,
+    };
+
+    database.transaction_manager.rollback(database, &tx)?;
+    Ok(result)
+}
+
+/// Scan all rows from a table into a RecordBatch, evaluate a filter expression,
+/// and return the count of rows where the expression evaluates to true (non-null).
+fn scan_table_with_where(
+    table: &crate::storage::storage_manager::Table,
+    bm: &crate::storage::buffer_manager::BufferManager,
+    tx: &crate::transaction::transaction_manager::Transaction,
+    num_rows: usize,
+    filter_expr: &crate::planner::binder::BoundExpression,
+    database: &crate::Database,
+    registry: &crate::processor::functions::FunctionRegistry,
+) -> Result<i64> {
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
+    let mut fields: Vec<arrow::datatypes::Field> = Vec::with_capacity(table.columns.len());
+
+    for col in &table.columns {
+        let arr = col.scan_to_array(bm, 0, num_rows as u64, tx, None)?;
+        fields.push(col.to_field());
+        columns.push(arr);
+    }
+
+    let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    let batch = RecordBatch::try_new(schema, columns)
+        .map_err(|e| LightningError::Internal(format!("Failed to build subquery batch: {e}")))?;
+
+    let filter_arr = ExpressionEvaluator::evaluate(
+        filter_expr,
+        Some(&batch),
+        None,
+        batch.num_rows(),
+        registry,
+        database,
+    )?;
+
+    let bool_arr = filter_arr
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| LightningError::Internal("COUNT/EXISTS subquery WHERE must evaluate to boolean".into()))?;
+
+    let mut count: i64 = 0;
+    for i in 0..bool_arr.len() {
+        if bool_arr.is_valid(i) && bool_arr.value(i) {
+            count += 1;
+        }
+    }
+
+    Ok(count)
 }
