@@ -305,83 +305,9 @@ impl WasmFunction {
                         Ok(Arc::new(Float32Array::from(results)))
                     }
                     WasmExecMode::MemoryString => {
-                        let mut store = wasmi::Store::new(&engine, ());
-                        store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM fuel metering failed: {e}"
-                            )))?;
-                        let instance = wasmi::Instance::new(&mut store, &module, &[])
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM instantiation failed: {e}"
-                            )))?;
-
-                        let func = instance.get_typed_func::<(i32, i32), i32>(&mut store, &func_name)
-                            .map_err(|e| crate::LightningError::Internal(format!(
-                                "WASM string function '{func_name}' not found: {e}"
-                            )))?;
-
-                        let mem = instance.get_memory(&mut store, "memory")
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "WASM string function requires exported 'memory'".into()
-                            ))?;
-
-                        let mem_size = mem.data(&store).len();
-                        let mut results = Vec::with_capacity(num_rows);
-                        for i in 0..num_rows {
-                            let input_str = format!("{}", Value::from_arrow(&args[0], i));
-                            let input_bytes = input_str.as_bytes();
-                            let input_len = input_bytes.len();
-                            if input_len > mem_size {
-                                results.push(input_str);
-                                continue;
-                            }
-                            let write_offset = 0i32;
-                            {
-                                let mem_data = mem.data_mut(&mut store);
-                                // Zero the entire memory before each invocation
-                                // to prevent data leakage from previous rows
-                                mem_data.fill(0);
-                                mem_data[..input_len].copy_from_slice(input_bytes);
-                            }
-
-                            let output_offset = func.call(&mut store, (write_offset, input_len as i32))
-                                .map_err(|e| {
-                                    let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
-                                        format!("WASM function '{}' timed out (fuel exhausted)", func_name)
-                                    } else {
-                                        format!("WASM string call failed: {e}")
-                                    };
-                                    crate::LightningError::Internal(msg)
-                                })?;
-
-                            // Read output with sandbox bounds: only read within written region
-                            let output = {
-                                let mem_data = mem.data(&store);
-                                let start = output_offset as usize;
-                                if start < mem_size {
-                                    let end = mem_data[start..].iter()
-                                        .position(|&b| b == 0)
-                                        .map(|p| start + p)
-                                        .unwrap_or(mem_size);
-                                    let clamped_end = end.min(mem_size);
-                                    if clamped_end > start {
-                                        String::from_utf8_lossy(&mem_data[start..clamped_end]).to_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    String::new()
-                                }
-                            };
-                            results.push(output);
-                        }
-
-                        // Zero out entire WASM memory after all rows
-                        {
-                            let mem_data = mem.data_mut(&mut store);
-                            mem_data.fill(0);
-                        }
-
+                        let results = _exec_memory_string(
+                            &engine, &module, &args[0], num_rows, timeout_ms, &func_name,
+                        )?;
                         Ok(Arc::new(StringArray::from(results)))
                     }
                 }
@@ -466,6 +392,99 @@ fn _exec_memory_f32(
         }
 
         // Zero out memory to prevent data leakage
+        mem.data_mut(&mut *store).fill(0);
+
+        Ok(results)
+    })
+}
+
+/// Execute a MemoryString WASM function with a cached store+instance.
+/// #63: Uses thread-local storage to avoid per-batch wasmi::Instance::new.
+fn _exec_memory_string(
+    engine: &wasmi::Engine,
+    module: &wasmi::Module,
+    input_arr: &ArrayRef,
+    num_rows: usize,
+    timeout_ms: u64,
+    func_name: &str,
+) -> Result<Vec<String>> {
+    use std::cell::RefCell;
+    std::thread_local! {
+        static MEM_STRING_CACHE: RefCell<Option<(wasmi::Store<()>, wasmi::Instance)>>
+            = const { RefCell::new(None) };
+    }
+    MEM_STRING_CACHE.with(|cell| -> Result<Vec<String>> {
+        let mut borrow = cell.borrow_mut();
+        if borrow.is_none() {
+            let mut s = wasmi::Store::new(engine, ());
+            let inst = wasmi::Instance::new(&mut s, module, &[])
+                .unwrap_or_else(|e| panic!("WASM MemoryString instantiation failed: {e}"));
+            *borrow = Some((s, inst));
+        }
+        let (store, instance) = borrow.as_mut().unwrap();
+
+        store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
+            .map_err(|e| LightningError::Internal(format!("WASM fuel metering failed: {e}")))?;
+
+        let func = instance.get_typed_func::<(i32, i32), i32>(&mut *store, func_name)
+            .map_err(|e| LightningError::Internal(format!("WASM string function '{func_name}' not found: {e}")))?;
+
+        let mem = instance.get_memory(&mut *store, "memory")
+            .ok_or_else(|| LightningError::Internal(
+                "WASM string function requires exported 'memory'".into()
+            ))?;
+
+        let mem_size = mem.data(&*store).len();
+        let mut results = Vec::with_capacity(num_rows);
+        for i in 0..num_rows {
+            let input_str = format!("{}", Value::from_arrow(input_arr, i));
+            let input_bytes = input_str.as_bytes();
+            let input_len = input_bytes.len();
+            if input_len > mem_size {
+                results.push(input_str);
+                continue;
+            }
+            let write_offset = 0i32;
+            {
+                let mem_data = mem.data_mut(&mut *store);
+                // Zero the entire memory before each invocation
+                // to prevent data leakage from previous rows
+                mem_data.fill(0);
+                mem_data[..input_len].copy_from_slice(input_bytes);
+            }
+
+            let output_offset = func.call(&mut *store, (write_offset, input_len as i32))
+                .map_err(|e| {
+                    let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
+                        format!("WASM function '{func_name}' timed out (fuel exhausted)")
+                    } else {
+                        format!("WASM string call failed: {e}")
+                    };
+                    LightningError::Internal(msg)
+                })?;
+
+            let output = {
+                let mem_data = mem.data(&*store);
+                let start = output_offset as usize;
+                if start < mem_size {
+                    let end = mem_data[start..].iter()
+                        .position(|&b| b == 0)
+                        .map(|p| start + p)
+                        .unwrap_or(mem_size);
+                    let clamped_end = end.min(mem_size);
+                    if clamped_end > start {
+                        String::from_utf8_lossy(&mem_data[start..clamped_end]).to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            };
+            results.push(output);
+        }
+
+        // Zero out memory to prevent data leakage between batches
         mem.data_mut(&mut *store).fill(0);
 
         Ok(results)
