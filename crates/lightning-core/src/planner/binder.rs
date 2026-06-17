@@ -6,6 +6,9 @@ use lightning_types::LogicalType;
 use std::collections::HashMap;
 use std::path::Component;
 
+/// System-internal auth tables that must not be directly queried by users.
+const AUTH_SYSTEM_TABLES: &[&str] = &["auth_users", "auth_refresh_tokens", "auth_api_keys"];
+
 #[derive(Debug, Clone)]
 pub struct BoundQuery {
     pub union_queries: Vec<BoundUnionQuery>,
@@ -456,6 +459,11 @@ impl<'a> Binder<'a> {
                 primary_key,
                 if_not_exists,
             } => {
+                if AUTH_SYSTEM_TABLES.contains(&name.as_str()) {
+                    return Err(LightningError::Query(format!(
+                        "Cannot create internal system table '{name}'"
+                    )));
+                }
                 let bound_columns: Vec<_> = columns
                     .iter()
                     .map(|c| crate::catalog::PropertyDefinition {
@@ -469,6 +477,41 @@ impl<'a> Binder<'a> {
                     primary_key: primary_key.clone(),
                     if_not_exists: *if_not_exists,
                 })
+            }
+            Statement::CreateTableRel {
+                name,
+                from_table,
+                to_table,
+                columns,
+                if_not_exists,
+            } => {
+                if AUTH_SYSTEM_TABLES.contains(&name.as_str()) {
+                    return Err(LightningError::Query(format!(
+                        "Cannot create internal system table '{name}'"
+                    )));
+                }
+                let columns = columns
+                    .iter()
+                    .map(|c| crate::catalog::PropertyDefinition {
+                        name: c.name.clone(),
+                        type_: self.bind_data_type(&c.data_type),
+                    })
+                    .collect();
+                Ok(BoundStatement::CreateTableRel {
+                    name: name.clone(),
+                    from_table: from_table.clone(),
+                    to_table: to_table.clone(),
+                    columns,
+                    if_not_exists: *if_not_exists,
+                })
+            }
+            Statement::DropTable(name, if_exists) => {
+                if AUTH_SYSTEM_TABLES.contains(&name.as_str()) {
+                    return Err(LightningError::Query(format!(
+                        "Cannot drop internal system table '{name}'"
+                    )));
+                }
+                Ok(BoundStatement::DropTable(name.clone(), *if_exists))
             }
             Statement::CreateTableRel {
                 name,
@@ -636,6 +679,11 @@ impl<'a> Binder<'a> {
                 }
             }
             Statement::Match(match_clause, where_clause, clauses) => {
+                // Prevent direct query access to internal auth tables
+                if let Some(m) = &match_clause {
+                    Self::check_auth_table_access(&m.patterns)?;
+                }
+
                 let bound_match = if let Some(m) = match_clause {
                     Some(self.bind_match_clause(m)?)
                 } else {
@@ -696,6 +744,7 @@ impl<'a> Binder<'a> {
             }),
             Statement::Merge(merge) => {
                 let node_pat = &merge.pattern.node_pattern;
+                Self::check_auth_table_access(&[merge.pattern.clone()])?;
                 let node_var = node_pat
                     .variable
                     .clone()
@@ -1859,5 +1908,40 @@ impl<'a> Binder<'a> {
         labels.first().ok_or_else(|| {
             LightningError::Query(format!("{context} must have a label"))
         })
+    }
+
+    fn check_auth_table_access(patterns: &[Pattern]) -> Result<()> {
+        for pattern in patterns {
+            let labels = std::iter::once(&pattern.node_pattern.labels)
+                .chain(pattern.relationship_chains.iter().map(|rc| &rc.node_pattern.labels));
+            for labels_ref in labels {
+                for label in labels_ref {
+                    if AUTH_SYSTEM_TABLES.contains(&label.as_str()) {
+                        return Err(LightningError::Query(format!(
+                            "Direct access to internal system table '{label}' is not allowed"
+                        )));
+                    }
+                }
+            }
+            if let Some(start) = &pattern.shortest_path_start {
+                for label in &start.labels {
+                    if AUTH_SYSTEM_TABLES.contains(&label.as_str()) {
+                        return Err(LightningError::Query(format!(
+                            "Direct access to internal system table '{label}' is not allowed"
+                        )));
+                    }
+                }
+            }
+            if let Some(end) = &pattern.shortest_path_end {
+                for label in &end.labels {
+                    if AUTH_SYSTEM_TABLES.contains(&label.as_str()) {
+                        return Err(LightningError::Query(format!(
+                            "Direct access to internal system table '{label}' is not allowed"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
