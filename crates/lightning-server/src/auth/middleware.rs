@@ -88,17 +88,7 @@ pub async fn auth_middleware(
                 .get(header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
-                .map(|s| s.trim().to_string())
-                .or_else(|| {
-                    req.uri().query().and_then(|q| {
-                        q.split('&').find_map(|pair| {
-                            let mut parts = pair.splitn(2, '=');
-                            let key = parts.next()?;
-                            let val = parts.next().unwrap_or("");
-                            if key == "access_token" { Some(val.to_string()) } else { None }
-                        })
-                    })
-                });
+                .map(|s| s.trim().to_string());
 
             match provided {
                 Some(token) if token == expected => {
@@ -115,61 +105,12 @@ pub async fn auth_middleware(
             }
         }
         AuthMode::Jwt => {
-            let auth_header = req
+            let token = req
                 .headers()
                 .get(header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok());
-
-            let token_from_query = req.uri().query()
-                .and_then(|q| {
-                    q.split('&')
-                        .find_map(|pair| {
-                            let mut parts = pair.splitn(2, '=');
-                            let key = parts.next()?;
-                            let val = parts.next().unwrap_or("");
-                            if key == "access_token" {
-                                Some(percent_decode(val))
-                            } else {
-                                None
-                            }
-                        })
-                });
-
-            fn percent_decode(s: &str) -> String {
-                let mut out = Vec::with_capacity(s.len());
-                let mut bytes = s.bytes();
-                while let Some(b) = bytes.next() {
-                    if b == b'%' {
-                        let hi = bytes.next().and_then(hex_val);
-                        let lo = bytes.next().and_then(hex_val);
-                        match (hi, lo) {
-                            (Some(h), Some(l)) => out.push(h * 16 + l),
-                            _ => out.push(b'%'),
-                        }
-                    } else if b == b'+' {
-                        out.push(b' ');
-                    } else {
-                        out.push(b);
-                    }
-                }
-                String::from_utf8(out).unwrap_or_default()
-            }
-
-            fn hex_val(b: u8) -> Option<u8> {
-                match b {
-                    b'0'..=b'9' => Some(b - b'0'),
-                    b'a'..=b'f' => Some(b - b'a' + 10),
-                    b'A'..=b'F' => Some(b - b'A' + 10),
-                    _ => None,
-                }
-            }
-
-            let token = match auth_header {
-                Some(header_value) => {
-                    header_value.strip_prefix("Bearer ").map(|s| s.trim().to_string())
-                }
-                None => token_from_query,
-            };
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|s| s.trim().to_string());
 
             match token {
                 Some(token) => {
@@ -192,7 +133,7 @@ pub async fn auth_middleware(
                         }
                     }
                 }
-                None => Err(unauthorized_response("authorization header or access_token query param required")),
+                None => Err(unauthorized_response("authorization header required (Bearer token)")),
             }
         }
     }

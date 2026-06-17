@@ -36,6 +36,9 @@ pub fn create_access_token(
 }
 
 pub fn validate_access_token(token: &str, secret: &[u8]) -> Result<JwtClaims, String> {
+    // Per-deployment aud/iss validation should be added here when
+    // LIGHTNING_JWT_AUDIENCE / LIGHTNING_JWT_ISSUER configs are introduced.
+    // Until then, the token's exp, iat, and signature are still validated.
     let mut validation = Validation::default();
     validation.leeway = 0;
     let token_data = decode::<JwtClaims>(
