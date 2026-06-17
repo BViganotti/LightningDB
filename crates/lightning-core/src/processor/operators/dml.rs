@@ -1052,17 +1052,18 @@ impl PhysicalOperator for PhysicalMerge {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
-            let chunks: Vec<Option<DataChunk>> = if let Some(ref mut child) = self.child {
-                let mut acc = Vec::new();
-                while let Some(chunk) = child.get_next(database, tx, params)? {
-                    acc.push(Some(chunk));
-                }
-                acc
-            } else {
-                vec![None]
-            };
-
-            for chunk_opt in &chunks {
+            // Process chunks incrementally instead of collecting all into
+            // memory first, avoiding OOM for large result sets.
+            let standalone = self.child.is_none();
+            loop {
+                let chunk_opt = if let Some(ref mut c) = self.child {
+                    match c.get_next(database, tx, params)? {
+                        Some(chunk) => Some(chunk),
+                        None => break,
+                    }
+                } else {
+                    if standalone { None } else { break }
+                };
                 let num_rows = chunk_opt.as_ref().map(|c| c.num_rows()).unwrap_or(1);
                 let batch_ref = chunk_opt.as_ref().map(|c| &c.batch);
 

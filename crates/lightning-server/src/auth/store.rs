@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use arrow::array::{Array, BooleanArray, Int64Array, StringArray};
 use lightning::Database;
@@ -19,6 +20,7 @@ use crate::auth::password;
 const AUTH_USERS_TABLE: &str = "auth_users";
 const AUTH_TOKENS_TABLE: &str = "auth_refresh_tokens";
 const AUTH_API_KEYS_TABLE: &str = "auth_api_keys";
+static DUMMY_PASSWORD_HASH: OnceLock<String> = OnceLock::new();
 
 const MAX_LOGIN_ATTEMPTS: u32 = 5;
 const LOGIN_WINDOW_SECS: i64 = 900;
@@ -299,16 +301,27 @@ impl AuthStore {
             }
 
             let users = self.users_cache.read();
-            let user = users
+            let (user, stored_hash) = match users
                 .values()
                 .find(|u| u.username == username && u.enabled)
-                .ok_or_else(|| "invalid username or password".to_string())?;
-            if !password::verify_password(password, &user.password_hash)
+            {
+                Some(u) => (Some(u.clone()), u.password_hash.clone()),
+                // Always run Argon2 even for unknown usernames to prevent
+                // timing side-channel that leaks which usernames exist.
+                None => {
+                    let dummy_hash = DUMMY_PASSWORD_HASH.get_or_init(|| {
+                        password::hash_password("dummy_timing_marker")
+                            .unwrap_or_else(|_| "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHlzYWx0eXNhbHR5c2FsdA$3m8P7YN5GpIgJxmQhSn3qJnNBVpqHsp+Lq/hbp7Epl4".to_string())
+                    });
+                    (None, dummy_hash.clone())
+                },
+            };
+            if !password::verify_password(password, &stored_hash)
                 .map_err(|_| "invalid username or password".to_string())?
             {
                 return Err("invalid username or password".to_string());
             }
-            user.clone()
+            user.ok_or_else(|| "invalid username or password".to_string())?
         };
 
         self.login_attempts.lock().remove(username);

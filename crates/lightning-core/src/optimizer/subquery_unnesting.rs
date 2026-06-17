@@ -2,8 +2,6 @@ use crate::optimizer::Rule;
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::Result;
-use crate::planner::binder::BoundMatchClause;
-use crate::planner::binder::BoundWhereClause;
 use std::collections::HashSet;
 
 pub struct SubqueryUnnesting;
