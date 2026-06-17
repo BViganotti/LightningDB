@@ -29,35 +29,35 @@ export function createAggregationSuite(client: LightningClient) {
   return { setup, teardown, tests: [
     test("COUNT(*)", async () => {
       const r = await client.query(`MATCH (n:${TABLE}) RETURN count(*) AS cnt`);
-      assertEq(r.data.rows[0]["cnt"], 5);
+      assertEq(r.rows[0]["cnt"], 5);
     }),
 
     test("COUNT(property)", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN count(n.salary) AS cnt`
       );
-      assertEq(r.data.rows[0]["cnt"], 5);
+      assertEq(r.rows[0]["cnt"], 5);
     }),
 
     test("COUNT with WHERE", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.age > 28 RETURN count(*) AS cnt`
       );
-      assertEq(r.data.rows[0]["cnt"], 3);
+      assertEq(r.rows[0]["cnt"], 3);
     }),
 
     test("SUM", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN sum(n.salary) AS total`
       );
-      assertEq(r.data.rows[0]["total"], 475000);
+      assertEq(r.rows[0]["total"], 475000);
     }),
 
     test("AVG", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN avg(n.salary) AS avg_sal`
       );
-      const avg = r.data.rows[0]["avg_sal"] as number;
+      const avg = r.rows[0]["avg_sal"] as number;
       assertEq(Math.round(avg), 95000);
     }),
 
@@ -65,23 +65,23 @@ export function createAggregationSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN min(n.salary) AS min_sal`
       );
-      assertEq(r.data.rows[0]["min_sal"], 70000);
+      assertEq(r.rows[0]["min_sal"], 70000);
     }),
 
     test("MAX", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN max(n.salary) AS max_sal`
       );
-      assertEq(r.data.rows[0]["max_sal"], 120000);
+      assertEq(r.rows[0]["max_sal"], 120000);
     }),
 
     test("GROUP BY single column", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.dept, count(*) AS cnt ORDER BY n.dept`
       );
-      assertEq(r.data.numRows, 3, "3 departments");
+      assertEq(r.numRows, 3, "3 departments");
       const deptCounts: Record<string, number> = {};
-      for (const row of r.data.rows) {
+      for (const row of r.rows) {
         deptCounts[row["dept"] as string] = row["cnt"] as number;
       }
       assertEq(deptCounts["Engineering"], 2);
@@ -93,22 +93,22 @@ export function createAggregationSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.dept, sum(n.salary) AS total ORDER BY total DESC`
       );
-      assertEq(r.data.rows[0]["dept"], "Engineering");
-      assertEq(r.data.rows[0]["total"], 215000);
+      assertEq(r.rows[0]["dept"], "Engineering");
+      assertEq(r.rows[0]["total"], 215000);
     }),
 
     test("COUNT with alias", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.active = true RETURN count(*) AS active_count`
       );
-      assertEq(r.data.rows[0]["active_count"], 4);
+      assertEq(r.rows[0]["active_count"], 4);
     }),
 
     test("COUNT(DISTINCT expr)", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN count(DISTINCT n.dept) AS dept_count`
       );
-      assertEq(r.data.rows[0]["dept_count"], 3);
+      assertEq(r.rows[0]["dept_count"], 3);
     }),
   ]};
 }

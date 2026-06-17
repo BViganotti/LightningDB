@@ -49,8 +49,8 @@ export function createGraphSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (a:${PERSON} {name: "Alice"})-[r:${KNOWS}]->(b:${PERSON}) RETURN b.name ORDER BY b.name`
       );
-      assertEq(r.data.numRows, 2, "Alice knows 2 people");
-      const names = r.data.rows.map((r) => r["name"]);
+      assertEq(r.numRows, 2, "Alice knows 2 people");
+      const names = r.rows.map((r) => r["name"]);
       assertEq(JSON.stringify(names), '["Bob","Charlie"]');
     }),
 
@@ -58,7 +58,7 @@ export function createGraphSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (a:${PERSON})<-[r:${KNOWS}]-(b:${PERSON} {name: "Alice"}) RETURN a.name ORDER BY a.name`
       );
-      assertEq(r.data.numRows, 0, "nobody knows Alice");
+      assertEq(r.numRows, 0, "nobody knows Alice");
     }),
 
     test("CREATE REL between existing nodes", async () => {
@@ -69,7 +69,7 @@ export function createGraphSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (a:${PERSON} {name: "Diana"})-[r:${KNOWS}]->(b:${PERSON}) RETURN b.name`
       );
-      assertEq(r.data.numRows, 2, "Diana knows 2 people now");
+      assertEq(r.numRows, 2, "Diana knows 2 people now");
     }),
   ]};
 }

@@ -27,31 +27,31 @@ export function createSkipLimitSuite(client: LightningClient) {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name LIMIT 5`
         );
-        assertEq(r.data.numRows, 5);
-        assertEq(r.data.rows.length, 5);
+        assertEq(r.numRows, 5);
+        assertEq(r.rows.length, 5);
       }),
 
       test("SKIP without ORDER BY", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name SKIP 5`
         );
-        assertGt(r.data.numRows, 0, "rows remain after skip");
-        assertEq(r.data.numRows, 15, "15 rows after skipping 5");
+        assertGt(r.numRows, 0, "rows remain after skip");
+        assertEq(r.numRows, 15, "15 rows after skipping 5");
       }),
 
       test("SKIP + LIMIT without ORDER BY", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name SKIP 3 LIMIT 4`
         );
-        assertEq(r.data.numRows, 4);
+        assertEq(r.numRows, 4);
       }),
 
       test("ORDER BY + LIMIT", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name LIMIT 3`
         );
-        assertEq(r.data.numRows, 3);
-        const names = r.data.rows.map((r) => r["name"]);
+        assertEq(r.numRows, 3);
+        const names = r.rows.map((r) => r["name"]);
         assertEq(names[0], "User01");
         assertEq(names[1], "User02");
         assertEq(names[2], "User03");
@@ -61,15 +61,15 @@ export function createSkipLimitSuite(client: LightningClient) {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name SKIP 17`
         );
-        assertEq(r.data.numRows, 3, "3 rows after skip 17 of 20");
+        assertEq(r.numRows, 3, "3 rows after skip 17 of 20");
       }),
 
       test("ORDER BY + SKIP + LIMIT", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name SKIP 5 LIMIT 5`
         );
-        assertEq(r.data.numRows, 5);
-        const names = r.data.rows.map((r) => r["name"]);
+        assertEq(r.numRows, 5);
+        const names = r.rows.map((r) => r["name"]);
         assertEq(names[0], "User06");
         assertEq(names[4], "User10");
       }),
@@ -78,8 +78,8 @@ export function createSkipLimitSuite(client: LightningClient) {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name DESC LIMIT 3`
         );
-        assertEq(r.data.numRows, 3);
-        const names = r.data.rows.map((r) => r["name"]);
+        assertEq(r.numRows, 3);
+        const names = r.rows.map((r) => r["name"]);
         assertEq(names[0], "User20");
         assertEq(names[2], "User18");
       }),
@@ -88,21 +88,21 @@ export function createSkipLimitSuite(client: LightningClient) {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name SKIP 100`
         );
-        assertEq(r.data.numRows, 0, "skip beyond total returns empty");
+        assertEq(r.numRows, 0, "skip beyond total returns empty");
       }),
 
       test("SKIP 0 is no-op", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name SKIP 0`
         );
-        assertEq(r.data.numRows, 20, "skip 0 returns all rows");
+        assertEq(r.numRows, 20, "skip 0 returns all rows");
       }),
 
       test("LIMIT 0 returns empty", async () => {
         const r = await client.query(
           `MATCH (n:${TABLE}) RETURN n.name LIMIT 0`
         );
-        assertEq(r.data.numRows, 0, "limit 0 returns empty");
+        assertEq(r.numRows, 0, "limit 0 returns empty");
       }),
     ],
   };

@@ -33,21 +33,21 @@ export function createEdgeCasesSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name SKIP 999999`
       );
-      assertEq(r.data.numRows, 0, "skip larger than total returns empty");
+      assertEq(r.numRows, 0, "skip larger than total returns empty");
     }),
 
     test("ORDER BY with LIMIT 1 returns single row", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name LIMIT 1`
       );
-      assertEq(r.data.numRows, 1, "top 1 returns 1 row");
+      assertEq(r.numRows, 1, "top 1 returns 1 row");
     }),
 
     test("ORDER BY DESC with LIMIT 1 (reverse top)", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name DESC LIMIT 1`
       );
-      assertEq(r.data.numRows, 1, "bottom 1 returns 1 row");
+      assertEq(r.numRows, 1, "bottom 1 returns 1 row");
     }),
   ]};
 }

@@ -19,45 +19,45 @@ export function createBasicCrudSuite(client: LightningClient) {
       const r = await client.query(
         `CREATE (n:${TABLE} {id: "crud-1", name: "Alice", age: 30, active: true, score: 95.5}) RETURN n.id, n.name, n.age, n.active, n.score`
       );
-      assertEq(r.data.numRows, 1, "should create 1 node");
-      assertEq(r.data.rows[0]["id"], "crud-1");
-      assertEq(r.data.rows[0]["name"], "Alice");
-      assertEq(r.data.rows[0]["age"], 30);
-      assertEq(r.data.rows[0]["active"], true);
-      assertEq(r.data.rows[0]["score"], 95.5);
+      assertEq(r.numRows, 1, "should create 1 node");
+      assertEq(r.rows[0]["id"], "crud-1");
+      assertEq(r.rows[0]["name"], "Alice");
+      assertEq(r.rows[0]["age"], 30);
+      assertEq(r.rows[0]["active"], true);
+      assertEq(r.rows[0]["score"], 95.5);
     }),
 
     test("MATCH all returns all rows", async () => {
       await client.query(`CREATE (n:${TABLE} {id: "crud-2", name: "Bob", age: 25})`);
       await client.query(`CREATE (n:${TABLE} {id: "crud-3", name: "Charlie", age: 35})`);
       const r = await client.query(`MATCH (n:${TABLE}) RETURN n.id, n.name`);
-      assertEq(r.data.numRows, 3, "should return 3 nodes");
+      assertEq(r.numRows, 3, "should return 3 nodes");
     }),
 
     test("MATCH with WHERE on STRING", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.name = "Alice" RETURN n.id, n.age`
       );
-      assertEq(r.data.numRows, 1);
-      assertEq(r.data.rows[0]["id"], "crud-1");
+      assertEq(r.numRows, 1);
+      assertEq(r.rows[0]["id"], "crud-1");
     }),
 
     test("MATCH with WHERE on INT64", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.age > 25 RETURN n.id, n.name ORDER BY n.age`
       );
-      assertEq(r.data.numRows, 2, "2 nodes with age > 25");
-      assertEq(r.data.rows[0]["name"], "Alice");
-      assertEq(r.data.rows[1]["name"], "Charlie");
+      assertEq(r.numRows, 2, "2 nodes with age > 25");
+      assertEq(r.rows[0]["name"], "Alice");
+      assertEq(r.rows[1]["name"], "Charlie");
     }),
 
     test("MATCH with WHERE on BOOL", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.active = true RETURN n.id`
       );
-      assertGt(r.data.numRows, 0, "active=true nodes are returned");
+      assertGt(r.numRows, 0, "active=true nodes are returned");
       // Verify that no null-active nodes appear in results
-      for (const row of r.data.rows) {
+      for (const row of r.rows) {
         assertNeq(row["id"], "crud-3", "null-active node should not match");
       }
     }),
@@ -66,24 +66,24 @@ export function createBasicCrudSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.age > 20 AND (n.name = "Alice" OR n.name = "Bob") RETURN n.name ORDER BY n.name`
       );
-      assertEq(r.data.numRows, 2);
-      assertEq(r.data.rows[0]["name"], "Alice");
-      assertEq(r.data.rows[1]["name"], "Bob");
+      assertEq(r.numRows, 2);
+      assertEq(r.rows[0]["name"], "Alice");
+      assertEq(r.rows[1]["name"], "Bob");
     }),
 
     test("MATCH with NOT", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE NOT n.name = "Alice" RETURN n.name ORDER BY n.name`
       );
-      assertEq(r.data.numRows, 2);
-      assertEq(r.data.rows[0]["name"], "Bob");
+      assertEq(r.numRows, 2);
+      assertEq(r.rows[0]["name"], "Bob");
     }),
 
     test("Empty result set", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.name = "NonExistent" RETURN n.id`
       );
-      assertEq(r.data.numRows, 0, "empty result returns 0 rows");
+      assertEq(r.numRows, 0, "empty result returns 0 rows");
     }),
   ]};
 }

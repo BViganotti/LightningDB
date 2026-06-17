@@ -45,8 +45,8 @@ export class LightningClient {
       throw new Error(`HTTP ${res.status}: ${msg}`);
     }
 
-    const json = await res.json();
-    return json as QueryResult;
+    const json = await res.json() as { data: QueryResult };
+    return (json.data ?? json) as QueryResult;
   }
 
   async queryRaw(statement: string): Promise<{

@@ -1,9 +1,7 @@
 export interface QueryResult {
-  data: {
-    columns: string[];
-    rows: Record<string, unknown>[];
-    numRows: number;
-  };
+  columns: string[];
+  rows: Record<string, unknown>[];
+  numRows: number;
 }
 
 export interface TestCase {

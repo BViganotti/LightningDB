@@ -22,8 +22,8 @@ export function createExpressionsSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name, n.salary / 12 AS monthly ORDER BY n.name LIMIT 1`
       );
-      assertEq(r.data.rows[0]["name"], "Alice");
-      const monthly = r.data.rows[0]["monthly"] as number;
+      assertEq(r.rows[0]["name"], "Alice");
+      const monthly = r.rows[0]["monthly"] as number;
       assertEq(Math.round(monthly), 8333);
     }),
 
@@ -31,23 +31,23 @@ export function createExpressionsSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) WHERE n.age >= 28 AND n.age <= 32 RETURN n.name`
       );
-      assertEq(r.data.numRows, 1);
-      assertEq(r.data.rows[0]["name"], "Alice");
+      assertEq(r.numRows, 1);
+      assertEq(r.rows[0]["name"], "Alice");
     }),
 
     test("ORDER BY with LIMIT 1", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name LIMIT 1`
       );
-      assertEq(r.data.numRows, 1);
-      assertEq(r.data.rows[0]["name"], "Alice");
+      assertEq(r.numRows, 1);
+      assertEq(r.rows[0]["name"], "Alice");
     }),
 
     test("ORDER BY DESC with LIMIT 1", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name DESC LIMIT 1`
       );
-      assertEq(r.data.rows[0]["name"], "Charlie");
+      assertEq(r.rows[0]["name"], "Charlie");
     }),
   ]};
 }

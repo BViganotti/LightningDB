@@ -33,8 +33,8 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name`
       );
-      assertEq(r.data.numRows, 5);
-      assertEq(JSON.stringify(vals(r.data.rows, "name")),
+      assertEq(r.numRows, 5);
+      assertEq(JSON.stringify(vals(r.rows, "name")),
         '["Alice","Bob","Charlie","Diana","Eve"]');
     }),
 
@@ -42,7 +42,7 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name DESC`
       );
-      assertEq(JSON.stringify(vals(r.data.rows, "name")),
+      assertEq(JSON.stringify(vals(r.rows, "name")),
         '["Eve","Diana","Charlie","Bob","Alice"]');
     }),
 
@@ -50,7 +50,7 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name, n.age ORDER BY n.age`
       );
-      const ages = vals(r.data.rows, "age");
+      const ages = vals(r.rows, "age");
       assertEq(JSON.stringify(ages), "[25,28,30,32,35]");
     }),
 
@@ -58,7 +58,7 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name, n.age ORDER BY n.age DESC`
       );
-      const ages = vals(r.data.rows, "age");
+      const ages = vals(r.rows, "age");
       assertEq(JSON.stringify(ages), "[35,32,30,28,25]");
     }),
 
@@ -66,7 +66,7 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name, n.salary ORDER BY n.salary`
       );
-      const salaries = vals(r.data.rows, "salary");
+      const salaries = vals(r.rows, "salary");
       assertEq(JSON.stringify(salaries), "[80000,95000,100000,110000,120000]");
     }),
 
@@ -74,7 +74,7 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name, n.salary ORDER BY n.salary DESC`
       );
-      const salaries = vals(r.data.rows, "salary");
+      const salaries = vals(r.rows, "salary");
       assertEq(JSON.stringify(salaries), "[120000,110000,100000,95000,80000]");
     }),
 
@@ -82,8 +82,8 @@ export function createSortingSuite(client: LightningClient) {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.city, n.name ORDER BY n.city, n.name`
       );
-      assertEq(r.data.numRows, 5);
-      const pairs = r.data.rows.map((r) => `${r["city"]}:${r["name"]}`);
+      assertEq(r.numRows, 5);
+      const pairs = r.rows.map((r) => `${r["city"]}:${r["name"]}`);
       assertEq(JSON.stringify(pairs),
         '["LA:Bob","LA:Eve","NYC:Alice","NYC:Charlie","SF:Diana"]');
     }),
@@ -95,15 +95,15 @@ export function createSortingSuite(client: LightningClient) {
       const r2 = await client.query(
         `MATCH (n:${TABLE}) RETURN n.name ORDER BY n.name`
       );
-      assertEq(r1.data.numRows, 5, "first call returns 5");
-      assertEq(r2.data.numRows, 5, "second call returns 5 (no cache corruption)");
+      assertEq(r1.numRows, 5, "first call returns 5");
+      assertEq(r2.numRows, 5, "second call returns 5 (no cache corruption)");
     }),
 
     test("ORDER BY on primary key field", async () => {
       const r = await client.query(
         `MATCH (n:${TABLE}) RETURN n.id ORDER BY n.id`
       );
-      assertEq(JSON.stringify(vals(r.data.rows, "id")),
+      assertEq(JSON.stringify(vals(r.rows, "id")),
         '["s1","s2","s3","s4","s5"]');
     }),
   ]};
