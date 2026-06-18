@@ -831,9 +831,9 @@ impl Database {
         // Persist free space map
         {
             let fsm_path = self._path.join("free_space.bin");
-            if let Err(e) = self.free_space_manager.save(&fsm_path) {
-                tracing::warn!("Failed to save free space map during checkpoint: {}", e);
-            }
+            self.free_space_manager.save(&fsm_path).map_err(|e| {
+                LightningError::Internal(format!("Failed to save free space map during checkpoint: {e}"))
+            })?;
         }
 
         // Persist catalog to disk so num_rows and other metadata survive restart.

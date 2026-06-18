@@ -435,13 +435,13 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 };
 
                 if let Some(entry) = entry {
-                    // 2. Update Catalog
-                    let mut catalog = database.catalog.write();
-                    catalog.remove_table(name);
-
-                    // 3. Update Storage
+                    // 2. Update Storage first so catalog changes only happen after
                     let mut storage = database.storage_manager.write();
                     storage.remove_table(name);
+
+                    // 3. Update Catalog
+                    let mut catalog = database.catalog.write();
+                    catalog.remove_table(name);
 
                     // 4. Register for rollback
                     self.undo_buffer

@@ -172,9 +172,9 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Vec<(u64, f32)>> {
-        if let Err(e) = self.reader.reload() {
-            tracing::warn!("inverted_index reload failed (stale results possible): {e}");
-        }
+        self.reader.reload().map_err(|e| {
+            crate::LightningError::Internal(format!("inverted_index reload failed: {e}"))
+        })?;
         let searcher = self.reader.searcher();
         let search_fields: Vec<Field> = self.content_fields.values().copied().collect();
         let query_parser = QueryParser::for_index(
