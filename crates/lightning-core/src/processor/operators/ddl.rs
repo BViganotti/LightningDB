@@ -552,10 +552,13 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 database.catalog.mark_dirty();
             }
             DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
+                let mut catalog = database.catalog.write();
                 let mut storage = database.storage_manager.write();
                 storage.add_column_to_table(table_name, col_name, data_type.clone())?;
-                let mut catalog = database.catalog.write();
-                catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone())?;
+                if let Err(e) = catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone()) {
+                    storage.remove_column_from_table(table_name, col_name).ok();
+                    return Err(e);
+                }
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::AlterAddColumn {
                     table_name: table_name.clone(),
@@ -563,9 +566,9 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 });
             }
             DDLAction::AlterDropColumn { table_name, col_name } => {
+                let mut catalog = database.catalog.write();
                 let mut storage = database.storage_manager.write();
                 storage.remove_column_from_table(table_name, col_name)?;
-                let mut catalog = database.catalog.write();
                 let removed = catalog.remove_column_from_table(table_name, col_name)?;
                 database.catalog.mark_dirty();
                 self.undo_buffer.push(UndoRecord::AlterDropColumn {

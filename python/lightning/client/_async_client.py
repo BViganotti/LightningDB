@@ -19,6 +19,7 @@ from lightning.client._types import (
     SearchResult,
     SnapshotSelector,
     SourceRef,
+    StoreBatchResult,
 )
 from lightning.client._validation import (
     validate_batch_entities,
@@ -143,6 +144,86 @@ class AsyncClient:
             timeout=timeout,
         )
         return [Entity.from_dict(e) for e in result["entities"]]
+
+    async def recall_by_type(
+        self,
+        entity_type: str,
+        top_k: int = 10,
+        timeout: Optional[float] = None,
+    ) -> list[Entity]:
+        validate_entity_type(entity_type)
+        validate_top_k(top_k, self._config.max_top_k)
+        result = await self._post(
+            "/v1/memory/recall-by-type",
+            {"entityType": entity_type, "topK": top_k},
+            timeout=timeout,
+        )
+        return [Entity.from_dict(e) for e in result["entities"]]
+
+    async def forget(
+        self,
+        id: str,
+        timeout: Optional[float] = None,
+    ) -> bool:
+        validate_id(id)
+        result = await self._post("/v1/memory/forget", {"id": id}, timeout=timeout)
+        return result["deleted"]
+
+    async def decay(self, timeout: Optional[float] = None) -> int:
+        result = await self._post("/v1/memory/decay", {}, timeout=timeout)
+        return result["expired"]
+
+    async def entity_history(
+        self,
+        id: str,
+        timeout: Optional[float] = None,
+    ) -> list[Entity]:
+        validate_id(id)
+        result = await self._post(
+            "/v1/memory/entity-history",
+            {"id": id},
+            timeout=timeout,
+        )
+        return [Entity.from_dict(v) for v in result["versions"]]
+
+    async def consolidate(
+        self,
+        similarity_threshold: Optional[float] = None,
+        contradiction_jaccard_max: Optional[float] = None,
+        contradiction_cosine_min: Optional[float] = None,
+        contradiction_length_sim_min: Optional[float] = None,
+        max_comparisons_per_entity: Optional[int] = None,
+        include_details: bool = False,
+        timeout: Optional[float] = None,
+    ) -> ConsolidationReport:
+        body: dict[str, Any] = {}
+        if similarity_threshold is not None:
+            body["similarityThreshold"] = similarity_threshold
+        if contradiction_jaccard_max is not None:
+            body["contradictionJaccardMax"] = contradiction_jaccard_max
+        if contradiction_cosine_min is not None:
+            body["contradictionCosineMin"] = contradiction_cosine_min
+        if contradiction_length_sim_min is not None:
+            body["contradictionLengthSimMin"] = contradiction_length_sim_min
+        if max_comparisons_per_entity is not None:
+            body["maxComparisonsPerEntity"] = max_comparisons_per_entity
+        if include_details:
+            body["includeDetails"] = True
+        result = await self._post("/v1/memory/consolidate", body, timeout=timeout)
+        links = None
+        contradictions = None
+        if "links" in result and result["links"] is not None:
+            links = [LinkDetail(**l) for l in result["links"]]
+        if "contradictions" in result and result["contradictions"] is not None:
+            contradictions = [ContradictionDetail(**c) for c in result["contradictions"]]
+        return ConsolidationReport(
+            links_created=result["linksCreated"],
+            contradictions_found=result["contradictionsFound"],
+            total_entities=result["totalEntities"],
+            warnings=result.get("warnings", []),
+            links=links,
+            contradictions=contradictions,
+        )
 
     async def associate(
         self,

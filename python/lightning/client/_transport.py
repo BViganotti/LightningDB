@@ -136,6 +136,7 @@ class SyncTransport:
         auth_token = _resolve_auth(self._config)
         headers = _make_headers(self._config, request_id, auth_token)
         telemetry = self._config.telemetry
+        effective_timeout = timeout or self._config.default_timeout
         start = time.monotonic()
 
         if telemetry and telemetry.on_request_start:
@@ -159,23 +160,18 @@ class SyncTransport:
                     path,
                     json=json_body,
                     headers=headers,
-                    timeout=timeout or self._config.default_timeout,
+                    timeout=effective_timeout,
                 )
 
                 if resp.is_error:
                     status = resp.status_code
                     body = self._try_decode_error(resp, request_id)
 
-                    if status == 429:
-                        if attempt < self._config.retry.max_retries:
-                            continue
-                    elif status in (502, 503, 504):
-                        if attempt < self._config.retry.max_retries:
-                            continue
+                    if should_retry(status, attempt, self._config.retry):
+                        continue
 
                     self._report_failure()
                     error_msg = body.get("error", resp.text)
-                    error_code = body.get("code")
                     raise LightningTransportError(
                         error_msg,
                         status_code=status,
@@ -207,7 +203,7 @@ class SyncTransport:
                     telemetry.on_error(request_id, method, path, e)
                 if attempt >= self._config.retry.max_retries:
                     raise LightningTransportError(
-                        f"request timed out after {self._config.default_timeout}s",
+                        f"request timed out after {effective_timeout}s",
                         request_id=request_id,
                     ) from e
 
@@ -336,6 +332,7 @@ class AsyncTransport:
         auth_token = _resolve_auth(self._config)
         headers = _make_headers(self._config, request_id, auth_token)
         telemetry = self._config.telemetry
+        effective_timeout = timeout or self._config.default_timeout
         start = time.monotonic()
 
         if telemetry and telemetry.on_request_start:
@@ -359,19 +356,15 @@ class AsyncTransport:
                     path,
                     json=json_body,
                     headers=headers,
-                    timeout=timeout or self._config.default_timeout,
+                    timeout=effective_timeout,
                 )
 
                 if resp.is_error:
                     status = resp.status_code
                     body = self._try_decode_error(resp, request_id)
 
-                    if status == 429:
-                        if attempt < self._config.retry.max_retries:
-                            continue
-                    elif status in (502, 503, 504):
-                        if attempt < self._config.retry.max_retries:
-                            continue
+                    if should_retry(status, attempt, self._config.retry):
+                        continue
 
                     self._report_failure()
                     error_msg = body.get("error", resp.text)
@@ -406,7 +399,7 @@ class AsyncTransport:
                     telemetry.on_error(request_id, method, path, e)
                 if attempt >= self._config.retry.max_retries:
                     raise LightningTransportError(
-                        f"request timed out after {self._config.default_timeout}s",
+                        f"request timed out after {effective_timeout}s",
                         request_id=request_id,
                     ) from e
 

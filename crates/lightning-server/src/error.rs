@@ -56,30 +56,34 @@ impl IntoResponse for AppError {
             AppError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
             }
-            AppError::Db(db_err) => match db_err {
-                lightning_core::LightningError::Query(msg) => {
-                    if msg.contains("Variable") && msg.contains("not found") {
+            AppError::Db(db_err) => {
+                let (status, code) = match db_err.code() {
+                    lightning_core::ErrorCode::NotFound => {
                         (StatusCode::NOT_FOUND, Some("NOT_FOUND".into()))
-                    } else if msg.contains("already exists") {
+                    }
+                    lightning_core::ErrorCode::AlreadyExists => {
                         (StatusCode::CONFLICT, Some("ALREADY_EXISTS".into()))
-                    } else if msg.contains("syntax") || msg.contains("parse") {
+                    }
+                    lightning_core::ErrorCode::SyntaxError => {
                         (StatusCode::BAD_REQUEST, Some("SYNTAX_ERROR".into()))
-                    } else {
+                    }
+                    lightning_core::ErrorCode::QueryError => {
                         (StatusCode::BAD_REQUEST, Some("QUERY_ERROR".into()))
                     }
-                }
-                lightning_core::LightningError::Config(_) => {
-                    (StatusCode::BAD_REQUEST, Some("CONFIG_ERROR".into()))
-                }
-                lightning_core::LightningError::Internal(_) => {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
-                }
-                lightning_core::LightningError::Database(_) => {
-                    (StatusCode::SERVICE_UNAVAILABLE, Some("DATABASE_ERROR".into()))
-                }
-                lightning_core::LightningError::Io(_) => {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Some("IO_ERROR".into()))
-                }
+                    lightning_core::ErrorCode::ConfigError => {
+                        (StatusCode::BAD_REQUEST, Some("CONFIG_ERROR".into()))
+                    }
+                    lightning_core::ErrorCode::Internal => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
+                    }
+                    lightning_core::ErrorCode::Database => {
+                        (StatusCode::SERVICE_UNAVAILABLE, Some("DATABASE_ERROR".into()))
+                    }
+                    lightning_core::ErrorCode::IoError => {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Some("IO_ERROR".into()))
+                    }
+                };
+                (status, code)
             },
         };
 

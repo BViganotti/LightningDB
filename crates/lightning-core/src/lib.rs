@@ -175,6 +175,33 @@ fn validate_clause_no_auth_tables(clause: &Clause) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    Internal,
+    Database,
+    NotFound,
+    AlreadyExists,
+    SyntaxError,
+    QueryError,
+    ConfigError,
+    IoError,
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ErrorCode::Internal => write!(f, "INTERNAL_ERROR"),
+            ErrorCode::Database => write!(f, "DATABASE_ERROR"),
+            ErrorCode::NotFound => write!(f, "NOT_FOUND"),
+            ErrorCode::AlreadyExists => write!(f, "ALREADY_EXISTS"),
+            ErrorCode::SyntaxError => write!(f, "SYNTAX_ERROR"),
+            ErrorCode::QueryError => write!(f, "QUERY_ERROR"),
+            ErrorCode::ConfigError => write!(f, "CONFIG_ERROR"),
+            ErrorCode::IoError => write!(f, "IO_ERROR"),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum LightningError {
     #[error("Internal error: {0}")]
@@ -187,6 +214,28 @@ pub enum LightningError {
     Config(String),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl LightningError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            LightningError::Internal(_) => ErrorCode::Internal,
+            LightningError::Database(_) => ErrorCode::Database,
+            LightningError::Query(msg) => {
+                if msg.contains("Variable") && msg.contains("not found") {
+                    ErrorCode::NotFound
+                } else if msg.contains("already exists") {
+                    ErrorCode::AlreadyExists
+                } else if msg.contains("syntax") || msg.contains("parse") {
+                    ErrorCode::SyntaxError
+                } else {
+                    ErrorCode::QueryError
+                }
+            }
+            LightningError::Config(_) => ErrorCode::ConfigError,
+            LightningError::Io(_) => ErrorCode::IoError,
+        }
+    }
 }
 
 impl From<arrow::error::ArrowError> for LightningError {
@@ -467,12 +516,12 @@ impl Database {
                 if table_entry.primary_key.is_some() {
                     storage_manager.create_index(&table_entry.name)?;
                 }
-                if let Err(e) = storage_manager.create_fts_index(&table_entry.name) {
-                    tracing::warn!("FTS index creation failed for {}: {}", table_entry.name, e);
-                }
-                if let Err(e) = storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM) {
-                    tracing::warn!("Vector index creation failed for {}: {}", table_entry.name, e);
-                }
+                storage_manager.create_fts_index(&table_entry.name).map_err(|e| {
+                    LightningError::Internal(format!("FTS index creation failed for {}: {}", table_entry.name, e))
+                })?;
+                storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM).map_err(|e| {
+                    LightningError::Internal(format!("Vector index creation failed for {}: {}", table_entry.name, e))
+                })?;
             }
             for table_entry in cat.rel_tables.values() {
                 let col_defs: Vec<(String, LogicalType)> = table_entry
