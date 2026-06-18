@@ -26,11 +26,11 @@ impl CompressionAlg for IntegerBitpacking {
 
         let mut values = [0u64; 32];
         let element_size = 8;
-        for i in 0..num_values_to_compress as usize {
+        for (i, val_slot) in values.iter_mut().enumerate() {
             let start = i * element_size;
             let mut val_bytes = [0u8; 8];
             val_bytes.copy_from_slice(&src[start..start + 8]);
-            values[i] = u64::from_le_bytes(val_bytes);
+            *val_slot = u64::from_le_bytes(val_bytes);
         }
 
         BitPacker::pack_32(&values, bit_width, dst);

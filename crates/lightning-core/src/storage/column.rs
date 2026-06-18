@@ -1094,8 +1094,8 @@ impl Column {
                 while i + 8 <= to_read {
                     let bytes = &null_src[i..i + 8];
                     let mut word: u8 = 0;
-                    for j in 0..8 {
-                        if bytes[j] != 0 {
+                    for (j, byte) in bytes.iter().enumerate() {
+                        if *byte != 0 {
                             word |= 1 << j;
                             has_any_nulls = true;
                         }

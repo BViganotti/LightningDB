@@ -74,14 +74,14 @@ pub async fn create_user_handler(
     }
 
     let role = match req.role.as_deref() {
-        Some(r) => r.parse::<Role>().map_err(|e| AppError::BadRequest(e))?,
+        Some(r) => r.parse::<Role>().map_err(AppError::BadRequest)?,
         None => Role::Reader,
     };
 
     let user = state
         .auth_store
         .create_user(&req.username, &req.password, role)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,
@@ -114,7 +114,7 @@ pub async fn update_user_handler(
             return Err(AppError::BadRequest("cannot disable yourself".to_string()));
         }
         if let Some(ref r) = req.role {
-            let new_role = r.parse::<Role>().map_err(|e| AppError::BadRequest(e))?;
+            let new_role = r.parse::<Role>().map_err(AppError::BadRequest)?;
             if new_role < Role::Admin {
                 return Err(AppError::BadRequest("cannot demote yourself below admin".to_string()));
             }
@@ -122,14 +122,14 @@ pub async fn update_user_handler(
     }
 
     let role = match req.role.as_deref() {
-        Some(r) => Some(r.parse::<Role>().map_err(|e| AppError::BadRequest(e))?),
+        Some(r) => Some(r.parse::<Role>().map_err(AppError::BadRequest)?),
         None => None,
     };
 
     state
         .auth_store
         .update_user(&user_id, role, req.enabled)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,
@@ -161,7 +161,7 @@ pub async fn delete_user_handler(
     state
         .auth_store
         .delete_user(&user_id)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,
@@ -196,7 +196,7 @@ pub async fn reset_password_handler(
     state
         .auth_store
         .reset_password(&user_id, &req.password)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,
@@ -247,14 +247,14 @@ pub async fn create_api_key_handler(
     }
 
     let role_override = match req.role_override.as_deref() {
-        Some(r) => Some(r.parse::<Role>().map_err(|e| AppError::BadRequest(e))?),
+        Some(r) => Some(r.parse::<Role>().map_err(AppError::BadRequest)?),
         None => None,
     };
 
     let (key, api_key) = state
         .auth_store
         .create_api_key(&user_id, &req.name, role_override, req.expires_at)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,
@@ -286,7 +286,7 @@ pub async fn delete_api_key_handler(
     state
         .auth_store
         .revoke_api_key(&key_id)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     tracing::info!(
         request_id = %request_id,

@@ -117,8 +117,7 @@ impl Table {
         let num_cols = self.columns.len();
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(num_cols);
 
-        for col_idx in 0..num_cols {
-            let col = &self.columns[col_idx];
+        for (col_idx, col) in self.columns.iter().enumerate() {
             let col_values = &columns[col_idx];
             let arr: ArrayRef = match col.data_type {
                 LogicalType::String => {

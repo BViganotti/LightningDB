@@ -42,7 +42,7 @@ pub async fn login_handler(
         state.auth_store.jwt_secret(),
         state.auth_store.access_token_ttl_secs(),
     )
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     let (refresh_token, refresh_hash) = jwt::create_refresh_token(state.auth_store.jwt_secret());
     let _ = state.auth_store.store_refresh_token(
@@ -100,7 +100,7 @@ pub async fn refresh_handler(
         state.auth_store.jwt_secret(),
         state.auth_store.access_token_ttl_secs(),
     )
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     let (new_refresh_token, new_hash) = jwt::create_refresh_token(state.auth_store.jwt_secret());
     let _ = state.auth_store.store_refresh_token(

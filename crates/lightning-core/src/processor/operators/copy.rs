@@ -247,13 +247,9 @@ impl PhysicalCopy {
                 continue;
             }
 
-            let normalized_batch = if start_col == 1 {
-                let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
-                let mut columns = vec![Arc::new(ids) as ArrayRef];
-                columns.extend(batch.columns().iter().cloned());
-                RecordBatch::try_new(table.get_schema(), columns)?
-            } else if table.get_schema().fields().len() == batch.schema().fields().len() + 1
-                && table.columns.first().map(|c| c.name.as_str()) == Some("INTERNAL_ID")
+            let normalized_batch = if start_col == 1
+                || (table.get_schema().fields().len() == batch.schema().fields().len() + 1
+                    && table.columns.first().map(|c| c.name.as_str()) == Some("INTERNAL_ID"))
             {
                 let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
                 let mut columns = vec![Arc::new(ids) as ArrayRef];

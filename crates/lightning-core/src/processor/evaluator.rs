@@ -1186,11 +1186,7 @@ impl ExpressionEvaluator {
         for i in 0..list_arr.len() {
             let values = list_arr.value(i);
             if values.is_empty() {
-                results.push(match op {
-                    "LIST_ALL" => true,
-                    "LIST_NONE" => true,
-                    _ => false,
-                });
+                results.push(matches!(op, "LIST_ALL" | "LIST_NONE"));
                 continue;
             }
 

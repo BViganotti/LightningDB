@@ -56,7 +56,7 @@ impl RateLimiter {
         if windows.len() > 1000 {
             let stale_threshold = self.window * 2;
             windows.retain(|_, sw| {
-                sw.timestamps.back().map_or(false, |t| now.duration_since(*t) < stale_threshold)
+                sw.timestamps.back().is_some_and(|t| now.duration_since(*t) < stale_threshold)
             });
         }
 
@@ -64,7 +64,7 @@ impl RateLimiter {
             timestamps: VecDeque::new(),
         });
 
-        while sw.timestamps.front().map_or(false, |t| now.duration_since(*t) > self.window) {
+        while sw.timestamps.front().is_some_and(|t| now.duration_since(*t) > self.window) {
             sw.timestamps.pop_front();
         }
 

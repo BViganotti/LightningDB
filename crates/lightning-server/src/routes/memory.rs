@@ -44,7 +44,7 @@ pub async fn store_handler(
     RequestId(request_id): RequestId,
     Json(req): Json<StoreRequest>,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
-    req.validate().map_err(|e| AppError::BadRequest(e))?;
+    req.validate().map_err(AppError::BadRequest)?;
     let start = std::time::Instant::now();
     let now = now_micros();
 
@@ -82,7 +82,7 @@ pub async fn store_batch_handler(
     Json(req): Json<StoreBatchRequest>,
 ) -> Result<Json<ApiResponse<StoreBatchResponse>>, AppError> {
     for entity in &req.entities {
-        entity.validate().map_err(|e| AppError::BadRequest(e))?;
+        entity.validate().map_err(AppError::BadRequest)?;
     }
     let start = std::time::Instant::now();
     let now = now_micros();
@@ -124,7 +124,7 @@ pub async fn recall_handler(
     RequestId(request_id): RequestId,
     Json(req): Json<RecallRequest>,
 ) -> Result<Json<ApiResponse<RecallResponse>>, AppError> {
-    req.validate().map_err(|e| AppError::BadRequest(e))?;
+    req.validate().map_err(AppError::BadRequest)?;
     let start = std::time::Instant::now();
 
     let results = store

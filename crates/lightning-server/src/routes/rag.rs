@@ -10,7 +10,7 @@ pub async fn rag_query_handler(
     RequestId(request_id): RequestId,
     Json(req): Json<RagRequest>,
 ) -> Result<Json<ApiResponse<RagResponse>>, AppError> {
-    req.validate().map_err(|e| AppError::BadRequest(e))?;
+    req.validate().map_err(AppError::BadRequest)?;
     let start = std::time::Instant::now();
 
     let config = lightning_core::memory::RagConfig {

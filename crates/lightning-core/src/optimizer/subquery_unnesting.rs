@@ -121,9 +121,7 @@ impl SubqueryUnnesting {
                     ))
                 }
             }
-            BoundExpression::Logical(l, op, r)
-                if op == crate::parser::ast::LogicalOperator::And =>
-            {
+            BoundExpression::Logical(l, crate::parser::ast::LogicalOperator::And, r) => {
                 // Recursively unnest AND
                 let left_unnested = self.unnest_subquery(child, *l)?;
                 self.unnest_subquery(left_unnested, *r)

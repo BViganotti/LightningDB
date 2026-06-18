@@ -150,7 +150,7 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     pub fn from_args(args: &CliArgs) -> Self {
-        let buffer_pool_size = (args.buffer_pool_mb as u64) * 1024 * 1024;
+        let buffer_pool_size = args.buffer_pool_mb * 1024 * 1024;
 
         let cors_allowed_origins = args
             .cors_allowed_origins
@@ -205,7 +205,7 @@ impl ServerConfig {
             mtls_ca: args.mtls_ca.clone(),
             startup_time: std::time::Instant::now(),
             cors_allowed_origins,
-            auth_token: args.auth_token.as_deref().map(|t| Arc::from(t)),
+            auth_token: args.auth_token.as_deref().map(Arc::from),
             auth_mode,
             admin_username: args.admin_username.clone(),
             admin_password: args.admin_password.clone(),

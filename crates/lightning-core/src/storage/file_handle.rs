@@ -23,6 +23,7 @@ impl FileHandle {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(path)?;
 
         let metadata = file.metadata()?;

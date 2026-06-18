@@ -26,15 +26,15 @@ struct ScoredNode {
 
 impl Eq for ScoredNode {}
 
-impl PartialOrd for ScoredNode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        other.score.partial_cmp(&self.score)
+impl Ord for ScoredNode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.score.partial_cmp(&self.score).unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
-impl Ord for ScoredNode {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+impl PartialOrd for ScoredNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -257,8 +257,8 @@ impl VectorIndex {
                     ptr.add(offset + 8),
                     4,
                 );
-                for j in 0..dim {
-                    let val = vec[j].to_le_bytes();
+                for (j, elem) in vec.iter().enumerate() {
+                    let val = elem.to_le_bytes();
                     std::ptr::copy_nonoverlapping(
                         val.as_ptr(),
                         ptr.add(offset + 12 + j * 4),
@@ -574,8 +574,8 @@ impl VectorIndex {
                 unsafe {
                     std::ptr::copy_nonoverlapping(node_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
                     std::ptr::copy_nonoverlapping(inv_norm.to_le_bytes().as_ptr(), ptr.add(offset + 8), 4);
-                    for j in 0..dim {
-                        let val = embedding[j].to_le_bytes();
+                    for (j, elem) in embedding.iter().enumerate() {
+                        let val = elem.to_le_bytes();
                         std::ptr::copy_nonoverlapping(val.as_ptr(), ptr.add(offset + 12 + j * 4), 4);
                     }
                 }

@@ -526,12 +526,9 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     .unwrap_or_default();
                 let mut args = Vec::new();
                 for token in inner.into_iter().skip(1) {
-                    match token.as_rule() {
-                        Rule::expression => {
-                            args.push(parse_literal(token)?);
-                        }
-                        _ => {} // yield_clause and others are skipped for StandaloneCall
-                    }
+                    if token.as_rule() == Rule::expression {
+                        args.push(parse_literal(token)?);
+                    } // yield_clause and others are skipped for StandaloneCall
                 }
                 return Ok(Statement::StandaloneCall(name, args));
             }

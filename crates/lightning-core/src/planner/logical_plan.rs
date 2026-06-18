@@ -357,9 +357,9 @@ impl LogicalPlanner {
                     if let BoundExpression::PropertyLookup(ri_var, ri_idx, _) = &item.expression {
                         if ri_var == var && ri_idx == idx {
                             let mut agg_offset = 0;
-                            for prev in 0..ri {
-                                if ret_items[prev].expression.is_aggregate() || matches!(&ret_items[prev].expression, BoundExpression::PropertyLookup(_, _, _)) {
-                                    let prev_var_idx = match &ret_items[prev].expression {
+                            for prev_item in &ret_items[..ri] {
+                                if prev_item.expression.is_aggregate() || matches!(&prev_item.expression, BoundExpression::PropertyLookup(_, _, _)) {
+                                    let prev_var_idx = match &prev_item.expression {
                                         BoundExpression::PropertyLookup(pv, pi, _) => Some((pv.as_str(), *pi)),
                                         _ => None,
                                     };
@@ -402,9 +402,9 @@ impl LogicalPlanner {
                             // Aggregate column — count how many non-group-by
                             // RETURN items precede this one
                             let mut agg_idx = 0;
-                            for prev in 0..ri {
+                            for prev_item in &ret_items[..ri] {
                                 let prev_is_gb = group_by_exprs.iter().any(|gb| {
-                                    gb.alias == ret_items[prev].alias
+                                    gb.alias == prev_item.alias
                                 });
                                 if !prev_is_gb {
                                     agg_idx += 1;
@@ -449,9 +449,9 @@ impl LogicalPlanner {
                             }
                         } else {
                             let mut agg_idx = 0;
-                            for prev in 0..ri {
+                            for prev_item in &ret_items[..ri] {
                                 let prev_is_gb = group_by_exprs.iter().any(|gb| {
-                                    gb.alias == ret_items[prev].alias
+                                    gb.alias == prev_item.alias
                                 });
                                 if !prev_is_gb {
                                     agg_idx += 1;

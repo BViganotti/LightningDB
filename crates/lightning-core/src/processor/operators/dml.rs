@@ -563,20 +563,18 @@ impl PhysicalOperator for PhysicalSet {
                     });
                     if let Some(emb_idx) = emb_col_idx {
                         if updated_props.contains(&emb_idx) {
-                            if let Ok(val) = self.table.columns[emb_idx]
+                            if let Ok(Value::List(ref emb)) = self.table.columns[emb_idx]
                                 .get_value(&self.buffer_manager, *node_id, tx)
                             {
-                                if let Value::List(ref emb) = val {
-                                    if emb.len() == vec_idx.dimension() {
-                                        let emb_f32: Vec<f32> = emb.iter()
-                                            .filter_map(|v| {
-                                                if let Value::Number(n) = v { Some(*n as f32) } else { None }
-                                            })
-                                            .collect();
-                                        if emb_f32.len() == vec_idx.dimension() {
-                                            if let Err(e) = vec_idx.update(*node_id, &emb_f32, &self.buffer_manager, tx) {
-                                                tracing::warn!("Vector index update failed for node {node_id}: {e}");
-                                            }
+                                if emb.len() == vec_idx.dimension() {
+                                    let emb_f32: Vec<f32> = emb.iter()
+                                        .filter_map(|v| {
+                                            if let Value::Number(n) = v { Some(*n as f32) } else { None }
+                                        })
+                                        .collect();
+                                    if emb_f32.len() == vec_idx.dimension() {
+                                        if let Err(e) = vec_idx.update(*node_id, &emb_f32, &self.buffer_manager, tx) {
+                                            tracing::warn!("Vector index update failed for node {node_id}: {e}");
                                         }
                                     }
                                 }

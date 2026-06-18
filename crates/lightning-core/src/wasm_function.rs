@@ -383,11 +383,11 @@ fn _exec_memory_f32(
         let output_byte_len = num_rows * 4;
         if read_offset < mem_size && read_offset.saturating_add(output_byte_len) <= mem_size {
             let mem_data = mem.data(&*store);
-            for j in 0..num_rows {
+            for (j, result) in results.iter_mut().enumerate() {
                 let start = read_offset + j * 4;
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(&mem_data[start..start + 4]);
-                results[j] = f32::from_le_bytes(bytes);
+                *result = f32::from_le_bytes(bytes);
             }
         }
 

@@ -12,7 +12,6 @@ use std::sync::Arc;
 /// within the same process.  In-memory HashMap protections via RandomState
 /// are orthogonal; SipHash provides adequate collision resistance for
 /// bucket assignment.
-
 pub struct HashIndex {
     file_handle: Arc<FileHandle>,
     num_buckets: std::sync::atomic::AtomicU64,

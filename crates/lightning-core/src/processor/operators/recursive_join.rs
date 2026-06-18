@@ -91,8 +91,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         continue;
                     }
                     if depth >= self.bounds.0 && depth > 0 {
-                        for col_idx in 0..chunk.batch.num_columns() {
-                            final_columns[col_idx]
+                        for (col_idx, fc) in final_columns.iter_mut().enumerate().take(chunk.batch.num_columns()) {
+                            fc
                                 .push(Value::from_arrow(chunk.batch.column(col_idx), i));
                         }
                         final_columns[chunk.batch.num_columns()].push(Value::Node(node_id));

@@ -20,7 +20,7 @@ struct BloomFilter {
 
 impl BloomFilter {
     fn new() -> Self {
-        let num_u64s = ((BLOOM_NUM_BITS + 63) / 64) as usize;
+        let num_u64s = BLOOM_NUM_BITS.div_ceil(64) as usize;
         Self {
             bits: vec![0; num_u64s],
             mask: BLOOM_NUM_BITS - 1,
@@ -66,6 +66,12 @@ pub struct TokenCache {
     bloom: RwLock<BloomFilter>,
     revoked: RwLock<HashMap<String, Arc<AtomicBool>>>,
     generation: AtomicU64,
+}
+
+impl Default for TokenCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TokenCache {

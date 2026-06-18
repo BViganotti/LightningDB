@@ -143,9 +143,9 @@ impl JoinReordering {
                 let mut best_for_subset: Option<(LogicalOperator, u64, u64, HashSet<usize>)> = None;
 
                 let mut subset_vars = HashSet::new();
-                for i in 0..n {
+                for (i, rvar) in relation_vars.iter().enumerate() {
                     if (subset_mask & (1 << i)) != 0 {
-                        subset_vars.extend(relation_vars[i].iter().cloned());
+                        subset_vars.extend(rvar.iter().cloned());
                     }
                 }
 

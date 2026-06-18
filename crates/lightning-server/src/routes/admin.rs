@@ -69,26 +69,25 @@ pub async fn metrics_handler(
     let metrics = format!(
         r#"# HELP lightning_queries_total Total queries executed
 # TYPE lightning_queries_total counter
-lightning_queries_total {}
+lightning_queries_total {total_queries}
 
 # HELP lightning_checkpoints_total Total checkpoints performed
 # TYPE lightning_checkpoints_total counter
-lightning_checkpoints_total {}
+lightning_checkpoints_total {total_checkpoints}
 
 # HELP lightning_buffer_hit_rate Buffer pool hit rate (0.0 to 1.0)
 # TYPE lightning_buffer_hit_rate gauge
-lightning_buffer_hit_rate {:.4}
+lightning_buffer_hit_rate {buffer_hit_rate:.4}
 
 # HELP lightning_http_requests_total Total HTTP requests processed
 # TYPE lightning_http_requests_total counter
-lightning_http_requests_total {}
+lightning_http_requests_total {request_count}
 
 # HELP lightning_uptime_seconds Server uptime in seconds
 # TYPE lightning_uptime_seconds gauge
-lightning_uptime_seconds {}
+lightning_uptime_seconds {uptime_secs}
 
 "#,
-        total_queries, total_checkpoints, buffer_hit_rate, request_count, uptime_secs,
     );
 
     (

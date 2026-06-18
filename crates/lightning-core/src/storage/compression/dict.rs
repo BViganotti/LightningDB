@@ -28,14 +28,14 @@ impl CompressionAlg for DictCompression {
         let mut dict_map = HashMap::new();
         let mut indices = vec![0u64; num_values as usize];
 
-        for i in 0..num_values as usize {
+        for (i, idx) in indices.iter_mut().enumerate() {
             let start = i * element_size;
             let val = &src[start..start + element_size];
             if !dict_map.contains_key(val) {
                 dict_map.insert(val, dict.len() as u64);
                 dict.push(val);
             }
-            indices[i] = *dict_map.get(val).expect("internal invariant violated");
+            *idx = *dict_map.get(val).expect("internal invariant violated");
         }
 
         // Write dict count (4 bytes)

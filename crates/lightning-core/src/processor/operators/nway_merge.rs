@@ -151,8 +151,7 @@ impl PhysicalOperator for NWayMerge {
 
         // Pre-compute sort key arrays once per child (columnar, not row-by-row)
         let mut child_key_arrays: Vec<Vec<Option<(ArrayRef, &BoundOrderByItem)>>> = Vec::with_capacity(num_children);
-        for child_idx in 0..num_children {
-            let batch = &child_data[child_idx];
+        for batch in child_data.iter() {
             let mut key_arrays = Vec::with_capacity(self.order_by.len());
             if batch.num_rows() > 0 {
                 for item in &self.order_by {
@@ -183,8 +182,8 @@ impl PhysicalOperator for NWayMerge {
 
         while let Some(HeapEntry { child_idx, .. }) = heap.pop() {
             let row = cursors[child_idx];
-            for col_idx in 0..num_cols {
-                out_arrays[col_idx].push(Value::from_arrow(child_data[child_idx].column(col_idx), row));
+            for (col_idx, out_col) in out_arrays.iter_mut().enumerate() {
+                out_col.push(Value::from_arrow(child_data[child_idx].column(col_idx), row));
             }
             cursors[child_idx] += 1;
             if cursors[child_idx] < child_data[child_idx].num_rows() {

@@ -83,9 +83,6 @@ impl PhysicalRecursiveJoin {
             // Parallel neighbor extraction - capture only Sync variables
             let rel_tables = &self.rel_tables;
             let storage = &storage;
-            let bm = bm;
-            let tx = tx;
-
             let next_frontier: Vec<u64> = current_frontier
                 .par_iter()
                 .flat_map(|&node| {

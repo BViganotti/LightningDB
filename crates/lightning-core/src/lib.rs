@@ -1246,8 +1246,8 @@ impl Connection {
             let arr: ArrayRef = match col.data_type {
                 lightning_types::LogicalType::String => {
                     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::String(s)) => builder.append_value(s),
                             _ => builder.append_null(),
@@ -1257,8 +1257,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Int64 => {
                     let mut builder = Int64Builder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Number(n)) => builder.append_value(*n as i64),
                             _ => builder.append_null(),
@@ -1268,8 +1268,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Double => {
                     let mut builder = Float64Builder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Number(n)) => builder.append_value(*n),
                             _ => builder.append_null(),
@@ -1279,8 +1279,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Bool => {
                     let mut builder = BooleanBuilder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Boolean(b)) => builder.append_value(*b),
                             _ => builder.append_null(),
@@ -1290,8 +1290,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Node(_) => {
                     let mut builder = UInt64Builder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Node(id)) => builder.append_value(*id),
                             _ => builder.append_null(),
@@ -1301,8 +1301,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Date => {
                     let mut builder = Date32Builder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Date(d)) => builder.append_value(*d),
                             _ => builder.append_null(),
@@ -1312,8 +1312,8 @@ impl Connection {
                 }
                 lightning_types::LogicalType::Timestamp => {
                     let mut builder = TimestampMicrosecondBuilder::with_capacity(num_rows);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(Value::Timestamp(t)) => builder.append_value(*t),
                             _ => builder.append_null(),
@@ -1323,8 +1323,8 @@ impl Connection {
                 }
                 _ => {
                     let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 64);
-                    for row_idx in 0..num_rows {
-                        let val = row_maps[row_idx].get(col.name.as_str());
+                    for row_map in &row_maps {
+                        let val = row_map.get(col.name.as_str());
                         match val {
                             Some(v) => builder.append_value(v.to_string()),
                             _ => builder.append_null(),
@@ -1639,7 +1639,7 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).inspect_err(|e| {
+            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
                 if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
                     tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
                 }

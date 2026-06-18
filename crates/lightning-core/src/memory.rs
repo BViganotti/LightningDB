@@ -608,8 +608,8 @@ impl MemoryStore {
         // Phase 2: Graph expansion — find neighbors for top results using CSR index
         let top_for_expansion = std::cmp::min(config.expansion_depth, initial.len());
         let db = self.conn.client_context.database.clone();
-        for i in 0..top_for_expansion {
-            if let Ok(neighbors) = self.expand(&initial[i].entity.id, 1, &[]) {
+        for entity in initial.iter().take(top_for_expansion) {
+            if let Ok(neighbors) = self.expand(&entity.entity.id, 1, &[]) {
                 for neighbor in &neighbors {
                     if !all_entities.contains_key(&neighbor.id) {
                         all_entities.insert(neighbor.id.clone(), (neighbor.clone(), 0.0));
@@ -975,9 +975,9 @@ impl MemoryStore {
                 let dangling: f64 = rank.iter().enumerate()
                     .filter(|(i, _)| adjacency[*i].is_empty())
                     .map(|(_, r)| r).sum();
-                for i in 0..n {
-                    new_rank[i] = (1.0 - damping) / n as f64
-                        + damping * (new_rank[i] + dangling / n as f64);
+                for rank_val in new_rank.iter_mut() {
+                    *rank_val = (1.0 - damping) / n as f64
+                        + damping * (*rank_val + dangling / n as f64);
                 }
                 rank = new_rank;
             }

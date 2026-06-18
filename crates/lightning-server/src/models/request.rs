@@ -122,7 +122,7 @@ impl RecallRequest {
             return Err("top_k must be greater than 0".into());
         }
         if self.top_k > MAX_TOP_K {
-            return Err(format!("top_k cannot exceed {}", MAX_TOP_K));
+            return Err(format!("top_k cannot exceed {MAX_TOP_K}"));
         }
         Ok(())
     }
@@ -183,7 +183,7 @@ impl ExpandRequest {
             return Err("hops must be greater than 0".into());
         }
         if self.hops > MAX_HOPS {
-            return Err(format!("hops cannot exceed {}", MAX_HOPS));
+            return Err(format!("hops cannot exceed {MAX_HOPS}"));
         }
         Ok(())
     }
@@ -219,7 +219,7 @@ impl RagRequest {
             return Err("top_k must be greater than 0".into());
         }
         if self.top_k > MAX_RAG_TOP_K {
-            return Err(format!("top_k cannot exceed {}", MAX_RAG_TOP_K));
+            return Err(format!("top_k cannot exceed {MAX_RAG_TOP_K}"));
         }
         if let Some(depth) = self.expansion_depth {
             if depth > 10 {

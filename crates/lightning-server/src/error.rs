@@ -18,13 +18,13 @@ pub enum AppError {
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AppError::Db(e) => write!(f, "{}", e),
-            AppError::Internal(s) => write!(f, "{}", s),
-            AppError::Timeout(ms) => write!(f, "query timed out after {}ms", ms),
-            AppError::BadRequest(s) => write!(f, "{}", s),
-            AppError::Unauthorized(s) => write!(f, "unauthorized: {}", s),
-            AppError::Forbidden(s) => write!(f, "forbidden: {}", s),
-            AppError::TooManyRequests(s) => write!(f, "too many requests: {}", s),
+            AppError::Db(e) => write!(f, "{e}"),
+            AppError::Internal(s) => write!(f, "{s}"),
+            AppError::Timeout(ms) => write!(f, "query timed out after {ms}ms"),
+            AppError::BadRequest(s) => write!(f, "{s}"),
+            AppError::Unauthorized(s) => write!(f, "unauthorized: {s}"),
+            AppError::Forbidden(s) => write!(f, "forbidden: {s}"),
+            AppError::TooManyRequests(s) => write!(f, "too many requests: {s}"),
         }
     }
 }

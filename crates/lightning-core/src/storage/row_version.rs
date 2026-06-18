@@ -100,8 +100,7 @@ impl RowVersion {
             shard_updates[self.get_shard_idx(row_id)].push(row_id);
         }
 
-        for shard_idx in 0..self.num_shards {
-            let ids = &shard_updates[shard_idx];
+        for (shard_idx, ids) in shard_updates.iter().enumerate() {
             if ids.is_empty() {
                 continue;
             }
@@ -157,8 +156,7 @@ impl RowVersion {
         // Initialize mask with all visible
         mask.resize(row_ids.len(), true);
 
-        for shard_idx in 0..self.num_shards {
-            let group = &shard_groups[shard_idx];
+        for (shard_idx, group) in shard_groups.iter().enumerate() {
             if group.is_empty() {
                 continue;
             }

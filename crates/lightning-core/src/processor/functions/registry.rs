@@ -474,9 +474,9 @@ impl FunctionRegistry {
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
                             .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
-                        for i in 0..args[0].len() {
+                        for (i, result) in result_vec.iter_mut().enumerate() {
                             if !s_array.is_null(i) {
-                                result_vec[i].push_str(s_array.value(i));
+                                result.push_str(s_array.value(i));
                             }
                         }
                     }
@@ -2611,8 +2611,8 @@ impl FunctionRegistry {
                             let len1 = s1.chars().count();
                             let len2 = s2.chars().count();
                             let mut matrix = vec![vec![0; len2 + 1]; len1 + 1];
-                            for i in 0..=len1 {
-                                matrix[i][0] = i;
+                            for (i, row) in matrix.iter_mut().enumerate() {
+                                row[0] = i;
                             }
                             for j in 0..=len2 {
                                 matrix[0][j] = j;
@@ -3314,7 +3314,7 @@ impl FunctionRegistry {
                             "PI" => std::f64::consts::PI,
                             "E" => std::f64::consts::E,
                             "PHI" => 1.618033988749895,
-                            "INFINITY" => std::f64::INFINITY,
+                            "INFINITY" => f64::INFINITY,
                             _ => 0.0,
                         };
                         Ok(Arc::new(arrow::array::Float64Array::from(vec![
@@ -3420,8 +3420,8 @@ impl FunctionRegistry {
                         let uuid = format!(
                             "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
                             a,
-                            ((c >> 4)),
-                            ((c & 0x0fff)),
+                            (c >> 4),
+                            (c & 0x0fff),
                             0x8000u16 | ((d >> 2) & 0x3fff),
                             ((b as u64) << 32) | (a as u64)
                         );
@@ -3688,9 +3688,7 @@ impl FunctionRegistry {
                                 let mut components = Vec::new();
                                 let is_node_extraction = *name == "NODES";
                                 for (idx, v) in p.into_iter().enumerate() {
-                                    if is_node_extraction && idx % 2 == 0 {
-                                        components.push(v);
-                                    } else if !is_node_extraction && idx % 2 != 0 {
+                                    if is_node_extraction == (idx % 2 == 0) {
                                         components.push(v);
                                     }
                                 }

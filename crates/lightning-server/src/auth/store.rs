@@ -896,7 +896,7 @@ impl AuthStore {
         {
             let mut kcache = self.api_keys_cache.write();
             kcache.retain(|_, k| {
-                k.expires_at.map_or(true, |exp| exp > now)
+                k.expires_at.is_none_or(|exp| exp > now)
             });
         }
 
