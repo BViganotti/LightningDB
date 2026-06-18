@@ -341,10 +341,8 @@ class AsyncClient:
         body: dict[str, Any] = {"query": query}
         if params:
             body["params"] = params
-        resp = await self._transport.stream("POST", "/v1/query/stream", json_body=body)
-        async for line in resp.aiter_lines():
-            if line.startswith("data: "):
-                yield json.loads(line[6:])
+        async for event in self._transport.stream("POST", "/v1/query/stream", json_body=body):
+            yield event
 
     # ── Admin ──────────────────────────────────────────────────────────
 
@@ -365,17 +363,14 @@ class AsyncClient:
     # ── CDC ────────────────────────────────────────────────────────────
 
     async def subscribe(self) -> AsyncIterator[ChangeEvent]:
-        resp = await self._transport.stream("GET", "/v1/subscribe")
-        async for line in resp.aiter_lines():
-            if line.startswith("data: "):
-                event = json.loads(line[6:])
-                yield ChangeEvent(
-                    timestamp=event.get("timestamp", 0),
-                    bytes_written=event.get("bytesWritten", 0),
-                    total_wal_bytes=event.get("totalWalBytes", 0),
-                    entity_id=event.get("entityId"),
-                    operation_type=event.get("operationType", ""),
-                )
+        async for event in self._transport.stream("GET", "/v1/subscribe"):
+            yield ChangeEvent(
+                timestamp=event.get("timestamp", 0),
+                bytes_written=event.get("bytesWritten", 0),
+                total_wal_bytes=event.get("totalWalBytes", 0),
+                entity_id=event.get("entityId"),
+                operation_type=event.get("operationType", ""),
+            )
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
