@@ -68,6 +68,7 @@ func (cb *CircuitBreaker) AllowRequest() bool {
 	case CircuitOpen:
 		if time.Since(cb.lastFailureTime) >= cb.cfg.RecoveryTimeout {
 			cb.transitionToHalfOpen()
+			cb.halfOpenPermits++
 			return true
 		}
 		return false
