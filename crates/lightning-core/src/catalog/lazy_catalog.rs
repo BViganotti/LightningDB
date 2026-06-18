@@ -1,11 +1,39 @@
 use crate::catalog::Catalog;
 use crate::Result;
 use parking_lot::RwLock;
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info};
 
 pub const CATALOG_SAVE_TX_INTERVAL: u64 = 1000;
+
+/// A write guard that automatically marks the catalog as dirty on drop.
+/// This prevents callers from mutating the catalog without going through mark_dirty().
+pub struct DirtyCatalogGuard<'a> {
+    guard: parking_lot::RwLockWriteGuard<'a, Catalog>,
+    dirty: &'a AtomicBool,
+}
+
+impl<'a> Deref for DirtyCatalogGuard<'a> {
+    type Target = Catalog;
+    fn deref(&self) -> &Catalog {
+        &self.guard
+    }
+}
+
+impl<'a> DerefMut for DirtyCatalogGuard<'a> {
+    fn deref_mut(&mut self) -> &mut Catalog {
+        &mut self.guard
+    }
+}
+
+impl<'a> Drop for DirtyCatalogGuard<'a> {
+    fn drop(&mut self) {
+        self.dirty.store(true, Ordering::Release);
+        debug!("Catalog marked dirty via guard drop");
+    }
+}
 
 pub struct LazyCatalog {
     inner: Arc<RwLock<Catalog>>,
@@ -44,9 +72,15 @@ impl LazyCatalog {
         self.inner.read()
     }
 
+    /// Acquire a write guard that auto-marks the catalog as dirty when dropped.
+    /// Callers can mutate the catalog through this guard and the dirty flag
+    /// will be set automatically, ensuring catalog changes are never silently lost.
     #[inline]
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Catalog> {
-        self.inner.write()
+    pub fn write(&self) -> DirtyCatalogGuard<'_> {
+        DirtyCatalogGuard {
+            guard: self.inner.write(),
+            dirty: &self.dirty,
+        }
     }
 
     #[inline]
