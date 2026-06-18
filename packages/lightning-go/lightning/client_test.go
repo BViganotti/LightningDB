@@ -256,7 +256,7 @@ func TestDefaultClientConfig(t *testing.T) {
 	if cfg.DefaultTimeout != 30*time.Second {
 		t.Fatal("default timeout wrong")
 	}
-	if cfg.MaxRetries != 3 {
+	if cfg.Retry.MaxRetries != 3 {
 		t.Fatal("max retries should be 3")
 	}
 	if cfg.FollowRedirects {

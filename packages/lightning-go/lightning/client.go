@@ -61,7 +61,11 @@ func New(cfg ClientConfig) (*Client, error) {
 
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if cfg.TLS != nil && !strings.HasPrefix(baseURL, "https://") {
-		baseURL = strings.Replace(baseURL, "http://", "https://", 1)
+		if strings.HasPrefix(baseURL, "http://") {
+			baseURL = strings.Replace(baseURL, "http://", "https://", 1)
+		} else {
+			return nil, fmt.Errorf("TLS requires https:// scheme, got %s", cfg.BaseURL)
+		}
 	}
 
 	return &Client{
@@ -164,13 +168,17 @@ func (c *Client) do(method, path string, body interface{}, timeout time.Duration
 			continue
 		}
 		req.Header = h
+		var cancel context.CancelFunc
 		if timeout > 0 {
-			ctx, cancel := context.WithTimeout(req.Context(), timeout)
-			defer cancel()
-			req = req.WithContext(ctx)
+			var reqCtx context.Context
+			reqCtx, cancel = context.WithTimeout(req.Context(), timeout)
+			req = req.WithContext(reqCtx)
 		}
 
 		resp, err := c.httpClient.Do(req)
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
 			lastErr = err
 			if c.tele != nil && c.tele.OnError != nil {
@@ -185,8 +193,11 @@ func (c *Client) do(method, path string, body interface{}, timeout time.Duration
 
 		if resp.StatusCode >= 400 {
 			status := resp.StatusCode
-			bodyBytes, _ := io.ReadAll(resp.Body)
+			bodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, c.maxContent))
 			resp.Body.Close()
+			if readErr != nil && c.tele != nil && c.tele.OnError != nil {
+				c.tele.OnError(requestID, method, path, readErr)
+			}
 
 			if IsRetryable(status, c.retry) && attempt < c.retry.MaxRetries {
 				continue
@@ -235,7 +246,7 @@ func (c *Client) post(path string, body, into interface{}, timeout time.Duration
 		return err
 	}
 	defer resp.Body.Close()
-	return decodeResponse(resp, into)
+	return c.decodeResponse(resp, into)
 }
 
 func (c *Client) get(path string, into interface{}, timeout time.Duration) error {
@@ -244,11 +255,15 @@ func (c *Client) get(path string, into interface{}, timeout time.Duration) error
 		return err
 	}
 	defer resp.Body.Close()
-	return decodeResponse(resp, into)
+	return c.decodeResponse(resp, into)
 }
 
-func decodeResponse(resp *http.Response, into interface{}) error {
-	raw, err := io.ReadAll(resp.Body)
+func (c *Client) decodeResponse(resp *http.Response, into interface{}) error {
+	var reader io.Reader = resp.Body
+	if c.maxContent > 0 {
+		reader = io.LimitReader(resp.Body, c.maxContent)
+	}
+	raw, err := io.ReadAll(reader)
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
@@ -310,10 +325,10 @@ func (c *Client) Store(req StoreRequest) error {
 // StoreBatch stores multiple entities in one call.
 func (c *Client) StoreBatch(entities []StoreRequest) (int, error) {
 	if len(entities) == 0 {
-		return 0, ErrValidation("entities must not be empty")
+		return 0, NewValidationError("entities must not be empty")
 	}
 	if len(entities) > c.maxBatch {
-		return 0, ErrValidation(fmt.Sprintf("batch size %d exceeds max %d", len(entities), c.maxBatch))
+		return 0, NewValidationError(fmt.Sprintf("batch size %d exceeds max %d", len(entities), c.maxBatch))
 	}
 	var result struct {
 		Stored int `json:"stored"`
