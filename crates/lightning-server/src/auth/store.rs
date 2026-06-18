@@ -54,7 +54,7 @@ impl AuthStore {
         access_token_ttl_secs: u64,
         refresh_token_ttl_secs: u64,
     ) -> Result<Self, String> {
-        let conn = db.connect();
+        let conn = db.connect_internal();
         Self::ensure_system_tables(&conn)?;
 
         let users = Self::load_users(&conn)?;

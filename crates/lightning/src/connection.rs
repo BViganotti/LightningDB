@@ -42,6 +42,12 @@ impl Connection {
         }
     }
 
+    pub(crate) fn new_internal(database: Arc<CoreDatabase>) -> Self {
+        Self {
+            inner: CoreConnection::new_internal(database),
+        }
+    }
+
     // ── Query Execution ──────────────────────────────────────────────
 
     /// Execute a Cypher query and return results as Arrow record batches.

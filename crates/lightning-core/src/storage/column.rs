@@ -768,6 +768,7 @@ impl Column {
             let is_null = null_data[null_idx];
 
             if is_null != 0 {
+                offsets.push(current_offset);
                 continue;
             }
 

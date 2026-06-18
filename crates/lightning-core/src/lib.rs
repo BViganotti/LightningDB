@@ -75,7 +75,7 @@ const SYSTEM_AUTH_TABLES: &[&str] = &["auth_users", "auth_refresh_tokens", "auth
 /// Extract all table label references from a parsed Query AST and check
 /// that none of them target system auth tables. This prevents privilege
 /// escalation via Cypher queries (e.g., `MATCH (u:auth_users) RETURN u.password_hash`).
-fn validate_no_auth_table_access(query: &Query) -> Result<()> {
+pub fn validate_no_auth_table_access(query: &Query) -> Result<()> {
     for union_q in &query.union_queries {
         validate_statement_no_auth_tables(&union_q.statement)?;
     }
@@ -100,8 +100,19 @@ fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
         Statement::Merge(mc) => {
             validate_pattern_no_auth_tables(&mc.pattern)?;
         }
-        Statement::CreateTableNode { name, .. }
-        | Statement::AlterTable { name, .. }
+        Statement::CreateTableNode { name, if_not_exists, .. } => {
+            if SYSTEM_AUTH_TABLES.contains(&name.as_str()) {
+                // Allow CREATE TABLE IF NOT EXISTS for auth tables (used during
+                // server initialization). All other operations on auth tables
+                // are blocked.
+                if !*if_not_exists {
+                    return Err(LightningError::Query(format!(
+                        "Access to system table '{}' is not allowed via Cypher", name
+                    )));
+                }
+            }
+        }
+        Statement::AlterTable { name, .. }
         | Statement::DropTable(name, _)
         | Statement::CreateIndex { table_label: name, .. }
         | Statement::CreateConstraint { table_label: name, .. }
@@ -647,6 +658,12 @@ impl Database {
         Connection::new(Arc::clone(self))
     }
 
+    /// Create a connection that bypasses system table access checks.
+    /// Only for internal auth store use.
+    pub fn connect_internal(self: &Arc<Self>) -> Connection {
+        Connection::new_internal(Arc::clone(self))
+    }
+
     /// Register a WebAssembly function that can be called from Cypher queries.
     ///
     /// The WASM module must export a function `func_name` with signature
@@ -1010,6 +1027,7 @@ pub struct Connection {
     pub client_context: Arc<ClientContext>,
     pub transaction: parking_lot::Mutex<Option<Arc<Transaction>>>,
     pub pending_tables: parking_lot::RwLock<Vec<String>>,
+    pub skip_auth_check: bool,
 }
 
 impl Connection {
@@ -1018,7 +1036,16 @@ impl Connection {
             client_context: Arc::new(ClientContext::new(database)),
             transaction: parking_lot::Mutex::new(None),
             pending_tables: parking_lot::RwLock::new(Vec::new()),
+            skip_auth_check: false,
         }
+    }
+
+    /// Create a connection with auth table checks disabled.
+    /// Used internally by the auth store to manage system tables.
+    pub fn new_internal(database: Arc<Database>) -> Self {
+        let mut c = Self::new(database);
+        c.skip_auth_check = true;
+        c
     }
 
     pub fn begin(&self) -> Result<()> {
@@ -1375,7 +1402,9 @@ impl Connection {
                 drop(cache);
                 let query = parse(query_str)
                     .map_err(|e| LightningError::Query(e.to_string()))?;
-                validate_no_auth_table_access(&query)?;
+                if !self.skip_auth_check {
+                    validate_no_auth_table_access(&query)?;
+                }
                 let catalog = self.client_context.database.catalog.read();
                 let mut binder = Binder::new(
                     &catalog,

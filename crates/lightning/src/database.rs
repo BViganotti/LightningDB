@@ -63,6 +63,11 @@ impl Database {
         Connection::new(Arc::clone(&self.inner))
     }
 
+    /// Create a connection with auth table checks disabled for internal use.
+    pub fn connect_internal(&self) -> Connection {
+        Connection::new_internal(Arc::clone(&self.inner))
+    }
+
     /// Flush all dirty pages to disk and persist catalog metadata.
     ///
     /// Checkpoints ensure data durability and bound WAL size. Called
