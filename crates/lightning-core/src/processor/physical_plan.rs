@@ -892,8 +892,9 @@ impl PhysicalPlanner {
                     let cat = self.db.catalog.read();
                     if let Some(t) = cat.get_node_table(table_name) {
                         // IndexScan includes the internal _id column in its physical
-                        // output (same as Scan), so the column count must match.
-                        t.properties.len() + 1
+                        // output (same as Scan), and add_node_table already prepends
+                        // _id into properties, so properties.len() is the correct count.
+                        t.properties.len()
                     } else if let Some(t) = cat.get_rel_table(table_name) {
                         t.properties.len()
                     } else {
@@ -943,7 +944,9 @@ impl PhysicalPlanner {
             LogicalOperator::IndexScan(table_name, ..) => {
                 let cat = self.db.catalog.read();
                 if let Some(t) = cat.get_node_table(table_name) {
-                    t.properties.len() + 1
+                    // add_node_table prepends _id into properties, so
+                    // properties.len() already includes _id.
+                    t.properties.len()
                 } else if let Some(t) = cat.get_rel_table(table_name) {
                     t.properties.len()
                 } else {

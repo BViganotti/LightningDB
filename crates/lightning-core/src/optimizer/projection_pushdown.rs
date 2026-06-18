@@ -295,9 +295,22 @@ impl ProjectionPushDown {
                     combined,
                 ))
             }
-            LogicalOperator::Scan(table, var, mask, _, filter) => {
+            LogicalOperator::Scan(table, var, mask, existing, filter) => {
+                // If projected_idxs was already set by a previous optimization
+                // pass, don't overwrite it (same rationale as IndexScan).
+                if existing.is_some() {
+                    return Ok((
+                        LogicalOperator::Scan(table, var, mask, existing, filter),
+                        ColumnUsage::from_single(required_indices),
+                    ));
+                }
+                let mut req = required_indices.clone();
+                // Also include filter column indices so the scan reads them.
+                if let Some(ref expr) = filter {
+                    Self::extract_property_indices(expr, &mut req);
+                }
                 let mut v = Vec::new();
-                if let Some(set) = required_indices.get(&var) {
+                if let Some(set) = req.get(&var) {
                     v = set.iter().cloned().collect();
                     v.sort();
                 }
@@ -309,10 +322,22 @@ impl ProjectionPushDown {
                         if v.is_empty() { None } else { Some(v) },
                         filter,
                     ),
-                    ColumnUsage::from_single(required_indices),
+                    ColumnUsage::from_single(req),
                 ))
             }
-            LogicalOperator::IndexScan(table, var, pk_name, pk_val, _) => {
+            LogicalOperator::IndexScan(table, var, pk_name, pk_val, existing) => {
+                // If projected_idxs was already set by a previous optimization
+                // pass, don't overwrite it. The indices from extract_property_indices
+                // may already have been remapped to child-output-relative space,
+                // and using them as storage-column indices would produce wrong
+                // projected_idxs (the fixed-point loop applies this rule multiple
+                // times; only the first pass has binder-level storage indices).
+                if existing.is_some() {
+                    return Ok((
+                        LogicalOperator::IndexScan(table, var, pk_name, pk_val, existing),
+                        ColumnUsage::from_single(required_indices),
+                    ));
+                }
                 let mut v = Vec::new();
                 if let Some(set) = required_indices.get(&var) {
                     v = set.iter().cloned().collect();

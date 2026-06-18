@@ -603,8 +603,17 @@ impl PhysicalOperator for PhysicalScan {
 
             if !filter_all_pass {
                 if let Some(ref filter_expr) = self.pushdown_filter {
+                    // When the batch has projected columns, remap the filter
+                    // expression from table-column indices to projected positions.
+                    let eval_filter = if self.projected_idxs.is_some() {
+                        let mut remapped = filter_expr.clone();
+                        self.remap_filter_expression(&mut remapped);
+                        remapped
+                    } else {
+                        filter_expr.clone()
+                    };
                     let mask_result = crate::processor::evaluator::ExpressionEvaluator::evaluate(
-                        filter_expr,
+                        &eval_filter,
                         Some(&batch),
                         params,
                         batch.num_rows(),
