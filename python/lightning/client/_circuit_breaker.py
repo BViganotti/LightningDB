@@ -39,6 +39,7 @@ class CircuitBreaker:
                 elapsed = time.monotonic() - self._last_failure_time
                 if elapsed >= self._config.recovery_timeout:
                     self._transition_to_half_open()
+                    self._half_open_permits += 1
                     return True
                 return False
 

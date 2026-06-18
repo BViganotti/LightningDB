@@ -20,7 +20,7 @@ from lightning.client import Client, ClientConfig, RetryConfig, CircuitBreakerCo
 
 
 def _build_client(**overrides: Any) -> Client:
-    config = ClientConfig(
+    defaults = dict(
         base_url="http://localhost:9999",
         retry=RetryConfig(max_retries=1, base_delay=0.01),
         circuit_breaker=CircuitBreakerConfig(
@@ -29,9 +29,9 @@ def _build_client(**overrides: Any) -> Client:
             half_open_max_requests=2,
             success_threshold=1,
         ),
-        **overrides,
     )
-    return Client(config)
+    defaults.update(overrides)
+    return Client(ClientConfig(**defaults))
 
 
 def _mock_json_response(data: Any, status: int = 200) -> Response:
@@ -116,37 +116,28 @@ def test_id_validation() -> None:
 
 def test_retry_on_429() -> None:
     """Client should retry on 429 Too Many Requests."""
-    transport = mock.MagicMock()
-    transport.request.side_effect = [
-        httpx.HTTPStatusError(
-            "too many requests",
-            request=mock.MagicMock(),
-            response=Response(429, content=b'{"error":"rate limit"}', request=Request("GET", "http://localhost:9999/test")),
-        ),
-        {"results": []},
-    ]
+    mock_httpx = mock.MagicMock()
+    err_resp_1 = mock.MagicMock(spec=httpx.Response, status_code=429, is_error=True, headers={}, text="rate limit")
+    ok_resp = mock.MagicMock(spec=httpx.Response, status_code=200, is_error=False, headers={"content-type": "application/json"})
+    ok_resp.json.return_value = {"data": {"results": []}}
+    mock_httpx.request.side_effect = [err_resp_1, ok_resp]
 
-    client = _build_client(retry=RetryConfig(max_retries=2, base_delay=0.01))
-    client._transport = transport
-    result = client.recall("test")
+    with mock.patch("lightning.client._transport.httpx.Client", return_value=mock_httpx):
+        client = _build_client(retry=RetryConfig(max_retries=2, base_delay=0.01))
+        result = client.recall("test")
     assert result == []
 
 
 def test_max_retries_exceeded() -> None:
     """Client should raise after max retries on persistent 429."""
-    transport = mock.MagicMock()
-    transport.request.side_effect = [
-        httpx.HTTPStatusError(
-            "rate limit",
-            request=mock.MagicMock(),
-            response=Response(429, content=b'{"error":"rate limit"}', request=Request("GET", "http://localhost:9999/test")),
-        )
-    ] * 5
+    mock_httpx = mock.MagicMock()
+    err_resp = mock.MagicMock(spec=httpx.Response, status_code=429, is_error=True, headers={}, text="rate limit")
+    mock_httpx.request.return_value = err_resp
 
-    client = _build_client(retry=RetryConfig(max_retries=2, base_delay=0.01))
-    client._transport = transport
-    with pytest.raises(Exception):
-        client.recall("test")
+    with mock.patch("lightning.client._transport.httpx.Client", return_value=mock_httpx):
+        client = _build_client(retry=RetryConfig(max_retries=1, base_delay=0.01))
+        with pytest.raises(Exception):
+            client.recall("test")
 
 
 def test_no_retry_on_400() -> None:

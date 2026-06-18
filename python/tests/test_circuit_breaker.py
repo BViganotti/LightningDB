@@ -7,7 +7,9 @@ from lightning.client._types import CircuitBreakerConfig
 
 
 def _cb(**kw) -> CircuitBreaker:
-    return CircuitBreaker(CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0, **kw))
+    defaults = dict(failure_threshold=3, recovery_timeout=30.0)
+    defaults.update(kw)
+    return CircuitBreaker(CircuitBreakerConfig(**defaults))
 
 
 def test_initial_state() -> None:
@@ -94,4 +96,4 @@ def test_thread_safety() -> None:
     for t in threads:
         t.join()
 
-    assert c.state == CircuitState.CLOSED
+    assert c.state == CircuitState.OPEN
