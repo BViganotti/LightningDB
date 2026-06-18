@@ -55,7 +55,7 @@ fn test_hash_join_vectorized() {
     
     let dir = tempfile::tempdir().unwrap();
     let db = lightning_core::Database::new(dir.path(), Default::default()).unwrap();
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let res = join.get_next(&db, &tx, None).unwrap().expect("Should have output");
     let batch = res.batch;
     

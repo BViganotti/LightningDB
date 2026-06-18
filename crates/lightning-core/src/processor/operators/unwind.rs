@@ -82,8 +82,8 @@ impl PhysicalOperator for PhysicalUnwind {
                         database,
                     )?);
                 }
-                let eval_res = self.cached_eval.as_ref().unwrap();
-
+                let eval_res = self.cached_eval.as_ref()
+                    .expect("unwind: cached_eval was just populated");
                 // Check if it's a list
                 if let Some(lists) = eval_res.as_list_opt::<i32>() {
                     self.current_list = Some(lists.value(self.current_row_idx));

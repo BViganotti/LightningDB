@@ -20,7 +20,7 @@ fn test_expression_evaluator() {
     let batch = RecordBatch::try_new(schema, vec![col0, col1]).unwrap();
     let db_arc = lightning_core::Database::new(":memory:", lightning_core::SystemConfig::default()).unwrap();
     let database = &*db_arc;
-    let registry = &database.function_registry;
+    let registry = database.function_registry();
 
     // 1. Literal Evaluation
     let expr1 = BoundExpression::Literal(Literal::Number(5.0));

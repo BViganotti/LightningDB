@@ -41,7 +41,7 @@ fn test_unwind_dedup_manual_plan() {
     let mut planner = lightning_core::processor::physical_plan::PhysicalPlanner::new(db.clone(), 0, 0, undo_buffer);
     let mut physical_plan = planner.plan(dedup).unwrap();
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let mut all_values = Vec::new();
     while let Some(chunk) = physical_plan.get_next(&db, &tx, None).unwrap() {
         let batch = chunk.batch;
@@ -86,7 +86,7 @@ fn test_unwind_dedup_multiple_batches() {
     let mut planner = lightning_core::processor::physical_plan::PhysicalPlanner::new(db.clone(), 0, 0, undo_buffer);
     let mut physical_plan = planner.plan(dedup).unwrap();
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let mut count = 0;
     while let Some(chunk) = physical_plan.get_next(&db, &tx, None).unwrap() {
         count += chunk.batch.num_rows();

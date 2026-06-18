@@ -426,7 +426,7 @@ fn test_alter_add_column_rel_table() -> TestResult {
 
     exec(&db, "ALTER TABLE KNOWS ADD COLUMN weight DOUBLE");
 
-    let cat = db.catalog.read();
+    let cat = db.catalog().read();
     let rel = cat.get_rel_table("KNOWS").unwrap();
     assert!(rel.properties.iter().any(|p| p.name == "weight"));
 
@@ -443,7 +443,7 @@ fn test_alter_drop_column_rel_table() -> TestResult {
 
     exec(&db, "ALTER TABLE KNOWS DROP COLUMN notes");
 
-    let cat = db.catalog.read();
+    let cat = db.catalog().read();
     let rel = cat.get_rel_table("KNOWS").unwrap();
     assert!(!rel.properties.iter().any(|p| p.name == "notes"));
 
@@ -460,7 +460,7 @@ fn test_alter_rename_column_rel_table() -> TestResult {
 
     exec(&db, "ALTER TABLE KNOWS RENAME COLUMN since TO met_year");
 
-    let cat = db.catalog.read();
+    let cat = db.catalog().read();
     let rel = cat.get_rel_table("KNOWS").unwrap();
     assert!(rel.properties.iter().any(|p| p.name == "met_year"));
     assert!(!rel.properties.iter().any(|p| p.name == "since"));

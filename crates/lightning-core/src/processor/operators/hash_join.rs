@@ -313,8 +313,8 @@ impl PhysicalOperator for HashJoin {
                 }
                 tracing::debug!(
                     "HashJoin::get_next: got left chunk with {} rows, {} cols",
-                    self.current_left_chunk.as_ref().unwrap().num_rows(),
-                    self.current_left_chunk.as_ref().unwrap().batch.num_columns()
+                    self.current_left_chunk.as_ref().expect("hash_join left chunk num_rows").num_rows(),
+                    self.current_left_chunk.as_ref().expect("hash_join left chunk num_cols").batch.num_columns()
                 );
             }
 

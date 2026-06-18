@@ -135,7 +135,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                 }
                                 fallback_adj = Some(map);
                             }
-                            let adj = fallback_adj.as_ref().unwrap();
+                            let adj = fallback_adj.as_ref()
+                                .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
                                 for &neighbor_id in neighbors {
                                     if !visited.contains(&neighbor_id) {

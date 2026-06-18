@@ -1195,16 +1195,16 @@ fn torture_graph_scale() -> TestResult {
     println!("  [GRAPH] {} nodes, {} edges, 3-hop traversal: {} results", n, edges, hops);
 
     // Verify CSR index was built correctly
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     let _has_csr = storage.fwd_csr.contains_key("Linked");
     let csr_count = storage.fwd_csr.get("Linked").map(|csr| {
-        let tx = db.transaction_manager.begin(true).unwrap();
-        let bm = &db.buffer_manager;
+        let tx = db.transaction_manager().begin(true).unwrap();
+        let bm = &db.buffer_manager();
         let mut count = 0u64;
         for node in 0..n {
             let _ = csr.for_each_neighbor(bm, node, &tx, |_| { count += 1; });
         }
-        let _ = db.transaction_manager.rollback(&db, &tx);
+        let _ = db.transaction_manager().rollback(&db, &tx);
         count
     });
     drop(storage);

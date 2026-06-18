@@ -56,7 +56,7 @@ fn main() -> lightning_core::Result<()> {
     }
 
     // Check storage
-    let sm = db.storage_manager.read();
+    let sm = db.storage_manager().read();
     if let Some(follows_table) = sm.get_table("Follows") {
         for col in &follows_table.columns {
             let stats = col.stats.read();

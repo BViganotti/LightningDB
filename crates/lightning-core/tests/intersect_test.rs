@@ -28,16 +28,16 @@ fn test_intersect_operator() {
         ).unwrap();
 
         // Manual catalog update for tests
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.get_node_table_mut("User").unwrap().num_rows = 4;
         catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
     }
 
     // 2. Insert Data
     {
-        let tx = db.transaction_manager.begin(false).unwrap();
-        let bm = &db.buffer_manager;
-        let storage = db.storage_manager.read();
+        let tx = db.transaction_manager().begin(false).unwrap();
+        let bm = &db.buffer_manager();
+        let storage = db.storage_manager().read();
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
 
@@ -74,28 +74,28 @@ fn test_intersect_operator() {
             .append_row(bm, &[Value::Node(1), Value::Node(4)], 4, &tx)
             .unwrap();
 
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
     // 3. Test Physical Intersect directly
     use lightning_core::processor::operators::PhysicalIntersect;
     use lightning_core::processor::operators::PhysicalScan;
 
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     // Build 1: Scan Follows
     let scan1 = Box::new(PhysicalScan::new(
         follows_table.clone(),
         "e1".to_string(),
-        db.buffer_manager.clone(),
+        db.buffer_manager().clone(),
         5,
     ).unwrap());
     // Build 2: Scan Follows
     let scan2 = Box::new(PhysicalScan::new(
         follows_table,
         "e2".to_string(),
-        db.buffer_manager.clone(),
+        db.buffer_manager().clone(),
         5,
     ).unwrap());
 
@@ -146,7 +146,7 @@ fn test_intersect_operator() {
         "c".to_string(),
     );
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let result = intersect
         .get_next(&db, &tx, None)
         .unwrap()
@@ -186,15 +186,15 @@ fn test_intersect_no_match() {
             "CREATE REL TABLE Follows(FROM User TO User)",
             None,
         ).unwrap();
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.get_node_table_mut("User").unwrap().num_rows = 4;
         catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
     }
 
     {
-        let tx = db.transaction_manager.begin(false).unwrap();
-        let bm = &db.buffer_manager;
-        let storage = db.storage_manager.read();
+        let tx = db.transaction_manager().begin(false).unwrap();
+        let bm = &db.buffer_manager();
+        let storage = db.storage_manager().read();
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
         user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
@@ -206,13 +206,13 @@ fn test_intersect_no_match() {
         follows_table.append_row(bm, &[Value::Node(1), Value::Node(2)], 2, &tx).unwrap();
         follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 3, &tx).unwrap();
         follows_table.append_row(bm, &[Value::Node(1), Value::Node(4)], 4, &tx).unwrap();
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
     use lightning_core::processor::operators::PhysicalIntersect;
     use lightning_core::processor::operators::PhysicalScan;
 
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     #[derive(Clone)]
@@ -241,14 +241,14 @@ fn test_intersect_no_match() {
     }
 
     let probe = Box::new(NoMatchProbe { done: false });
-    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager.clone(), 5).unwrap());
-    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager.clone(), 5).unwrap());
+    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager().clone(), 5).unwrap());
+    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager().clone(), 5).unwrap());
 
     let mut intersect = PhysicalIntersect::new(
         probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
     );
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let result = intersect.get_next(&db, &tx, None).unwrap();
     assert!(result.is_none());
 }
@@ -265,27 +265,27 @@ fn test_intersect_empty_probe() {
         let conn = db.connect();
         conn.execute("CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))", None).unwrap();
         conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.get_node_table_mut("User").unwrap().num_rows = 4;
         catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
     }
     {
-        let tx = db.transaction_manager.begin(false).unwrap();
-        let bm = &db.buffer_manager;
-        let storage = db.storage_manager.read();
+        let tx = db.transaction_manager().begin(false).unwrap();
+        let bm = &db.buffer_manager();
+        let storage = db.storage_manager().read();
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
         user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
         user_table.append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx).unwrap();
         follows_table.append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx).unwrap();
         follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 1, &tx).unwrap();
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
     use lightning_core::processor::operators::PhysicalIntersect;
     use lightning_core::processor::operators::PhysicalScan;
 
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     #[derive(Clone)]
@@ -307,14 +307,14 @@ fn test_intersect_empty_probe() {
     }
 
     let probe = Box::new(EmptyProbe { done: false });
-    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager.clone(), 5).unwrap());
-    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager.clone(), 5).unwrap());
+    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager().clone(), 5).unwrap());
+    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager().clone(), 5).unwrap());
 
     let mut intersect = PhysicalIntersect::new(
         probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
     );
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let result = intersect.get_next(&db, &tx, None).unwrap();
     assert!(result.is_none());
 }

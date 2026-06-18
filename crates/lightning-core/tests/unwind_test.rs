@@ -11,11 +11,11 @@ fn test_baseline_match() {
     let conn = db.connect();
 
     {
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.add_node_table("Person".into(), vec![
             PropertyDefinition { name: "name".into(), type_: LogicalType::String },
         ], None).unwrap();
-        let mut storage = db.storage_manager.write();
+        let mut storage = db.storage_manager().write();
         storage.create_table("Person".into(), vec![("name".into(), LogicalType::String)], false, None).unwrap();
     }
     conn.query("CREATE (p:Person {name: 'Alice'})").unwrap();
@@ -70,12 +70,12 @@ fn test_unwind_with_match() {
 
     // 1. Setup Data
     {
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.add_node_table("Person".into(), vec![
             PropertyDefinition { name: "name".into(), type_: LogicalType::String },
         ], None).unwrap();
 
-        let mut storage = db.storage_manager.write();
+        let mut storage = db.storage_manager().write();
         storage.create_table("Person".into(), vec![
             ("name".into(), LogicalType::String),
         ], false, None).unwrap();
@@ -103,12 +103,12 @@ fn test_unwind_empty_list() {
 
     // Setup Data
     {
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.add_node_table("Person".into(), vec![
             PropertyDefinition { name: "name".into(), type_: LogicalType::String },
         ], None).unwrap();
 
-        let mut storage = db.storage_manager.write();
+        let mut storage = db.storage_manager().write();
         storage.create_table("Person".into(), vec![
             ("name".into(), LogicalType::String),
         ], false, None).unwrap();

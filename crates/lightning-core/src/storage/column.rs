@@ -486,14 +486,14 @@ impl Column {
 
             // Cache null frame across sequential batches on the same null page
             let null_frame = if cached_null_page.as_ref().map(|(idx, _)| *idx) == Some(null_page_idx) {
-                cached_null_page.as_ref().unwrap().1.clone()
+                cached_null_page.as_ref().expect("null_page cache hit has value").1.clone()
             } else {
                 if let Some((old_idx, ref old_frame)) = cached_null_page.take() {
                     bm.unpin_page(&null_fh, old_idx, old_frame.clone());
                 }
                 let frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
                 cached_null_page = Some((null_page_idx, frame));
-                cached_null_page.as_ref().unwrap().1.clone()
+                cached_null_page.as_ref().expect("null_page cache just populated").1.clone()
             };
 
             for i in 0..to_read as usize {

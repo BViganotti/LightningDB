@@ -17,14 +17,14 @@ fn test_flatten_operator() -> Result<()> {
     std::fs::create_dir_all(&test_dir).unwrap();
 
     let db = Database::new(&test_dir, SystemConfig::default())?;
-    let sm = db.storage_manager.clone();
+    let sm = db.storage_manager().clone();
 
     // Setup: 1 table with 3 rows
     {
-        let tx = db.transaction_manager.begin(false)?;
+        let tx = db.transaction_manager().begin(false)?;
         // 1. Add to Catalog
         {
-            let mut cat = db.catalog.write();
+            let mut cat = db.catalog().write();
             cat.add_node_table(
                 "User".to_string(),
                 vec![PropertyDefinition {
@@ -51,7 +51,7 @@ fn test_flatten_operator() -> Result<()> {
         let table = sm_write.node_tables.get("User").unwrap();
         table
             .append_row(
-                &db.buffer_manager,
+                &db.buffer_manager(),
                 &[Value::Node(1), Value::String("Alice".to_string())],
                 0,
                 &tx,
@@ -59,7 +59,7 @@ fn test_flatten_operator() -> Result<()> {
             .unwrap();
         table
             .append_row(
-                &db.buffer_manager,
+                &db.buffer_manager(),
                 &[Value::Node(2), Value::String("Bob".to_string())],
                 1,
                 &tx,
@@ -67,15 +67,15 @@ fn test_flatten_operator() -> Result<()> {
             .unwrap();
         table
             .append_row(
-                &db.buffer_manager,
+                &db.buffer_manager(),
                 &[Value::Node(3), Value::String("Charlie".to_string())],
                 2,
                 &tx,
             )
             .unwrap();
 
-        db.transaction_manager
-            .commit(&tx, &db.buffer_manager, &db)?;
+        db.transaction_manager()
+            .commit(&tx, &db.buffer_manager(), &db)?;
     }
 
     // Manually create a plan with Flatten
@@ -83,7 +83,7 @@ fn test_flatten_operator() -> Result<()> {
     let scan = LogicalOperator::Scan("User".to_string(), "u".to_string(), None, None, None);
     let plan = LogicalOperator::Flatten(Box::new(scan));
 
-    let tx = db.transaction_manager.begin(true)?;
+    let tx = db.transaction_manager().begin(true)?;
     let undo_buffer = Arc::new(lightning_core::storage::undo_buffer::UndoBuffer::new());
     let mut planner = PhysicalPlanner::new(db.clone(), tx.tx_id, tx.read_ts, undo_buffer);
     let mut physical_plan = planner.plan(plan)?;

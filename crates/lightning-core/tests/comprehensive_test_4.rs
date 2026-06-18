@@ -939,7 +939,7 @@ fn constraint_create_and_drop() -> TestResult {
         None,
     )?;
 
-    let cat = db.catalog.read();
+    let cat = db.catalog().read();
     let table = cat.get_node_table("Person").unwrap();
     assert_eq!(table.constraints.len(), 1);
     assert_eq!(table.constraints[0].name, "unique_name");
@@ -948,7 +948,7 @@ fn constraint_create_and_drop() -> TestResult {
 
     conn.execute("DROP CONSTRAINT unique_name", None)?;
 
-    let cat = db.catalog.read();
+    let cat = db.catalog().read();
     let table = cat.get_node_table("Person").unwrap();
     assert_eq!(table.constraints.len(), 0);
     Ok(())
@@ -1105,13 +1105,13 @@ fn index_create_and_drop() -> TestResult {
         None,
     )?;
 
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     assert!(storage.indexes.contains_key("idx_name"), "Index should exist");
     drop(storage);
 
     conn.execute("DROP INDEX idx_name", None)?;
 
-    let storage = db.storage_manager.read();
+    let storage = db.storage_manager().read();
     assert!(!storage.indexes.contains_key("idx_name"), "Index should be removed");
     Ok(())
 }

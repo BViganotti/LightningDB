@@ -29,12 +29,12 @@ fn test_semi_mask_filtering() {
 
     // 4. Verify PhysicalScan with Mask
     {
-        let storage = db.storage_manager.read();
+        let storage = db.storage_manager().read();
         let table = storage.get_table("User").unwrap().clone();
         let mut scan = lightning_core::processor::operators::PhysicalScan::new(
             table,
             "u".to_string(),
-            db.buffer_manager.clone(),
+            db.buffer_manager().clone(),
             4,
         ).unwrap();
         
@@ -46,7 +46,7 @@ fn test_semi_mask_filtering() {
         scan = scan.with_mask(mask_arc, None);
         
         let mut processor = lightning_core::processor::Processor::new(Box::new(scan));
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let tx = db.transaction_manager().begin(false).unwrap();
         let results = processor.execute(db.clone(), Arc::new(tx), None).unwrap();
         
         let mut total_rows = 0;
@@ -66,7 +66,7 @@ fn test_semi_mask_filtering() {
 
     // 5. Verify PhysicalRecursiveJoin with Mask
     {
-        let storage = db.storage_manager.read();
+        let storage = db.storage_manager().read();
         let rel_table = storage.get_table("Follows").unwrap().clone();
         let dst_table = storage.get_table("User").unwrap().clone();
         
@@ -82,7 +82,7 @@ fn test_semi_mask_filtering() {
             Box::new(lightning_core::processor::operators::PhysicalSingleRow::new()),
             rel_table,
             dst_table,
-            db.buffer_manager.clone(),
+            db.buffer_manager().clone(),
             2, // rel rows
             0, // src_var_idx (PhysicalSingleRow has no cols, but RJ will try to read from it)
             // Wait, PhysicalSingleRow returns a DataChunk with no columns.

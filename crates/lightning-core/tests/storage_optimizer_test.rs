@@ -11,7 +11,7 @@ fn test_storage_compression_rewrite_roundtrip() {
     // 1. Create table and insert highly compressible data (repeated values)
     // 1. Setup Catalog and Storage
     {
-        let mut catalog = db.catalog.write();
+        let mut catalog = db.catalog().write();
         catalog.add_node_table(
             "Person".into(),
             vec![
@@ -31,7 +31,7 @@ fn test_storage_compression_rewrite_roundtrip() {
             None,
         ).unwrap();
 
-        let mut storage = db.storage_manager.write();
+        let mut storage = db.storage_manager().write();
         storage
             .create_table(
                 "Person".into(),
@@ -57,17 +57,17 @@ fn test_storage_compression_rewrite_roundtrip() {
 
     // 2. Run optimization manual
     {
-        let mut storage = db.storage_manager.write();
+        let mut storage = db.storage_manager().write();
         let table = storage.node_tables.get_mut("Person").unwrap();
-        let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).unwrap();
+        let bm = &db.buffer_manager();
+        let tx = db.transaction_manager().begin(false).unwrap();
         table.optimize(bm, &tx).unwrap();
-        db.transaction_manager.commit(&tx, bm, &db).unwrap();
+        db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
     // 3. Verify compression detected
     {
-        let storage = db.storage_manager.read();
+        let storage = db.storage_manager().read();
         let table = storage.node_tables.get("Person").unwrap();
         // Check "age" column (index 2, 0 is _id, 1 is id, 2 is age)
         let age_col = &table.columns[2];

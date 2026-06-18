@@ -33,7 +33,7 @@ impl GDSFrontier {
             .compare_exchange(u32::MAX, distance, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         if first_visit {
-            self.active_nodes.lock().unwrap().push(node_id as u32);
+            self.active_nodes.lock().expect("GDS active_nodes lock").push(node_id as u32);
         }
         first_visit
     }
@@ -43,7 +43,7 @@ impl GDSFrontier {
     }
 
     pub fn clear(&mut self) {
-        let active = std::mem::take(&mut *self.active_nodes.lock().unwrap());
+        let active = std::mem::take(&mut *self.active_nodes.lock().expect("GDS active_nodes lock"));
         for &node_id in &active {
             // Use Release to ensure prior reads complete before clear is visible
             self.nodes[node_id as usize].store(u32::MAX, Ordering::Release);
@@ -75,7 +75,7 @@ impl GDSState {
             self.next_frontier = Arc::new(GDSFrontier::new(num_nodes));
         } else {
             // SAFETY: just verified get_mut returns Some
-            Arc::get_mut(&mut self.next_frontier).unwrap().clear();
+            Arc::get_mut(&mut self.next_frontier).expect("GDS swap: get_mut returned Some above").clear();
         }
         self.iteration += 1;
     }

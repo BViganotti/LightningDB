@@ -3464,7 +3464,7 @@ impl FunctionRegistry {
                             ) = (s_val, p_val)
                             {
                                 let re = {
-                                    let mut cache = re_cache.lock().unwrap();
+                                    let mut cache = re_cache.lock().expect("regex_cache lock");
                                     if let Some((ref cached_pat, ref cached_re)) = *cache {
                                         if *cached_pat == p {
                                             (*cached_re).clone()

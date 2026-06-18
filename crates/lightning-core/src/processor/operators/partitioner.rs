@@ -43,51 +43,51 @@ impl PhysicalPartitioner {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         match column.data_type() {
             DataType::UInt8 => {
-                let arr = column.as_any().downcast_ref::<UInt8Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<UInt8Array>().expect("partitioner UInt8");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::UInt16 => {
-                let arr = column.as_any().downcast_ref::<UInt16Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<UInt16Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::UInt32 => {
-                let arr = column.as_any().downcast_ref::<UInt32Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<UInt32Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::UInt64 => {
-                let arr = column.as_any().downcast_ref::<UInt64Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<UInt64Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Int8 => {
-                let arr = column.as_any().downcast_ref::<Int8Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Int8Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Int16 => {
-                let arr = column.as_any().downcast_ref::<Int16Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Int16Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Int32 => {
-                let arr = column.as_any().downcast_ref::<Int32Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Int32Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Int64 => {
-                let arr = column.as_any().downcast_ref::<Int64Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Int64Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0i64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Float32 => {
-                let arr = column.as_any().downcast_ref::<Float32Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Float32Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).to_bits().hash(&mut hasher); }
             }
             DataType::Float64 => {
-                let arr = column.as_any().downcast_ref::<Float64Array>().unwrap();
+                let arr = column.as_any().downcast_ref::<Float64Array>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).to_bits().hash(&mut hasher); }
             }
             DataType::Utf8 | DataType::LargeUtf8 => {
-                let arr = column.as_any().downcast_ref::<StringArray>().unwrap();
+                let arr = column.as_any().downcast_ref::<StringArray>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             DataType::Boolean => {
-                let arr = column.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let arr = column.as_any().downcast_ref::<BooleanArray>().expect("partitioner downcast matches data_type arm");
                 if arr.is_null(row) { 0u64.hash(&mut hasher); } else { arr.value(row).hash(&mut hasher); }
             }
             _ => {

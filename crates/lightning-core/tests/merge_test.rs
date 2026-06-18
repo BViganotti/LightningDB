@@ -32,15 +32,15 @@ fn test_merge_basic() {
         .statement;
 
     let bound_statement = {
-        let catalog = db.catalog.read();
-        let mut binder = Binder::new(&catalog, &db.function_registry);
+        let catalog = db.catalog().read();
+        let mut binder = Binder::new(&catalog, &db.function_registry());
         binder.bind(&statement).unwrap()
     };
 
     let logical_plan = LogicalPlanner::plan(bound_statement).unwrap();
     let undo_buffer = std::sync::Arc::new(lightning_core::storage::undo_buffer::UndoBuffer::new());
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let mut physical_planner = PhysicalPlanner::new(db.clone(), tx.tx_id, tx.read_ts, undo_buffer);
     let mut physical_plan = physical_planner.plan(logical_plan).unwrap();
 
@@ -54,14 +54,14 @@ fn test_merge_basic() {
         .value(0);
     assert_eq!(count, 1.0);
 
-    db.transaction_manager
-        .commit(&tx, &db.buffer_manager, &db)
+    db.transaction_manager()
+        .commit(&tx, &db.buffer_manager(), &db)
         .unwrap();
 
     // Verify Alice exists
     {
         assert_eq!(
-            db.catalog.read().get_node_table("Person").unwrap().num_rows,
+            db.catalog().read().get_node_table("Person").unwrap().num_rows,
             1
         );
     }
@@ -75,13 +75,13 @@ fn test_merge_basic() {
         .unwrap()
         .statement;
     let bound_statement2 = {
-        let catalog = db.catalog.read();
-        let mut binder = Binder::new(&catalog, &db.function_registry);
+        let catalog = db.catalog().read();
+        let mut binder = Binder::new(&catalog, &db.function_registry());
         binder.bind(&statement2).unwrap()
     };
     let logical_plan2 = LogicalPlanner::plan(bound_statement2).unwrap();
 
-    let tx2 = db.transaction_manager.begin(false).unwrap();
+    let tx2 = db.transaction_manager().begin(false).unwrap();
     let undo_buffer2 = std::sync::Arc::new(lightning_core::storage::undo_buffer::UndoBuffer::new());
     let mut physical_planner2 =
         PhysicalPlanner::new(db.clone(), tx2.tx_id, tx2.read_ts, undo_buffer2);
@@ -97,11 +97,11 @@ fn test_merge_basic() {
         .value(0);
     assert_eq!(count2, 1.0);
 
-    db.transaction_manager
-        .commit(&tx2, &db.buffer_manager, &db)
+    db.transaction_manager()
+        .commit(&tx2, &db.buffer_manager(), &db)
         .unwrap();
     assert_eq!(
-        db.catalog.read().get_node_table("Person").unwrap().num_rows,
+        db.catalog().read().get_node_table("Person").unwrap().num_rows,
         1
     );
 }
@@ -131,26 +131,26 @@ fn test_merge_on_create_on_match() {
         .unwrap()
         .statement;
     let bound_statement = {
-        let catalog = db.catalog.read();
-        let mut binder = Binder::new(&catalog, &db.function_registry);
+        let catalog = db.catalog().read();
+        let mut binder = Binder::new(&catalog, &db.function_registry());
         binder.bind(&statement).unwrap()
     };
     let logical_plan = LogicalPlanner::plan(bound_statement).unwrap();
     let undo_buffer = std::sync::Arc::new(lightning_core::storage::undo_buffer::UndoBuffer::new());
 
-    let tx = db.transaction_manager.begin(false).unwrap();
+    let tx = db.transaction_manager().begin(false).unwrap();
     let mut physical_planner = PhysicalPlanner::new(db.clone(), tx.tx_id, tx.read_ts, undo_buffer);
     let mut physical_plan = physical_planner.plan(logical_plan).unwrap();
     physical_plan.get_next(&db, &tx, None).unwrap();
 
-    db.transaction_manager
-        .commit(&tx, &db.buffer_manager, &db)
+    db.transaction_manager()
+        .commit(&tx, &db.buffer_manager(), &db)
         .unwrap();
 
     // Verify created = TRUE
     {
         assert_eq!(
-            db.catalog.read().get_node_table("Person").unwrap().num_rows,
+            db.catalog().read().get_node_table("Person").unwrap().num_rows,
             1
         );
     }
@@ -166,13 +166,13 @@ fn test_merge_on_create_on_match() {
         .unwrap()
         .statement;
     let bound_statement2 = {
-        let catalog = db.catalog.read();
-        let mut binder = Binder::new(&catalog, &db.function_registry);
+        let catalog = db.catalog().read();
+        let mut binder = Binder::new(&catalog, &db.function_registry());
         binder.bind(&statement2).unwrap()
     };
     let logical_plan2 = LogicalPlanner::plan(bound_statement2).unwrap();
 
-    let tx2 = db.transaction_manager.begin(false).unwrap();
+    let tx2 = db.transaction_manager().begin(false).unwrap();
     let undo_buffer2 = std::sync::Arc::new(lightning_core::storage::undo_buffer::UndoBuffer::new());
     let mut physical_planner2 =
         PhysicalPlanner::new(db.clone(), tx2.tx_id, tx2.read_ts, undo_buffer2);
@@ -187,7 +187,7 @@ fn test_merge_on_create_on_match() {
         .value(0);
     assert_eq!(count2, 1.0);
 
-    db.transaction_manager
-        .commit(&tx2, &db.buffer_manager, &db)
+    db.transaction_manager()
+        .commit(&tx2, &db.buffer_manager(), &db)
         .unwrap();
 }

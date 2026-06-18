@@ -133,7 +133,8 @@ impl BufferManager {
                 });
             }
 
-            let _lock_cap = NonZeroUsize::new(shard_capacity.max(1024)).unwrap();
+            let _lock_cap = NonZeroUsize::new(shard_capacity.max(1024))
+                .expect("shard_capacity.max(1024) >= 1024 > 0");
             shards.push(RwLock::new(BufferPool {
                 page_to_slots: HashMap::with_capacity(shard_capacity),
                 file_handles: HashMap::new(),
