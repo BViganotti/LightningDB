@@ -1,11 +1,10 @@
 use crate::storage::buffer_manager::{BufferManager, PAGE_SIZE};
 use crate::storage::file_handle::FileHandle;
 use crate::Result;
-use crc::{Algorithm, Crc, Digest};
+use crc::{Algorithm, Crc};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::io::Write;
 
 const CRC32C: Crc<u32> = Crc::<u32>::new(&Algorithm {
     width: 32,

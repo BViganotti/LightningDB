@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Component;
 
 /// System-internal auth tables that must not be directly queried by users.
+#[allow(dead_code)]
 const AUTH_SYSTEM_TABLES: &[&str] = &["auth_users", "auth_refresh_tokens", "auth_api_keys"];
 
 #[derive(Debug, Clone)]
@@ -469,31 +470,6 @@ impl<'a> Binder<'a> {
                     primary_key: primary_key.clone(),
                     if_not_exists: *if_not_exists,
                 })
-            }
-            Statement::CreateTableRel {
-                name,
-                from_table,
-                to_table,
-                columns,
-                if_not_exists,
-            } => {
-                let columns = columns
-                    .iter()
-                    .map(|c| crate::catalog::PropertyDefinition {
-                        name: c.name.clone(),
-                        type_: self.bind_data_type(&c.data_type),
-                    })
-                    .collect();
-                Ok(BoundStatement::CreateTableRel {
-                    name: name.clone(),
-                    from_table: from_table.clone(),
-                    to_table: to_table.clone(),
-                    columns,
-                    if_not_exists: *if_not_exists,
-                })
-            }
-            Statement::DropTable(name, if_exists) => {
-                Ok(BoundStatement::DropTable(name.clone(), *if_exists))
             }
             Statement::CreateTableRel {
                 name,
@@ -1298,7 +1274,7 @@ impl<'a> Binder<'a> {
                 ProjectionItem::Star => {
                     // Sort variables by name for deterministic column order
                     let mut sorted_vars: Vec<_> = self.variables.iter().collect();
-                    sorted_vars.sort_by_key(|(name, _)| name.clone());
+                    sorted_vars.sort_by_key(|(name, _)| *name);
                     for (var_name, var_binding) in sorted_vars {
                         let table_info = if let Some(t) =
                             self.catalog.get_node_table(&var_binding.table_name)

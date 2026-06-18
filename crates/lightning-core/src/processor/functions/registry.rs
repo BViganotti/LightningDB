@@ -1239,7 +1239,7 @@ impl FunctionRegistry {
                 func_name.clone(),
                 ScalarFunction::new(
                     func_name,
-                    Arc::new(move |args, num_rows| {
+                    Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
                             return Err(crate::LightningError::Internal(
                                 format!("{name} requires 1 argument"),

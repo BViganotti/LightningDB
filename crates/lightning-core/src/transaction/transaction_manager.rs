@@ -312,7 +312,7 @@ impl TransactionManager {
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
 
-            self.committed_tx_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c + 1));
+            let _ = self.committed_tx_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c + 1));
             db.catalog.save_if_needed(self.committed_tx_count.load(Ordering::Acquire))?;
         }
         self.remove_read_ts(tx.read_ts);

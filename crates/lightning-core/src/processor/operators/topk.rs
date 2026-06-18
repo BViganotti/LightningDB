@@ -76,7 +76,7 @@ impl PhysicalOperator for PhysicalTopK {
             let indices: ArrayRef = if n > k * 2 {
                 // Bounded top-K: extract sort values, use select_nth_unstable
                 // O(N) partition + O(K log K) final sort instead of O(N log N).
-                let num_sort_keys = sort_arrays.len();
+                let _num_sort_keys = sort_arrays.len();
                 let mut rows: Vec<(Vec<Value>, u64)> = Vec::with_capacity(n);
                 for i in 0..n {
                     let keys: Vec<Value> = sort_arrays.iter()

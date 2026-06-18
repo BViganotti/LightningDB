@@ -27,6 +27,7 @@ pub struct PhysicalASP {
     bfs_queue: VecDeque<u64>,
     bfs_distance: HashMap<u64, u32>,
     bfs_src_id: u64,
+    #[allow(dead_code)]
     bfs_depth: u32,
     bfs_phase: BFSPhase,
     cached_csr: Option<Arc<CSRIndex>>,

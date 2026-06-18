@@ -218,7 +218,7 @@ impl ProjectionPushDown {
                 Self::remap_expression_indices(body, column_usage);
             }
             BoundExpression::Not(inner) => Self::remap_expression_indices(inner, column_usage),
-            BoundExpression::Exists(steps) | BoundExpression::CountSubquery(steps) => {
+            BoundExpression::Exists(_steps) | BoundExpression::CountSubquery(_steps) => {
                 // Exists/CountSubquery expressions reference outer-scope variables
                 // but their internal expressions are evaluated in a subquery scope
                 // and do not need index remapping in the parent plan.

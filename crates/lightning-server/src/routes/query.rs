@@ -12,7 +12,7 @@ use crate::models::response::{ApiResponse, QueryResponse, ResponseMeta};
 use crate::server::AppState;
 
 pub async fn query_handler(
-    DbConnection(conn): DbConnection,
+    conn: DbConnection,
     State(state): State<Arc<AppState>>,
     RequestId(request_id): RequestId,
     Json(req): Json<QueryRequest>,

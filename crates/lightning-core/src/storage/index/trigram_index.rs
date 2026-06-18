@@ -256,8 +256,8 @@ impl TrigramIndex {
     pub fn insert_batch(&self, entries: &[(u64, &str)]) {
         let entry_count = entries.len() as u64;
         let mut trigram_count = 0u64;
-        let mut bigram_count = 0u64;
-        let mut unigram_count = 0u64;
+        let mut _bigram_count = 0u64;
+        let mut _unigram_count = 0u64;
 
         // Use HashSet for O(1) deduplication during batch insert
         let mut tri_map: HashMap<[u8; 3], HashSet<u64>> = HashMap::new();
@@ -272,13 +272,13 @@ impl TrigramIndex {
             }
 
             let bis = Self::extract_bigrams(value);
-            bigram_count += bis.len() as u64;
+            _bigram_count += bis.len() as u64;
             for bi in bis {
                 bi_map.entry(bi).or_default().insert(row_id);
             }
 
             let unis = Self::extract_unigrams(value);
-            unigram_count += unis.len() as u64;
+            _unigram_count += unis.len() as u64;
             for u in unis {
                 uni_map.entry(u).or_default().insert(row_id);
             }

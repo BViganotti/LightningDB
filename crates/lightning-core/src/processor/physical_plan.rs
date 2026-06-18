@@ -125,7 +125,7 @@ impl PhysicalPlanner {
                 }
                 Ok(Box::new(scan))
             }
-            LogicalOperator::IndexScan(table_name, var, pk_name, pk_value_expr, projected_idxs) => {
+            LogicalOperator::IndexScan(table_name, _var, _pk_name, pk_value_expr, projected_idxs) => {
                 let table = {
                     let storage = self.db.storage_manager.read();
                     storage

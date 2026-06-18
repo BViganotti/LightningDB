@@ -1,3 +1,5 @@
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -10,13 +12,36 @@ use lightning::memory::MemoryStore;
 use crate::models::response::ErrorResponse;
 use crate::server::AppState;
 
-pub struct DbConnection(pub lightning::Connection);
+/// A connection that is returned to the pool on drop.
+pub struct DbConnection {
+    inner: ManuallyDrop<lightning::Connection>,
+    pool: Arc<ConnectionPool>,
+}
 
-/// A bounded pool of pre-created connections to the database.
-///
-/// Each `acquire()` returns a connection from the pool if available,
-/// or creates a new one up to `max_size`. Connections are returned
-/// to the pool on drop via a wrapper.
+impl Deref for DbConnection {
+    type Target = lightning::Connection;
+    fn deref(&self) -> &lightning::Connection {
+        &self.inner
+    }
+}
+
+impl DerefMut for DbConnection {
+    fn deref_mut(&mut self) -> &mut lightning::Connection {
+        &mut self.inner
+    }
+}
+
+impl Drop for DbConnection {
+    fn drop(&mut self) {
+        // Safety: we take ownership of the connection here since
+        // ManuallyDrop prevents double-drop. This is the only place
+        // the connection is consumed.
+        let conn = unsafe { ManuallyDrop::take(&mut self.inner) };
+        self.pool.release(conn);
+    }
+}
+
+/// A bounded pool of database connections for reuse across requests.
 pub struct ConnectionPool {
     db: Arc<lightning::Database>,
     idle: Mutex<Vec<lightning::Connection>>,
@@ -32,18 +57,20 @@ impl ConnectionPool {
         }
     }
 
-    pub fn acquire(&self) -> lightning::Connection {
+    pub fn acquire(self: &Arc<Self>) -> DbConnection {
         let mut idle = self.idle.lock().unwrap();
-        idle.pop().unwrap_or_else(|| self.db.connect())
+        let conn = idle.pop().unwrap_or_else(|| self.db.connect());
+        DbConnection {
+            inner: ManuallyDrop::new(conn),
+            pool: Arc::clone(self),
+        }
     }
 
-    /// Return a connection to the pool for reuse.
-    pub fn release(&self, conn: lightning::Connection) {
+    fn release(&self, conn: lightning::Connection) {
         let mut idle = self.idle.lock().unwrap();
         if idle.len() < self.max_size {
             idle.push(conn);
         }
-        // else drop the excess connection
     }
 }
 
@@ -59,7 +86,7 @@ where
         state: &S,
     ) -> Result<Self, Self::Rejection> {
         let app_state = Arc::<AppState>::from_ref(state);
-        Ok(DbConnection(app_state.connection_pool.acquire()))
+        Ok(app_state.connection_pool.acquire())
     }
 }
 

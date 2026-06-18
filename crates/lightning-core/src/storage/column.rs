@@ -1242,10 +1242,10 @@ impl Column {
 
     pub fn set_null(
         &self,
-        bm: &BufferManager,
+        _bm: &BufferManager,
         row_id: u64,
         is_null: bool,
-        tx: &crate::transaction::transaction_manager::Transaction,
+        _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.dirty.store(true, Ordering::Release);
         let mut pending = self.pending_nulls.lock();

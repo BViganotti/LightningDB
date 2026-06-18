@@ -712,7 +712,7 @@ impl LogicalPlanner {
                                     })?;
                                     if let crate::planner::binder::BoundMatchElement::Node(
                                         dst_table,
-                                        d_var,
+                                        _d_var,
                                         properties,
                                     ) = next
                                     {
@@ -812,7 +812,7 @@ impl LogicalPlanner {
                                             )),
                                             crate::parser::ast::ComparisonOperator::Equal,
                                             Box::new(BoundExpression::PropertyLookup(
-                                                d_var,
+                                        d_var,
                                                 0,
                                                 LogicalType::Uint64,
                                             )),
@@ -846,11 +846,11 @@ impl LogicalPlanner {
                             let mut aggregates = Vec::new();
                             let mut group_by_exprs = Vec::new();
                             let mut aggregate_arg_exprs = Vec::new();
-                            let mut aggregates_found = false;
+                            let mut _aggregates_found = false;
 
                             for item in &ret.items {
                                 if item.expression.is_aggregate() {
-                                    aggregates_found = true;
+                                    _aggregates_found = true;
                                     if let BoundExpression::Function(name, args, _) =
                                         &item.expression
                                     {
@@ -1130,7 +1130,6 @@ impl LogicalPlanner {
 
                 Ok(plan)
             }
-            _ => Err(LightningError::Internal("Not a query".into())),
         }
     }
 }

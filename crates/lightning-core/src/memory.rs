@@ -13,6 +13,7 @@ use std::sync::Arc;
 const ENTITY_TABLE: &str = "Entity";
 const RELATES_TABLE: &str = "Relates";
 pub const DEFAULT_EMBEDDING_DIM: usize = 768;
+#[allow(dead_code)]
 const SIMILARITY_THRESHOLD: f64 = 0.82;
 /// Size of the MinHash signature for content-based similarity.
 /// Each entity's text is hashed into MINHASH_K hash values, replacing
@@ -708,7 +709,7 @@ impl MemoryStore {
         let mut char_count = 0usize;
         let mut warnings: Vec<String> = Vec::new();
 
-        for (i, (entity, score)) in ranked.iter().enumerate().take(top_n) {
+        for (_i, (entity, score)) in ranked.iter().enumerate().take(top_n) {
             use std::hash::Hash;
             use std::hash::Hasher;
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -997,7 +998,7 @@ impl MemoryStore {
                     unwind_parts.push(format!("{{id: ${pid}, meta: ${pmid}}}"));
                     id_params.push(pid);
                     meta_params.push(pmid);
-                    let new_meta = format!(
+                    let _new_meta = format!(
                         r#"{{"pagerank":{:.6},"id":"{}"}}"#,
                         score, all[*idx].id
                     );
@@ -1263,7 +1264,7 @@ impl MemoryStore {
                 }
                 Ok(None) => {
                 }
-                Err(e) => {
+                Err(_e) => {
                 }
             }
         } else {
@@ -1305,7 +1306,7 @@ impl MemoryStore {
                 }
                 None
             }
-            Err(e) => {
+            Err(_e) => {
                 None
             }
         }

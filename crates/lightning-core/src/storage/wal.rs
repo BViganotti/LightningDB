@@ -27,7 +27,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crc::{Algorithm, Crc, Digest};
+use crc::{Algorithm, Crc};
 
 const CRC32C: Crc<u32> = Crc::<u32>::new(&Algorithm {
     width: 32,

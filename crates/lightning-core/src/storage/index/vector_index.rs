@@ -41,6 +41,7 @@ impl Ord for ScoredNode {
 pub struct VectorIndex {
     pub(crate) file_handle: Arc<FileHandle>,
     dimension: usize,
+    #[allow(dead_code)]
     page_header_size: usize,
     node_index: parking_lot::Mutex<std::collections::HashMap<u64, usize>>,
 }

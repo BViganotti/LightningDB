@@ -892,7 +892,7 @@ impl PhysicalOperator for PhysicalCreateRel {
                     let mut rows = Vec::with_capacity(num_rows);
 
                     for i in 0..num_rows {
-                        let next_id = start_id + i as u64;
+                        let _next_id = start_id + i as u64;
                         let src_val = Value::from_arrow(src_col, i);
                         let dst_val = Value::from_arrow(dst_col, i);
 

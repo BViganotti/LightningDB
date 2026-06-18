@@ -149,7 +149,7 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
             // Store expression + direction as "expr|DIR" for inject_modifiers
             let direction = if desc { "DESC" } else { "ASC" };
             ord = Some(format!("{}|{}", cleaned, direction));
-            let removed_len = 9 + end;
+            let _removed_len = 9 + end;
             result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
         }
     }

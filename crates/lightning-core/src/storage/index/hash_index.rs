@@ -248,7 +248,7 @@ impl HashIndex {
     }
 
     fn compute_hash(val: &Value) -> u64 {
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hasher;
         let mut h = std::collections::hash_map::DefaultHasher::new();
         Self::hash_value(val, &mut h);
         h.finish() & !DELETED_BIT

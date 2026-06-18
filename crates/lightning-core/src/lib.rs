@@ -673,7 +673,7 @@ impl Database {
                         (Some(ids), Some(queries)) => {
                             for i in 0..ids.len() {
                                 let score = if ids.is_valid(i) && queries.is_valid(i) {
-                                    let node_id = ids.value(i);
+                                    let _node_id = ids.value(i);
                                     let query_str = queries.value(i);
                                     let mut best_score = 0.0f32;
                                     for fts in storage.fts_indexes.values() {

@@ -54,6 +54,7 @@ impl PhysicalVacuum {
         }
     }
 
+    #[allow(dead_code)]
     fn is_read_only(&self) -> bool {
         false
     }

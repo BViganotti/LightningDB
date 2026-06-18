@@ -819,7 +819,7 @@ impl ExpressionEvaluator {
                     let num_rows = arr.len();
                     let all_false = {
                         let byte_count = num_rows.div_ceil(8);
-                        let mut buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
+                        let buf = arrow::buffer::MutableBuffer::from_len_zeroed(byte_count);
                         let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
                         Arc::new(BooleanArray::new(values, None)) as ArrayRef
                     };

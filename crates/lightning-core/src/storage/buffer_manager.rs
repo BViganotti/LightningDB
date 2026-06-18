@@ -133,7 +133,7 @@ impl BufferManager {
                 });
             }
 
-            let lock_cap = NonZeroUsize::new(shard_capacity.max(1024)).unwrap();
+            let _lock_cap = NonZeroUsize::new(shard_capacity.max(1024)).unwrap();
             shards.push(RwLock::new(BufferPool {
                 page_to_slots: HashMap::with_capacity(shard_capacity),
                 file_handles: HashMap::new(),
@@ -195,13 +195,13 @@ impl BufferManager {
             if let Some(slot_indices) = pool.page_to_slots.get(&key) {
                 let mut best_frame: Option<Arc<Frame>> = None;
                 let mut best_version: u64 = 0;
-                let mut found_our_own = false;
+                let mut _found_our_own = false;
 
                 for &idx in slot_indices.iter().rev() {
                     let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                     if version == tx_id_marked {
                         best_frame = Some(Arc::clone(&pool.slots[idx].frame));
-                        found_our_own = true;
+                        _found_our_own = true;
                         break;
                     }
                     if (version & UNCOMMITTED_BIT) == 0
@@ -228,13 +228,13 @@ impl BufferManager {
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             let mut best_frame: Option<Arc<Frame>> = None;
             let mut best_version: u64 = 0;
-            let mut found_our_own = false;
+            let mut _found_our_own = false;
 
             for &idx in slot_indices.iter().rev() {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                 if version == tx_id_marked {
                     best_frame = Some(Arc::clone(&pool.slots[idx].frame));
-                    found_our_own = true;
+                    _found_our_own = true;
                     break;
                 }
                 if (version & UNCOMMITTED_BIT) == 0
@@ -329,7 +329,6 @@ impl BufferManager {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
 
                 if version == tx_id_marked {
-                    best_version = version;
                     // SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The caller holds the shard write lock (acquired above at line 266), ensuring exclusive access to this slot.
                     source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
                     break;
@@ -436,7 +435,7 @@ impl BufferManager {
 
     /// Prefetch pages into the buffer pool without holding shard locks.
     /// This does the I/O outside the critical path.
-    fn do_prefetch(&self, file_id: u64, pages: &[(u64, u64)]) {
+    fn do_prefetch(&self, _file_id: u64, pages: &[(u64, u64)]) {
         for &(pf_id, pf_pg) in pages {
             let pf_key = (pf_id, pf_pg);
             let shard_idx = self.get_shard_idx(pf_key);
@@ -551,7 +550,7 @@ impl BufferManager {
         }
     }
 
-    pub fn unpin_page(&self, fh: &FileHandle, page_idx: u64, frame: Arc<Frame>) {
+    pub fn unpin_page(&self, _fh: &FileHandle, _page_idx: u64, frame: Arc<Frame>) {
         frame.pin_count.fetch_sub(1, Ordering::Release);
     }
 
@@ -827,7 +826,7 @@ impl BufferManager {
 
         // Single scan of the clock — no sleeping while holding the lock.
         let start_ptr = pool.clock_ptr;
-        let mut all_uncommitted = true;
+        let mut _all_uncommitted = true;
         loop {
             let idx = pool.clock_ptr;
             pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
@@ -836,7 +835,7 @@ impl BufferManager {
             if pin_count == 0 {
                 if pool.slots[idx].referenced {
                     pool.slots[idx].referenced = false;
-                    all_uncommitted = false;
+                    _all_uncommitted = false;
                     continue;
                 }
                 if pool.slots[idx].dirty {
@@ -844,7 +843,7 @@ impl BufferManager {
                     if version & UNCOMMITTED_BIT != 0 {
                         continue;
                     }
-                    all_uncommitted = false;
+                    _all_uncommitted = false;
                     if let Some((fid, pid)) = pool.slots[idx].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
@@ -968,6 +967,7 @@ impl BufferManager {
         }
     }
 
+    #[allow(dead_code)]
     fn reset_referenced(&self) {
         for shard in &self.shards {
             let mut pool = shard.write();

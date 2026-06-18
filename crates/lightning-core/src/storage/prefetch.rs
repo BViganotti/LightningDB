@@ -62,12 +62,13 @@ impl PrefetchTracker {
         entries.retain(|(_, w)| *w > 0.01);
     }
 
+    #[allow(dead_code)]
     fn record_transition(
         trans: &mut HashMap<(u64, u64), Vec<((u64, u64), f64)>>,
         from: (u64, u64),
         to: (u64, u64),
     ) {
-        let total: f64 = trans.values().flat_map(|v| v.iter()).map(|(_, w)| *w).sum();
+        let _total: f64 = trans.values().flat_map(|v| v.iter()).map(|(_, w)| *w).sum();
         let entry = trans.entry(from).or_default();
         let mut found = false;
         for (key, weight) in entry.iter_mut() {

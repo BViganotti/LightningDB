@@ -18,7 +18,9 @@ thread_local! {
     };
 }
 
+#[allow(dead_code)]
 const HNSW_MAGIC: [u8; 4] = *b"HNSW";
+#[allow(dead_code)]
 const HNSW_VERSION: u8 = 0x01;
 
 /// Distance metric for vector comparison.
@@ -31,6 +33,7 @@ pub enum DistanceMetric {
 
 /// Configuration for the HNSW index.
 #[derive(Debug, Clone)]
+#[allow(non_snake_case)]
 pub struct HnswConfig {
     pub M: usize,
     pub M_max: usize,
@@ -58,6 +61,7 @@ impl Default for HnswConfig {
 #[derive(Debug, Clone)]
 struct HnswNode {
     id: u64,
+    #[allow(dead_code)]
     level: usize,
     /// Neighbors per layer: neighbors[layer] = Vec<node_id>
     neighbors: Vec<Vec<u64>>,
@@ -207,7 +211,7 @@ impl HnswIndex {
     }
 
     /// Select the M nearest neighbors using the simple heuristic.
-    fn select_neighbors_simple(&self, candidates: &[Candidate], M: usize) -> Vec<Candidate> {
+    fn select_neighbors_simple(&self, candidates: &[Candidate], #[allow(non_snake_case)] M: usize) -> Vec<Candidate> {
         let mut sorted = candidates.to_vec();
         sorted.sort();
         sorted.truncate(M);
@@ -285,6 +289,7 @@ impl HnswIndex {
             let ef = if lvl == 0 { self.config.ef_construction } else { self.config.M };
             let candidates = self.search_layer(&new_embedding, curr_entry, ef, lvl);
 
+            #[allow(non_snake_case)]
             let M = if lvl == 0 { self.config.M_max0 } else { self.config.M_max };
             let neighbors = self.select_neighbors_simple(&candidates, M);
             let neighbor_ids: Vec<u64> = neighbors.iter().map(|c| c.node_id).collect();

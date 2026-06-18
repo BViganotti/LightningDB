@@ -77,7 +77,7 @@ impl InvertedIndex {
         // Acquire write lock once for the entire batch to reduce lock overhead.
         // This blocks concurrent searches during the batch but is more efficient
         // than acquiring/releasing the lock per document.
-        let mut writer = self.writer.write();
+        let writer = self.writer.write();
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
