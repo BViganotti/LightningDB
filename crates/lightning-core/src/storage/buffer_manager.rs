@@ -1090,12 +1090,13 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        unsafe { f1.as_mut_slice() }[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x12]);
+        let s = unsafe { f1.as_mut_slice() };
+        s[..4].copy_from_slice(&[0xABu8, 0xCDu8, 0xEFu8, 0x12u8]);
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         bm.unpin_page(&fh, 0, f1);
         let tx2 = begin_tx_at(&tm, commit_ts);
         let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
-        assert_eq!(f2.as_slice()[..4], [0xAB, 0xCD, 0xEF, 0x12]);
+        assert_eq!(f2.as_slice()[..4], [0xABu8, 0xCDu8, 0xEFu8, 0x12u8]);
         assert_eq!(f2.pin_count.load(Ordering::Acquire), 1);
     }
 
@@ -1107,12 +1108,13 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        unsafe { f1.as_mut_slice() }[0] = 0x55;
+        let s = unsafe { f1.as_mut_slice() };
+        s[0] = 0x55u8;
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         bm.unpin_page(&fh, 0, f1);
         let tx2 = begin_tx_at(&tm, commit_ts);
         let f2 = bm.create_new_version(Arc::clone(&fh), 0, &tx2).unwrap();
-        assert_eq!(f2.as_slice()[0], 0x55);
+        assert_eq!(f2.as_slice()[0], 0x55u8);
     }
 
     #[test]
@@ -1121,7 +1123,8 @@ mod tests {
         let bm = create_bm(64);
         let tx1 = begin_tx(&tm);
         let frame1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
-        unsafe { frame1.as_mut_slice() }[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let s = unsafe { frame1.as_mut_slice() };
+        s[..4].copy_from_slice(&[0xDEu8, 0xADu8, 0xBEu8, 0xEFu8]);
         let tx2 = begin_tx(&tm);
         let frame2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
         assert_eq!(frame2.as_slice()[..4], [0, 0, 0, 0]);
@@ -1275,7 +1278,8 @@ mod tests {
         let tx_id = tx.tx_id;
         let commit_ts = tm.get_current_ts() + 1;
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        unsafe { f1.as_mut_slice() }[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let s = unsafe { f1.as_mut_slice() };
+        s[..8].copy_from_slice(&[1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8]);
         bm.update_timestamps(fh.file_id, 0, tx_id, commit_ts);
         let tx2 = begin_tx_at(&tm, commit_ts);
         let mut pinned = Vec::new();

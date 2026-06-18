@@ -313,6 +313,7 @@ fn crucible_consolidation_pipeline() -> TestResult {
         contradiction_cosine_min: 0.3,
         contradiction_length_sim_min: 0.0,
         max_comparisons_per_entity: 100,
+        collect_details: true,
     }))?;
 
     println!("  Consolidation: {} links created, {} contradictions, {} total entities, {} warnings",
