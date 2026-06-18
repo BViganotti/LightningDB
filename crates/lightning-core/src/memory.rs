@@ -200,7 +200,7 @@ impl MemoryStore {
         // Ensure all indexes exist (they are not persisted across restarts)
         {
             let mut storage = db.storage_manager.write();
-            if storage.fts_indexes.get(ENTITY_TABLE).is_none() {
+            if !storage.fts_indexes.contains_key(ENTITY_TABLE) {
                 if let Err(e) = storage.create_fts_index(ENTITY_TABLE) {
                     tracing::warn!("MemoryStore: failed to create FTS index: {e}");
                 }
@@ -216,7 +216,7 @@ impl MemoryStore {
                     tracing::warn!("MemoryStore: failed to create hash index: {e}");
                 }
             }
-            if storage.fwd_csr.get(RELATES_TABLE).is_none() {
+            if !storage.fwd_csr.contains_key(RELATES_TABLE) {
                 if let Err(e) = storage.create_csr(RELATES_TABLE) {
                     tracing::warn!("MemoryStore: failed to create CSR: {e}");
                 }
