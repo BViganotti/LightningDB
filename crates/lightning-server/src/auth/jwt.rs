@@ -144,6 +144,8 @@ mod tests {
             exp: now - 3600,
             iat: now - 7200,
             jti: uuid::Uuid::new_v4().to_string(),
+            aud: None,
+            iss: None,
         };
         let token = jwt_encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).unwrap();
         let result = validate_access_token(&token, secret);

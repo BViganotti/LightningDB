@@ -1687,7 +1687,6 @@ name = "lightning-core"
 version = "0.1.0"
 dependencies = [
  "antlr4rust",
- "anyhow",
  "arrow",
  "bincode",
  "chrono",

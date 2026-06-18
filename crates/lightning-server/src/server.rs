@@ -104,7 +104,7 @@ impl AppState {
             store: Arc::new(store),
             config,
             request_counter: AtomicU64::new(0),
-            connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db))),
+            connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db), 64)),
             auth_store,
             auth_mode,
             rate_limiter: Arc::new(RateLimiter::new(100, 1)),

@@ -11,12 +11,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 lightning-types.workspace = true
 lightning-arrow.workspace = true
-anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
-tempfile.workspace = true
 libc = "0.2"
 arrow.workspace = true
 serde.workspace = true
@@ -58,6 +56,7 @@ wasmi = "2.0.0-beta.2"
 rand = "0.8"
 
 [dev-dependencies]
+tempfile.workspace = true
 # rusqlite is a dev-only dependency used for testing SQLite interop.
 # It is not part of the runtime library build and is excluded from
 # production builds. Do not move to [dependencies].

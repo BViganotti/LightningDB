@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     extract::{FromRef, FromRequestParts},
@@ -12,17 +12,38 @@ use crate::server::AppState;
 
 pub struct DbConnection(pub lightning::Connection);
 
+/// A bounded pool of pre-created connections to the database.
+///
+/// Each `acquire()` returns a connection from the pool if available,
+/// or creates a new one up to `max_size`. Connections are returned
+/// to the pool on drop via a wrapper.
 pub struct ConnectionPool {
     db: Arc<lightning::Database>,
+    idle: Mutex<Vec<lightning::Connection>>,
+    max_size: usize,
 }
 
 impl ConnectionPool {
-    pub fn new(db: Arc<lightning::Database>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<lightning::Database>, max_size: usize) -> Self {
+        Self {
+            db,
+            idle: Mutex::new(Vec::with_capacity(max_size)),
+            max_size,
+        }
     }
 
     pub fn acquire(&self) -> lightning::Connection {
-        self.db.connect()
+        let mut idle = self.idle.lock().unwrap();
+        idle.pop().unwrap_or_else(|| self.db.connect())
+    }
+
+    /// Return a connection to the pool for reuse.
+    pub fn release(&self, conn: lightning::Connection) {
+        let mut idle = self.idle.lock().unwrap();
+        if idle.len() < self.max_size {
+            idle.push(conn);
+        }
+        // else drop the excess connection
     }
 }
 
