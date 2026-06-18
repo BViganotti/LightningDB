@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import random
-import time
-from typing import Optional
 
-from lightning.client._types import RetryConfig, TelemetryHooks
+from lightning.client._types import RetryConfig
 
 
 def compute_backoff(
@@ -37,16 +35,3 @@ def is_connection_error(exception: Exception) -> bool:
     return False
 
 
-def retry_with_backoff(
-    attempt: int,
-    config: RetryConfig,
-    telemetry: Optional[TelemetryHooks],
-    request_id: str,
-    path: str,
-    status_code: int,
-) -> float:
-    delay = compute_backoff(attempt, config)
-    if telemetry and telemetry.on_retry:
-        telemetry.on_retry(request_id, path, str(status_code), attempt + 1, delay)
-    time.sleep(delay)
-    return delay

@@ -1,39 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum LogicalTypeID {
-    Any,
-    Bool,
-    Int128,
-    Int64,
-    Int32,
-    Int16,
-    Int8,
-    Uint128,
-    Uint64,
-    Uint32,
-    Uint16,
-    Uint8,
-    Float,
-    Double,
-    String,
-    Blob,
-    Timestamp,
-    Date,
-    Interval,
-    InternalID,
-    Serial,
-    List,
-    Struct,
-    Map,
-    Union,
-    Node,
-    Rel,
-    RecursiveRel,
-    Lambda,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InternalID {
     pub offset: u64,
@@ -76,41 +43,6 @@ pub enum LogicalType {
 pub struct StructField {
     pub name: String,
     pub type_: LogicalType,
-}
-
-impl LogicalType {
-    pub fn id(&self) -> LogicalTypeID {
-        match self {
-            LogicalType::Any => LogicalTypeID::Any,
-            LogicalType::Bool => LogicalTypeID::Bool,
-            LogicalType::Int128 => LogicalTypeID::Int128,
-            LogicalType::Int64 => LogicalTypeID::Int64,
-            LogicalType::Int32 => LogicalTypeID::Int32,
-            LogicalType::Int16 => LogicalTypeID::Int16,
-            LogicalType::Int8 => LogicalTypeID::Int8,
-            LogicalType::Uint128 => LogicalTypeID::Uint128,
-            LogicalType::Uint64 => LogicalTypeID::Uint64,
-            LogicalType::Uint32 => LogicalTypeID::Uint32,
-            LogicalType::Uint16 => LogicalTypeID::Uint16,
-            LogicalType::Uint8 => LogicalTypeID::Uint8,
-            LogicalType::Float => LogicalTypeID::Float,
-            LogicalType::Double => LogicalTypeID::Double,
-            LogicalType::String => LogicalTypeID::String,
-            LogicalType::Blob => LogicalTypeID::Blob,
-            LogicalType::Timestamp => LogicalTypeID::Timestamp,
-            LogicalType::Date => LogicalTypeID::Date,
-            LogicalType::Interval => LogicalTypeID::Interval,
-            LogicalType::InternalID => LogicalTypeID::InternalID,
-            LogicalType::Serial => LogicalTypeID::Serial,
-            LogicalType::List(_) => LogicalTypeID::List,
-            LogicalType::Struct(_) => LogicalTypeID::Struct,
-            LogicalType::Map(_, _) => LogicalTypeID::Map,
-            LogicalType::Union(_) => LogicalTypeID::Union,
-            LogicalType::Node(_) => LogicalTypeID::Node,
-            LogicalType::Rel(_) => LogicalTypeID::Rel,
-            LogicalType::Lambda(_) => LogicalTypeID::Lambda,
-        }
-    }
 }
 
 impl fmt::Display for LogicalType {

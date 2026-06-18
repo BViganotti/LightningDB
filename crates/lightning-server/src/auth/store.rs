@@ -112,7 +112,7 @@ impl AuthStore {
 
     fn ensure_system_tables(conn: &Connection) -> Result<(), String> {
         let db = conn.client_context().database.clone();
-        let storage = db.storage_manager.read();
+        let storage = db.storage_manager().read();
         let users_exist = storage.node_tables.contains_key(AUTH_USERS_TABLE);
         let tokens_exist = storage.node_tables.contains_key(AUTH_TOKENS_TABLE);
         let keys_exist = storage.node_tables.contains_key(AUTH_API_KEYS_TABLE);

@@ -99,7 +99,7 @@ impl Database {
 
     /// Access database metrics (query counts, buffer hit rate, etc.).
     pub fn metrics(&self) -> &DatabaseMetrics {
-        &self.inner.metrics
+        self.inner.metrics()
     }
 
     /// Repair table cardinalities from actual data file sizes.

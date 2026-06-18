@@ -37,10 +37,6 @@ class MaxRetriesExceededError(LightningTransportError):
         super().__init__(message, request_id=request_id)
 
 
-class PayloadTooLargeError(LightningTransportError):
-    pass
-
-
 def _build_ssl_context(tls: Optional[TlsConfig]) -> Optional[ssl.SSLContext]:
     if tls is None:
         return None

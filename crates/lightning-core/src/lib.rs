@@ -408,20 +408,20 @@ impl DatabaseMetrics {
 pub struct Database {
     pub(crate) _path: PathBuf,
     pub(crate) _config: SystemConfig,
-    pub storage_manager: Arc<RwLock<crate::storage::storage_manager::StorageManager>>,
-    pub wal: Arc<WAL>,
-    pub transaction_manager: Arc<TransactionManager>,
-    pub buffer_manager: Arc<crate::storage::buffer_manager::BufferManager>,
-    pub free_space_manager: Arc<crate::storage::FreeSpaceManager>,
-    pub catalog: Arc<LazyCatalog>,
-    pub function_registry: Arc<crate::processor::functions::FunctionRegistry>,
-    pub header: RwLock<crate::storage::DatabaseHeader>,
+    pub(crate) storage_manager: Arc<RwLock<crate::storage::storage_manager::StorageManager>>,
+    pub(crate) wal: Arc<WAL>,
+    pub(crate) transaction_manager: Arc<TransactionManager>,
+    pub(crate) buffer_manager: Arc<crate::storage::buffer_manager::BufferManager>,
+    pub(crate) free_space_manager: Arc<crate::storage::FreeSpaceManager>,
+    pub(crate) catalog: Arc<LazyCatalog>,
+    pub(crate) function_registry: Arc<crate::processor::functions::FunctionRegistry>,
+    pub(crate) header: RwLock<crate::storage::DatabaseHeader>,
     /// Cached bound statements paired with their binder column offsets, keyed by
     /// normalized query string. The column offsets map variable names to their
     /// starting column position in the binder's flat layout and are needed by the
     /// physical plan builder to remap PropertyLookup indices after optimizer
     /// transforms (e.g. join reordering) alter the physical column layout.
-    pub plan_caches: Vec<
+    pub(crate) plan_caches: Vec<
         Arc<
             parking_lot::Mutex<
                 LruCache<
@@ -434,8 +434,8 @@ pub struct Database {
             >,
         >,
     >,
-    pub physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
-    pub metrics: DatabaseMetrics,
+    pub(crate) physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
+    pub(crate) metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -713,6 +713,52 @@ impl Database {
         Connection::new_internal(Arc::clone(self))
     }
 
+    // ── Accessor methods for encapsulated Database fields ────────────
+
+    pub fn storage_manager(&self) -> &Arc<RwLock<crate::storage::storage_manager::StorageManager>> {
+        &self.storage_manager
+    }
+
+    pub fn wal(&self) -> &Arc<WAL> {
+        &self.wal
+    }
+
+    pub fn transaction_manager(&self) -> &Arc<TransactionManager> {
+        &self.transaction_manager
+    }
+
+    pub fn buffer_manager(&self) -> &Arc<crate::storage::buffer_manager::BufferManager> {
+        &self.buffer_manager
+    }
+
+    pub fn free_space_manager(&self) -> &Arc<crate::storage::FreeSpaceManager> {
+        &self.free_space_manager
+    }
+
+    pub fn catalog(&self) -> &Arc<LazyCatalog> {
+        &self.catalog
+    }
+
+    pub fn function_registry(&self) -> &Arc<crate::processor::functions::FunctionRegistry> {
+        &self.function_registry
+    }
+
+    pub fn header(&self) -> &RwLock<crate::storage::DatabaseHeader> {
+        &self.header
+    }
+
+    pub fn plan_caches(&self) -> &Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<(crate::planner::binder::BoundStatement, std::collections::HashMap<String, usize>)>>>>> {
+        &self.plan_caches
+    }
+
+    pub fn physical_plan_caches(&self) -> &Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>> {
+        &self.physical_plan_caches
+    }
+
+    pub fn metrics(&self) -> &DatabaseMetrics {
+        &self.metrics
+    }
+
     /// Register a WebAssembly function that can be called from Cypher queries.
     ///
     /// The WASM module must export a function `func_name` with signature
@@ -931,7 +977,7 @@ impl Database {
                 }
             }
             // Rebuild CSR indexes if present
-            self.storage_manager.write().rebuild_csr_if_stale(table_name, bm, &tx)?;
+            self.storage_manager.write().ensure_csr_fresh(table_name, bm, &tx)?;
         }
 
         // Rollback the read transaction used for optimization.
@@ -1075,7 +1121,6 @@ impl QueryResult {
 pub struct Connection {
     pub client_context: Arc<ClientContext>,
     pub transaction: parking_lot::Mutex<Option<Arc<Transaction>>>,
-    pub pending_tables: parking_lot::RwLock<Vec<String>>,
     pub skip_auth_check: bool,
 }
 
@@ -1084,7 +1129,6 @@ impl Connection {
         Self {
             client_context: Arc::new(ClientContext::new(database)),
             transaction: parking_lot::Mutex::new(None),
-            pending_tables: parking_lot::RwLock::new(Vec::new()),
             skip_auth_check: false,
         }
     }

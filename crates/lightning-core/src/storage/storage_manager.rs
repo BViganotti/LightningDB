@@ -1046,29 +1046,6 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn rebuild_csr_if_stale(
-        &self,
-        table_name: &str,
-        bm: &BufferManager,
-        tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<()> {
-        let has_csr = self.fwd_csr.contains_key(table_name) || self.bwd_csr.contains_key(table_name);
-        if !has_csr {
-            return Ok(());
-        }
-        let current_cardinality = match self.get_table(table_name) {
-            Some(t) => t.stats.read().cardinality,
-            None => return Ok(()),
-        };
-        let last_rebuilt = self.csr_cardinalities.read().get(table_name).copied().unwrap_or(0);
-        if current_cardinality == last_rebuilt {
-            return Ok(());
-        }
-        self.rebuild_csr(table_name, bm, tx)?;
-        self.csr_cardinalities.write().insert(table_name.to_string(), current_cardinality);
-        Ok(())
-    }
-
     pub fn apply_page(&mut self, file_id: u64, page_idx: u64, data: &[u8]) -> Result<()> {
         if let Some(fh) = self.file_handles.get(&file_id) {
             fh.write_page(page_idx, data)?;
