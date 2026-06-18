@@ -341,7 +341,8 @@ fn _exec_memory_f32(
                 .unwrap_or_else(|e| panic!("WASM MemoryF32 instantiation failed: {e}"));
             *borrow = Some((s, inst));
         }
-        let (store, instance) = borrow.as_mut().unwrap();
+        let (store, instance) = borrow.as_mut()
+            .expect("WASM MemoryF32 cache: just initialized if was None");
 
         store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
             .map_err(|e| LightningError::Internal(format!("WASM fuel metering failed: {e}")))?;
@@ -421,7 +422,8 @@ fn _exec_memory_string(
                 .unwrap_or_else(|e| panic!("WASM MemoryString instantiation failed: {e}"));
             *borrow = Some((s, inst));
         }
-        let (store, instance) = borrow.as_mut().unwrap();
+        let (store, instance) = borrow.as_mut()
+            .expect("WASM MemoryString cache: just initialized if was None");
 
         store.set_fuel(timeout_ms * WASM_FUEL_PER_MS)
             .map_err(|e| LightningError::Internal(format!("WASM fuel metering failed: {e}")))?;

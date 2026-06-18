@@ -263,7 +263,7 @@ impl HnswIndex {
                 return;
             }
 
-            let ep = entry_point.unwrap();
+            let ep = entry_point.expect("HNSW entry_point is Some because is_none check returned early above");
             if level > *max_level {
                 *max_level = level;
                 *entry_point = Some(id);

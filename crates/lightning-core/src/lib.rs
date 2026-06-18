@@ -1125,7 +1125,7 @@ impl QueryResult {
 pub struct Connection {
     pub client_context: Arc<ClientContext>,
     pub transaction: parking_lot::Mutex<Option<Arc<Transaction>>>,
-    pub skip_auth_check: bool,
+    skip_auth_check: bool,
 }
 
 impl Connection {
@@ -1143,6 +1143,10 @@ impl Connection {
         let mut c = Self::new(database);
         c.skip_auth_check = true;
         c
+    }
+
+    pub fn is_internal(&self) -> bool {
+        self.skip_auth_check
     }
 
     pub fn begin(&self) -> Result<()> {
