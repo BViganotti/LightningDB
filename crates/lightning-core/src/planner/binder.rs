@@ -585,7 +585,7 @@ impl<'a> Binder<'a> {
                 for component in path.components() {
                     if let Component::ParentDir = component {
                         return Err(LightningError::Config(format!(
-                            "COPY FROM path '{}' contains '..' traversal", file_path
+                            "COPY FROM path '{file_path}' contains '..' traversal"
                         )));
                     }
                 }
@@ -612,7 +612,7 @@ impl<'a> Binder<'a> {
                 for component in path.components() {
                     if let Component::ParentDir = component {
                         return Err(LightningError::Config(format!(
-                            "COPY TO path '{}' contains '..' traversal", file_path
+                            "COPY TO path '{file_path}' contains '..' traversal"
                         )));
                     }
                 }
@@ -841,8 +841,7 @@ impl<'a> Binder<'a> {
                         .map(|(_, rel)| rel.clone())
                         .ok_or_else(|| {
                             LightningError::Query(format!(
-                                "No rel table found connecting '{}' to '{}'",
-                                src_label, dst_label
+                                "No rel table found connecting '{src_label}' to '{dst_label}'"
                             ))
                         })?
                 } else {
@@ -989,7 +988,7 @@ impl<'a> Binder<'a> {
                 let (dst_table_name, dst_properties) = if self.variables.contains_key(&dst_var) {
                     // Variable already exists, get its properties from the bound variable
                     let bound_var = self.variables.get(&dst_var).ok_or_else(|| {
-                        crate::LightningError::Internal(format!("Variable '{}' not found in scope", dst_var))
+                        crate::LightningError::Internal(format!("Variable '{dst_var}' not found in scope"))
                     })?.clone();
                     let src_table = self
                         .catalog

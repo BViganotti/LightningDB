@@ -310,7 +310,7 @@ impl Aggregate {
             for _ in 0..self.group_by_indices.len() {
                 columns.push(Box::new(arrow::array::StringBuilder::new()));
             }
-            for (_i, (agg_type, _)) in self.aggregates.iter().enumerate() {
+            for (agg_type, _) in self.aggregates.iter() {
                 let builder: Box<dyn arrow::array::ArrayBuilder> = match agg_type {
                     AggregateFunction::Count | AggregateFunction::CountDistinct => {
                         Box::new(arrow::array::Int64Array::builder(num_groups))
@@ -324,8 +324,8 @@ impl Aggregate {
             // Use string representation since Value doesn't implement Ord.
             let mut sorted_groups: Vec<_> = groups.iter().collect();
             sorted_groups.sort_by(|a, b| {
-                let a_str: Vec<String> = a.0.iter().map(|v| format!("{:?}", v)).collect();
-                let b_str: Vec<String> = b.0.iter().map(|v| format!("{:?}", v)).collect();
+                let a_str: Vec<String> = a.0.iter().map(|v| format!("{v:?}")).collect();
+                let b_str: Vec<String> = b.0.iter().map(|v| format!("{v:?}")).collect();
                 a_str.cmp(&b_str)
             });
 

@@ -884,12 +884,10 @@ impl FunctionRegistry {
                         const RANGE_MAX_ELEMS: u64 = 10_000_000;
                         let estimated = if step > 0 {
                             if start > end { 0 } else { ((end as i128 - start as i128) / step as i128 + 1) as u64 }
-                        } else {
-                            if start < end { 0 } else { ((start as i128 - end as i128) / (-step as i128) + 1) as u64 }
-                        };
+                        } else if start < end { 0 } else { ((start as i128 - end as i128) / (-step as i128) + 1) as u64 };
                         if estimated > RANGE_MAX_ELEMS {
                             return Err(crate::LightningError::Query(
-                                format!("RANGE would produce {} elements (max {})", estimated, RANGE_MAX_ELEMS)
+                                format!("RANGE would produce {estimated} elements (max {RANGE_MAX_ELEMS})")
                             ));
                         }
                         let mut range_vals = Vec::with_capacity(estimated as usize);
@@ -3422,9 +3420,9 @@ impl FunctionRegistry {
                         let uuid = format!(
                             "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
                             a,
-                            (c >> 4) as u16,
-                            (c & 0x0fff) as u16,
-                            0x8000u16 | ((d >> 2) as u16 & 0x3fff),
+                            ((c >> 4)),
+                            ((c & 0x0fff)),
+                            0x8000u16 | ((d >> 2) & 0x3fff),
                             ((b as u64) << 32) | (a as u64)
                         );
                         results.append_value(uuid);

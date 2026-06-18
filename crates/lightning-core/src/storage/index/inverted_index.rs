@@ -81,7 +81,7 @@ impl InvertedIndex {
         for (node_id, text) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
-            for (_name, field) in &self.content_fields {
+            for field in self.content_fields.values() {
                 doc.add_text(*field, text);
             }
             writer

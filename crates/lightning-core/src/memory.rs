@@ -286,9 +286,7 @@ impl MemoryStore {
         params.insert("metadata".to_string(), Value::String(entity.metadata.clone()));
         params.insert("now".to_string(), Value::Number(now as f64));
 
-        if let Err(e) = self.conn.execute(&query, Some(params)) {
-            return Err(e);
-        }
+        self.conn.execute(&query, Some(params))?;
 
         if !entity.embedding.is_empty() {
             let db = self.conn.client_context.database.clone();
@@ -395,7 +393,7 @@ impl MemoryStore {
                 if e.embedding.len() == emb_dim {
                     emb_values.extend_from_slice(&e.embedding);
                 } else {
-                    emb_values.extend(std::iter::repeat(0.0f32).take(emb_dim));
+                    emb_values.extend(std::iter::repeat_n(0.0f32, emb_dim));
                 }
             }
             let emb_values_array = Float32Array::from(emb_values);
@@ -603,7 +601,7 @@ impl MemoryStore {
 
         // Phase 3 prep: initialize degree map for all entities
         let mut degree: HashMap<String, usize> = HashMap::new();
-        for (id, _) in &all_entities {
+        for id in all_entities.keys() {
             degree.insert(id.clone(), 0);
         }
 
@@ -625,7 +623,7 @@ impl MemoryStore {
             let storage = db.storage_manager.read();
             if let Some(fwd_csr) = storage.fwd_csr.get(RELATES_TABLE) {
                 let bm = &db.buffer_manager;
-                for (eid, _) in &all_entities {
+                for eid in all_entities.keys() {
                     let lookup = format!(
                         "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
                     );
@@ -948,8 +946,7 @@ impl MemoryStore {
                                     cosine_sim: cosine,
                                     jaccard_sim: jaccard,
                                     reason: format!(
-                                        "high cosine similarity ({:.4}) but low Jaccard content overlap ({:.4})",
-                                        cosine, jaccard
+                                        "high cosine similarity ({cosine:.4}) but low Jaccard content overlap ({jaccard:.4})"
                                     ),
                                 });
                             }
@@ -993,8 +990,8 @@ impl MemoryStore {
                 let mut id_params: Vec<String> = Vec::with_capacity(top_n);
                 let mut meta_params: Vec<String> = Vec::with_capacity(top_n);
                 for (idx, score) in ranked.iter().take(top_n) {
-                    let pid = format!("id_{}", idx);
-                    let pmid = format!("meta_{}", idx);
+                    let pid = format!("id_{idx}");
+                    let pmid = format!("meta_{idx}");
                     unwind_parts.push(format!("{{id: ${pid}, meta: ${pmid}}}"));
                     id_params.push(pid);
                     meta_params.push(pmid);
@@ -1350,7 +1347,7 @@ impl MemoryStore {
                     if let Err(e) = csr.compact(bm, &tx) {
                         tracing::warn!("MemoryStore: fwd CSR compact failed: {e}");
                     }
-                    if let Some(ref bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
+                    if let Some(bwd_csr) = storage.bwd_csr.get(RELATES_TABLE) {
                         if let Err(e) = bwd_csr.compact(bm, &tx) {
                             tracing::warn!("MemoryStore: bwd CSR compact failed: {e}");
                         }
@@ -1459,7 +1456,7 @@ impl MemoryStore {
             let bm = &db.buffer_manager;
             if let Ok(tx) = db.transaction_manager.begin(false) {
                 let storage = db.storage_manager.read();
-                if let Some(ref vec) = storage.vector_indexes.get(ENTITY_TABLE) {
+                if let Some(vec) = storage.vector_indexes.get(ENTITY_TABLE) {
                     let _ = vec.delete(node_id, bm, &tx);
                 }
                 // Remove hash index entry so a subsequent store_batch won't see a stale _id
@@ -1474,7 +1471,7 @@ impl MemoryStore {
                     // THEN commit FTS index so readers never see an FTS doc pointing
                     // to a stale or uncommitted node_id
                     let storage = db.storage_manager.read();
-                    if let Some(ref fts) = storage.fts_indexes.get(ENTITY_TABLE) {
+                    if let Some(fts) = storage.fts_indexes.get(ENTITY_TABLE) {
                         let _ = fts.delete(node_id);
                         let _ = fts.commit();
                     }
@@ -1566,11 +1563,10 @@ impl MemoryStore {
         let id_list: Vec<String> = internal_ids.iter().map(|id| id.to_string()).collect();
         let id_list_str = id_list.join(", ");
         let query = format!(
-            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
+            "MATCH (e:{ENTITY_TABLE}) WHERE e._id IN [{id_list_str}] AND (e.valid_until = 0 OR e.valid_until = 9223372036854775807) \
              RETURN e.id, e.type, e.content, e.created_at, \
              e.last_accessed, e.access_count, e.ttl_seconds, e.metadata, \
              e.valid_from, e.valid_until",
-            id_list_str,
         );
         match self.conn.execute(&query, None) {
             Ok(res) => self.batches_to_entities(&res.batches),

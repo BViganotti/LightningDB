@@ -240,8 +240,7 @@ impl VectorIndex {
             // Bounds check: ensure we don't write beyond the page
             if write_end > 4096 {
                 return Err(crate::LightningError::Internal(format!(
-                    "Vector index write: entry exceeds page boundary (offset={}, dim={}, end={})",
-                    offset, dim, write_end
+                    "Vector index write: entry exceeds page boundary (offset={offset}, dim={dim}, end={write_end})"
                 )));
             }
 

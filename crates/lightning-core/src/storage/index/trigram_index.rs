@@ -214,7 +214,7 @@ impl TrigramIndex {
             let trigrams = Self::extract_trigrams(value);
             let mut map = self.trigrams.write();
             for tri in trigrams {
-                let list = map.entry(tri).or_insert_with(Vec::new);
+                let list = map.entry(tri).or_default();
                 if list.last() != Some(&row_id) {
                     if let Err(pos) = list.binary_search(&row_id) {
                         list.insert(pos, row_id);
@@ -226,7 +226,7 @@ impl TrigramIndex {
             let bigrams = Self::extract_bigrams(value);
             let mut map = self.bigrams.write();
             for bi in bigrams {
-                let list = map.entry(bi).or_insert_with(Vec::new);
+                let list = map.entry(bi).or_default();
                 if list.last() != Some(&row_id) {
                     if let Err(pos) = list.binary_search(&row_id) {
                         list.insert(pos, row_id);
@@ -238,7 +238,7 @@ impl TrigramIndex {
             let unigrams = Self::extract_unigrams(value);
             let mut map = self.unigrams.write();
             for u in unigrams {
-                let list = map.entry(u).or_insert_with(Vec::new);
+                let list = map.entry(u).or_default();
                 if list.last() != Some(&row_id) {
                     if let Err(pos) = list.binary_search(&row_id) {
                         list.insert(pos, row_id);

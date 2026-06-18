@@ -358,8 +358,8 @@ impl PartialOrd for Value {
             }
             _ => {
                 // For incomparable types, use string representation
-                let s1 = format!("{:?}", self);
-                let s2 = format!("{:?}", other);
+                let s1 = format!("{self:?}");
+                let s2 = format!("{other:?}");
                 s1.partial_cmp(&s2)
             }
         }

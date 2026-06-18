@@ -110,7 +110,7 @@ fn normalize_query(s: &str) -> String {
 }
 
 fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>) {
-    let mut result = s.replace('\n', " ").replace('\r', " ");
+    let mut result = s.replace(['\n', '\r'], " ");
     let mut ord = None;
     let mut skp = None;
     let mut lmt = None;
@@ -148,7 +148,7 @@ fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>
             };
             // Store expression + direction as "expr|DIR" for inject_modifiers
             let direction = if desc { "DESC" } else { "ASC" };
-            ord = Some(format!("{}|{}", cleaned, direction));
+            ord = Some(format!("{cleaned}|{direction}"));
             let _removed_len = 9 + end;
             result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
         }
@@ -1450,7 +1450,7 @@ fn parse_comparison_operator(p: pest::iterators::Pair<Rule>) -> Result<Compariso
         ">" => Ok(ComparisonOperator::GreaterThan),
         ">=" => Ok(ComparisonOperator::GreaterThanOrEqual),
         other => Err(ParserError::Internal(format!(
-            "Unknown comparison operator: {:?}", other
+            "Unknown comparison operator: {other:?}"
         ))),
     }
 }
@@ -1463,7 +1463,7 @@ fn parse_arithmetic_operator(p: pest::iterators::Pair<Rule>) -> Result<Arithmeti
         "/" => Ok(ArithmeticOperator::Divide),
         "%" => Ok(ArithmeticOperator::Modulo),
         other => Err(ParserError::Internal(format!(
-            "Unknown arithmetic operator: {:?}", other
+            "Unknown arithmetic operator: {other:?}"
         ))),
     }
 }
@@ -1570,7 +1570,7 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
             "BOOL" => Ok(DataType::Bool),
             "DATE" => Ok(DataType::Date),
             "TIMESTAMP" => Ok(DataType::Timestamp),
-            unknown => Err(ParserError::Internal(format!("Unknown data type '{}'. Valid types: INT64, INT32, UINT64, DOUBLE, FLOAT, STRING, BOOL, DATE, TIMESTAMP", unknown))),
+            unknown => Err(ParserError::Internal(format!("Unknown data type '{unknown}'. Valid types: INT64, INT32, UINT64, DOUBLE, FLOAT, STRING, BOOL, DATE, TIMESTAMP"))),
         },
     }
 }

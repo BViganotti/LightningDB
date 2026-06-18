@@ -121,8 +121,7 @@ impl CompressionAlg for DictCompression {
 
             if dict_idx >= dict_count {
                 return Err(LightningError::Internal(format!(
-                    "Dict decompression: index {} out of bounds (dict_count={})",
-                    dict_idx, dict_count
+                    "Dict decompression: index {dict_idx} out of bounds (dict_count={dict_count})"
                 )));
             }
 

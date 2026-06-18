@@ -246,18 +246,14 @@ impl CSRIndex {
         let header_frame = bm.pin_page(self.offset_fh.clone(), 0, tx)?;
         let mut header_buf = [0u8; PAGE_SIZE];
         header_buf.copy_from_slice(header_frame.as_slice());
-        if let Err(e) = validate_csr_header(&header_buf, CSR_OFFSET_MAGIC) {
-            return Err(e);
-        }
+        validate_csr_header(&header_buf, CSR_OFFSET_MAGIC)?;
 
         // Validate adjacency file header if it has pages
         if self.adj_node_fh.get_num_pages() > 0 {
             let adj_header = bm.pin_page(self.adj_node_fh.clone(), 0, tx)?;
             let mut adj_buf = [0u8; PAGE_SIZE];
             adj_buf.copy_from_slice(adj_header.as_slice());
-            if let Err(e) = validate_csr_header(&adj_buf, CSR_ADJ_MAGIC) {
-                return Err(e);
-            }
+            validate_csr_header(&adj_buf, CSR_ADJ_MAGIC)?
         }
 
         // Read all offsets using header-aware positions with page-boundary safety

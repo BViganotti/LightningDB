@@ -341,7 +341,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                         return Ok(None);
                     }
                     return Err(crate::LightningError::Database(format!(
-                        "Table '{}' already exists", name
+                        "Table '{name}' already exists"
                     )));
                 }
                 // Acquire both locks, do both updates, rollback on failure
@@ -388,7 +388,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                         return Ok(None);
                     }
                     return Err(crate::LightningError::Database(format!(
-                        "Table '{}' already exists", name
+                        "Table '{name}' already exists"
                     )));
                 }
                 // Acquire both locks, do both updates, rollback on failure

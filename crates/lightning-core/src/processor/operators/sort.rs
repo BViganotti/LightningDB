@@ -120,8 +120,7 @@ impl PhysicalSort {
         }
         if total_rows > MAX_SORT_MEMORY_ROWS {
             return Err(LightningError::Internal(format!(
-                "Sort of {} rows exceeds in-memory limit of {}. Use ORDER BY ... LIMIT to reduce rows, or increase MAX_SORT_MEMORY_ROWS.",
-                total_rows, MAX_SORT_MEMORY_ROWS
+                "Sort of {total_rows} rows exceeds in-memory limit of {MAX_SORT_MEMORY_ROWS}. Use ORDER BY ... LIMIT to reduce rows, or increase MAX_SORT_MEMORY_ROWS."
             )));
         }
         let mut sort_columns = Vec::new();

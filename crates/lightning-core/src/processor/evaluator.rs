@@ -849,7 +849,7 @@ impl ExpressionEvaluator {
             }
         }
         if let Literal::Number(n) = lit {
-            let val = *n as f64;
+            let val = *n;
             let scalar = arrow::array::Float64Array::new_scalar(val);
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
                 let f64_arr = arrow::compute::cast(arr, &DataType::Float64)
@@ -1275,10 +1275,10 @@ fn evaluate_subquery_count(
             if num_table_rows == 0 {
                 0
             } else if let Some(where_clause) = sub_where {
-                let count = scan_table_with_where(
+                
+                scan_table_with_where(
                     &table, bm, &tx, num_table_rows, &where_clause.expression, database, registry,
-                )?;
-                count
+                )?
             } else {
                 num_table_rows as i64
             }

@@ -150,7 +150,7 @@ impl HnswIndex {
         RNG_STATE.with(|state| {
             let mut rng = state.borrow_mut();
             *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let bits = (*rng >> 33) as u64;
+            let bits = *rng >> 33;
             // Avoid log(0) = -infinity by ensuring u > 0
             let u = ((bits | 1) as f64) / (1u64 << 31) as f64;
             ((-u.ln() * ml) as usize).min(MAX_LEVEL)

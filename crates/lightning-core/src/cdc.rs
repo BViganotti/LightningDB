@@ -38,6 +38,12 @@ struct CdcManagerInner {
     running: AtomicBool,
 }
 
+impl Default for CdcManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CdcManager {
     pub fn new() -> Self {
         Self {

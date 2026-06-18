@@ -89,7 +89,7 @@ impl TopKOptimizer {
                 ))
             }
             _ => {
-                let child_opt = plan.get_child().map(|c| c.clone());
+                let child_opt = plan.get_child().cloned();
                 if let Some(child) = child_opt {
                     let mut plan_clone = plan.clone();
                     plan_clone.set_child(self.push_down(child)?);

@@ -888,7 +888,7 @@ impl StorageManager {
             .get(table_name)
             .or_else(|| self.rel_tables.get(table_name))
             .map(|t| t.version_info.clone())
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
 
         // Check for duplicate column
         let has_dup = self
@@ -898,8 +898,7 @@ impl StorageManager {
             .is_some_and(|t| t.columns.iter().any(|c| c.name == col_name));
         if has_dup {
             return Err(crate::LightningError::Database(format!(
-                "Column '{}' already exists in table '{}'",
-                col_name, table_name
+                "Column '{col_name}' already exists in table '{table_name}'"
             )));
         }
 
@@ -917,7 +916,7 @@ impl StorageManager {
             .node_tables
             .get_mut(table_name)
             .or_else(|| self.rel_tables.get_mut(table_name))
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
         table.columns.push(col);
         Ok(())
     }
@@ -931,7 +930,7 @@ impl StorageManager {
             .node_tables
             .get_mut(table_name)
             .or_else(|| self.rel_tables.get_mut(table_name))
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{}' not found", table_name)))?;
+            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
 
         let idx = table
             .columns
@@ -939,8 +938,7 @@ impl StorageManager {
             .position(|c| c.name == col_name)
             .ok_or_else(|| {
                 crate::LightningError::Database(format!(
-                    "Column '{}' not found in table '{}'",
-                    col_name, table_name
+                    "Column '{col_name}' not found in table '{table_name}'"
                 ))
             })?;
         table.columns.remove(idx);

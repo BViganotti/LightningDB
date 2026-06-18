@@ -57,7 +57,7 @@ impl IndexPushDown {
                                                 // literal. If it references outer-scope variables
                                                 // (correlated subquery), constant folding produces
                                                 // wrong values. In that case, keep the Filter+Scan.
-                                                if !expr_has_outer_variables(&*right) {
+                                                if !expr_has_outer_variables(right) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
@@ -85,8 +85,8 @@ impl IndexPushDown {
                                                 _,
                                             ) = &**right
                                             {
-                                                if *lookup_idx == pk_idx {
-                                                if !expr_has_outer_variables(&*left) {
+                                                if *lookup_idx == pk_idx
+                                                && !expr_has_outer_variables(left) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
@@ -95,7 +95,6 @@ impl IndexPushDown {
                                                         proj.clone(),
                                                     ));
                                                 }
-                                            }
                                             }
                                         }
                                     }
@@ -258,8 +257,8 @@ fn expr_has_outer_variables(expr: &BoundExpression) -> bool {
         BoundExpression::Literal(_) => false,
         BoundExpression::Variable(_, _) => true,
         BoundExpression::PropertyLookup(_, _, _) => true,
-        BoundExpression::Function(_, args, _) => args.iter().any(|a| expr_has_outer_variables(a)),
-        BoundExpression::Aggregate(_, args, _) => args.iter().any(|a| expr_has_outer_variables(a)),
+        BoundExpression::Function(_, args, _) => args.iter().any(expr_has_outer_variables),
+        BoundExpression::Aggregate(_, args, _) => args.iter().any(expr_has_outer_variables),
         BoundExpression::Arithmetic(left, _, right) => {
             expr_has_outer_variables(left) || expr_has_outer_variables(right)
         }
@@ -271,13 +270,13 @@ fn expr_has_outer_variables(expr: &BoundExpression) -> bool {
         }
         BoundExpression::Not(inner) => expr_has_outer_variables(inner),
         BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => true,
-        BoundExpression::List(items, _) => items.iter().any(|i| expr_has_outer_variables(i)),
+        BoundExpression::List(items, _) => items.iter().any(expr_has_outer_variables),
         BoundExpression::Map(entries, _) => entries.iter().any(|(_, v)| expr_has_outer_variables(v)),
         BoundExpression::Lambda(_, body) => expr_has_outer_variables(body),
         BoundExpression::Case { expression, when_then, else_expression, .. } => {
-            expression.as_ref().map_or(false, |e| expr_has_outer_variables(e))
+            expression.as_ref().is_some_and(|e| expr_has_outer_variables(e))
                 || when_then.iter().any(|(w, t)| expr_has_outer_variables(w) || expr_has_outer_variables(t))
-                || else_expression.as_ref().map_or(false, |e| expr_has_outer_variables(e))
+                || else_expression.as_ref().is_some_and(|e| expr_has_outer_variables(e))
         }
         _ => false,
     }

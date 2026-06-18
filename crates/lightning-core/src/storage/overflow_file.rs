@@ -43,19 +43,17 @@ impl OverflowFile {
             pages_visited += 1;
             if pages_visited > MAX_PAGES {
                 return Err(LightningError::Internal(format!(
-                    "read_string: exceeded maximum page chain length ({}) — possible corruption",
-                    MAX_PAGES
+                    "read_string: exceeded maximum page chain length ({MAX_PAGES}) — possible corruption"
                 )));
             }
             if !seen_pages.insert(current_page_idx) {
                 return Err(LightningError::Internal(format!(
-                    "read_string: cycle detected — page {} visited twice",
-                    current_page_idx
+                    "read_string: cycle detected — page {current_page_idx} visited twice"
                 )));
             }
             if current_offset > USABLE_SIZE {
                 return Err(LightningError::Internal(format!(
-                    "read_string: offset {} exceeds usable page size {}", current_offset, USABLE_SIZE
+                    "read_string: offset {current_offset} exceeds usable page size {USABLE_SIZE}"
                 )));
             }
 
@@ -92,7 +90,7 @@ impl OverflowFile {
                     let next_ptr_end = USABLE_SIZE + NEXT_PTR_SIZE;
                     if next_ptr_end > page_data.len() {
                         return Err(LightningError::Internal(format!(
-                            "read_string: page {} too short for next pointer", current_page_idx
+                            "read_string: page {current_page_idx} too short for next pointer"
                         )));
                     }
                     let next_page_idx = u32::from_le_bytes(

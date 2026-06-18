@@ -520,7 +520,7 @@ impl WALRecordIter {
     }
 
     pub fn next_record(&mut self) -> Option<WALRecord> {
-        while self.pos + 1 <= self.buf.len() {
+        while self.pos < self.buf.len() {
             let record_type = self.buf[self.pos];
             match record_type {
                 RECORD_TYPE_PAGE_UPDATE => {

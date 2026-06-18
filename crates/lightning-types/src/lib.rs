@@ -69,7 +69,7 @@ impl fmt::Display for LogicalType {
             LogicalType::Interval => write!(f, "INTERVAL"),
             LogicalType::InternalID => write!(f, "INTERNAL_ID"),
             LogicalType::Serial => write!(f, "SERIAL"),
-            LogicalType::List(child) => write!(f, "{}[]", child),
+            LogicalType::List(child) => write!(f, "{child}[]"),
             LogicalType::Struct(fields) => {
                 write!(f, "STRUCT(")?;
                 for (i, field) in fields.iter().enumerate() {
@@ -78,7 +78,7 @@ impl fmt::Display for LogicalType {
                 }
                 write!(f, ")")
             }
-            LogicalType::Map(key, value) => write!(f, "MAP({}, {})", key, value),
+            LogicalType::Map(key, value) => write!(f, "MAP({key}, {value})"),
             LogicalType::Union(fields) => {
                 write!(f, "UNION(")?;
                 for (i, field) in fields.iter().enumerate() {
@@ -103,7 +103,7 @@ impl fmt::Display for LogicalType {
                 }
                 write!(f, ")")
             }
-            LogicalType::Lambda(ret) => write!(f, "LAMBDA -> {}", ret),
+            LogicalType::Lambda(ret) => write!(f, "LAMBDA -> {ret}"),
         }
     }
 }

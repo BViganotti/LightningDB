@@ -63,7 +63,7 @@ impl PhysicalOperator for PhysicalProjection {
 
             for i in 0..num_items {
                 let array = evaluated[i].clone().ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Expression evaluation slot {} was not populated", i))
+                    crate::LightningError::Internal(format!("Expression evaluation slot {i} was not populated"))
                 })?;
                 fields.push(Field::new(&self.items[i].alias, array.data_type().clone(), true));
                 projected_columns.push(array);

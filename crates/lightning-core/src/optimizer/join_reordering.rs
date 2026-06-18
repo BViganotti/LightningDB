@@ -110,13 +110,13 @@ impl JoinReordering {
     ) -> Result<LogicalOperator> {
         let n = relations.len();
         if n == 1 {
-            return Ok(relations.into_iter().next().ok_or_else(|| {
+            return relations.into_iter().next().ok_or_else(|| {
                 crate::LightningError::Internal("Expected at least one relation in join reordering".into())
-            })?);
+            });
         }
         if n > 30 {
             return Err(crate::LightningError::Internal(format!(
-                "Join reordering does not support {} relations (max 30)", n
+                "Join reordering does not support {n} relations (max 30)"
             )));
         }
 
@@ -207,7 +207,7 @@ impl JoinReordering {
                         let card = self.estimator.estimate(&plan);
                         let cost = card + l_cost + r_cost;
 
-                        if best_for_subset.as_ref().map_or(true, |best| cost < best.2) {
+                        if best_for_subset.as_ref().is_none_or(|best| cost < best.2) {
                             best_for_subset = Some((plan, card, cost, current_used));
                         }
                     }

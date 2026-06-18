@@ -49,8 +49,7 @@ impl WasmExecMode {
         if let Self::MultiArgF64(expected) = self {
             if *expected != 0 && *expected != actual {
                 return Err(crate::LightningError::Internal(format!(
-                    "WASM function expected {} arguments, got {}",
-                    expected, actual
+                    "WASM function expected {expected} arguments, got {actual}"
                 )));
             }
         }
@@ -230,7 +229,7 @@ impl WasmFunction {
                                         func.call(&mut store, (arg_arrays[0].value(i),))
                                             .map_err(|e| {
                                                 let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
-                                                    format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                                    format!("WASM function '{func_name}' timed out (fuel exhausted)")
                                                 } else {
                                                     format!("WASM call failed: {e}")
                                                 };
@@ -253,7 +252,7 @@ impl WasmFunction {
                                     let val = func.call(&mut store, (v0, v1))
                                         .map_err(|e| {
                                             let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
-                                                format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                                format!("WASM function '{func_name}' timed out (fuel exhausted)")
                                             } else {
                                                 format!("WASM call failed: {e}")
                                             };
@@ -276,7 +275,7 @@ impl WasmFunction {
                                     let val = func.call(&mut store, (v0, v1, v2))
                                         .map_err(|e| {
                                             let msg = if matches!(e.kind(), wasmi::errors::ErrorKind::Fuel(wasmi::errors::FuelError::OutOfFuel { .. })) {
-                                                format!("WASM function '{}' timed out (fuel exhausted)", func_name)
+                                                format!("WASM function '{func_name}' timed out (fuel exhausted)")
                                             } else {
                                                 format!("WASM call failed: {e}")
                                             };

@@ -49,6 +49,7 @@ impl Frame {
     /// - The caller holds the shard write lock, OR
     /// - The frame is freshly created and not yet shared, OR
     /// - The frame's pin_count is 0 and no other thread has a reference.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn as_mut_slice(&self) -> &mut [u8] {
         unsafe { &mut *self.data.get() }
     }
@@ -142,7 +143,7 @@ impl BufferManager {
                 clock_ptr: 0,
                 capacity: initial_cap,
                 max_capacity: shard_capacity,
-                wal: wal.as_ref().map(|w| Arc::clone(w)),
+                wal: wal.as_ref().map(Arc::clone),
                 page_locks: HashMap::new(),
                 shutdown: AtomicBool::new(false),
                 dirty_count: AtomicU64::new(0),
@@ -764,7 +765,7 @@ impl BufferManager {
         for r in &results {
             if let Err(e) = r {
                 return Err(crate::LightningError::Internal(format!(
-                    "Checkpoint write error: {}", e
+                    "Checkpoint write error: {e}"
                 )));
             }
         }

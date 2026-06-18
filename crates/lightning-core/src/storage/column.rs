@@ -617,7 +617,7 @@ impl Column {
                 .iter()
                 .find(|(idx, _)| *idx == null_page_idx)
                 .ok_or_else(|| crate::LightningError::Internal(format!(
-                    "Null page {} not found in pre-pinned frames", null_page_idx
+                    "Null page {null_page_idx} not found in pre-pinned frames"
                 )))?
                 .1;
             let null_base_offset = (current_offset % 4096) as usize;

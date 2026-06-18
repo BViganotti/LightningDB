@@ -365,7 +365,7 @@ impl LogicalPlanner {
                                     };
                                     let is_gb = group_by_exprs.iter().any(|gb| {
                                         matches!(&gb.expression, BoundExpression::PropertyLookup(gv, gi, _)
-                                            if prev_var_idx.map_or(false, |(pv, pi)| gv.as_str() == pv && *gi == pi))
+                                            if prev_var_idx.is_some_and(|(pv, pi)| gv.as_str() == pv && *gi == pi))
                                     });
                                     if !is_gb {
                                         agg_offset += 1;
@@ -595,7 +595,7 @@ impl LogicalPlanner {
                 procedure_name: name,
                 parameters: args
                     .into_iter()
-                    .map(|a| BoundExpression::Literal(a))
+                    .map(BoundExpression::Literal)
                     .collect(),
                 yield_items: None,
             })),
@@ -873,8 +873,7 @@ impl LogicalPlanner {
                                             "VAR_SAMP" => AggregateFunction::VarSamp,
                                             _ => {
                                                 return Err(LightningError::Query(format!(
-                                                    "Unknown aggregate function: {}",
-                                                    name
+                                                    "Unknown aggregate function: {name}"
                                                 )))
                                             }
                                         };
@@ -942,7 +941,7 @@ impl LogicalPlanner {
                                     child: Box::new(current_plan),
                                     group_by_cols: group_by_indices.clone(),
                                     dependent_group_by_cols: Vec::new(),
-                                    aggregates: aggregates,
+                                    aggregates,
                                 };
 
                                 // After aggregate, we need a final projection to match the RETURN items.
@@ -1122,7 +1121,7 @@ impl LogicalPlanner {
                         }
                         other => {
                             return Err(LightningError::Internal(format!(
-                                "Unsupported clause type in query: {:?}", other
+                                "Unsupported clause type in query: {other:?}"
                             )));
                         }
                     };

@@ -148,7 +148,7 @@ impl SubqueryUnnesting {
         for element in &mut sub_match.elements {
             if let crate::planner::binder::BoundMatchElement::Node(ref table_name, ref var_name, ref props) = element {
                 if left_vars.contains(var_name) {
-                    let new_name = format!("__sub_{}", var_name);
+                    let new_name = format!("__sub_{var_name}");
                     *element = crate::planner::binder::BoundMatchElement::Node(
                         table_name.clone(), new_name, props.clone(),
                     );
@@ -157,7 +157,7 @@ impl SubqueryUnnesting {
         }
         if let Some(ref mut where_clause) = sub_where {
             for var in &left_vars {
-                where_clause.expression = rename_var_in_expr(&where_clause.expression, var, &format!("__sub_{}", var));
+                where_clause.expression = rename_var_in_expr(&where_clause.expression, var, &format!("__sub_{var}"));
             }
         }
 
@@ -184,7 +184,7 @@ impl SubqueryUnnesting {
                     )),
                     crate::parser::ast::ComparisonOperator::Equal,
                     Box::new(BoundExpression::PropertyLookup(
-                        format!("__sub_{}", var),
+                        format!("__sub_{var}"),
                         0,
                         lightning_types::LogicalType::Any,
                     )),

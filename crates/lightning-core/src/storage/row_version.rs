@@ -129,7 +129,7 @@ impl RowVersion {
             // Row is being modified by another uncommitted tx — not visible to us
             drop(versions);
             let committed = self.shards[shard_idx].committed.read();
-            return committed.get(&row_id).map_or(false, |&commit_ts| commit_ts <= read_ts);
+            return committed.get(&row_id).is_some_and(|&commit_ts| commit_ts <= read_ts);
         }
         let committed = self.shards[shard_idx].committed.read();
         if let Some(&commit_ts) = committed.get(&row_id) {

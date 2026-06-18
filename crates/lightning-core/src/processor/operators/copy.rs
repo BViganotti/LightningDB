@@ -28,7 +28,7 @@ fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&P
     for component in path.components() {
         if let Component::ParentDir = component {
             return Err(LightningError::Config(format!(
-                "COPY path '{}' contains '..' traversal", file_path
+                "COPY path '{file_path}' contains '..' traversal"
             )));
         }
     }
@@ -42,18 +42,18 @@ fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&P
 
     let parent = resolved.parent().ok_or_else(|| {
         LightningError::Config(format!(
-            "Cannot determine parent directory for COPY path '{}'", file_path
+            "Cannot determine parent directory for COPY path '{file_path}'"
         ))
     })?;
     let file_name = resolved.file_name().ok_or_else(|| {
         LightningError::Config(format!(
-            "Cannot determine filename for COPY path '{}'", file_path
+            "Cannot determine filename for COPY path '{file_path}'"
         ))
     })?;
 
     let canonical_parent = parent.canonicalize().map_err(|e| {
         LightningError::Config(format!(
-            "Cannot resolve COPY path directory '{}': {}", file_path, e
+            "Cannot resolve COPY path directory '{file_path}': {e}"
         ))
     })?;
     let canonical = canonical_parent.join(file_name);
@@ -157,7 +157,7 @@ impl PhysicalOperator for PhysicalCopy {
             Arc::new(Float64Array::from(vec![affected as f64])) as arrow::array::ArrayRef;
         Ok(Some(DataChunk {
             batch: RecordBatch::try_new(output_schema, vec![count_array])
-                .map_err(|e| crate::LightningError::Internal(format!("Failed to create COPY output batch: {}", e)))?,
+                .map_err(|e| crate::LightningError::Internal(format!("Failed to create COPY output batch: {e}")))?,
         }))
     }
 
@@ -252,17 +252,15 @@ impl PhysicalCopy {
                 let mut columns = vec![Arc::new(ids) as ArrayRef];
                 columns.extend(batch.columns().iter().cloned());
                 RecordBatch::try_new(table.get_schema(), columns)?
+            } else if table.get_schema().fields().len() == batch.schema().fields().len() + 1
+                && table.columns.first().map(|c| c.name.as_str()) == Some("INTERNAL_ID")
+            {
+                let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
+                let mut columns = vec![Arc::new(ids) as ArrayRef];
+                columns.extend(batch.columns().iter().cloned());
+                RecordBatch::try_new(table.get_schema(), columns)?
             } else {
-                if table.get_schema().fields().len() == batch.schema().fields().len() + 1
-                    && table.columns.first().map(|c| c.name.as_str()) == Some("INTERNAL_ID")
-                {
-                    let ids: UInt64Array = (next_id..next_id + num_rows as u64).map(Some).collect();
-                    let mut columns = vec![Arc::new(ids) as ArrayRef];
-                    columns.extend(batch.columns().iter().cloned());
-                    RecordBatch::try_new(table.get_schema(), columns)?
-                } else {
-                    batch
-                }
+                batch
             };
             table.bulk_append_batch(&database.buffer_manager, &normalized_batch, next_id, tx)?;
 

@@ -151,13 +151,13 @@ impl PrefetchTracker {
 
                 // Record 1st-order: prev → current
                 let mut trans1 = self.transitions_1st.write();
-                Self::record_transition_1st(&mut *trans1, prev_key, key, decay, max_entries);
+                Self::record_transition_1st(&mut trans1, prev_key, key, decay, max_entries);
 
                 // Record 2nd-order: (prev_prev, prev) → current
                 if window.len() >= 2 {
                     let prev_prev = window[window.len() - 2];
                     let mut trans2 = self.transitions_2nd.write();
-                    Self::record_transition_2nd(&mut *trans2, (prev_prev, prev_key), key, decay, max_entries);
+                    Self::record_transition_2nd(&mut trans2, (prev_prev, prev_key), key, decay, max_entries);
                 }
             }
         }
@@ -222,7 +222,7 @@ impl PrefetchTracker {
                     let mut scored: Vec<((u64, u64), f64)> = entries
                         .iter()
                         .filter_map(|(k, w)| {
-                            let conf = *w as f64 / total;
+                            let conf = *w / total;
                             if conf >= min_confidence { Some((*k, conf)) } else { None }
                         })
                         .collect();

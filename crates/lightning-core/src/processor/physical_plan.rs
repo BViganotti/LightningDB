@@ -266,7 +266,7 @@ impl PhysicalPlanner {
 
                     // Build filter from remaining comparisons
                     // The hash join output = left columns + right columns
-                    let left_ncols = self.compute_subtree_num_cols(&*left);
+                    let left_ncols = self.compute_subtree_num_cols(&left);
                     let mut combined_positions = left_positions.clone();
                     for (var, pos) in &right_positions {
                         combined_positions.insert(var.clone(), pos + left_ncols);
@@ -1012,12 +1012,10 @@ impl PhysicalPlanner {
             (expr_a, expr_b)
         } else if b_in_left && a_in_right {
             (expr_b, expr_a)
+        } else if a_in_left {
+            (expr_a, expr_b)
         } else {
-            if a_in_left {
-                (expr_a, expr_b)
-            } else {
-                (expr_b, expr_a)
-            }
+            (expr_b, expr_a)
         };
 
         let left_key = self.resolve_key_index(left_key_expr, left_positions, "left")?;
@@ -1064,13 +1062,11 @@ impl PhysicalPlanner {
                     return Ok(base + idx);
                 }
                 Err(LightningError::Internal(format!(
-                    "{} join key variable '{}' not found in either subtree",
-                    side, var,
+                    "{side} join key variable '{var}' not found in either subtree",
                 )))
             }
             _ => Err(LightningError::Internal(format!(
-                "{} join key must be a PropertyLookup",
-                side,
+                "{side} join key must be a PropertyLookup",
             ))),
         }
     }

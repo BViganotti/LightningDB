@@ -331,7 +331,7 @@ impl PhysicalOperator for HashJoin {
                 if self.is_cross_join {
                     // Cross join: pair each left row with ALL build rows across ALL chunks.
                     let mut global_build_idx = 0usize;
-                    for (_chunk_i, build_chunk) in shared.build_chunks.iter().enumerate() {
+                    for build_chunk in shared.build_chunks.iter() {
                         let n = build_chunk.num_rows();
                         for _local_idx in 0..n {
                             left_indices.push(self.left_row_idx as u64);

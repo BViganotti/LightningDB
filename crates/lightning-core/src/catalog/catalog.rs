@@ -118,8 +118,7 @@ impl Catalog {
             Ok(rel as &mut dyn TableLike)
         } else {
             Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                table_name
+                "Table '{table_name}' not found"
             )))
         }
     }
@@ -132,15 +131,13 @@ impl Catalog {
     ) -> Result<(), crate::LightningError> {
         if Self::is_builtin_column(&col_name) {
             return Err(crate::LightningError::Database(format!(
-                "Cannot add built-in column '{}'",
-                col_name
+                "Cannot add built-in column '{col_name}'"
             )));
         }
         let props = self.get_table_mut(table_name)?.properties_mut();
         if props.iter().any(|p| p.name == col_name) {
             return Err(crate::LightningError::Database(format!(
-                "Column '{}' already exists in table '{}'",
-                col_name, table_name
+                "Column '{col_name}' already exists in table '{table_name}'"
             )));
         }
         props.push(PropertyDefinition {
@@ -157,8 +154,7 @@ impl Catalog {
     ) -> Result<PropertyDefinition, crate::LightningError> {
         if Self::is_builtin_column(col_name) {
             return Err(crate::LightningError::Database(format!(
-                "Cannot remove built-in column '{}'",
-                col_name
+                "Cannot remove built-in column '{col_name}'"
             )));
         }
         let props = self.get_table_mut(table_name)?.properties_mut();
@@ -167,8 +163,7 @@ impl Catalog {
             .position(|p| p.name == col_name)
             .ok_or_else(|| {
                 crate::LightningError::Database(format!(
-                    "Column '{}' not found in table '{}'",
-                    col_name, table_name
+                    "Column '{col_name}' not found in table '{table_name}'"
                 ))
             })?;
         Ok(props.remove(idx))
@@ -181,15 +176,12 @@ impl Catalog {
         new_name: &str,
     ) -> Result<(), crate::LightningError> {
         if Self::is_builtin_column(old_name) || Self::is_builtin_column(new_name) {
-            return Err(crate::LightningError::Database(format!(
-                "Cannot rename built-in column"
-            )));
+            return Err(crate::LightningError::Database("Cannot rename built-in column".to_string()));
         }
         let props = self.get_table_mut(table_name)?.properties_mut();
         if props.iter().any(|p| p.name == new_name) {
             return Err(crate::LightningError::Database(format!(
-                "Column '{}' already exists in table '{}'",
-                new_name, table_name
+                "Column '{new_name}' already exists in table '{table_name}'"
             )));
         }
         let col = props
@@ -197,8 +189,7 @@ impl Catalog {
             .find(|p| p.name == old_name)
             .ok_or_else(|| {
                 crate::LightningError::Database(format!(
-                    "Column '{}' not found in table '{}'",
-                    old_name, table_name
+                    "Column '{old_name}' not found in table '{table_name}'"
                 ))
             })?;
         col.name = new_name.to_string();
@@ -212,13 +203,12 @@ impl Catalog {
     ) -> Result<(), crate::LightningError> {
         if self.node_tables.contains_key(new_name) || self.rel_tables.contains_key(new_name) {
             return Err(crate::LightningError::Database(format!(
-                "Table '{}' already exists",
-                new_name
+                "Table '{new_name}' already exists"
             )));
         }
         if self.node_tables.contains_key(old_name) {
             let mut entry = self.node_tables.remove(old_name)
-                .ok_or_else(|| crate::LightningError::Internal(format!("Catalog: node table '{}' disappeared between contains_key and remove", old_name)))?;
+                .ok_or_else(|| crate::LightningError::Internal(format!("Catalog: node table '{old_name}' disappeared between contains_key and remove")))?;
             entry.name = new_name.to_string();
             self.node_tables.insert(new_name.to_string(), entry);
             // Update all relationship tables that reference the renamed node table
@@ -237,8 +227,7 @@ impl Catalog {
             Ok(())
         } else {
             Err(crate::LightningError::Database(format!(
-                "Table '{}' not found",
-                old_name
+                "Table '{old_name}' not found"
             )))
         }
     }
@@ -251,8 +240,7 @@ impl Catalog {
     ) -> Result<(), crate::LightningError> {
         if self.node_tables.contains_key(&name) || self.rel_tables.contains_key(&name) {
             return Err(crate::LightningError::Database(format!(
-                "Table '{}' already exists",
-                name
+                "Table '{name}' already exists"
             )));
         }
         properties.insert(
@@ -287,8 +275,7 @@ impl Catalog {
     ) -> Result<(), crate::LightningError> {
         if self.node_tables.contains_key(&name) || self.rel_tables.contains_key(&name) {
             return Err(crate::LightningError::Database(format!(
-                "Table '{}' already exists",
-                name
+                "Table '{name}' already exists"
             )));
         }
         properties.insert(
@@ -387,8 +374,7 @@ impl Catalog {
     pub fn add_sequence(&mut self, name: String, start_val: u64, increment: i64) -> Result<(), crate::LightningError> {
         if self.sequences.contains_key(&name) {
             return Err(crate::LightningError::Database(format!(
-                "Sequence '{}' already exists",
-                name
+                "Sequence '{name}' already exists"
             )));
         }
         self.sequences.insert(
@@ -424,8 +410,7 @@ impl Catalog {
     ) -> Result<(), crate::LightningError> {
         if self.macros.contains_key(&name) {
             return Err(crate::LightningError::Database(format!(
-                "Macro '{}' already exists",
-                name
+                "Macro '{name}' already exists"
             )));
         }
         self.macros
@@ -443,7 +428,7 @@ impl Catalog {
         constraint: NodeConstraint,
     ) -> Result<(), crate::LightningError> {
         let table = self.node_tables.get_mut(table_name).ok_or_else(|| {
-            crate::LightningError::Database(format!("Table '{}' not found", table_name))
+            crate::LightningError::Database(format!("Table '{table_name}' not found"))
         })?;
         if table.constraints.iter().any(|c| c.name == constraint.name) {
             return Err(crate::LightningError::Database(format!(
@@ -478,8 +463,7 @@ impl Catalog {
             self.rebuild_constraint_index();
         }
         Err(crate::LightningError::Database(format!(
-            "Constraint '{}' not found",
-            constraint_name
+            "Constraint '{constraint_name}' not found"
         )))
     }
 

@@ -522,7 +522,7 @@ impl PhysicalOperator for PhysicalSet {
                 }
 
                 // Update FTS index: rebuild document for this node
-                if let Some(ref fts) = fts_opt {
+                if let Some(fts) = fts_opt {
                     let string_fields: Vec<(String, String)> = self.table.columns.iter()
                         .filter_map(|col| {
                             let idx = *col_name_to_idx.get(col.name.as_str())?;
@@ -555,7 +555,7 @@ impl PhysicalOperator for PhysicalSet {
                 }
 
                 // Vector index: check if embedding column was updated
-                if let Some(ref vec_idx) = vec_opt {
+                if let Some(vec_idx) = vec_opt {
                     let emb_col_idx = self.table.columns.iter().position(|c| {
                         c.data_type == lightning_types::LogicalType::List(
                             Box::new(lightning_types::LogicalType::Float)
@@ -1061,9 +1061,7 @@ impl PhysicalOperator for PhysicalMerge {
                         Some(chunk) => Some(chunk),
                         None => break,
                     }
-                } else {
-                    if standalone { None } else { break }
-                };
+                } else if standalone { None } else { break };
                 let num_rows = chunk_opt.as_ref().map(|c| c.num_rows()).unwrap_or(1);
                 let batch_ref = chunk_opt.as_ref().map(|c| &c.batch);
 

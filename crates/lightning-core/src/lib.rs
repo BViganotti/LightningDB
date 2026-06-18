@@ -107,7 +107,7 @@ fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
                 // are blocked.
                 if !*if_not_exists {
                     return Err(LightningError::Query(format!(
-                        "Access to system table '{}' is not allowed via Cypher", name
+                        "Access to system table '{name}' is not allowed via Cypher"
                     )));
                 }
             }
@@ -119,14 +119,14 @@ fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
         | Statement::CreateVectorIndex { table_name: name, .. } => {
             if SYSTEM_AUTH_TABLES.contains(&name.as_str()) {
                 return Err(LightningError::Query(format!(
-                    "Access to system table '{}' is not allowed via Cypher", name
+                    "Access to system table '{name}' is not allowed via Cypher"
                 )));
             }
         }
         Statement::CopyFrom { table_name, .. } | Statement::CopyTo { table_name, .. } => {
             if SYSTEM_AUTH_TABLES.contains(&table_name.as_str()) {
                 return Err(LightningError::Query(format!(
-                    "Access to system table '{}' is not allowed via Cypher", table_name
+                    "Access to system table '{table_name}' is not allowed via Cypher"
                 )));
             }
         }
@@ -153,7 +153,7 @@ fn validate_node_labels_no_auth(node: &NodePattern) -> Result<()> {
     for label in &node.labels {
         if SYSTEM_AUTH_TABLES.contains(&label.as_str()) {
             return Err(LightningError::Query(format!(
-                "Access to system table '{}' is not allowed via Cypher", label
+                "Access to system table '{label}' is not allowed via Cypher"
             )));
         }
     }
@@ -345,6 +345,12 @@ pub struct DatabaseMetrics {
     pub eviction_count: AtomicU64,
     pub buffer_miss_count: AtomicU64,
     pub buffer_hit_count: AtomicU64,
+}
+
+impl Default for DatabaseMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DatabaseMetrics {
@@ -819,7 +825,7 @@ impl Database {
         let resolved = base.join(user_path);
         let canonical_base = base
             .canonicalize()
-            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM base: {}", e)))?;
+            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM base: {e}")))?;
         let parent = resolved.parent().ok_or_else(|| {
             LightningError::Config(format!(
                 "Cannot determine parent for WASM path '{}'",
@@ -834,7 +840,7 @@ impl Database {
         })?;
         let canonical_parent = parent
             .canonicalize()
-            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM path parent: {}", e)))?;
+            .map_err(|e| LightningError::Config(format!("Cannot resolve WASM path parent: {e}")))?;
         let canonical = canonical_parent.join(file_name);
         if !canonical.starts_with(&canonical_base) {
             return Err(LightningError::Config(format!(
@@ -1633,11 +1639,10 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).or_else(|e| {
+            db.transaction_manager.commit(&tx, bm, db).inspect_err(|e| {
                 if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
                     tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
                 }
-                Err(e)
             })?;
         }
 

@@ -500,7 +500,7 @@ impl HashIndex {
         let offset = 16 + (num_entries as usize) * ENTRY_SIZE;
         if offset + ENTRY_SIZE > 4096 {
             return Err(LightningError::Internal(format!(
-                "Hash index page full: entry at offset {} exceeds page size", offset
+                "Hash index page full: entry at offset {offset} exceeds page size"
             )));
         }
         unsafe {
