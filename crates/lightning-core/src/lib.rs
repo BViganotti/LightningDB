@@ -491,60 +491,7 @@ impl Database {
                 .unwrap_or_else(|_| LazyCatalog::new(Catalog::new(), Some(catalog_path.clone()))),
         );
 
-        {
-            let cat = catalog.read();
-            for table_entry in cat.node_tables.values() {
-                let col_defs: Vec<(String, LogicalType)> = table_entry
-                    .properties
-                    .iter()
-                    .map(|p| (p.name.clone(), p.type_.clone()))
-                    .collect();
-                let mut stats = table_entry.stats.clone();
-                stats.cardinality = stats.cardinality.max(table_entry.num_rows);
-                storage_manager.create_table(
-                    table_entry.name.clone(),
-                    col_defs,
-                    false,
-                    Some(stats),
-                )?;
-                // Restore next_row_id from catalog so new inserts don't overwrite existing rows.
-                if table_entry.num_rows > 0 {
-                    if let Some(table) = storage_manager.node_tables.get_mut(&table_entry.name) {
-                        table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
-                    }
-                }
-                if table_entry.primary_key.is_some() {
-                    storage_manager.create_index(&table_entry.name)?;
-                }
-                storage_manager.create_fts_index(&table_entry.name).map_err(|e| {
-                    LightningError::Internal(format!("FTS index creation failed for {}: {}", table_entry.name, e))
-                })?;
-                storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM).map_err(|e| {
-                    LightningError::Internal(format!("Vector index creation failed for {}: {}", table_entry.name, e))
-                })?;
-            }
-            for table_entry in cat.rel_tables.values() {
-                let col_defs: Vec<(String, LogicalType)> = table_entry
-                    .properties
-                    .iter()
-                    .map(|p| (p.name.clone(), p.type_.clone()))
-                    .collect();
-                let mut stats = table_entry.stats.clone();
-                stats.cardinality = stats.cardinality.max(table_entry.num_rows);
-                storage_manager.create_table(
-                    table_entry.name.clone(),
-                    col_defs,
-                    true,
-                    Some(stats),
-                )?;
-                // Restore next_row_id from catalog so new inserts don't overwrite existing rows.
-                if table_entry.num_rows > 0 {
-                    if let Some(table) = storage_manager.rel_tables.get_mut(&table_entry.name) {
-                        table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
-                    }
-                }
-            }
-        }
+        Self::restore_tables_from_catalog(&catalog, &mut storage_manager)?;
 
         // REPLAY WAL after tables are created so apply_page can find file handles
         let replay_report = wal.replay(
@@ -637,6 +584,63 @@ impl Database {
         Self::register_search_function(&db)?;
 
         Ok(db)
+    }
+
+    fn restore_tables_from_catalog(
+        catalog: &Arc<LazyCatalog>,
+        storage_manager: &mut crate::storage::storage_manager::StorageManager,
+    ) -> Result<()> {
+        let cat = catalog.read();
+        for table_entry in cat.node_tables.values() {
+            let col_defs: Vec<(String, LogicalType)> = table_entry
+                .properties
+                .iter()
+                .map(|p| (p.name.clone(), p.type_.clone()))
+                .collect();
+            let mut stats = table_entry.stats.clone();
+            stats.cardinality = stats.cardinality.max(table_entry.num_rows);
+            storage_manager.create_table(
+                table_entry.name.clone(),
+                col_defs,
+                false,
+                Some(stats),
+            )?;
+            if table_entry.num_rows > 0 {
+                if let Some(table) = storage_manager.node_tables.get_mut(&table_entry.name) {
+                    table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                }
+            }
+            if table_entry.primary_key.is_some() {
+                storage_manager.create_index(&table_entry.name)?;
+            }
+            storage_manager.create_fts_index(&table_entry.name).map_err(|e| {
+                LightningError::Internal(format!("FTS index creation failed for {}: {}", table_entry.name, e))
+            })?;
+            storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM).map_err(|e| {
+                LightningError::Internal(format!("Vector index creation failed for {}: {}", table_entry.name, e))
+            })?;
+        }
+        for table_entry in cat.rel_tables.values() {
+            let col_defs: Vec<(String, LogicalType)> = table_entry
+                .properties
+                .iter()
+                .map(|p| (p.name.clone(), p.type_.clone()))
+                .collect();
+            let mut stats = table_entry.stats.clone();
+            stats.cardinality = stats.cardinality.max(table_entry.num_rows);
+            storage_manager.create_table(
+                table_entry.name.clone(),
+                col_defs,
+                true,
+                Some(stats),
+            )?;
+            if table_entry.num_rows > 0 {
+                if let Some(table) = storage_manager.rel_tables.get_mut(&table_entry.name) {
+                    table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Register the SEARCH() scalar function for full-text search BM25 scores.
