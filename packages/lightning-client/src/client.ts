@@ -29,14 +29,18 @@ import {
 } from './validation'
 
 export class LightningError extends Error {
+  public cause?: Error
+
   constructor(
     message: string,
     public statusCode?: number,
     public code?: string,
     public requestId?: string,
+    cause?: Error,
   ) {
     super(message)
     this.name = 'LightningError'
+    this.cause = cause
   }
 }
 
@@ -87,7 +91,9 @@ export class LightningClient {
   private userAgent: string
   private tlsAgent: unknown
   private _tlsAgentInit: Promise<unknown> | undefined
-  private abortController?: AbortController
+  private abortController: AbortController
+  private _closed = false
+  private _refreshAttempts = 0
 
   constructor(options: ClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? 'http://127.0.0.1:8080').replace(/\/+$/, '')
@@ -105,6 +111,7 @@ export class LightningClient {
     this.maxBatchEntities = options.maxBatchEntities ?? 1000
     this.maxTopK = options.maxTopK ?? 1000
     this.userAgent = options.userAgent ?? 'lightning-client-ts/0.1.0'
+    this.abortController = new AbortController()
 
     const defaults = buildDefaults(options)
     this.retry = defaults.retry
@@ -113,6 +120,11 @@ export class LightningClient {
     if (options.circuitBreaker) {
       this.circuitBreaker = new CircuitBreaker(defaults.circuitBreaker, options.telemetry)
     }
+  }
+
+  close(): void {
+    this._closed = true
+    this.abortController.abort()
   }
 
   async login(username: string, password: string): Promise<void> {
@@ -142,7 +154,10 @@ export class LightningClient {
 
   private async ensureTlsAgent(): Promise<unknown> {
     if (this._tlsAgentInit) return this._tlsAgentInit
-    this._tlsAgentInit = this.buildTlsAgent()
+    this._tlsAgentInit = this.buildTlsAgent().catch((e: unknown) => {
+      this._tlsAgentInit = undefined
+      throw e
+    })
     this.tlsAgent = await this._tlsAgentInit
     return this.tlsAgent
   }
@@ -230,8 +245,13 @@ export class LightningClient {
     this.telemetry.onRequestStart(requestId, method, path)
 
     const attempt = async (retryCount: number): Promise<T> => {
+      if (this._closed) {
+        throw new LightningError('client is closed')
+      }
+
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), timeout)
+      this.abortController.signal.addEventListener('abort', () => controller.abort(), { once: true })
 
       try {
         const r = await fetch(`${this.baseUrl}${path}`, {
@@ -260,9 +280,10 @@ export class LightningClient {
           const code = errBody.code as string | undefined
           const reqId = errBody.requestId as string | undefined
 
-          // Token refresh on 401
-          if (r.status === 401 && this.refreshToken) {
+          // Token refresh on 401 with finite retry guard
+          if (r.status === 401 && this.refreshToken && this._refreshAttempts < 1) {
             try {
+              this._refreshAttempts++
               const refreshRes = await fetch(`${this.baseUrl}/v1/auth/refresh`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -273,10 +294,13 @@ export class LightningClient {
                 const refreshData = (refreshBody as Record<string, unknown>)?.data as Record<string, unknown> ?? refreshBody
                 this.accessToken = refreshData.accessToken as string
                 this.refreshToken = refreshData.refreshToken as string
+                this._refreshAttempts = 0
                 return attempt(retryCount)
               }
             } catch {
               // refresh failed, fall through to normal error handling
+            } finally {
+              // Only reset attempts if refresh succeeded (handled above)
             }
           }
 
@@ -291,6 +315,7 @@ export class LightningClient {
           throw new LightningError(errorMsg, r.status, code, reqId)
         }
 
+        this._refreshAttempts = 0
         this.reportSuccess()
         const duration = performance.now() - start
         this.telemetry.onRequestEnd(requestId, method, path, r.status, duration)
@@ -316,6 +341,7 @@ export class LightningClient {
           undefined,
           undefined,
           requestId,
+          e as Error,
         )
       }
     }
@@ -540,36 +566,19 @@ export class LightningClient {
   }
 
   async metrics(timeout?: number): Promise<string> {
-    const requestId = uuidv4()
-    const agent = await this.ensureTlsAgent()
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeout ?? this.defaultTimeout)
-
-    try {
-      const r = await fetch(`${this.baseUrl}/metrics`, {
-        headers: this.headers(requestId),
-        signal: controller.signal,
-        redirect: this.followRedirects ? 'follow' : 'error',
-        ...(agent ? { agent } : {}),
-      })
-      clearTimeout(timeoutId)
-      if (!r.ok) throw new LightningError(await r.text(), r.status)
-      return r.text()
-    } catch (e) {
-      clearTimeout(timeoutId)
-      this.telemetry.onError(requestId, 'GET', '/metrics', e as Error)
-      throw e instanceof LightningError ? e : new LightningError((e as Error).message)
-    }
+    return this.get<string>('/metrics', timeout)
   }
 
   // ── CDC ────────────────────────────────────────────────────────
 
   async *subscribe(): AsyncGenerator<ChangeEvent> {
+    if (this._closed) throw new LightningError('client is closed')
     const requestId = uuidv4()
     const agent = await this.ensureTlsAgent()
     const r = await fetch(`${this.baseUrl}/v1/subscribe`, {
       headers: this.headers(requestId),
       redirect: this.followRedirects ? 'follow' : 'error',
+      signal: this.abortController.signal,
       ...(agent ? { agent } : {}),
     })
     if (!r.ok) throw new LightningError(`subscribe failed: ${r.statusText}`, r.status)
