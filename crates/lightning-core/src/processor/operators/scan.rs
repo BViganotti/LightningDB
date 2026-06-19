@@ -300,6 +300,52 @@ impl PhysicalScan {
             _ => {}
         }
     }
+
+    fn remap_filter_to_projected(&self, expr: &mut BoundExpression) {
+        let projected = match self.projected_idxs {
+            Some(ref p) => p,
+            None => return,
+        };
+        match expr {
+            BoundExpression::PropertyLookup(_, original_idx, _) => {
+                if let Some(new_idx) = projected.iter().position(|&i| i == *original_idx) {
+                    *original_idx = new_idx;
+                }
+            }
+            BoundExpression::Arithmetic(left, _, right)
+            | BoundExpression::Comparison(left, _, right)
+            | BoundExpression::Logical(left, _, right) => {
+                self.remap_filter_to_projected(left);
+                self.remap_filter_to_projected(right);
+            }
+            BoundExpression::Not(inner) => {
+                self.remap_filter_to_projected(inner);
+            }
+            BoundExpression::Function(_, args, _) | BoundExpression::List(args, _) => {
+                for arg in args {
+                    self.remap_filter_to_projected(arg);
+                }
+            }
+            BoundExpression::Case {
+                expression,
+                when_then,
+                else_expression,
+                ..
+            } => {
+                if let Some(e) = expression {
+                    self.remap_filter_to_projected(e);
+                }
+                for (w, t) in when_then {
+                    self.remap_filter_to_projected(w);
+                    self.remap_filter_to_projected(t);
+                }
+                if let Some(e) = else_expression {
+                    self.remap_filter_to_projected(e);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl PhysicalOperator for PhysicalScan {
@@ -603,11 +649,9 @@ impl PhysicalOperator for PhysicalScan {
 
             if !filter_all_pass {
                 if let Some(ref filter_expr) = self.pushdown_filter {
-                    // When the batch has projected columns, remap the filter
-                    // expression from table-column indices to projected positions.
                     let eval_filter = if self.projected_idxs.is_some() {
                         let mut remapped = filter_expr.clone();
-                        self.remap_filter_expression(&mut remapped);
+                        self.remap_filter_to_projected(&mut remapped);
                         remapped
                     } else {
                         filter_expr.clone()
@@ -626,16 +670,11 @@ impl PhysicalOperator for PhysicalScan {
                                 .ok_or_else(|| crate::LightningError::Internal(
                                     "filter expression must evaluate to BooleanArray".into(),
                                 ))?;
-
                             let set_bits = mask.values().count_set_bits();
                             if set_bits == 0 {
                                 continue;
                             }
-
                             if mask.null_count() > 0 || set_bits != mask.len() {
-                                // Arrow's filter_record_batch ignores null bits in the mask.
-                                // Convert null entries to false so that rows with null comparisons
-                                // (e.g., null = true) are correctly excluded.
                                 let cleaned_mask: BooleanArray = if mask.null_count() > 0 {
                                     mask.iter().map(|v| v.unwrap_or(false)).collect()
                                 } else {
@@ -646,8 +685,6 @@ impl PhysicalOperator for PhysicalScan {
                             }
                         }
                         Err(e) => {
-                            // Filter evaluation failed — propagate the error.
-                            // Returning unfiltered rows would silently produce wrong results.
                             return Err(crate::LightningError::Internal(format!(
                                 "Pushdown filter evaluation failed: {e}"
                             )));

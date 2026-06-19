@@ -26,16 +26,6 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
-
-fn normalize_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"'[^']*'"#).expect("infallible: valid regex pattern"))
-}
-
-fn normalize_query(query: &str) -> String {
-    normalize_re().replace_all(query, "'?'").into_owned()
-}
 
 /// Select a shard index for a cache key using its hash.
 fn cache_shard(key: &str, num_shards: usize) -> usize {
@@ -65,7 +55,7 @@ use crate::storage::WAL;
 use crate::transaction::transaction_manager::Transaction;
 use crate::transaction::TransactionManager;
 use crate::parser::ast::{Clause, NodePattern, Pattern, Query, Statement};
-use regex::Regex;
+
 
 /// System table names that must not be accessible via Cypher queries.
 /// These tables store authentication data (password hashes, tokens, API keys)
@@ -1433,20 +1423,12 @@ impl Connection {
         Box<dyn crate::processor::PhysicalOperator + Send + Sync>,
         Arc<crate::transaction::transaction_manager::Transaction>,
     )> {
-        // Normalize query once for both plan cache and physical plan cache
-        let normalized = normalize_query(query_str);
-        let cache_key = if normalized != query_str {
-            normalized
-        } else {
-            query_str.to_string()
-        };
-
-        // Hash the cache key for zero-allocation physical plan cache lookups.
-        // Uses the same hash function as cache_shard() to ensure consistent
-        // shard assignment between the plan cache and physical plan cache.
-        let query_hash = hash_cache_key(&cache_key);
-
-        let pp_shard = cache_shard(&cache_key, 4);
+        // Use the original query string as the cache key to avoid collisions
+        // when queries differ only in literal values (the normalized form would
+        // collapse e.g. `WHERE name = 'alice'` and `WHERE name = 'nobody'` into
+        // the same key, causing stale literal values to be reused from cache).
+        let query_hash = hash_cache_key(query_str);
+        let pp_shard = cache_shard(query_str, 4);
 
         // Try physical plan cache first (fastest path: saves logical plan,
         // optimizer, and physical planner)
@@ -1499,9 +1481,10 @@ impl Connection {
 
         // Try bound statement cache
         let (bound_stmt, binder_column_offsets) = {
-            let cache_shard_idx = cache_shard(&cache_key, 4);
+            let plan_cache_key = query_str.to_string();
+            let cache_shard_idx = cache_shard(&plan_cache_key, 4);
             let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
-            let cached = cache.get(&cache_key).cloned();
+            let cached = cache.get(&plan_cache_key).cloned();
             if let Some(pair) = cached {
                 let (stmt, offsets) = &*pair;
                 (stmt.clone(), offsets.clone())
@@ -1530,9 +1513,13 @@ impl Connection {
                 // are normalized away by normalize_query, causing different
                 // DML statements to share the same cache key and reuse
                 // stale literal values from the first execution.
+                // Note: Query statements can also contain literal values
+                // (e.g., WHERE col = 'value'), so we use the original
+                // query string (not normalized) as the cache key to avoid
+                // collisions between queries with different literal values.
                 if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
                     let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
-                    cache.put(cache_key.clone(), Arc::new((stmt.clone(), binder_offsets.clone())));
+                    cache.put(plan_cache_key, Arc::new((stmt.clone(), binder_offsets.clone())));
                 }
                 (stmt, binder_offsets)
             }
