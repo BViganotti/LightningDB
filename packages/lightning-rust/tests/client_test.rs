@@ -1,5 +1,4 @@
 use lightning_client::*;
-use std::time::Duration;
 
 #[test]
 fn test_validate_id() {
@@ -236,10 +235,9 @@ fn test_store_request_serialization() {
 #[test]
 fn test_retry_backoff_increases() {
     let config = retry::RetryConfig::default();
-    let prev = retry::compute_backoff(0, &config);
-    for i in 1..4 {
-        let next = retry::compute_backoff(i, &config);
-        assert!(next.as_millis() >= 1);
+    for i in 0..4 {
+        let delay = retry::compute_backoff(i, &config);
+        assert!(delay.as_millis() >= 1);
     }
 }
 
