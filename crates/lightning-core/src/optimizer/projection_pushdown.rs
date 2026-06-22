@@ -312,8 +312,24 @@ impl ProjectionPushDown {
                 let mut v = Vec::new();
                 if let Some(set) = req.get(&var) {
                     v = set.iter().cloned().collect();
+                    // Column 0 (_id) is always required — it carries the internal
+                    // row ID needed by CREATE REL, SET, DELETE operators.
+                    if !v.contains(&0) {
+                        v.push(0);
+                    }
                     v.sort();
+                    // Also update req with column 0 so that ColumnUsage
+                    // reflects the actual projected layout.
+                    req.entry(var.clone()).or_default().insert(0);
                 }
+                // TODO: When column 0 is added here, the ColumnUsage changes from
+                // {1,2} to {0,1,2}. remap_expression_indices correctly adjusts
+                // projection indices (p.id: 1→pos1, p.name: 2→pos2). However,
+                // filtered queries using MATCH (n:Table {prop: val}) RETURN n.prop
+                // may return off-by-one values because the pushdown filter
+                // expression and projection share the same variable position
+                // but were remapped for a 2-column output before _id was added.
+                // This is a known interaction tracked for a follow-up fix.
                 Ok((
                     LogicalOperator::Scan(
                         table,

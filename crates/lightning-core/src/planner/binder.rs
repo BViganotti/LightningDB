@@ -929,13 +929,19 @@ impl<'a> Binder<'a> {
                 .variable
                 .clone()
                 .unwrap_or_else(|| format!("_n{}", self.variables.len()));
-            let node_label = node_pat
-                .labels.first()
-                .ok_or_else(|| LightningError::Query("MATCH must have a label".into()))?;
+            let node_label: String = if let Some(label) = node_pat.labels.first() {
+                label.clone()
+            } else if let Some(bv) = self.variables.get(&node_var) {
+                // Variable is already bound (e.g. from an outer MATCH in an EXISTS
+                // subquery). Use the existing table name as the label.
+                bv.table_name.clone()
+            } else {
+                return Err(LightningError::Query("MATCH must have a label".into()));
+            };
 
             let node_table = self
                 .catalog
-                .get_node_table(node_label)
+                .get_node_table(&node_label)
                 .ok_or_else(|| LightningError::Query(format!("Table {node_label} not found")))?;
             self.variables.insert(
                 node_var.clone(),

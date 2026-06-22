@@ -507,7 +507,8 @@ impl PhysicalPlanner {
                         src_idx,
                         (min_d, max_d),
                         self.read_ts,
-                    ),
+                    )
+                    .with_max_traversal_ms(30_000),
                 ))
             }
             LogicalOperator::DropConstraint(name) => Ok(Box::new(

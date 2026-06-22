@@ -1,10 +1,13 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
-use crate::Result;
+use crate::{LightningError, Result};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::time::Instant;
+
+const DEFAULT_MAX_TRAVERSAL_MS: u64 = 30_000; // 30 seconds
 
 pub struct PhysicalRecursiveJoin {
     pub child: Box<dyn PhysicalOperator>,
@@ -16,6 +19,7 @@ pub struct PhysicalRecursiveJoin {
     pub bounds: (u32, u32),
     pub mask: Option<Arc<RwLock<super::semi_mask::SemiMask>>>,
     pub read_ts: u64,
+    pub max_traversal_ms: u64,
 }
 
 impl PhysicalRecursiveJoin {
@@ -39,7 +43,12 @@ impl PhysicalRecursiveJoin {
             bounds: (min_depth, max_depth),
             mask: None,
             read_ts,
+            max_traversal_ms: DEFAULT_MAX_TRAVERSAL_MS,
         }
+    }
+    pub fn with_max_traversal_ms(mut self, ms: u64) -> Self {
+        self.max_traversal_ms = ms;
+        self
     }
     pub fn with_mask(mut self, mask: Arc<RwLock<super::semi_mask::SemiMask>>) -> Self {
         self.mask = Some(mask);
@@ -74,6 +83,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
             let mut fallback_adj: Option<std::collections::HashMap<u64, Vec<u64>>> = None;
 
+            let deadline = Instant::now() + std::time::Duration::from_millis(self.max_traversal_ms);
             for i in 0..chunk.batch.num_rows() {
                 let start_node = Value::from_arrow(chunk.batch.column(self.src_var_idx), i);
                 let start_id = match start_node {
@@ -87,6 +97,12 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 visited.insert(start_id);
 
                 while let Some((node_id, depth)) = queue.pop_front() {
+                    if Instant::now() > deadline {
+                        return Err(LightningError::Internal(format!(
+                            "Relationship traversal timed out after {}ms",
+                            self.max_traversal_ms,
+                        )));
+                    }
                     if depth > self.bounds.1 {
                         continue;
                     }
@@ -202,6 +218,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
             bounds: self.bounds,
             mask: self.mask.clone(),
             read_ts: self.read_ts,
+            max_traversal_ms: self.max_traversal_ms,
         })
     }
 }
