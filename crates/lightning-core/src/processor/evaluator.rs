@@ -568,9 +568,16 @@ impl ExpressionEvaluator {
                         let values = arrow::buffer::BooleanBuffer::new(buf.into(), 0, num_rows);
                         Ok(Arc::new(BooleanArray::new(values, None)))
                     }
-                    _ => Err(LightningError::Internal(format!(
-                        "Parameter type not implemented for evaluation: {val:?}"
-                    ))),
+                    Value::Null => Ok(arrow::array::new_null_array(
+                        &arrow::datatypes::DataType::Float64,
+                        num_rows,
+                    )),
+                    Value::List(_) | Value::Map(_) | Value::Node(_) | Value::Relationship(_)
+                    | Value::Path(_) | Value::Date(_) | Value::Timestamp(_) | Value::Struct(_) => {
+                        Err(LightningError::Internal(format!(
+                            "Parameter type not yet supported for evaluation: {val:?}"
+                        )))
+                    }
                 }
             }
             BoundExpression::Exists(steps) => {

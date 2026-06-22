@@ -356,9 +356,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let mut from_table = String::new();
                 let mut to_table = String::new();
                 let mut cols = Vec::new();
-                let if_not_exists = false;
+                let mut if_not_exists = false;
                 for j in i.into_inner() {
                     match j.as_rule() {
+                        Rule::if_not_exists => {
+                            if_not_exists = true;
+                        }
                         Rule::table_name => {
                             if name.is_empty() {
                                 name = j.as_str().to_string();

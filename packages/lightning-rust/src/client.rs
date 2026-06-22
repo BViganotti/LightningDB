@@ -7,7 +7,7 @@ use crate::circuit_breaker::CircuitBreaker;
 use crate::config::{ClientConfig, TlsConfig};
 use crate::error::Error;
 use crate::retry::compute_backoff;
-use crate::transport::{execute_and_unwrap, execute_and_unwrap_blocking};
+use crate::transport::execute_and_unwrap;
 use crate::types::*;
 use crate::validation;
 
@@ -174,6 +174,12 @@ impl Client {
         let mut last_err = None;
         let max_retries = self.config.retry.max_retries;
 
+        if let Some(ref hooks) = self.config.telemetry {
+            if let Some(ref cb) = hooks.on_request_start {
+                cb(&request_id, method, path);
+            }
+        }
+
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 let delay = compute_backoff(attempt - 1, &self.config.retry);
@@ -256,68 +262,15 @@ impl Client {
     {
         self.check_circuit_breaker()?;
 
-        let request_id = generate_request_id();
-        let url = format!("{}{}", self.base_url, path);
-
-        let effective_timeout = timeout.unwrap_or(self.config.default_timeout);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(effective_timeout)
-            .build()
-            .map_err(|e| Error::Config(format!("failed to build blocking client: {}", e)))?;
-
-        let mut last_err = None;
-        let max_retries = self.config.retry.max_retries;
-
-        for attempt in 0..=max_retries {
-            if attempt > 0 {
-                let delay = compute_backoff(attempt - 1, &self.config.retry);
-                std::thread::sleep(delay);
-            }
-
-            let mut builder = client
-                .request(
-                    reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
-                    &url,
-                )
-                .headers(self.headers.clone())
-                .header("X-Request-Id", &request_id);
-
-            if let Some(ref body_val) = body {
-                builder = builder.json(body_val);
-            }
-            if let Some(t) = timeout {
-                builder = builder.timeout(t);
-            }
-
-            match execute_and_unwrap_blocking::<T>(builder, self.config.max_content_bytes) {
-                Ok(result) => {
-                    self.report_success();
-                    return Ok(result);
-                }
-                Err(e) => {
-                    let is_retryable = e.is_retryable();
-                    if is_retryable && attempt < max_retries {
-                        last_err = Some(e);
-                        continue;
-                    }
-                    self.report_failure();
-                    return if attempt >= max_retries && is_retryable {
-                        Err(Error::MaxRetriesExceeded(
-                            max_retries + 1,
-                            last_err.map(|e| e.to_string()).unwrap_or_default(),
-                        ))
-                    } else {
-                        Err(e)
-                    };
-                }
-            }
+        if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(self.execute(method, path, body, timeout))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| Error::Config(format!("blocking runtime: {}", e)))?;
+            rt.block_on(self.execute(method, path, body, timeout))
         }
-
-        self.report_failure();
-        Err(Error::MaxRetriesExceeded(
-            max_retries + 1,
-            last_err.map(|e| e.to_string()).unwrap_or_default(),
-        ))
     }
 
     // ── Memory ────────────────────────────────────────────────────────────

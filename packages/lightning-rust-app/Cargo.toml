@@ -1,0 +1,17 @@
+[package]
+name = "lightning-rust-app"
+version = "0.1.0"
+edition = "2021"
+description = "Real-world test application for LightningDB Rust client"
+
+[workspace]
+
+[dependencies]
+lightning-client = { path = "../lightning-rust" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+chrono = "0.4"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive"] }

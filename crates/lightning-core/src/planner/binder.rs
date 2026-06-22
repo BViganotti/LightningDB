@@ -1296,10 +1296,40 @@ impl<'a> Binder<'a> {
                     }
                 }
                 ProjectionItem::Expression(expr, alias) => {
+                    // Expand bare Variable expressions (e.g. RETURN n) into per-property
+                    // columns when the variable refers to a node or relationship table.
+                    if let Expression::Variable(v) = expr {
+                        if let Some(bv) = self.variables.get(v) {
+                            let table_info = self.catalog
+                                .get_node_table(&bv.table_name)
+                                .map(|t| (&t.properties, 0))
+                                .or_else(|| {
+                                    self.catalog
+                                        .get_rel_table(&bv.table_name)
+                                        .map(|t| (&t.properties, 0))
+                                });
+                            if let Some((properties, offset)) = table_info {
+                                for (i, prop) in properties.iter().enumerate() {
+                                    let prop_alias = alias.clone()
+                                        .unwrap_or_else(|| format!("{}.{}", v, prop.name));
+                                    items.push(BoundProjectionItem {
+                                        expression: BoundExpression::PropertyLookup(
+                                            v.clone(),
+                                            i + offset,
+                                            prop.type_.clone(),
+                                        ),
+                                        alias: prop_alias,
+                                    });
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     let bound_expr = self.bind_expression(expr)?;
                     let alias = alias.clone().unwrap_or_else(|| match expr {
                         Expression::Variable(v) => v.clone(),
-                        Expression::PropertyLookup(_, p) => p.clone(),
+                        Expression::PropertyLookup(var, prop) => format!("{var}.{prop}"),
                         Expression::Function(name, _, _) => format!("{name}(...)"),
                         _ => "result".into(),
                     });

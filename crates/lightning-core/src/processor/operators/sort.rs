@@ -49,6 +49,14 @@ impl PhysicalSort {
         }
     }
 
+    /// Signal the condvar so get_next can wake and consume the result.
+    /// Must be called on every exit path (success, error, or panic).
+    fn signal_sort_done(&self) {
+        let (ref lock, ref cvar) = &*self.sort_done;
+        *lock.lock() = true;
+        cvar.notify_all();
+    }
+
     fn collect_and_sort(
         &mut self,
         database: &crate::Database,
@@ -80,6 +88,7 @@ impl PhysicalSort {
         {
             // Another thread is sorting. Wait for it by returning Ok(())
             // and letting get_next check sort_done via the condvar.
+            self.signal_sort_done();
             return Ok(());
         }
 
@@ -90,16 +99,28 @@ impl PhysicalSort {
             std::hint::spin_loop();
         }
 
+        let result = self.do_sort(database, params, tx);
+
+        // Always signal that sorting is done, regardless of success or failure.
+        // Without this, get_next hangs forever on the condvar.
+        self.signal_sort_done();
+
+        result
+    }
+
+    /// Core sort logic — separated so signal_sort_done fires on every exit path.
+    fn do_sort(
+        &mut self,
+        database: &crate::Database,
+        params: Option<&HashMap<String, Value>>,
+        _tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
         let schema;
         let big_batch;
         let total_rows;
         {
             let shared = self.shared.read();
             if shared.batches.is_empty() {
-                // No data to sort. Signal sort_done so get_next doesn't hang.
-                let (ref lock, ref cvar) = &*self.sort_done;
-                *lock.lock() = true;
-                cvar.notify_all();
                 return Ok(());
             }
             schema = shared.batches[0].schema();
@@ -163,9 +184,6 @@ impl PhysicalSort {
             shared.sorted_result = Some(result);
             shared.batches.clear();
         }
-        let (ref lock, ref cvar) = &*self.sort_done;
-        *lock.lock() = true;
-        cvar.notify_all();
 
         Ok(())
     }
