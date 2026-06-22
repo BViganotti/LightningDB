@@ -1,0 +1,31 @@
+[package]
+name = "lightning-client"
+version = "0.1.0"
+edition = "2021"
+description = "Production-grade Rust HTTP client for LightningDB — graph+vector+RAG database for AI agent memory"
+license = "BUSL-1.1"
+repository = "https://github.com/lightningDB/lightning"
+keywords = ["lightning", "graph", "vector", "database", "client"]
+
+[workspace]
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls"] }
+tokio = { version = "1", features = ["sync", "time"] }
+tokio-stream = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+parking_lot = "0.12"
+rand = "0.8"
+base64 = "0.22"
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+http = "1"
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
