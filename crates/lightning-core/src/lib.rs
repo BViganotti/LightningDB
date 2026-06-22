@@ -481,7 +481,7 @@ impl Database {
         let wal = Arc::new(WAL::new(&path, config.sync_mode)?);
         let mut storage_manager = crate::storage::storage_manager::StorageManager::new(&path)?;
 
-        let catalog_path = path.join("catalog.lbug");
+        let catalog_path = path.join("catalog.ltng");
         let catalog = Arc::new(
             LazyCatalog::from_disk(&catalog_path)
                 .unwrap_or_else(|_| LazyCatalog::new(Catalog::new(), Some(catalog_path.clone()))),
@@ -784,7 +784,7 @@ impl Database {
     }
 
     pub fn get_catalog_path(&self) -> PathBuf {
-        self._path.join("catalog.lbug")
+        self._path.join("catalog.ltng")
     }
 
     /// Open and read a WASM file with path traversal validation and O_NOFOLLOW

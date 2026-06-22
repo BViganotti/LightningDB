@@ -61,7 +61,7 @@ async fn test_store_sends_correct_body() {
         valid_until: None,
     };
 
-    client.store(req).await.expect("store failed");
+    client.store(req, None).await.expect("store failed");
 
     let body = captured.lock().unwrap().take().unwrap();
     assert_eq!(body["id"], "test-1");
@@ -88,7 +88,7 @@ async fn test_store_validates_id() {
         valid_from: None,
         valid_until: None,
     };
-    let result = client.store(req).await;
+    let result = client.store(req, None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
@@ -108,7 +108,7 @@ async fn test_store_validates_content_empty() {
         valid_from: None,
         valid_until: None,
     };
-    let result = client.store(req).await;
+    let result = client.store(req, None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
@@ -143,7 +143,7 @@ async fn test_store_defaults_entity_type_to_memory() {
             access_count: None,
             valid_from: None,
             valid_until: None,
-        })
+        }, None)
         .await;
     assert!(result.is_ok());
     let body = captured.lock().unwrap().take().unwrap();
@@ -175,7 +175,7 @@ async fn test_recall_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     let results = client
-        .recall("test query", Some(&[0.1, 0.2, 0.3]), 5)
+        .recall("test query", Some(&[0.1, 0.2, 0.3]), 5, None)
         .await
         .expect("recall failed");
 
@@ -190,14 +190,14 @@ async fn test_recall_sends_correct_body() {
 #[tokio::test]
 async fn test_recall_validates_top_k_zero() {
     let client = mock_client("http://localhost:1");
-    let result = client.recall("test", None, 0).await;
+    let result = client.recall("test", None, 0, None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
 #[tokio::test]
 async fn test_recall_validates_embedding_empty() {
     let client = mock_client("http://localhost:1");
-    let result = client.recall("test", Some(&[]), 5).await;
+    let result = client.recall("test", Some(&[]), 5, None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
@@ -225,7 +225,7 @@ async fn test_recall_recent_sends_correct_body() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let entities = client.recall_recent(10).await.expect("recall_recent failed");
+    let entities = client.recall_recent(10, None).await.expect("recall_recent failed");
     let body = captured.lock().unwrap().take().unwrap();
     assert_eq!(body["topK"], 10);
     assert!(entities.is_empty());
@@ -249,7 +249,7 @@ async fn test_recall_by_type_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     client
-        .recall_by_type("test_type", 10)
+        .recall_by_type("test_type", 10, None)
         .await
         .expect("recall_by_type failed");
 }
@@ -278,7 +278,7 @@ async fn test_forget_sends_correct_body() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let deleted = client.forget("test-id").await.expect("forget failed");
+    let deleted = client.forget("test-id", None).await.expect("forget failed");
     assert!(deleted);
 
     let body = captured.lock().unwrap().take().unwrap();
@@ -288,7 +288,7 @@ async fn test_forget_sends_correct_body() {
 #[tokio::test]
 async fn test_forget_validates_id() {
     let client = mock_client("http://localhost:1");
-    let result = client.forget("").await;
+    let result = client.forget("", None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
@@ -309,7 +309,7 @@ async fn test_decay_sends_correct_body() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let expired = client.decay().await.expect("decay failed");
+    let expired = client.decay(None).await.expect("decay failed");
     assert_eq!(expired, 5);
 }
 
@@ -366,7 +366,7 @@ async fn test_store_batch_sends_correct_body() {
         },
     ];
 
-    let stored = client.store_batch(entities).await.expect("store_batch failed");
+    let stored = client.store_batch(entities, None).await.expect("store_batch failed");
     assert_eq!(stored, 2);
 
     let body = captured.lock().unwrap().take().unwrap();
@@ -397,7 +397,7 @@ async fn test_associate_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     client
-        .associate("src-1", "dst-1", "knows", 0.5)
+        .associate("src-1", "dst-1", "knows", 0.5, None)
         .await
         .expect("associate failed");
 
@@ -426,7 +426,7 @@ async fn test_expand_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     client
-        .expand("entity-1", 1, None)
+        .expand("entity-1", 1, None, None)
         .await
         .expect("expand failed");
 }
@@ -452,7 +452,7 @@ async fn test_rag_query_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     let result = client
-        .rag_query("test query", None, 5, None)
+        .rag_query("test query", None, 5, None, None)
         .await
         .expect("rag_query failed");
     assert_eq!(result.context, "test context");
@@ -485,7 +485,7 @@ async fn test_query_sends_correct_body() {
 
     let client = mock_client(&mock_server.uri());
     let result = client
-        .query("MATCH (n) RETURN n", None, None, 5000)
+        .query("MATCH (n) RETURN n", None, None, 5000, None)
         .await
         .expect("query failed");
     assert_eq!(result.columns, vec!["id", "name"]);
@@ -498,7 +498,7 @@ async fn test_query_sends_correct_body() {
 #[tokio::test]
 async fn test_query_validates_empty() {
     let client = mock_client("http://localhost:1");
-    let result = client.query("", None, None, 5000).await;
+    let result = client.query("", None, None, 5000, None).await;
     assert!(matches!(result, Err(Error::Validation(_))));
 }
 
@@ -520,7 +520,7 @@ async fn test_health() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let health = client.health().await.expect("health failed");
+    let health = client.health(None).await.expect("health failed");
     assert_eq!(health["status"], "ok");
 }
 
@@ -539,7 +539,7 @@ async fn test_metrics() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let metrics = client.metrics().await.expect("metrics failed");
+    let metrics = client.metrics(None).await.expect("metrics failed");
     assert!(metrics.contains("http_requests_total"));
 }
 
@@ -577,7 +577,7 @@ async fn test_server_error_returns_lightning_error() {
         valid_from: None,
         valid_until: None,
     };
-    let result = client.store(req).await;
+    let result = client.store(req, None).await;
     match result {
         Err(Error::Lightning(e)) => {
             assert_eq!(e.status, 400);
@@ -616,7 +616,7 @@ async fn test_retry_on_429() {
         });
     let client = Client::new(config).expect("failed to create client");
 
-    let health = client.health().await.expect("health should succeed after retries");
+    let health = client.health(None).await.expect("health should succeed after retries");
     assert_eq!(health["status"], "ok");
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 3);
 }
@@ -640,7 +640,7 @@ async fn test_max_retries_exceeded() {
         });
     let client = Client::new(config).expect("failed to create client");
 
-    let result = client.health().await;
+    let result = client.health(None).await;
     assert!(matches!(result, Err(Error::MaxRetriesExceeded(_, _))));
 }
 
@@ -672,7 +672,7 @@ async fn test_no_retry_on_400() {
         });
     let client = Client::new(config).expect("failed to create client");
 
-    let result = client.health().await;
+    let result = client.health(None).await;
     assert!(result.is_err());
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
@@ -703,7 +703,7 @@ async fn test_login_sends_correct_body() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let login = client.login("admin", "password").await.expect("login failed");
+    let login = client.login("admin", "password", None).await.expect("login failed");
     assert_eq!(login.access_token, "test-token");
 
     let body = captured.lock().unwrap().take().unwrap();
@@ -726,7 +726,7 @@ async fn test_me() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let me = client.me().await.expect("me failed");
+    let me = client.me(None).await.expect("me failed");
     assert_eq!(me.username, "admin");
 }
 
@@ -739,7 +739,7 @@ fn test_blocking_client_construction() {
     let config = ClientConfig::new("http://localhost:9999");
     let client = Client::new(config).expect("client creation failed");
     // Just verify the client exists — blocking HTTP calls are tested via wiremock above
-    assert!(client.blocking_health().is_err()); // Expected: connection refused
+    assert!(client.blocking_health(None).is_err()); // Expected: connection refused
 }
 
 // ---------------------------------------------------------------------------
@@ -760,6 +760,6 @@ async fn test_envelope_unwrap() {
         .await;
 
     let client = mock_client(&mock_server.uri());
-    let health = client.health().await.expect("health failed");
+    let health = client.health(None).await.expect("health failed");
     assert_eq!(health["status"], "ok");
 }

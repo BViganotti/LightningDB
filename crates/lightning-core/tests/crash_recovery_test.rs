@@ -51,7 +51,7 @@ fn test_wal_replay_with_corrupt_records() -> TestResult {
     drop(conn);
     drop(db);
 
-    let wal_path = db_path.join("wal.lbug");
+    let wal_path = db_path.join("wal.ltng");
     if wal_path.exists() {
         let wal_data = std::fs::read(&wal_path).unwrap();
         if wal_data.len() > 20 {
@@ -85,7 +85,7 @@ fn test_wal_header_validated_on_open() -> TestResult {
     drop(conn);
     drop(db);
 
-    let wal_path = db_path.join("wal.lbug");
+    let wal_path = db_path.join("wal.ltng");
     if wal_path.exists() {
         let mut wal_data = std::fs::read(&wal_path).unwrap();
         if wal_data.len() >= 5 {

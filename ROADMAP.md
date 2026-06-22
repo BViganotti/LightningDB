@@ -534,7 +534,7 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 ### 2.7.3 File format versioning
 
-- [ ] **2.7.3a** Add file format magic + version to all `.lbug` files (data files, catalog, WAL, free space map, header)
+- [ ] **2.7.3a** Add file format magic + version to all `.ltng` files (data files, catalog, WAL, free space map, header)
 - [ ] **2.7.3b** Add migration framework for upgrading between file format versions
 - [ ] **2.7.3c** Add backward compatibility tests: open databases created by old versions
 
@@ -673,9 +673,9 @@ Then update all read sites to use `UnsafeCell::get()` and all writes to use the 
 
 | File | Extension | Current Format | Versioning Needed? |
 |------|-----------|---------------|-------------------|
-| Data files | `.lbug` | Raw column pages (unnamed) | YES — add magic+version per file |
-| Catalog | `catalog.lbug` | Serialized catalog struct | YES — add header |
-| WAL | `wal.lbug` | Raw records, no header | YES — add magic+format version+checksum |
+| Data files | `.ltng` | Raw column pages (unnamed) | YES — add magic+version per file |
+| Catalog | `catalog.ltng` | Serialized catalog struct | YES — add header |
+| WAL | `wal.ltng` | Raw records, no header | YES — add magic+format version+checksum |
 | Header | `database.header` | Has version already? | CHECK — might already be versioned |
 | Free space | `free_space.bin` | Bincode-serialized | YES — add header |
 

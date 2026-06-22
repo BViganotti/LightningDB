@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use tokio::sync::mpsc;
 
@@ -159,6 +161,7 @@ impl Client {
         method: &str,
         path: &str,
         body: Option<&serde_json::Value>,
+        timeout: Option<Duration>,
     ) -> Result<T, Error>
     where
         T: serde::de::DeserializeOwned,
@@ -193,6 +196,9 @@ impl Client {
 
             if let Some(ref body_val) = body {
                 builder = builder.json(body_val);
+            }
+            if let Some(t) = timeout {
+                builder = builder.timeout(t);
             }
 
             match execute_and_unwrap::<T>(builder, self.config.max_content_bytes).await {
@@ -243,6 +249,7 @@ impl Client {
         method: &str,
         path: &str,
         body: Option<&serde_json::Value>,
+        timeout: Option<Duration>,
     ) -> Result<T, Error>
     where
         T: serde::de::DeserializeOwned,
@@ -252,8 +259,9 @@ impl Client {
         let request_id = generate_request_id();
         let url = format!("{}{}", self.base_url, path);
 
+        let effective_timeout = timeout.unwrap_or(self.config.default_timeout);
         let client = reqwest::blocking::Client::builder()
-            .timeout(self.config.default_timeout)
+            .timeout(effective_timeout)
             .build()
             .map_err(|e| Error::Config(format!("failed to build blocking client: {}", e)))?;
 
@@ -276,6 +284,9 @@ impl Client {
 
             if let Some(ref body_val) = body {
                 builder = builder.json(body_val);
+            }
+            if let Some(t) = timeout {
+                builder = builder.timeout(t);
             }
 
             match execute_and_unwrap_blocking::<T>(builder, self.config.max_content_bytes) {
@@ -311,7 +322,7 @@ impl Client {
 
     // ── Memory ────────────────────────────────────────────────────────────
 
-    pub async fn store(&self, req: StoreRequest) -> Result<(), Error> {
+    pub async fn store(&self, req: StoreRequest, timeout: Option<Duration>) -> Result<(), Error> {
         let entity_type = if req.entity_type.is_empty() {
             "memory"
         } else {
@@ -355,12 +366,12 @@ impl Client {
             body["validUntil"] = serde_json::json!(v);
         }
 
-        self.execute::<serde_json::Value>("POST", "/v1/memory/store", Some(&body))
+        self.execute::<serde_json::Value>("POST", "/v1/memory/store", Some(&body), timeout)
             .await?;
         Ok(())
     }
 
-    pub async fn store_batch(&self, entities: Vec<StoreRequest>) -> Result<usize, Error> {
+    pub async fn store_batch(&self, entities: Vec<StoreRequest>, timeout: Option<Duration>) -> Result<usize, Error> {
         validation::validate_batch_size(entities.len(), self.config.max_batch_entities)?;
         for e in &entities {
             validation::validate_id(&e.id, "id")?;
@@ -369,7 +380,7 @@ impl Client {
 
         let body = serde_json::json!({ "entities": entities });
         let result: StoreBatchResponse =
-            self.execute("POST", "/v1/memory/store-batch", Some(&body))
+            self.execute("POST", "/v1/memory/store-batch", Some(&body), timeout)
                 .await?;
         Ok(result.stored)
     }
@@ -379,6 +390,7 @@ impl Client {
         query: &str,
         embedding: Option<&[f32]>,
         top_k: usize,
+        timeout: Option<Duration>,
     ) -> Result<Vec<SearchResult>, Error> {
         validation::validate_query_string(query)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
@@ -395,21 +407,21 @@ impl Client {
             body["embedding"] = serde_json::json!(emb);
         }
 
-        let result: RecallResponse = self.execute("POST", "/v1/memory/recall", Some(&body)).await?;
+        let result: RecallResponse = self.execute("POST", "/v1/memory/recall", Some(&body), timeout).await?;
         Ok(result.results)
     }
 
-    pub async fn recall_recent(&self, top_k: usize) -> Result<Vec<Entity>, Error> {
+    pub async fn recall_recent(&self, top_k: usize, timeout: Option<Duration>) -> Result<Vec<Entity>, Error> {
         validation::validate_top_k(top_k, self.config.max_top_k)?;
 
         let body = serde_json::json!({ "topK": top_k });
         let result: RecallRecentResponse =
-            self.execute("POST", "/v1/memory/recall-recent", Some(&body))
+            self.execute("POST", "/v1/memory/recall-recent", Some(&body), timeout)
                 .await?;
         Ok(result.entities)
     }
 
-    pub async fn recall_by_type(&self, entity_type: &str, top_k: usize) -> Result<Vec<Entity>, Error> {
+    pub async fn recall_by_type(&self, entity_type: &str, top_k: usize, timeout: Option<Duration>) -> Result<Vec<Entity>, Error> {
         validation::validate_entity_type(entity_type)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
 
@@ -418,39 +430,50 @@ impl Client {
             "topK": top_k,
         });
         let result: RecallByTypeResponse =
-            self.execute("POST", "/v1/memory/recall-by-type", Some(&body))
+            self.execute("POST", "/v1/memory/recall-by-type", Some(&body), timeout)
                 .await?;
         Ok(result.entities)
     }
 
-    pub async fn forget(&self, id: &str) -> Result<bool, Error> {
+    pub async fn forget(&self, id: &str, timeout: Option<Duration>) -> Result<bool, Error> {
         validation::validate_id(id, "id")?;
 
         let body = serde_json::json!({ "id": id });
-        let result: ForgetResponse = self.execute("POST", "/v1/memory/forget", Some(&body)).await?;
+        let result: ForgetResponse = self.execute("POST", "/v1/memory/forget", Some(&body), timeout).await?;
         Ok(result.deleted)
     }
 
-    pub async fn decay(&self) -> Result<usize, Error> {
+    pub async fn decay(&self, timeout: Option<Duration>) -> Result<usize, Error> {
         let body = serde_json::json!({});
-        let result: DecayResponse = self.execute("POST", "/v1/memory/decay", Some(&body)).await?;
+        let result: DecayResponse = self.execute("POST", "/v1/memory/decay", Some(&body), timeout).await?;
         Ok(result.expired)
     }
 
-    pub async fn entity_history(&self, id: &str) -> Result<Vec<Entity>, Error> {
+    pub async fn entity_history(&self, id: &str, timeout: Option<Duration>) -> Result<Vec<Entity>, Error> {
         validation::validate_id(id, "id")?;
 
         let body = serde_json::json!({ "id": id });
         let result: EntityHistoryResponse =
-            self.execute("POST", "/v1/memory/entity-history", Some(&body))
+            self.execute("POST", "/v1/memory/entity-history", Some(&body), timeout)
                 .await?;
         Ok(result.versions)
     }
 
-    pub async fn consolidate(&self, config: ConsolidateRequest) -> Result<ConsolidationReport, Error> {
-        let body = serde_json::to_value(&config)
+    pub async fn consolidate(
+        &self,
+        config: ConsolidateRequest,
+        include_details: bool,
+        timeout: Option<Duration>,
+    ) -> Result<ConsolidationReport, Error> {
+        let mut body = serde_json::to_value(&config)
             .map_err(|e| Error::Validation(format!("serialization error: {}", e)))?;
-        self.execute("POST", "/v1/memory/consolidate", Some(&body))
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "includeDetails".to_string(),
+                serde_json::json!(include_details),
+            );
+        }
+        self.execute("POST", "/v1/memory/consolidate", Some(&body), timeout)
             .await
     }
 
@@ -462,6 +485,7 @@ impl Client {
         dst_id: &str,
         rel_type: &str,
         weight: f64,
+        timeout: Option<Duration>,
     ) -> Result<(), Error> {
         validation::validate_id(src_id, "src_id")?;
         validation::validate_id(dst_id, "dst_id")?;
@@ -472,7 +496,7 @@ impl Client {
             "relType": rel_type,
             "weight": weight,
         });
-        self.execute::<serde_json::Value>("POST", "/v1/graph/associate", Some(&body))
+        self.execute::<serde_json::Value>("POST", "/v1/graph/associate", Some(&body), timeout)
             .await?;
         Ok(())
     }
@@ -482,6 +506,7 @@ impl Client {
         entity_id: &str,
         hops: usize,
         edge_types: Option<&[String]>,
+        timeout: Option<Duration>,
     ) -> Result<Vec<Entity>, Error> {
         validation::validate_id(entity_id, "entity_id")?;
         validation::validate_hops(hops)?;
@@ -494,7 +519,7 @@ impl Client {
             body["edgeTypes"] = serde_json::json!(types);
         }
 
-        let result: ExpandResponse = self.execute("POST", "/v1/graph/expand", Some(&body)).await?;
+        let result: ExpandResponse = self.execute("POST", "/v1/graph/expand", Some(&body), timeout).await?;
         Ok(result.entities)
     }
 
@@ -506,6 +531,7 @@ impl Client {
         embedding: Option<&[f32]>,
         top_k: usize,
         rag_config: Option<RagQueryConfig>,
+        timeout: Option<Duration>,
     ) -> Result<RagResult, Error> {
         validation::validate_query_string(query)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
@@ -539,7 +565,7 @@ impl Client {
             }
         }
 
-        self.execute("POST", "/v1/rag/query", Some(&body)).await
+        self.execute("POST", "/v1/rag/query", Some(&body), timeout).await
     }
 
     // ── Query ──────────────────────────────────────────────────────────────
@@ -548,8 +574,9 @@ impl Client {
         &self,
         query: &str,
         params: Option<&serde_json::Value>,
-        snapshot_ts: Option<i64>,
+        snapshot: Option<SnapshotSelector>,
         timeout_ms: u64,
+        timeout: Option<Duration>,
     ) -> Result<QueryResult, Error> {
         validation::validate_query_string(query)?;
 
@@ -560,59 +587,156 @@ impl Client {
         if let Some(p) = params {
             body["params"] = p.clone();
         }
-        if let Some(ts) = snapshot_ts {
-            body["snapshotTs"] = serde_json::json!(ts);
+        if let Some(ref sel) = snapshot {
+            if let Some(iso) = &sel.iso {
+                body["snapshotIso"] = serde_json::json!(iso);
+            }
+            if let Some(rel) = &sel.relative {
+                body["snapshotRelative"] = serde_json::json!(rel);
+            }
+            if let Some(label) = &sel.label {
+                body["snapshotLabel"] = serde_json::json!(label);
+            }
         }
 
-        self.execute("POST", "/v1/query", Some(&body)).await
+        self.execute("POST", "/v1/query", Some(&body), timeout).await
+    }
+
+    pub async fn query_stream(
+        &self,
+        query: &str,
+        params: Option<&serde_json::Value>,
+        snapshot: Option<SnapshotSelector>,
+        timeout_ms: u64,
+        timeout: Option<Duration>,
+    ) -> Result<mpsc::Receiver<Result<serde_json::Value, Error>>, Error> {
+        validation::validate_query_string(query)?;
+
+        let mut body = serde_json::json!({
+            "query": query,
+            "timeoutMs": timeout_ms,
+            "stream": true,
+        });
+        if let Some(p) = params {
+            body["params"] = p.clone();
+        }
+        if let Some(ref sel) = snapshot {
+            if let Some(iso) = &sel.iso {
+                body["snapshotIso"] = serde_json::json!(iso);
+            }
+            if let Some(rel) = &sel.relative {
+                body["snapshotRelative"] = serde_json::json!(rel);
+            }
+            if let Some(label) = &sel.label {
+                body["snapshotLabel"] = serde_json::json!(label);
+            }
+        }
+
+        let request_id = generate_request_id();
+        let mut builder = self
+            .http_client
+            .post(format!("{}/v1/query/stream", self.base_url))
+            .headers(self.headers.clone())
+            .header("X-Request-Id", &request_id)
+            .json(&body);
+
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+
+        let response = builder.send().await.map_err(Error::Http)?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(Error::Lightning(crate::error::LightningError {
+                error: format!("query stream failed: HTTP {}", status),
+                code: status.to_string(),
+                details: Some(serde_json::json!({"body": text})),
+                request_id: None,
+                status,
+            }));
+        }
+
+        crate::subscribe::subscribe_sse_generic(response).await
+    }
+
+    pub async fn snapshots(&self, timeout: Option<Duration>) -> Result<Vec<SnapshotInfo>, Error> {
+        let result: SnapshotsResponse =
+            self.execute("GET", "/v1/snapshots", None, timeout).await?;
+        Ok(result.snapshots)
+    }
+
+    pub async fn login_with_api_key(
+        &self,
+        api_key: &str,
+        timeout: Option<Duration>,
+    ) -> Result<LoginResponse, Error> {
+        let body = serde_json::json!({ "apiKey": api_key });
+        self.execute("POST", "/v1/auth/login", Some(&body), timeout).await
+    }
+
+    pub async fn close(&self) {
+        // reqwest does not provide an explicit close; the HTTP client
+        // connections are dropped when the Client is dropped.
+        // This method exists for API parity with other clients.
     }
 
     // ── Auth ───────────────────────────────────────────────────────────────
 
-    pub async fn login(&self, username: &str, password: &str) -> Result<LoginResponse, Error> {
+    pub async fn login(
+        &self,
+        username: &str,
+        password: &str,
+        timeout: Option<Duration>,
+    ) -> Result<LoginResponse, Error> {
         let body = serde_json::json!({
             "username": username,
             "password": password,
         });
-        self.execute("POST", "/v1/auth/login", Some(&body)).await
+        self.execute("POST", "/v1/auth/login", Some(&body), timeout).await
     }
 
-    pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshResponse, Error> {
+    pub async fn refresh(
+        &self,
+        refresh_token: &str,
+        timeout: Option<Duration>,
+    ) -> Result<RefreshResponse, Error> {
         let body = serde_json::json!({
             "refreshToken": refresh_token,
         });
-        self.execute("POST", "/v1/auth/refresh", Some(&body)).await
+        self.execute("POST", "/v1/auth/refresh", Some(&body), timeout).await
     }
 
-    pub async fn logout(&self) -> Result<(), Error> {
+    pub async fn logout(&self, timeout: Option<Duration>) -> Result<(), Error> {
         let body = serde_json::json!({});
-        self.execute::<serde_json::Value>("POST", "/v1/auth/logout", Some(&body))
+        self.execute::<serde_json::Value>("POST", "/v1/auth/logout", Some(&body), timeout)
             .await?;
         Ok(())
     }
 
-    pub async fn me(&self) -> Result<UserInfo, Error> {
-        self.execute("GET", "/v1/auth/me", None).await
+    pub async fn me(&self, timeout: Option<Duration>) -> Result<UserInfo, Error> {
+        self.execute("GET", "/v1/auth/me", None, timeout).await
     }
 
     // ── Admin ──────────────────────────────────────────────────────────────
 
-    pub async fn checkpoint(&self) -> Result<(), Error> {
+    pub async fn checkpoint(&self, timeout: Option<Duration>) -> Result<(), Error> {
         let body = serde_json::json!({});
-        self.execute::<serde_json::Value>("POST", "/v1/admin/checkpoint", Some(&body))
+        self.execute::<serde_json::Value>("POST", "/v1/admin/checkpoint", Some(&body), timeout)
             .await?;
         Ok(())
     }
 
-    pub async fn vacuum(&self) -> Result<(), Error> {
+    pub async fn vacuum(&self, timeout: Option<Duration>) -> Result<(), Error> {
         let body = serde_json::json!({});
-        self.execute::<serde_json::Value>("POST", "/v1/admin/vacuum", Some(&body))
+        self.execute::<serde_json::Value>("POST", "/v1/admin/vacuum", Some(&body), timeout)
             .await?;
         Ok(())
     }
 
-    pub async fn list_users(&self) -> Result<Vec<UserInfo>, Error> {
-        let result: UserListResponse = self.execute("GET", "/v1/admin/users", None).await?;
+    pub async fn list_users(&self, timeout: Option<Duration>) -> Result<Vec<UserInfo>, Error> {
+        let result: UserListResponse = self.execute("GET", "/v1/admin/users", None, timeout).await?;
         Ok(result.users)
     }
 
@@ -621,13 +745,14 @@ impl Client {
         username: &str,
         password: &str,
         role: &str,
+        timeout: Option<Duration>,
     ) -> Result<UserInfo, Error> {
         let body = serde_json::json!({
             "username": username,
             "password": password,
             "role": role,
         });
-        self.execute("POST", "/v1/admin/users", Some(&body)).await
+        self.execute("POST", "/v1/admin/users", Some(&body), timeout).await
     }
 
     pub async fn update_user(
@@ -636,6 +761,7 @@ impl Client {
         username: Option<&str>,
         password: Option<&str>,
         role: Option<&str>,
+        timeout: Option<Duration>,
     ) -> Result<UserInfo, Error> {
         let mut body = serde_json::json!({});
         if let Some(u) = username {
@@ -647,33 +773,46 @@ impl Client {
         if let Some(r) = role {
             body["role"] = serde_json::json!(r);
         }
-        self.execute("POST", &format!("/v1/admin/users/{}", id), Some(&body))
+        self.execute("POST", &format!("/v1/admin/users/{}", id), Some(&body), timeout)
             .await
     }
 
-    pub async fn delete_user(&self, id: &str) -> Result<(), Error> {
-        let builder = self
+    pub async fn delete_user(&self, id: &str, timeout: Option<Duration>) -> Result<(), Error> {
+        let mut builder = self
             .http_client
             .delete(format!("{}/v1/admin/users/{}", self.base_url, id))
             .headers(self.headers.clone());
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
         execute_and_unwrap::<serde_json::Value>(builder, self.config.max_content_bytes).await?;
         Ok(())
     }
 
-    pub async fn reset_password(&self, user_id: &str, new_password: &str) -> Result<(), Error> {
+    pub async fn reset_password(
+        &self,
+        user_id: &str,
+        new_password: &str,
+        timeout: Option<Duration>,
+    ) -> Result<(), Error> {
         let body = serde_json::json!({ "newPassword": new_password });
         self.execute::<serde_json::Value>(
             "POST",
             &format!("/v1/admin/users/{}/reset-password", user_id),
             Some(&body),
+            timeout,
         )
         .await?;
         Ok(())
     }
 
-    pub async fn list_api_keys(&self, user_id: &str) -> Result<Vec<ApiKey>, Error> {
+    pub async fn list_api_keys(
+        &self,
+        user_id: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<ApiKey>, Error> {
         let result: ApiKeyListResponse =
-            self.execute("GET", &format!("/v1/admin/users/{}/keys", user_id), None)
+            self.execute("GET", &format!("/v1/admin/users/{}/keys", user_id), None, timeout)
                 .await?;
         Ok(result.keys)
     }
@@ -682,35 +821,58 @@ impl Client {
         &self,
         user_id: &str,
         label: &str,
+        timeout: Option<Duration>,
     ) -> Result<ApiKeyCreateResponse, Error> {
         let body = serde_json::json!({ "label": label });
-        self.execute("POST", &format!("/v1/admin/users/{}/keys", user_id), Some(&body))
-            .await
+        self.execute(
+            "POST",
+            &format!("/v1/admin/users/{}/keys", user_id),
+            Some(&body),
+            timeout,
+        )
+        .await
     }
 
-    pub async fn delete_api_key(&self, user_id: &str, key_id: &str) -> Result<(), Error> {
-        let builder = self
+    pub async fn delete_api_key(
+        &self,
+        user_id: &str,
+        key_id: &str,
+        timeout: Option<Duration>,
+    ) -> Result<(), Error> {
+        let mut builder = self
             .http_client
             .delete(format!(
                 "{}/v1/admin/users/{}/keys/{}",
                 self.base_url, user_id, key_id
             ))
             .headers(self.headers.clone());
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
         execute_and_unwrap::<serde_json::Value>(builder, self.config.max_content_bytes).await?;
         Ok(())
     }
 
     // ── Health / Metrics ───────────────────────────────────────────────────
 
-    pub async fn health(&self) -> Result<serde_json::Value, Error> {
-        self.execute("GET", "/health", None).await
+    pub async fn health(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<serde_json::Value, Error> {
+        self.execute("GET", "/health", None, timeout).await
     }
 
-    pub async fn metrics(&self) -> Result<String, Error> {
-        let builder = self
+    pub async fn metrics(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<String, Error> {
+        let mut builder = self
             .http_client
             .get(format!("{}/metrics", self.base_url))
             .headers(self.headers.clone());
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
 
         let response = builder.send().await.map_err(Error::Http)?;
         let text = response.text().await.map_err(Error::Http)?;
@@ -719,11 +881,17 @@ impl Client {
 
     // ── CDC Subscribe ──────────────────────────────────────────────────────
 
-    pub async fn subscribe(&self) -> Result<mpsc::Receiver<Result<ChangeEvent, Error>>, Error> {
-        let builder = self
+    pub async fn subscribe(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<mpsc::Receiver<Result<ChangeEvent, Error>>, Error> {
+        let mut builder = self
             .http_client
             .get(format!("{}/v1/subscribe", self.base_url))
             .headers(self.headers.clone());
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
 
         let response = builder.send().await.map_err(Error::Http)?;
 
@@ -744,7 +912,7 @@ impl Client {
 
     // ── Blocking API ───────────────────────────────────────────────────────
 
-    pub fn blocking_store(&self, req: StoreRequest) -> Result<(), Error> {
+    pub fn blocking_store(&self, req: StoreRequest, timeout: Option<Duration>) -> Result<(), Error> {
         let entity_type = if req.entity_type.is_empty() {
             "memory"
         } else {
@@ -787,11 +955,11 @@ impl Client {
             body["validUntil"] = serde_json::json!(v);
         }
 
-        self.execute_blocking::<serde_json::Value>("POST", "/v1/memory/store", Some(&body))?;
+        self.execute_blocking::<serde_json::Value>("POST", "/v1/memory/store", Some(&body), timeout)?;
         Ok(())
     }
 
-    pub fn blocking_store_batch(&self, entities: Vec<StoreRequest>) -> Result<usize, Error> {
+    pub fn blocking_store_batch(&self, entities: Vec<StoreRequest>, timeout: Option<Duration>) -> Result<usize, Error> {
         validation::validate_batch_size(entities.len(), self.config.max_batch_entities)?;
         for e in &entities {
             validation::validate_id(&e.id, "id")?;
@@ -800,7 +968,7 @@ impl Client {
 
         let body = serde_json::json!({ "entities": entities });
         let result: StoreBatchResponse =
-            self.execute_blocking("POST", "/v1/memory/store-batch", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/store-batch", Some(&body), timeout)?;
         Ok(result.stored)
     }
 
@@ -809,6 +977,7 @@ impl Client {
         query: &str,
         embedding: Option<&[f32]>,
         top_k: usize,
+        timeout: Option<Duration>,
     ) -> Result<Vec<SearchResult>, Error> {
         validation::validate_query_string(query)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
@@ -822,15 +991,15 @@ impl Client {
         }
 
         let result: RecallResponse =
-            self.execute_blocking("POST", "/v1/memory/recall", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/recall", Some(&body), timeout)?;
         Ok(result.results)
     }
 
-    pub fn blocking_recall_recent(&self, top_k: usize) -> Result<Vec<Entity>, Error> {
+    pub fn blocking_recall_recent(&self, top_k: usize, timeout: Option<Duration>) -> Result<Vec<Entity>, Error> {
         validation::validate_top_k(top_k, self.config.max_top_k)?;
         let body = serde_json::json!({ "topK": top_k });
         let result: RecallRecentResponse =
-            self.execute_blocking("POST", "/v1/memory/recall-recent", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/recall-recent", Some(&body), timeout)?;
         Ok(result.entities)
     }
 
@@ -838,45 +1007,54 @@ impl Client {
         &self,
         entity_type: &str,
         top_k: usize,
+        timeout: Option<Duration>,
     ) -> Result<Vec<Entity>, Error> {
         validation::validate_entity_type(entity_type)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
         let body = serde_json::json!({ "entityType": entity_type, "topK": top_k });
         let result: RecallByTypeResponse =
-            self.execute_blocking("POST", "/v1/memory/recall-by-type", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/recall-by-type", Some(&body), timeout)?;
         Ok(result.entities)
     }
 
-    pub fn blocking_forget(&self, id: &str) -> Result<bool, Error> {
+    pub fn blocking_forget(&self, id: &str, timeout: Option<Duration>) -> Result<bool, Error> {
         validation::validate_id(id, "id")?;
         let body = serde_json::json!({ "id": id });
         let result: ForgetResponse =
-            self.execute_blocking("POST", "/v1/memory/forget", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/forget", Some(&body), timeout)?;
         Ok(result.deleted)
     }
 
-    pub fn blocking_decay(&self) -> Result<usize, Error> {
+    pub fn blocking_decay(&self, timeout: Option<Duration>) -> Result<usize, Error> {
         let body = serde_json::json!({});
         let result: DecayResponse =
-            self.execute_blocking("POST", "/v1/memory/decay", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/decay", Some(&body), timeout)?;
         Ok(result.expired)
     }
 
-    pub fn blocking_entity_history(&self, id: &str) -> Result<Vec<Entity>, Error> {
+    pub fn blocking_entity_history(&self, id: &str, timeout: Option<Duration>) -> Result<Vec<Entity>, Error> {
         validation::validate_id(id, "id")?;
         let body = serde_json::json!({ "id": id });
         let result: EntityHistoryResponse =
-            self.execute_blocking("POST", "/v1/memory/entity-history", Some(&body))?;
+            self.execute_blocking("POST", "/v1/memory/entity-history", Some(&body), timeout)?;
         Ok(result.versions)
     }
 
     pub fn blocking_consolidate(
         &self,
         config: ConsolidateRequest,
+        include_details: bool,
+        timeout: Option<Duration>,
     ) -> Result<ConsolidationReport, Error> {
-        let body = serde_json::to_value(&config)
+        let mut body = serde_json::to_value(&config)
             .map_err(|e| Error::Validation(format!("serialization error: {}", e)))?;
-        self.execute_blocking("POST", "/v1/memory/consolidate", Some(&body))
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "includeDetails".to_string(),
+                serde_json::json!(include_details),
+            );
+        }
+        self.execute_blocking("POST", "/v1/memory/consolidate", Some(&body), timeout)
     }
 
     pub fn blocking_associate(
@@ -885,6 +1063,7 @@ impl Client {
         dst_id: &str,
         rel_type: &str,
         weight: f64,
+        timeout: Option<Duration>,
     ) -> Result<(), Error> {
         validation::validate_id(src_id, "src_id")?;
         validation::validate_id(dst_id, "dst_id")?;
@@ -898,6 +1077,7 @@ impl Client {
             "POST",
             "/v1/graph/associate",
             Some(&body),
+            timeout,
         )?;
         Ok(())
     }
@@ -907,6 +1087,7 @@ impl Client {
         entity_id: &str,
         hops: usize,
         edge_types: Option<&[String]>,
+        timeout: Option<Duration>,
     ) -> Result<Vec<Entity>, Error> {
         validation::validate_id(entity_id, "entity_id")?;
         validation::validate_hops(hops)?;
@@ -915,7 +1096,7 @@ impl Client {
             body["edgeTypes"] = serde_json::json!(types);
         }
         let result: ExpandResponse =
-            self.execute_blocking("POST", "/v1/graph/expand", Some(&body))?;
+            self.execute_blocking("POST", "/v1/graph/expand", Some(&body), timeout)?;
         Ok(result.entities)
     }
 
@@ -925,6 +1106,7 @@ impl Client {
         embedding: Option<&[f32]>,
         top_k: usize,
         rag_config: Option<RagQueryConfig>,
+        timeout: Option<Duration>,
     ) -> Result<RagResult, Error> {
         validation::validate_query_string(query)?;
         validation::validate_top_k(top_k, self.config.max_top_k)?;
@@ -954,34 +1136,44 @@ impl Client {
             }
         }
 
-        self.execute_blocking("POST", "/v1/rag/query", Some(&body))
+        self.execute_blocking("POST", "/v1/rag/query", Some(&body), timeout)
     }
 
     pub fn blocking_query(
         &self,
         query: &str,
         params: Option<&serde_json::Value>,
-        snapshot_ts: Option<i64>,
+        snapshot: Option<SnapshotSelector>,
         timeout_ms: u64,
+        timeout: Option<Duration>,
     ) -> Result<QueryResult, Error> {
         validation::validate_query_string(query)?;
         let mut body = serde_json::json!({ "query": query, "timeoutMs": timeout_ms });
         if let Some(p) = params {
             body["params"] = p.clone();
         }
-        if let Some(ts) = snapshot_ts {
-            body["snapshotTs"] = serde_json::json!(ts);
+        if let Some(ref sel) = snapshot {
+            if let Some(iso) = &sel.iso {
+                body["snapshotIso"] = serde_json::json!(iso);
+            }
+            if let Some(rel) = &sel.relative {
+                body["snapshotRelative"] = serde_json::json!(rel);
+            }
+            if let Some(label) = &sel.label {
+                body["snapshotLabel"] = serde_json::json!(label);
+            }
         }
-        self.execute_blocking("POST", "/v1/query", Some(&body))
+        self.execute_blocking("POST", "/v1/query", Some(&body), timeout)
     }
 
-    pub fn blocking_health(&self) -> Result<serde_json::Value, Error> {
-        self.execute_blocking("GET", "/health", None)
+    pub fn blocking_health(&self, timeout: Option<Duration>) -> Result<serde_json::Value, Error> {
+        self.execute_blocking("GET", "/health", None, timeout)
     }
 
-    pub fn blocking_metrics(&self) -> Result<String, Error> {
+    pub fn blocking_metrics(&self, timeout: Option<Duration>) -> Result<String, Error> {
+        let effective_timeout = timeout.unwrap_or(self.config.default_timeout);
         let client = reqwest::blocking::Client::builder()
-            .timeout(self.config.default_timeout)
+            .timeout(effective_timeout)
             .build()
             .map_err(|e| Error::Config(format!("failed to build blocking client: {}", e)))?;
 
@@ -994,13 +1186,18 @@ impl Client {
         response.text().map_err(Error::Http)
     }
 
-    pub fn blocking_login(&self, username: &str, password: &str) -> Result<LoginResponse, Error> {
+    pub fn blocking_login(
+        &self,
+        username: &str,
+        password: &str,
+        timeout: Option<Duration>,
+    ) -> Result<LoginResponse, Error> {
         let body = serde_json::json!({ "username": username, "password": password });
-        self.execute_blocking("POST", "/v1/auth/login", Some(&body))
+        self.execute_blocking("POST", "/v1/auth/login", Some(&body), timeout)
     }
 
-    pub fn blocking_me(&self) -> Result<UserInfo, Error> {
-        self.execute_blocking("GET", "/v1/auth/me", None)
+    pub fn blocking_me(&self, timeout: Option<Duration>) -> Result<UserInfo, Error> {
+        self.execute_blocking("GET", "/v1/auth/me", None, timeout)
     }
 }
 

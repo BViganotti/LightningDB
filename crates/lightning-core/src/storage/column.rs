@@ -2217,8 +2217,8 @@ mod tests {
 
     fn setup_col(col_type: LogicalType, with_overflow: bool) -> (Column, Arc<BufferManager>, Arc<TransactionManager>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let data_path = dir.path().join("data.lbug");
-        let null_path = dir.path().join("null.lbug");
+        let data_path = dir.path().join("data.ltng");
+        let null_path = dir.path().join("null.ltng");
         let data_fh = Arc::new(FileHandle::open(&data_path).unwrap());
         let null_fh = Arc::new(FileHandle::open(&null_path).unwrap());
         let wal = Arc::new(WAL::new(dir.path(), SyncMode::Normal).unwrap());
@@ -2228,7 +2228,7 @@ mod tests {
         let rv = Arc::new(RowVersion::new());
 
         let overflow_fh = if with_overflow {
-            let overflow_path = dir.path().join("overflow.lbug");
+            let overflow_path = dir.path().join("overflow.ltng");
             Some(Arc::new(FileHandle::open(&overflow_path).unwrap()))
         } else {
             None

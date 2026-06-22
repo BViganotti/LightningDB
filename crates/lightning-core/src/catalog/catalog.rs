@@ -314,7 +314,7 @@ impl Catalog {
     }
 
     pub fn save_to_disk(&self, path: &std::path::Path) -> crate::Result<()> {
-        let shadow_path = path.with_extension("lbug.shadow");
+        let shadow_path = path.with_extension("ltng.shadow");
         let buf = serde_json::to_vec(self)
             .map_err(|e| crate::LightningError::Database(e.to_string()))?;
         std::fs::write(&shadow_path, buf)?;

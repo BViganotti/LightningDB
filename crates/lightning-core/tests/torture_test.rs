@@ -1335,7 +1335,7 @@ fn torture_wal_corruption() -> TestResult {
     // because corrupted data bytes just produce wrong on-disk data for one page,
     // which will be overwritten by the next checkpoint.
     {
-        let wal_path = db_path.join("wal.lbug");
+        let wal_path = db_path.join("wal.ltng");
         if wal_path.exists() {
             let mut wal_data = std::fs::read(&wal_path)?;
             if wal_data.len() > 100 {

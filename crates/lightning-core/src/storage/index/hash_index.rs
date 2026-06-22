@@ -206,10 +206,16 @@ impl HashIndex {
         let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
 
-        if num_buckets == 0 {
-            return Err(LightningError::Internal("HashIndex header corrupted: num_buckets=0".into()));
-        }
-        let target_bucket = 1 + (hash % num_buckets);
+        let nb = if num_buckets == 0 {
+            tracing::warn!("HashIndex num_buckets=0 at insert, reinitializing with 64 buckets");
+            self.initialize_header()?;
+            let n = self.buckets();
+            if n == 0 { return Err(LightningError::Internal("HashIndex reinit failed".into())); }
+            n
+        } else {
+            num_buckets
+        };
+        let target_bucket = 1 + (hash % nb);
 
         let mut current_page = target_bucket;
         loop {
@@ -539,10 +545,16 @@ impl HashIndex {
         let hash = Self::compute_hash(key);
         let header_frame = bm.pin_page(Arc::clone(self.fh()), HEADER_PAGE_IDX, tx)?;
         let num_buckets = read_u64_at(header_frame.as_slice(), 0)?;
-        if num_buckets == 0 {
-            return Err(LightningError::Internal("HashIndex header corrupted: num_buckets=0".into()));
-        }
-        let target_bucket = 1 + (hash % num_buckets);
+        let nb = if num_buckets == 0 {
+            tracing::warn!("HashIndex num_buckets=0 at delete_if, reinitializing with 64 buckets");
+            self.initialize_header()?;
+            let n = self.buckets();
+            if n == 0 { return Err(LightningError::Internal("HashIndex reinit failed".into())); }
+            n
+        } else {
+            num_buckets
+        };
+        let target_bucket = 1 + (hash % nb);
 
         let mut current_page = target_bucket;
         loop {

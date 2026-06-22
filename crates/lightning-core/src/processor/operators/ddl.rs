@@ -516,7 +516,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 let mut storage = database.storage_manager.write();
                 let safe_name = sanitize(name);
                 let safe_table = sanitize(table_name);
-                let index_path = database._path.join(format!("{safe_table}_{safe_name}_idx.lbug"));
+                let index_path = database._path.join(format!("{safe_table}_{safe_name}_idx.ltng"));
                 let index = crate::storage::index::hash_index::HashIndex::open_or_create(
                     &index_path,
                 )?;

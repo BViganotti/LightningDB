@@ -104,18 +104,18 @@ impl UndoBuffer {
                             Self::collect_column_paths(&table.columns, &mut paths_to_delete);
                         }
                         if storage.fwd_csr.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_fwd_offset.lbug")));
-                            paths_to_delete.push(db._path.join(format!("{name}_fwd_adj.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_fwd_offset.ltng")));
+                            paths_to_delete.push(db._path.join(format!("{name}_fwd_adj.ltng")));
                         }
                         if storage.bwd_csr.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_bwd_offset.lbug")));
-                            paths_to_delete.push(db._path.join(format!("{name}_bwd_adj.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_bwd_offset.ltng")));
+                            paths_to_delete.push(db._path.join(format!("{name}_bwd_adj.ltng")));
                         }
                         if storage.vector_indexes.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_vector.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_vector.ltng")));
                         }
                         if storage.indexes.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_pk_index.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_pk_index.ltng")));
                         }
                     }
                     db.storage_manager.write().remove_table(&name);
@@ -134,18 +134,18 @@ impl UndoBuffer {
                             Self::collect_column_paths(&table.columns, &mut paths_to_delete);
                         }
                         if storage.fwd_csr.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_fwd_offset.lbug")));
-                            paths_to_delete.push(db._path.join(format!("{name}_fwd_adj.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_fwd_offset.ltng")));
+                            paths_to_delete.push(db._path.join(format!("{name}_fwd_adj.ltng")));
                         }
                         if storage.bwd_csr.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_bwd_offset.lbug")));
-                            paths_to_delete.push(db._path.join(format!("{name}_bwd_adj.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_bwd_offset.ltng")));
+                            paths_to_delete.push(db._path.join(format!("{name}_bwd_adj.ltng")));
                         }
                         if storage.vector_indexes.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_vector.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_vector.ltng")));
                         }
                         if storage.indexes.contains_key(&name) {
-                            paths_to_delete.push(db._path.join(format!("{name}_pk_index.lbug")));
+                            paths_to_delete.push(db._path.join(format!("{name}_pk_index.ltng")));
                         }
                     }
                     db.storage_manager.write().remove_table(&name);
@@ -291,7 +291,7 @@ impl UndoBuffer {
                         s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
                     }
                     let safe_name = sanitize(&name);
-                    let index_path = db._path.join(format!("{safe_name}_idx.lbug"));
+                    let index_path = db._path.join(format!("{safe_name}_idx.ltng"));
                     match crate::storage::index::hash_index::HashIndex::open_or_create(&index_path) {
                         Ok(index) => {
                             storage.indexes.insert(name.clone(), Arc::new(index));

@@ -21,9 +21,9 @@ Lightning is a **columnar, graph-native database server** with built-in vector s
 ### Columnar Layout
 Each table column is stored as a separate file on disk:
 ```
-<db_path>/<table>_<column>.lbug        — column data
-<db_path>/<table>_<column>_null.lbug   — null bitmap (1 byte/row)
-<db_path>/<table>_<column>_overflow.lbug — overflow (strings >63 chars)
+<db_path>/<table>_<column>.ltng        — column data
+<db_path>/<table>_<column>_null.ltng   — null bitmap (1 byte/row)
+<db_path>/<table>_<column>_overflow.ltng — overflow (strings >63 chars)
 ```
 
 ### Buffer Manager
@@ -199,21 +199,21 @@ Default: enabled. Tracks every `pin_page()` access in a transition matrix.
 ```
 <db_path>/
   database.header    — magic bytes, version, last_checkpoint_ts
-  wal.lbug           — write-ahead log
-  catalog.lbug       — table schemas, column metadata, cardinalities
+  wal.ltng           — write-ahead log
+  catalog.ltng       — table schemas, column metadata, cardinalities
   free_space.bin     — free page tracker
-  data.lbug          — shared data file (unused currently)
-  overflow.lbug      — shared overflow file (unused currently)
-  <table>_<col>.lbug — per-column data
-  <table>_<col>_null.lbug — per-column null bitmap
-  <table>_<col>_overflow.lbug — per-column overflow strings
+  data.ltng          — shared data file (unused currently)
+  overflow.ltng      — shared overflow file (unused currently)
+  <table>_<col>.ltng — per-column data
+  <table>_<col>_null.ltng — per-column null bitmap
+  <table>_<col>_overflow.ltng — per-column overflow strings
   <table>_fts/       — Tantivy FTS index directory
-  <table>_vector.lbug — vector embeddings
-  <table>_fwd_offset.lbug — CSR forward offset array
-  <table>_fwd_adj.lbug — CSR forward adjacency array
-  <table>_bwd_offset.lbug — CSR backward offset array
-  <table>_bwd_adj.lbug — CSR backward adjacency array
-  <table>_pk_index.lbug — hash index for primary key
+  <table>_vector.ltng — vector embeddings
+  <table>_fwd_offset.ltng — CSR forward offset array
+  <table>_fwd_adj.ltng — CSR forward adjacency array
+  <table>_bwd_offset.ltng — CSR backward offset array
+  <table>_bwd_adj.ltng — CSR backward adjacency array
+  <table>_pk_index.ltng — hash index for primary key
 ```
 
 ### Row Format

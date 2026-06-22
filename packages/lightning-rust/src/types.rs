@@ -80,12 +80,45 @@ pub struct SourceRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LinkDetail {
+    pub source_id: String,
+    pub target_id: String,
+    pub rel_type: String,
+    pub score: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContradictionDetail {
+    pub entity_id: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub fields: Vec<String>,
+    pub cosine_sim: f64,
+    pub jaccard_sim: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolidationDetail {
+    pub links: Vec<LinkDetail>,
+    pub contradictions: Vec<ContradictionDetail>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConsolidationReport {
     pub links_created: usize,
     pub contradictions_found: usize,
     pub total_entities: usize,
     #[serde(default)]
     pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<LinkDetail>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contradictions: Option<Vec<ContradictionDetail>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +172,30 @@ pub struct UserInfo {
 #[serde(rename_all = "camelCase")]
 pub struct StoreBatchResponse {
     pub stored: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSelector {
+    pub iso: Option<String>,
+    pub relative: Option<String>,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotInfo {
+    pub ts: i64,
+    pub iso: String,
+    #[serde(rename = "ageDays")]
+    pub age_days: i64,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotsResponse {
+    pub snapshots: Vec<SnapshotInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,4 +318,6 @@ pub struct ConsolidateRequest {
     pub contradiction_length_sim_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_comparisons_per_entity: Option<usize>,
+    #[serde(default)]
+    pub include_details: bool,
 }

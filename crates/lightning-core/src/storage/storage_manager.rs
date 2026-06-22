@@ -513,9 +513,9 @@ pub struct StorageManager {
 
 impl StorageManager {
     pub fn new(path: &Path) -> Result<Self> {
-        let data_path = path.join("data.lbug");
+        let data_path = path.join("data.ltng");
         let data_fh = Arc::new(FileHandle::open(&data_path)?);
-        let overflow_path = path.join("overflow.lbug");
+        let overflow_path = path.join("overflow.ltng");
         let overflow_fh = Arc::new(FileHandle::open(&overflow_path)?);
         Ok(Self {
             db_path: path.to_path_buf(),
@@ -550,7 +550,7 @@ impl StorageManager {
     }
 
     pub fn create_vector_index(&mut self, table_name: &str, dim: usize) -> Result<()> {
-        let index_path = self.db_path.join(format!("{table_name}_vector.lbug"));
+        let index_path = self.db_path.join(format!("{table_name}_vector.ltng"));
         let fh = Arc::new(FileHandle::open(&index_path)?);
         self.file_handles.insert(fh.file_id, Arc::clone(&fh));
         let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh, dim));
@@ -569,10 +569,10 @@ impl StorageManager {
     }
 
     pub fn create_csr(&mut self, table_name: &str) -> Result<()> {
-        let fwd_offset_path = self.db_path.join(format!("{table_name}_fwd_offset.lbug"));
-        let fwd_adj_path = self.db_path.join(format!("{table_name}_fwd_adj.lbug"));
-        let bwd_offset_path = self.db_path.join(format!("{table_name}_bwd_offset.lbug"));
-        let bwd_adj_path = self.db_path.join(format!("{table_name}_bwd_adj.lbug"));
+        let fwd_offset_path = self.db_path.join(format!("{table_name}_fwd_offset.ltng"));
+        let fwd_adj_path = self.db_path.join(format!("{table_name}_fwd_adj.ltng"));
+        let bwd_offset_path = self.db_path.join(format!("{table_name}_bwd_offset.ltng"));
+        let bwd_adj_path = self.db_path.join(format!("{table_name}_bwd_adj.ltng"));
 
         let fwd_off_fh = Arc::new(FileHandle::open(&fwd_offset_path)?);
         let fwd_adj_fh = Arc::new(FileHandle::open(&fwd_adj_path)?);
@@ -604,12 +604,12 @@ impl StorageManager {
         let version_info = Arc::new(RowVersion::new());
         if !is_rel {
             let col_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{}_{}.lbug", name, "_id")),
+                &self.db_path.join(format!("{}_{}.ltng", name, "_id")),
             )?);
             self.file_handles
                 .insert(col_fh.file_id, Arc::clone(&col_fh));
             let null_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{}_{}_null.lbug", name, "_id")),
+                &self.db_path.join(format!("{}_{}_null.ltng", name, "_id")),
             )?);
             self.file_handles
                 .insert(null_fh.file_id, Arc::clone(&null_fh));
@@ -641,12 +641,12 @@ impl StorageManager {
             // have only user columns (type, weight, etc.) and no _src/_dst,
             // causing PhysicalScan to fail with missing system columns.
             let src_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{name}_src.lbug")),
+                &self.db_path.join(format!("{name}_src.ltng")),
             )?);
             self.file_handles
                 .insert(src_fh.file_id, Arc::clone(&src_fh));
             let src_null_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{name}_src_null.lbug")),
+                &self.db_path.join(format!("{name}_src_null.ltng")),
             )?);
             self.file_handles
                 .insert(src_null_fh.file_id, Arc::clone(&src_null_fh));
@@ -660,12 +660,12 @@ impl StorageManager {
             ));
 
             let dst_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{name}_dst.lbug")),
+                &self.db_path.join(format!("{name}_dst.ltng")),
             )?);
             self.file_handles
                 .insert(dst_fh.file_id, Arc::clone(&dst_fh));
             let dst_null_fh = Arc::new(FileHandle::open(
-                &self.db_path.join(format!("{name}_dst_null.lbug")),
+                &self.db_path.join(format!("{name}_dst_null.ltng")),
             )?);
             self.file_handles
                 .insert(dst_null_fh.file_id, Arc::clone(&dst_null_fh));
@@ -745,7 +745,7 @@ impl StorageManager {
     }
 
     pub fn create_index(&mut self, table_name: &str) -> Result<()> {
-        let index_path = self.db_path.join(format!("{table_name}_pk_index.lbug"));
+        let index_path = self.db_path.join(format!("{table_name}_pk_index.ltng"));
         let index = HashIndex::open_or_create(&index_path)?;
         self.indexes.insert(table_name.to_string(), Arc::new(index));
         Ok(())
@@ -780,12 +780,12 @@ impl StorageManager {
     ) -> Result<Column> {
         let path = self
             .db_path
-            .join(format!("{table_name}_{col_name}.lbug"));
+            .join(format!("{table_name}_{col_name}.ltng"));
         let fh = Arc::new(FileHandle::open(&path)?);
         self.file_handles.insert(fh.file_id, Arc::clone(&fh));
         let null_path = self
             .db_path
-            .join(format!("{table_name}_{col_name}_null.lbug"));
+            .join(format!("{table_name}_{col_name}_null.ltng"));
         let null_fh = Arc::new(FileHandle::open(&null_path)?);
         self.file_handles
             .insert(null_fh.file_id, Arc::clone(&null_fh));

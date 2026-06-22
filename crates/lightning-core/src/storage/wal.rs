@@ -67,7 +67,7 @@ pub struct WAL {
 
 impl WAL {
     pub fn new(path: &Path, sync_mode: SyncMode) -> Result<Self> {
-        let wal_path = path.join("wal.lbug");
+        let wal_path = path.join("wal.ltng");
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -115,9 +115,9 @@ impl WAL {
             .filter_map(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                if name.starts_with("wal_") && name.ends_with(".lbug") {
+                if name.starts_with("wal_") && name.ends_with(".ltng") {
                     match name.trim_start_matches("wal_")
-                        .trim_end_matches(".lbug")
+                        .trim_end_matches(".ltng")
                         .parse::<u64>()
                     {
                         Ok(seq) => Some(seq),
@@ -426,7 +426,7 @@ impl WAL {
             let current_len = file.metadata()?.len();
             if current_len > WAL_HEADER_SIZE as u64 {
                 let seq = self.archive_seq.fetch_add(1, Ordering::AcqRel);
-                let archive_name = format!("wal_{seq}.lbug");
+                let archive_name = format!("wal_{seq}.ltng");
                 let archive_path = archive_dir.join(&archive_name);
                 file.seek(SeekFrom::Start(0))?;
                 let mut archive_file = File::create(&archive_path)?;
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn test_new_wal_invalid_magic() {
         let dir = tempfile::tempdir().unwrap();
-        let wal_path = dir.path().join("wal.lbug");
+        let wal_path = dir.path().join("wal.ltng");
         std::fs::write(&wal_path, b"BOGUS").unwrap();
         let result = WAL::new(dir.path(), SyncMode::Normal);
         match result {
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn test_replay_committed_transaction() {
         let dir = tempfile::tempdir().unwrap();
-        let wal_path = dir.path().join("wal.lbug");
+        let wal_path = dir.path().join("wal.ltng");
         {
             let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
             let data = vec![0xCDu8; PAGE_SIZE];
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn test_replay_partial_record_at_eof() {
         let dir = tempfile::tempdir().unwrap();
-        let wal_path = dir.path().join("wal.lbug");
+        let wal_path = dir.path().join("wal.ltng");
         {
             let mut f = std::fs::File::create(&wal_path).unwrap();
             f.write_all(&WAL_MAGIC).unwrap();
@@ -738,7 +738,7 @@ mod tests {
     #[test]
     fn test_replay_corrupt_checksum() {
         let dir = tempfile::tempdir().unwrap();
-        let wal_path = dir.path().join("wal.lbug");
+        let wal_path = dir.path().join("wal.ltng");
         {
             let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
             let data = vec![0xAAu8; PAGE_SIZE];
@@ -903,7 +903,7 @@ mod tests {
     #[test]
     fn test_replay_unknown_record_type() {
         let dir = tempfile::tempdir().unwrap();
-        let wal_path = dir.path().join("wal.lbug");
+        let wal_path = dir.path().join("wal.ltng");
         {
             let mut f = std::fs::File::create(&wal_path).unwrap();
             f.write_all(&WAL_MAGIC).unwrap();

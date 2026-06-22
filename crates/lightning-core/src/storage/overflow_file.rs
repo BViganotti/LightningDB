@@ -201,7 +201,7 @@ mod tests {
 
     fn setup() -> (Arc<FileHandle>, Arc<BufferManager>, Arc<TransactionManager>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("overflow_test.lbug");
+        let path = dir.path().join("overflow_test.ltng");
         let fh = Arc::new(FileHandle::open(&path).unwrap());
         let wal = Arc::new(WAL::new(dir.path(), SyncMode::Normal).unwrap());
         let tm = Arc::new(TransactionManager::new(Arc::clone(&wal)));

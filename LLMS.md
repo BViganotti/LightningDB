@@ -180,7 +180,7 @@ Lightning implements a significant Cypher subset. Supported:
 
 ## Storage Engine
 
-- **Columnar**: Each column → separate file (`<table>_<col>.lbug`)
+- **Columnar**: Each column → separate file (`<table>_<col>.ltng`)
 - **Page size**: 4096 bytes
 - **Buffer pool**: Sharded (16 shards), CLOCK eviction, Markov-chain learned prefetch
 - **MVCC**: Snapshot isolation, page-level versioning, row-level merge-on-commit
@@ -193,17 +193,17 @@ Lightning implements a significant Cypher subset. Supported:
 ```
 <db_path>/
 ├── database.header       # magic bytes, version, last_checkpoint_ts
-├── wal.lbug              # write-ahead log
-├── catalog.lbug          # table schemas and metadata
+├── wal.ltng              # write-ahead log
+├── catalog.ltng          # table schemas and metadata
 ├── free_space.bin         # free page tracker
-├── <table>_<col>.lbug    # column data
-├── <table>_<col>_null.lbug       # null bitmap
-├── <table>_<col>_overflow.lbug   # overflow strings
+├── <table>_<col>.ltng    # column data
+├── <table>_<col>_null.ltng       # null bitmap
+├── <table>_<col>_overflow.ltng   # overflow strings
 ├── <table>_fts/          # Tantivy FTS index
-├── <table>_vector.lbug   # vector embeddings
-├── <table>_fwd_{offset,adj}.lbug  # CSR forward index
-├── <table>_bwd_{offset,adj}.lbug  # CSR backward index
-└── <table>_pk_index.lbug # hash index
+├── <table>_vector.ltng   # vector embeddings
+├── <table>_fwd_{offset,adj}.ltng  # CSR forward index
+├── <table>_bwd_{offset,adj}.ltng  # CSR backward index
+└── <table>_pk_index.ltng # hash index
 ```
 
 ## SystemConfig Defaults
