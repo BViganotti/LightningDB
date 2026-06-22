@@ -780,8 +780,12 @@ impl PhysicalPlanner {
         positions: &mut std::collections::HashMap<String, usize>,
     ) -> Result<usize> {
         match op {
-            LogicalOperator::Scan(table_name, var, mask_opt, ..) => {
-                let num_cols = self.get_table_num_columns(table_name);
+            LogicalOperator::Scan(table_name, var, mask_opt, projected_idxs, _filter) => {
+                let num_cols = if let Some(idxs) = projected_idxs {
+                    idxs.len()
+                } else {
+                    self.get_table_num_columns(table_name)
+                };
                 // If a semi-join mask column is appended to the Scan output,
                 // account for it so downstream operators compute correct offsets.
                 let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
@@ -936,21 +940,27 @@ impl PhysicalPlanner {
 
     fn compute_subtree_num_cols(&self, op: &LogicalOperator) -> usize {
         match op {
-            LogicalOperator::Scan(table_name, _, mask_opt, ..) => {
-                let base = self.get_table_num_columns(table_name);
-                let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
-                base + mask_extra
-            }
-            LogicalOperator::IndexScan(table_name, ..) => {
-                let cat = self.db.catalog.read();
-                if let Some(t) = cat.get_node_table(table_name) {
-                    // add_node_table prepends _id into properties, so
-                    // properties.len() already includes _id.
-                    t.properties.len()
-                } else if let Some(t) = cat.get_rel_table(table_name) {
-                    t.properties.len()
+            LogicalOperator::Scan(table_name, _, mask_opt, projected_idxs, _filter) => {
+                if let Some(idxs) = projected_idxs {
+                    idxs.len() + if mask_opt.is_some() { 1 } else { 0 }
                 } else {
-                    0
+                    let base = self.get_table_num_columns(table_name);
+                    let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
+                    base + mask_extra
+                }
+            }
+            LogicalOperator::IndexScan(table_name, _, _, _, projected_idxs) => {
+                if let Some(idxs) = projected_idxs {
+                    idxs.len()
+                } else {
+                    let cat = self.db.catalog.read();
+                    if let Some(t) = cat.get_node_table(table_name) {
+                        t.properties.len()
+                    } else if let Some(t) = cat.get_rel_table(table_name) {
+                        t.properties.len()
+                    } else {
+                        0
+                    }
                 }
             }
             LogicalOperator::Join(left, right, ..) => {
