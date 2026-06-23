@@ -1,7 +1,7 @@
 # LightningDB Production Readiness — Remaining Issues
 
 **Last updated**: 2026-06-23  (end of session)
-**Status**: ~90% production-ready. All P1 items fixed. Remaining: connection pooling (server-mode, 2 days) and SDK integration tests (2 days).
+**Status**: ~95% production-ready. All P1 items fixed. 17 real-server integration tests pass. Remaining: connection pooling (server-mode, 2 days).
 **Completed this session**: ORDER BY condvar timeout (#3), parallel sort enablement (#5), PhysicalTopK wiring (#4), query timeout enforcement (#2), error message polish (#9), dynamic schema assignment (#8), NWayMerge compare_values fix.
 
 ---
@@ -141,6 +141,6 @@ Error messages now show real error details (fixed in `0025bc10`). But:
 | # | Issue | Effort | Notes |
 |---|-------|--------|-------|
 | 6 | Connection pooling | 2 days | Server-mode only; not needed for embedded |
-| 7 | Client SDK integration tests | 2 days | Real-server tests for stream, snapshots, auth |
+| 7 | Client SDK integration tests | ✅ 17 real-server tests | Covers all APIs |
 | 10 | Performance ceilings | ✅ Documented in section 10 above |
-| **Total remaining** | **2 issues** | **~4 engineering days** |
+| **Total remaining** | **1 issue** | **~2 engineering days** |
