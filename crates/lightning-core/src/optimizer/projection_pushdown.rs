@@ -316,14 +316,12 @@ impl ProjectionPushDown {
                     v = set.iter().cloned().collect();
                     v.sort();
                 }
+                // If the set of indices is empty, don't set projected_idxs
+                // (the scan will output all columns). This avoids passing
+                // Some([]) which would cause an empty RecordBatch downstream.
+                let p = if v.is_empty() { None } else { Some(v) };
                 Ok((
-                    LogicalOperator::Scan(
-                        table,
-                        var,
-                        mask,
-                        if v.is_empty() { None } else { Some(v) },
-                        filter,
-                    ),
+                    LogicalOperator::Scan(table, var, mask, p, filter),
                     ColumnUsage::from_single(req),
                 ))
             }

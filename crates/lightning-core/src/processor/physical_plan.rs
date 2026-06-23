@@ -226,6 +226,25 @@ impl PhysicalPlanner {
                     let mut comparisons = Vec::new();
                     self.collect_eq_comparisons(&join_cond, &mut comparisons);
 
+                    // Remap join condition indices from binder space to physical
+                    // space. The projection pushdown optimizer may have set
+                    // projected_idxs on child scans but does NOT remap the join
+                    // condition's PropertyLookup indices.
+                    let mut combined_pos: std::collections::HashMap<String, usize> =
+                        left_positions.clone();
+                    let left_cols = self.compute_subtree_num_cols(&left);
+                    for (var, pos) in &right_positions {
+                        combined_pos.insert(var.clone(), pos + left_cols);
+                    }
+                    let remapped_cond = Self::remap_property_lookup_clone(
+                        &join_cond, &combined_pos, &self.binder_column_offsets,
+                    );
+                    let mut remapped_comparisons = Vec::new();
+                    self.collect_eq_comparisons(&remapped_cond, &mut remapped_comparisons);
+                    if !remapped_comparisons.is_empty() {
+                        comparisons = remapped_comparisons;
+                    }
+
                     // Find the best cross-boundary comparison for the hash join key
                     let mut key_idx: Option<usize> = None;
                     for (i, (left_expr, right_expr)) in comparisons.iter().enumerate() {
@@ -258,6 +277,16 @@ impl PhysicalPlanner {
                         }
                     }
 
+                    if comparisons.is_empty() {
+                        // No equality comparisons — fall back to cross join.
+                        let planned_left = self.plan(*left)?;
+                        let planned_right = self.plan(*right)?;
+                        return Ok(Box::new(
+                            crate::processor::operators::hash_join::HashJoin::new_cross_join(
+                                planned_left, planned_right,
+                            ),
+                        ));
+                    }
                     let key_i = key_idx.unwrap_or(0);
                     let (key_left_expr, key_right_expr) = &comparisons[key_i];
                     let (left_key, right_key) = self.resolve_join_key_pair(
@@ -1151,6 +1180,18 @@ impl PhysicalPlanner {
     /// the CHILD operator's variable positions and corrects each lookup:
     ///   `new_idx = child_phys_positions[var] + property_index_in_table`
     ///            = child_phys_positions[var] + (idx - binder_column_offsets[var])
+    /// Clone of `remap_property_lookup` that operates on a reference and returns
+    /// a new expression, leaving the original unchanged.
+    fn remap_property_lookup_clone(
+        expr: &BoundExpression,
+        child_phys_positions: &std::collections::HashMap<String, usize>,
+        binder_column_offsets: &std::collections::HashMap<String, usize>,
+    ) -> BoundExpression {
+        let mut cloned = expr.clone();
+        Self::remap_property_lookup(&mut cloned, child_phys_positions, binder_column_offsets);
+        cloned
+    }
+
     fn remap_property_lookup(
         expr: &mut BoundExpression,
         child_phys_positions: &std::collections::HashMap<String, usize>,

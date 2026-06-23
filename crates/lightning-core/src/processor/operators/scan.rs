@@ -136,7 +136,14 @@ impl PhysicalScan {
         // Filter out indices that exceed the storage column count
         // (can happen if catalog and storage have different column counts after ALTER TABLE)
         idxs.retain(|&idx| idx < self.table.columns.len());
-        self.projected_idxs = Some(idxs);
+        // If ALL indices were filtered out, projected_idxs would be empty,
+        // causing RecordBatch creation to fail downstream. In that case,
+        // skip projection pushdown entirely (scan all columns).
+        if idxs.is_empty() {
+            self.projected_idxs = None;
+        } else {
+            self.projected_idxs = Some(idxs);
+        }
         self
     }
 

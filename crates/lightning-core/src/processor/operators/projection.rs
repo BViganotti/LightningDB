@@ -69,17 +69,12 @@ impl PhysicalOperator for PhysicalProjection {
                 projected_columns.push(array);
             }
 
-            if fields.is_empty() || projected_columns.is_empty() {
-                return Err(crate::LightningError::Internal(format!(
-                    "Projection produced zero columns (items={}, rows={}, child_cols={})",
-                    self.items.len(),
-                    chunk.batch.num_rows(),
-                    chunk.batch.num_columns(),
-                )));
-            }
             let schema = Arc::new(Schema::new(fields));
             let batch = RecordBatch::try_new(schema, projected_columns)
-                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                .map_err(|e| crate::LightningError::Internal(format!(
+                    "Projection::get_next: {} (items={}, chunk_cols={}, chunk_rows={})",
+                    e, self.items.len(), chunk.batch.num_columns(), chunk.batch.num_rows(),
+                )))?;
 
             return Ok(Some(DataChunk { batch }));
         }
