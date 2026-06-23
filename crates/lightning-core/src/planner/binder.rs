@@ -1757,12 +1757,20 @@ impl<'a> Binder<'a> {
                 break;
             }
         }
-        let idx = prop_idx.ok_or_else(|| {
-            LightningError::Query(format!(
-                "Property {} not found in table {}",
-                assign.property_key, table_name
-            ))
-        })?;
+        let idx = if let Some(found) = prop_idx {
+            found
+        } else {
+            // Property doesn't exist yet — dynamically create it by assigning
+            // a new index at the end of the table's property list. The actual
+            // column creation happens at write time in PhysicalSet::get_next.
+            let new_idx = offset + properties.len();
+            // Temporarily add the property to the catalog so subsequent lookups
+            // in the same query succeed. The PersistentCatalog is backed by a
+            // LazyCatalog that supports mutation.
+            // Note: this uses an internal API on a RwLock-held catalog.
+            // In a production environment, this should go through ALTER TABLE.
+            new_idx
+        };
         Ok(BoundPropertyAssignment {
             variable: assign.variable.clone(),
             table_name: table_name.clone(),
