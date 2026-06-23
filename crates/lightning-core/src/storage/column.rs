@@ -1500,6 +1500,7 @@ impl Column {
                 | LogicalType::Uint64
                 | LogicalType::Node(_)
                 | LogicalType::Double
+                | LogicalType::Float
         );
 
         // Enable fast path for primitives even with nulls - zeros will be written for nulls
@@ -1901,7 +1902,7 @@ impl Column {
             LogicalType::Uint64 | LogicalType::Node(_) => Ok(Value::Node(u64::from_le_bytes(
                 data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
-            LogicalType::Double => Ok(Value::Number(f64::from_le_bytes(
+            LogicalType::Double | LogicalType::Float => Ok(Value::Number(f64::from_le_bytes(
                 data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Bool => Ok(Value::Boolean(data[0] != 0)),
@@ -1972,6 +1973,7 @@ impl Column {
                 buf[..8].copy_from_slice(&(*n as u64).to_le_bytes())
             }
             (Value::Number(n), LogicalType::Double) => buf[..8].copy_from_slice(&n.to_le_bytes()),
+            (Value::Number(n), LogicalType::Float) => buf[..8].copy_from_slice(&n.to_le_bytes()),
             (Value::Node(id), LogicalType::Double) => {
                 buf[..8].copy_from_slice(&(*id as f64).to_le_bytes())
             }
@@ -2032,6 +2034,7 @@ impl Column {
             | LogicalType::Uint64
             | LogicalType::Node(_)
             | LogicalType::Double
+            | LogicalType::Float
             | LogicalType::Timestamp => 8,
             LogicalType::Int32 | LogicalType::Date => 4,
             LogicalType::Bool => 1,

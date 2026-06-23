@@ -32,7 +32,7 @@ pub fn logical_type_to_arrow_type(t: &LogicalType) -> DataType {
         LogicalType::Int64 => DataType::Int64,
         LogicalType::Int32 => DataType::Int32,
         LogicalType::Uint64 | LogicalType::Node(_) => DataType::UInt64,
-        LogicalType::Double => DataType::Float64,
+        LogicalType::Double | LogicalType::Float => DataType::Float64,
         LogicalType::Bool => DataType::Boolean,
         LogicalType::String => DataType::Utf8,
         LogicalType::Date => DataType::Date32,
