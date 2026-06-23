@@ -330,10 +330,15 @@ impl ProjectionPushDown {
                 let mut v = Vec::new();
                 if let Some(set) = req.get(&var) {
                     v = set.iter().cloned().collect();
-                    // Convert global binder-space indices to table-local indices
+                    // Convert global binder-space indices to table-local indices.
+                    // Binder-relative indices are >= binder_column_offset[var].
+                    // Table-local indices (from join conditions) are < binder_offset
+                    // and must be preserved as-is.
                     let base = self.binder_column_offsets.get(&var).copied().unwrap_or(0);
                     if base > 0 {
-                        v = v.into_iter().map(|i| i.saturating_sub(base)).collect();
+                        v = v.into_iter()
+                            .map(|i| if i >= base { i - base } else { i })
+                            .collect();
                     }
                     v.sort();
                 }
