@@ -1,7 +1,7 @@
 # LightningDB Production Readiness — Remaining Issues
 
 **Last updated**: 2026-06-23  (end of session)
-**Status**: ~95% production-ready. All P1 items fixed. 17 real-server integration tests pass. Remaining: connection pooling (server-mode, 2 days).
+**Status**: ~99% production-ready. All 10 issues resolved or already implemented.
 **Completed this session**: ORDER BY condvar timeout (#3), parallel sort enablement (#5), PhysicalTopK wiring (#4), query timeout enforcement (#2), error message polish (#9), dynamic schema assignment (#8), NWayMerge compare_values fix.
 
 ---
@@ -49,16 +49,8 @@ Condvar wait now uses `wait_for(30s)` as a deadman switch. Returns timeout error
 
 ## P2 — Hardening
 
-### 6. Connection Pooling
-**File**: `crates/lightning-core/src/lib.rs` (`Connection` struct)
-`Connection` is a simple wrapper around `Arc<ClientContext>`. Each call to `Connection::execute()` begins a new transaction. There is no connection pooling — every HTTP request creates a new connection.
-
-**Not a blocker** for single-user embedded use, but for server-mode deployments:
-- Add a connection pool (r2d2 or deadpool) wrapping `ClientContext`
-- Configure pool size, timeout, health checks
-- Wire pool into `axum` extractor
-
-**Files**: `lib.rs`, `lightning-server/src/extract.rs`
+### ~~6. Connection Pooling~~ ✅ ALREADY IMPLEMENTED
+`ConnectionPool` at `extract.rs:45` with `max_size: 64`, wired into the axum `DbConnection` extractor. Returns connections to pool on `Drop`.
 
 ---
 
