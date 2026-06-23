@@ -161,6 +161,7 @@ impl ProjectionPushDown {
     fn remap_expression_indices(
         expr: &mut BoundExpression,
         column_usage: &ColumnUsage,
+        binder_offsets: &std::collections::HashMap<String, usize>,
     ) {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
@@ -168,34 +169,31 @@ impl ProjectionPushDown {
                     let mut v: Vec<_> = set.iter().cloned().collect();
                     v.sort();
                     if let Some(pos) = v.iter().position(|&i| i == *idx) {
-                        if column_usage.is_right_var(var) {
-                            *idx = column_usage.left_col_count() + pos;
-                        } else {
-                            *idx = pos;
-                        }
+                        let base = binder_offsets.get(var).copied().unwrap_or(0);
+                        *idx = base + pos;
                     }
                 }
             }
             BoundExpression::Comparison(l, _, r) => {
-                Self::remap_expression_indices(l, column_usage);
-                Self::remap_expression_indices(r, column_usage);
+                Self::remap_expression_indices(l, column_usage, binder_offsets);
+                Self::remap_expression_indices(r, column_usage, binder_offsets);
             }
             BoundExpression::Arithmetic(l, _, r) => {
-                Self::remap_expression_indices(l, column_usage);
-                Self::remap_expression_indices(r, column_usage);
+                Self::remap_expression_indices(l, column_usage, binder_offsets);
+                Self::remap_expression_indices(r, column_usage, binder_offsets);
             }
             BoundExpression::Logical(l, _, r) => {
-                Self::remap_expression_indices(l, column_usage);
-                Self::remap_expression_indices(r, column_usage);
+                Self::remap_expression_indices(l, column_usage, binder_offsets);
+                Self::remap_expression_indices(r, column_usage, binder_offsets);
             }
             BoundExpression::Function(_, args, _) => {
                 for arg in args {
-                    Self::remap_expression_indices(arg, column_usage);
+                    Self::remap_expression_indices(arg, column_usage, binder_offsets);
                 }
             }
             BoundExpression::List(exprs, _) => {
                 for e in exprs {
-                    Self::remap_expression_indices(e, column_usage);
+                    Self::remap_expression_indices(e, column_usage, binder_offsets);
                 }
             }
             BoundExpression::Case {
@@ -205,25 +203,25 @@ impl ProjectionPushDown {
                 ..
             } => {
                 if let Some(e) = expression {
-                    Self::remap_expression_indices(e, column_usage);
+                    Self::remap_expression_indices(e, column_usage, binder_offsets);
                 }
                 for (w, t) in when_then {
-                    Self::remap_expression_indices(w, column_usage);
-                    Self::remap_expression_indices(t, column_usage);
+                    Self::remap_expression_indices(w, column_usage, binder_offsets);
+                    Self::remap_expression_indices(t, column_usage, binder_offsets);
                 }
                 if let Some(e) = else_expression {
-                    Self::remap_expression_indices(e, column_usage);
+                    Self::remap_expression_indices(e, column_usage, binder_offsets);
                 }
             }
             BoundExpression::Aggregate(_, args, _) => {
                 for arg in args {
-                    Self::remap_expression_indices(arg, column_usage);
+                    Self::remap_expression_indices(arg, column_usage, binder_offsets);
                 }
             }
             BoundExpression::Lambda(_, body) => {
-                Self::remap_expression_indices(body, column_usage);
+                Self::remap_expression_indices(body, column_usage, binder_offsets);
             }
-            BoundExpression::Not(inner) => Self::remap_expression_indices(inner, column_usage),
+            BoundExpression::Not(inner) => Self::remap_expression_indices(inner, column_usage, binder_offsets),
             BoundExpression::Exists(_steps) | BoundExpression::CountSubquery(_steps) => {
                 // Exists/CountSubquery expressions reference outer-scope variables
                 // but their internal expressions are evaluated in a subquery scope
@@ -231,7 +229,7 @@ impl ProjectionPushDown {
             }
             BoundExpression::Map(entries, _) => {
                 for (_, e) in entries {
-                    Self::remap_expression_indices(e, column_usage);
+                    Self::remap_expression_indices(e, column_usage, binder_offsets);
                 }
             }
             _ => {}
@@ -251,7 +249,7 @@ impl ProjectionPushDown {
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
                 for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
                 }
                 Ok((
                     LogicalOperator::Projection(Box::new(new_child), items),
@@ -262,7 +260,7 @@ impl ProjectionPushDown {
                 let mut my_indices = required_indices;
                 Self::extract_property_indices(&cond, &mut my_indices);
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
-                Self::remap_expression_indices(&mut cond, &child_indices);
+                Self::remap_expression_indices(&mut cond, &child_indices, &self.binder_column_offsets);
                 Ok((
                     LogicalOperator::Filter(Box::new(new_child), cond),
                     child_indices,
@@ -344,7 +342,14 @@ impl ProjectionPushDown {
                 // Some([]) which would cause an empty RecordBatch downstream.
                 let projected_cols = v.len();
                 let p = if v.is_empty() { None } else { Some(v) };
-                let mut cu = ColumnUsage::from_single(req);
+                // ColumnUsage should only track THIS variable's indices (in global
+                // space) so that parent Join handlers don't count other variables'
+                // indices when computing left_col_count.
+                let mut single_var_req = std::collections::HashMap::new();
+                if let Some(set) = req.get(&var) {
+                    single_var_req.insert(var.clone(), set.clone());
+                }
+                let mut cu = ColumnUsage::from_single(single_var_req);
                 cu.projected_cols = projected_cols;
                 Ok((
                     LogicalOperator::Scan(table, var, mask, p, filter),
@@ -359,15 +364,23 @@ impl ProjectionPushDown {
                 // projected_idxs (the fixed-point loop applies this rule multiple
                 // times; only the first pass has binder-level storage indices).
                 if existing.is_some() {
+                    let mut single_var_req = std::collections::HashMap::new();
+                    if let Some(set) = required_indices.get(&var) {
+                        single_var_req.insert(var.clone(), set.clone());
+                    }
                     return Ok((
                         LogicalOperator::IndexScan(table, var, pk_name, pk_val, existing),
-                        ColumnUsage::from_single(required_indices),
+                        ColumnUsage::from_single(single_var_req),
                     ));
                 }
                 let mut v = Vec::new();
                 if let Some(set) = required_indices.get(&var) {
                     v = set.iter().cloned().collect();
                     v.sort();
+                }
+                let mut single_var_req = std::collections::HashMap::new();
+                if let Some(set) = required_indices.get(&var) {
+                    single_var_req.insert(var.clone(), set.clone());
                 }
                 Ok((
                     LogicalOperator::IndexScan(
@@ -377,7 +390,7 @@ impl ProjectionPushDown {
                         pk_val,
                         if v.is_empty() { None } else { Some(v) },
                     ),
-                    ColumnUsage::from_single(required_indices),
+                    ColumnUsage::from_single(single_var_req),
                 ))
             }
             LogicalOperator::Aggregate {
@@ -404,7 +417,7 @@ impl ProjectionPushDown {
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
                 for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
                 }
                 Ok((
                     LogicalOperator::Sort(Box::new(new_child), items),
@@ -418,7 +431,7 @@ impl ProjectionPushDown {
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
                 for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices);
+                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
                 }
                 Ok((
                     LogicalOperator::TopK(Box::new(new_child), items, limit),

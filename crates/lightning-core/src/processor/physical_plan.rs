@@ -226,25 +226,6 @@ impl PhysicalPlanner {
                     let mut comparisons = Vec::new();
                     self.collect_eq_comparisons(&join_cond, &mut comparisons);
 
-                    // Remap join condition indices from binder space to physical
-                    // space. The projection pushdown optimizer may have set
-                    // projected_idxs on child scans but does NOT remap the join
-                    // condition's PropertyLookup indices.
-                    let mut combined_pos: std::collections::HashMap<String, usize> =
-                        left_positions.clone();
-                    let left_cols = self.compute_subtree_num_cols(&left);
-                    for (var, pos) in &right_positions {
-                        combined_pos.insert(var.clone(), pos + left_cols);
-                    }
-                    let remapped_cond = Self::remap_property_lookup_clone(
-                        &join_cond, &combined_pos, &self.binder_column_offsets,
-                    );
-                    let mut remapped_comparisons = Vec::new();
-                    self.collect_eq_comparisons(&remapped_cond, &mut remapped_comparisons);
-                    if !remapped_comparisons.is_empty() {
-                        comparisons = remapped_comparisons;
-                    }
-
                     // Find the best cross-boundary comparison for the hash join key
                     let mut key_idx: Option<usize> = None;
                     for (i, (left_expr, right_expr)) in comparisons.iter().enumerate() {
