@@ -48,9 +48,30 @@ pub async fn query_handler(
         }
     }))
     .await
-    .map_err(|_| AppError::Timeout(timeout_ms))?
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(AppError::from)?;
+    .map_err(|_| {
+        tracing::warn!(%request_id, "Query timed out after {}ms", timeout_ms);
+        AppError::Timeout(timeout_ms)
+    })?
+    .map_err(|join_err| {
+        if join_err.is_panic() {
+            let panic_msg = join_err.into_panic();
+            let msg = if let Some(s) = panic_msg.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_msg.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                format!("{:?}", panic_msg)
+            };
+            tracing::error!(%request_id, "Query panicked: {}", msg);
+            AppError::Internal(msg)
+        } else {
+            AppError::Internal(join_err.to_string())
+        }
+    })?
+    .map_err(|e| {
+        tracing::error!(%request_id, "Query error: {}", e);
+        AppError::from(e)
+    })?;
 
     let typed = TypedQueryResult::from(result);
     let duration = start.elapsed().as_millis() as u64;
