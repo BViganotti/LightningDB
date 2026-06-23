@@ -87,13 +87,7 @@ impl IntoResponse for AppError {
             },
         };
 
-        let user_message = match &self {
-            AppError::Internal(_) => "An internal error occurred".to_string(),
-            AppError::Db(lightning_core::LightningError::Internal(_)) => "An internal database error occurred".to_string(),
-            AppError::Db(lightning_core::LightningError::Database(_)) => "A database error occurred".to_string(),
-            AppError::Db(lightning_core::LightningError::Io(_)) => "An I/O error occurred".to_string(),
-            _ => self.to_string(),
-        };
+        let user_message = self.to_string();
 
         let error_response = ErrorResponse {
             error: user_message,

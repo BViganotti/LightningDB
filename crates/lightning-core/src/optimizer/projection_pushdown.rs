@@ -268,13 +268,15 @@ impl ProjectionPushDown {
                 let (new_left, left_indices) = self.push_down(*left, my_indices.clone())?;
                 let (new_right, right_indices) = self.push_down(*right, my_indices.clone())?;
 
-                // Count distinct left columns for offset calculation
+                // Count distinct left columns for offset calculation.
+                // Use len() rather than max()+1 because projected indices
+                // may not be contiguous from 0 (e.g. {2, 5} has 2 columns).
                 let all_left: HashSet<usize> = left_indices
                     .indices
                     .values()
                     .flat_map(|s| s.iter().cloned())
                     .collect();
-                let left_col_count = all_left.iter().max().copied().unwrap_or(0).saturating_add(1);
+                let left_col_count = all_left.len();
 
                 // Track which variables come from the right side
                 let right_vars: HashSet<String> = right_indices.indices.keys().cloned().collect();
