@@ -1,8 +1,8 @@
 # LightningDB Production Readiness — Remaining Issues
 
-**Last updated**: 2026-06-23
-**Status**: ~85% production-ready. Core engine, crashes, correctness, and performance all addressed. Remaining issues are client/sdk polish and hardening.
-**Completed in this session**: ORDER BY timeout guard, parallel sort enablement, PhysicalTopK wiring, query timeout enforcement, NWayMerge compare_values fix.
+**Last updated**: 2026-06-23  (end of session)
+**Status**: ~90% production-ready. All P1 items fixed. Remaining: connection pooling (server-mode, 2 days) and SDK integration tests (2 days).
+**Completed this session**: ORDER BY condvar timeout (#3), parallel sort enablement (#5), PhysicalTopK wiring (#4), query timeout enforcement (#2), error message polish (#9), dynamic schema assignment (#8), NWayMerge compare_values fix.
 
 ---
 
@@ -110,46 +110,37 @@ Error messages now show real error details (fixed in `0025bc10`). But:
 ## P3 — Performance & Polish
 
 ### 10. Benchmarks & Performance Ceilings
-Document known ceilings:
 
-| Operation | Limit | Action |
-|-----------|-------|--------|
-| Sort rows | 10M (hard-coded) | Increase or make configurable |
-| BFS max depth | u32::MAX | Add practical default (e.g., 10) |
-| BFS fallback rels | 1M | Document or make configurable |
-| HTTP body | 10MB (configurable) | Document default |
-| Batch entities | 1000 | Document default |
-| TopK | `MAX_SORT_MEMORY_ROWS` | Wire PhysicalTopK |
-
----
-
-## Quick Wins (1 day each)
-
-| # | Issue | Effort |
-|---|-------|--------|
-| 3 | ORDER BY condvar timeout | 1 hour |
-| 5 | Enable `is_parallel_safe()` | 1 day |
-| 8 | Dynamic schema type inference | 1 day |
-| 9 | Error message polish | 1 day |
-| 10 | Document ceilings | 2 hours |
-
-## Heavy Lifts (2-3 days each)
-
-| # | Issue | Effort |
-|---|-------|--------|
-| 2 | Query timeout enforcement | 2-3 days |
-| 4 | External sort / TopK | 2 days |
-| 6 | Connection pooling | 2 days |
-| 7 | Client SDK integration tests | 2 days |
+| Operation | Default Limit | Configurable? | Notes |
+|-----------|--------------|---------------|-------|
+| Sort rows | 10M (`MAX_SORT_MEMORY_ROWS`) | Hard-coded constant | Beyond this returns error. External sort not implemented. |
+| BFS depth | `u32::MAX` | No practical limit | Timeout enforced via `max_traversal_ms` (default 30s). |
+| BFS fallback | 1M rels | Hard-coded | Beyond this: warning logged, partial results. |
+| HTTP body | 10MB | Via `ClientConfig` | Configurable per client. |
+| Batch entities | 1000 | Via `ClientConfig` | Configurable per client. |
+| TopK | 10M rows | Same as sort limit | Uses O(N+K log K) bounded sort. |
+| Query timeout | 0 (disabled) | Via `query_timeout_ms` or HTTP `timeoutMs` | Thread-based kill switch. |
 
 ---
 
-## Summary
+## Completed This Session
 
-| Priority | Issues | Total Effort |
-|----------|--------|-------------|
-| P0 (correctness) | 1 (being worked on) | — |
-| P1 (hangs/features) | 2, 3, 4, 5 | ~7 days |
-| P2 (hardening) | 6, 7, 8, 9 | ~6 days |
-| P3 (polish) | 10 | ~2 hours |
-| **Total** | **9 issues** | **~13-15 engineering days** |
+| # | Issue | Fix | Commit |
+|---|-------|-----|--------|
+| 2 | Query timeout enforcement | Thread-based `recv_timeout` in `Connection::execute` | `2ddb4d21` |
+| 3 | ORDER BY condvar timeout | `wait_for(30s)` deadman switch | `91bb5cfc` |
+| 4 | PhysicalTopK wiring | `LogicalOperator::TopK` → `PhysicalTopK` directly | `91bb5cfc`, `9228fde5` |
+| 5 | Parallel sort dead code | `is_parallel_safe()=true`, backoff sleep, `Value::partial_cmp` | `91bb5cfc` |
+| 8 | Dynamic schema SET | Binder auto-assigns new property index on non-existent property | `9228fde5` |
+| 9 | Error message polish | Extract real panic messages, log with request_id | `243c2aa1` |
+
+---
+
+## Remaining (after session)
+
+| # | Issue | Effort | Notes |
+|---|-------|--------|-------|
+| 6 | Connection pooling | 2 days | Server-mode only; not needed for embedded |
+| 7 | Client SDK integration tests | 2 days | Real-server tests for stream, snapshots, auth |
+| 10 | Performance ceilings | ✅ Documented in section 10 above |
+| **Total remaining** | **2 issues** | **~4 engineering days** |
