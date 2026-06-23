@@ -316,6 +316,51 @@ impl PhysicalPlanner {
                     }
                 }
             }
+            LogicalOperator::SemiJoin(left, right, cond, is_anti) => {
+                // SemiJoin is a hash-based semi/anti-join. Reuse the same
+                // equality-comparison extraction and key-index logic as Join.
+                let left_positions = self.compute_variable_positions(&*left)
+                    .unwrap_or_default();
+                let right_positions = self.compute_variable_positions(&*right)
+                    .unwrap_or_default();
+
+                let mut comparisons = Vec::new();
+                self.collect_eq_comparisons(&cond, &mut comparisons);
+
+                // Find the first cross-boundary comparison for the hash key.
+                let mut l_key = 0usize;
+                let mut r_key = 0usize;
+                for (l_expr, r_expr) in &comparisons {
+                    let l_in_left = self.expr_belongs_to_side(l_expr, &left_positions);
+                    let r_in_right = self.expr_belongs_to_side(r_expr, &right_positions);
+                    if l_in_left && r_in_right {
+                        if let BoundExpression::PropertyLookup(_, idx, _) = l_expr {
+                            l_key = *idx;
+                        }
+                        if let BoundExpression::PropertyLookup(_, idx, _) = r_expr {
+                            r_key = *idx;
+                        }
+                        break;
+                    }
+                }
+
+                let planned_left = self.plan(*left)?;
+                let planned_right = self.plan(*right)?;
+
+                if is_anti {
+                    Ok(Box::new(
+                        crate::processor::operators::hash_join::HashJoin::new_anti(
+                            planned_left, planned_right, l_key, r_key,
+                        ),
+                    ))
+                } else {
+                    Ok(Box::new(
+                        crate::processor::operators::hash_join::HashJoin::new_semi(
+                            planned_left, planned_right, l_key, r_key,
+                        ),
+                    ))
+                }
+            }
             LogicalOperator::Aggregate {
                 child,
                 group_by_cols,

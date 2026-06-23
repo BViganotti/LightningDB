@@ -144,13 +144,30 @@ impl SubqueryUnnesting {
         // SemiJoin's equality condition's right-hand PropertyLookup("__sub_n", ...)
         // matches the actual variable names in the subquery plan.
         for element in &mut sub_match.elements {
-            if let crate::planner::binder::BoundMatchElement::Node(ref table_name, ref var_name, ref props) = element {
-                if left_vars.contains(var_name) {
-                    let new_name = format!("__sub_{var_name}");
-                    *element = crate::planner::binder::BoundMatchElement::Node(
-                        table_name.clone(), new_name, props.clone(),
-                    );
+            match element {
+                crate::planner::binder::BoundMatchElement::Node(ref table_name, ref var_name, ref props) => {
+                    if left_vars.contains(var_name) {
+                        let new_name = format!("__sub_{var_name}");
+                        *element = crate::planner::binder::BoundMatchElement::Node(
+                            table_name.clone(), new_name, props.clone(),
+                        );
+                    }
                 }
+                crate::planner::binder::BoundMatchElement::Rel(
+                    ref _rel_table,
+                    ref _rel_var,
+                    ref mut src_var,
+                    ref mut dst_var,
+                    _,
+                ) => {
+                    if left_vars.contains(src_var) {
+                        *src_var = format!("__sub_{src_var}");
+                    }
+                    if left_vars.contains(dst_var) {
+                        *dst_var = format!("__sub_{dst_var}");
+                    }
+                }
+                _ => {}
             }
         }
         if let Some(ref mut where_clause) = sub_where {
