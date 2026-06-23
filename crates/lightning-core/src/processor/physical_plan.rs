@@ -411,6 +411,12 @@ impl PhysicalPlanner {
                 let table = storage.get_table(&pat.table_name).ok_or_else(|| {
                     crate::LightningError::Internal(format!("Table '{}' not found for CREATE REL", pat.table_name))
                 })?.clone();
+                let rel_cat = self.db.catalog.read();
+                let from_table = rel_cat.get_rel_table(&pat.table_name)
+                    .map(|r| r.from_table.clone());
+                let to_table = rel_cat.get_rel_table(&pat.table_name)
+                    .map(|r| r.to_table.clone());
+                drop(rel_cat);
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalCreateRel::new(
                         pat.table_name,
@@ -422,7 +428,10 @@ impl PhysicalPlanner {
                         self.undo_buffer.clone(),
                         planned_child,
                         self.tx_id,
-                    ),
+                    )
+                    .with_src_node(from_table)
+                    .with_dst_node(to_table)
+                    .with_storage_manager(self.db.storage_manager.clone()),
                 ))
             }
             LogicalOperator::Delete(child, vars, detach) => {

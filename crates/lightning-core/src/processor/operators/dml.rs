@@ -812,6 +812,13 @@ pub struct PhysicalCreateRel {
     child: Option<Box<dyn PhysicalOperator + Send + Sync>>,
     shared_state: Arc<SharedDMLState>,
     tx_id: u64,
+    /// Source node table name — used to look up internal _id from storage
+    /// when the child batch doesn't contain the _id column.
+    src_node_table: Option<String>,
+    /// Destination node table name.
+    dst_node_table: Option<String>,
+    /// Storage manager for _id lookups.
+    storage_manager: Option<Arc<RwLock<crate::storage::StorageManager>>>,
 }
 impl PhysicalCreateRel {
     pub fn new(
@@ -843,7 +850,22 @@ impl PhysicalCreateRel {
                 affected_rows: RwLock::new(Vec::new()),
             }),
             tx_id,
+            src_node_table: None,
+            dst_node_table: None,
+            storage_manager: None,
         }
+    }
+    pub fn with_src_node(mut self, name: Option<String>) -> Self {
+        self.src_node_table = name;
+        self
+    }
+    pub fn with_dst_node(mut self, name: Option<String>) -> Self {
+        self.dst_node_table = name;
+        self
+    }
+    pub fn with_storage_manager(mut self, sm: Arc<RwLock<crate::storage::StorageManager>>) -> Self {
+        self.storage_manager = Some(sm);
+        self
     }
 }
 impl PhysicalOperator for PhysicalCreateRel {
@@ -857,6 +879,12 @@ impl PhysicalOperator for PhysicalCreateRel {
         params: Option<&std::collections::HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
+            // Capture references needed by resolve_node_id before the
+            // mutable borrow of self.child inside the loop below.
+            let src_node = self.src_node_table.clone();
+            let dst_node = self.dst_node_table.clone();
+            let sm = self.storage_manager.clone();
+
             if let Some(ref mut child) = self.child {
                 while let Some(chunk) = child.get_next(database, tx, params)? {
                     let num_rows = chunk.num_rows();
@@ -894,14 +922,15 @@ impl PhysicalOperator for PhysicalCreateRel {
                         let src_val = Value::from_arrow(src_col, i);
                         let dst_val = Value::from_arrow(dst_col, i);
 
-                        let src_id = match src_val {
-                            Value::Node(id) => id,
-                            _ => continue,
-                        };
-                        let dst_id = match dst_val {
-                            Value::Node(id) => id,
-                            _ => continue,
-                        };
+                        let src_id = Self::lookup_internal_id(
+                            src_val, true, &src_node, &dst_node, &sm,
+                            &self.buffer_manager, tx,
+                        )?;
+                        let dst_id = Self::lookup_internal_id(
+                            dst_val, false, &src_node, &dst_node, &sm,
+                            &self.buffer_manager, tx,
+                        )?;
+                        let (Some(src_id), Some(dst_id)) = (src_id, dst_id) else { continue };
 
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
                     if row_data.len() >= 2 {
@@ -982,10 +1011,64 @@ impl PhysicalOperator for PhysicalCreateRel {
             }),
             shared_state: self.shared_state.clone(),
             tx_id: self.tx_id,
+            src_node_table: self.src_node_table.clone(),
+            dst_node_table: self.dst_node_table.clone(),
+            storage_manager: self.storage_manager.clone(),
         })
     }
     fn is_single_row(&self) -> bool {
         self.child.is_none()
+    }
+}
+
+impl PhysicalCreateRel {
+    /// Resolve the internal node ID from a batch column value.
+    ///
+    /// When the value is `Value::Node(u64)` (the internal `_id` column),
+    /// this is returned directly. Otherwise the user-visible primary key is
+    /// used to look up the internal `_id` from the node table storage.
+    fn lookup_internal_id(
+        val: Value,
+        is_src: bool,
+        src_node_table: &Option<String>,
+        dst_node_table: &Option<String>,
+        storage_manager: &Option<Arc<RwLock<crate::storage::StorageManager>>>,
+        buffer_manager: &Arc<BufferManager>,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<Option<u64>> {
+        match val {
+            Value::Node(id) => Ok(Some(id)),
+            _ => {
+                let node_table = if is_src {
+                    src_node_table.as_deref()
+                } else {
+                    dst_node_table.as_deref()
+                };
+                let Some(table_name) = node_table else {
+                    return Ok(None);
+                };
+                let Some(ref sm) = storage_manager else {
+                    return Ok(None);
+                };
+                let sm_guard = sm.read();
+                let Some(tbl) = sm_guard.get_table(table_name) else {
+                    return Ok(None);
+                };
+                // The primary key column is at index 1 in the node table
+                // (index 0 is _id). Scan it for the matching value.
+                let pk_col = &tbl.columns[1];
+                let total = tbl.stats.read().cardinality;
+                for row in 0..total {
+                    let Ok(cell) = pk_col.get_value(buffer_manager, row, tx) else {
+                        continue;
+                    };
+                    if cell == val {
+                        return Ok(Some(row));
+                    }
+                }
+                Ok(None)
+            }
+        }
     }
 }
 
