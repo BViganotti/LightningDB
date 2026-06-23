@@ -15,6 +15,9 @@ struct ColumnUsage {
     left_col_count: usize,
     /// Variables that come from the right side of a Join.
     right_vars: HashSet<String>,
+    /// Number of projected columns in this operator's output (used for
+    /// computing left_col_count in parent Join operators).
+    projected_cols: usize,
 }
 
 impl ColumnUsage {
@@ -35,21 +38,24 @@ impl ColumnUsage {
             indices,
             left_col_count: 0,
             right_vars: HashSet::new(),
+            projected_cols: 0,
         }
     }
 }
 
-pub struct ProjectionPushDown;
+pub struct ProjectionPushDown {
+    binder_column_offsets: std::collections::HashMap<String, usize>,
+}
 
 impl Default for ProjectionPushDown {
     fn default() -> Self {
-        Self::new()
+        Self::new(std::collections::HashMap::new())
     }
 }
 
 impl ProjectionPushDown {
-    pub fn new() -> Self {
-        Self
+    pub fn new(binder_column_offsets: std::collections::HashMap<String, usize>) -> Self {
+        Self { binder_column_offsets }
     }
 
     fn extract_property_indices(
@@ -268,29 +274,41 @@ impl ProjectionPushDown {
                 let (new_left, left_indices) = self.push_down(*left, my_indices.clone())?;
                 let (new_right, right_indices) = self.push_down(*right, my_indices.clone())?;
 
-                // Count distinct left columns for offset calculation.
-                // Use len() rather than max()+1 because projected indices
-                // may not be contiguous from 0 (e.g. {2, 5} has 2 columns).
-                let all_left: HashSet<usize> = left_indices
-                    .indices
-                    .values()
-                    .flat_map(|s| s.iter().cloned())
-                    .collect();
-                let left_col_count = all_left.len();
+                // Number of columns in the left output. Use the left child's
+                // projected column count (which correctly accounts for the
+                // number of locally-projected columns), falling back to the
+                // count of unique global indices for the left side.
+                let left_col_count = if left_indices.projected_cols > 0 {
+                    left_indices.projected_cols
+                } else {
+                    let all_left: HashSet<usize> = left_indices
+                        .indices
+                        .values()
+                        .flat_map(|s| s.iter().cloned())
+                        .collect();
+                    all_left.len()
+                };
 
                 // Track which variables come from the right side
                 let right_vars: HashSet<String> = right_indices.indices.keys().cloned().collect();
 
                 // Merge indices: left indices stay as-is, right indices get their original values
                 let mut combined_indices = left_indices.indices;
-                for (k, v) in right_indices.indices {
+                for (k, v) in right_indices.indices.into_iter() {
                     combined_indices.entry(k).or_default().extend(v);
                 }
 
+                // Count right-side projected columns BEFORE consuming indices
+                let right_projected = if right_indices.projected_cols > 0 {
+                    right_indices.projected_cols
+                } else {
+                    0
+                };
                 let combined = ColumnUsage {
-                    indices: combined_indices,
+                    projected_cols: left_col_count + right_projected,
                     left_col_count,
                     right_vars,
+                    indices: combined_indices,
                 };
                 Ok((
                     LogicalOperator::Join(Box::new(new_left), Box::new(new_right), cond),
@@ -314,15 +332,23 @@ impl ProjectionPushDown {
                 let mut v = Vec::new();
                 if let Some(set) = req.get(&var) {
                     v = set.iter().cloned().collect();
+                    // Convert global binder-space indices to table-local indices
+                    let base = self.binder_column_offsets.get(&var).copied().unwrap_or(0);
+                    if base > 0 {
+                        v = v.into_iter().map(|i| i.saturating_sub(base)).collect();
+                    }
                     v.sort();
                 }
                 // If the set of indices is empty, don't set projected_idxs
                 // (the scan will output all columns). This avoids passing
                 // Some([]) which would cause an empty RecordBatch downstream.
+                let projected_cols = v.len();
                 let p = if v.is_empty() { None } else { Some(v) };
+                let mut cu = ColumnUsage::from_single(req);
+                cu.projected_cols = projected_cols;
                 Ok((
                     LogicalOperator::Scan(table, var, mask, p, filter),
-                    ColumnUsage::from_single(req),
+                    cu,
                 ))
             }
             LogicalOperator::IndexScan(table, var, pk_name, pk_val, existing) => {

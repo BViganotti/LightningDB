@@ -1404,10 +1404,12 @@ impl Connection {
     fn plan_and_optimize(
         &self,
         stmt: crate::planner::binder::BoundStatement,
+        binder_column_offsets: std::collections::HashMap<String, usize>,
     ) -> Result<crate::planner::logical_plan::LogicalOperator> {
         let plan = crate::planner::LogicalPlanner::plan(stmt)?;
-        let optimizer = crate::optimizer::Optimizer::new(
+        let optimizer = crate::optimizer::Optimizer::with_binder_offsets(
             self.client_context.database.catalog.inner_catalog(),
+            binder_column_offsets,
         );
         optimizer.optimize(plan)
     }
@@ -1525,7 +1527,7 @@ impl Connection {
             }
         };
 
-        let logical_plan = self.plan_and_optimize(bound_stmt)?;
+        let logical_plan = self.plan_and_optimize(bound_stmt, binder_column_offsets.clone())?;
         let mut planner = PhysicalPlanner::new(
             Arc::clone(&self.client_context.database),
             tx.read_ts,

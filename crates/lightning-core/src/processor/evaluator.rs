@@ -44,13 +44,13 @@ impl ExpressionEvaluator {
                 }
                 Literal::Null => Ok(arrow::array::new_null_array(&DataType::Float64, num_rows)),
             },
-            BoundExpression::PropertyLookup(_, idx, _) => {
+            BoundExpression::PropertyLookup(var_name, idx, _) => {
                 if let Some(b) = batch {
                     if *idx >= b.num_columns() {
+                        let col_names: Vec<String> = b.schema().fields().iter().map(|f| f.name().clone()).collect();
                         return Err(LightningError::Internal(format!(
-                            "PropertyLookup index {} out of bounds for batch with {} columns",
-                            idx,
-                            b.num_columns()
+                            "PropertyLookup `{}` index {} out of bounds for batch with {} columns. batch cols: {:?}",
+                            var_name, idx, b.num_columns(), col_names,
                         )));
                     }
                     Ok(b.column(*idx).clone())

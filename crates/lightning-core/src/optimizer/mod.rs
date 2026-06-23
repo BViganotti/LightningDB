@@ -29,10 +29,18 @@ pub struct Optimizer {
 }
 
 impl Optimizer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(catalog: Arc<RwLock<Catalog>>) -> Self {
+        Self::with_binder_offsets(catalog, std::collections::HashMap::new())
+    }
+    pub fn with_binder_offsets(
+        catalog: Arc<RwLock<Catalog>>,
+        binder_column_offsets: std::collections::HashMap<String, usize>,
+    ) -> Self {
         let cat_jr = Arc::clone(&catalog);
         let cat_ipd = Arc::clone(&catalog);
         let cat_crt = Arc::clone(&catalog);
+        let bco = binder_column_offsets;
         Self {
             rules: vec![
                 Box::new(subquery_unnesting::SubqueryUnnesting::new()),
@@ -42,7 +50,7 @@ impl Optimizer {
                 Box::new(topk_optimizer::TopKOptimizer::new()),
                 Box::new(limit_pushdown::LimitPushDown::new()),
                 Box::new(order_by_pushdown::OrderByPushDown::new()),
-                Box::new(projection_pushdown::ProjectionPushDown::new()),
+                Box::new(projection_pushdown::ProjectionPushDown::new(bco)),
                 Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
                 Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
                 // #59: CountRelTableOptimizer — replaces COUNT(*) on a rel table
