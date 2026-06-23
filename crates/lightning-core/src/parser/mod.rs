@@ -951,16 +951,24 @@ fn parse_var_len(
 ) -> Result<(Option<u32>, Option<u32>), ParserError> {
     let mut l = None;
     let mut u = None;
-    for i in p.into_inner() {
-        if i.as_rule() == Rule::number_literal {
-            let val = i.as_str().parse().unwrap_or(1);
+    fn collect_number_literals(
+        pair: pest::iterators::Pair<Rule>,
+        l: &mut Option<u32>,
+        u: &mut Option<u32>,
+    ) {
+        if pair.as_rule() == Rule::number_literal {
+            let val = pair.as_str().parse().unwrap_or(1);
             if l.is_none() {
-                l = Some(val);
+                *l = Some(val);
             } else {
-                u = Some(val);
+                *u = Some(val);
             }
         }
+        for inner in pair.into_inner() {
+            collect_number_literals(inner, l, u);
+        }
     }
+    collect_number_literals(p, &mut l, &mut u);
     Ok((l, u))
 }
 

@@ -935,6 +935,16 @@ impl<'a> Binder<'a> {
                 // Variable is already bound (e.g. from an outer MATCH in an EXISTS
                 // subquery). Use the existing table name as the label.
                 bv.table_name.clone()
+            } else if let Some(rel_chain) = pattern.relationship_chains.first() {
+                let rel_label = self.require_single_label(&rel_chain.relationship_pattern.labels, "MATCH relationship")?;
+                let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
+                    LightningError::Query(format!("Rel Table {rel_label} not found"))
+                })?;
+
+                match rel_chain.relationship_pattern.direction {
+                    crate::parser::ast::Direction::Left => rel_table.to_table.clone(),
+                    _ => rel_table.from_table.clone(),
+                }
             } else {
                 return Err(LightningError::Query("MATCH must have a label".into()));
             };
@@ -1009,10 +1019,17 @@ impl<'a> Binder<'a> {
                         self.bind_property_items(&dst_pat.properties, &src_table.properties, 0)?;
                     (bound_var.table_name, props)
                 } else {
-                    // Variable not bound yet, need label
-                    let dst_label = self.require_single_label(&dst_pat.labels, "MATCH destination node")?;
+                    let dst_label: String = if let Some(label) = dst_pat.labels.first() {
+                        label.clone()
+                    } else {
+                        // Infer destination node table from the relationship definition
+                        match rel_chain.relationship_pattern.direction {
+                            crate::parser::ast::Direction::Left => rel_table.from_table.clone(),
+                            _ => rel_table.to_table.clone(),
+                        }
+                    };
 
-                    let dst_table = self.catalog.get_node_table(dst_label).ok_or_else(|| {
+                    let dst_table = self.catalog.get_node_table(&dst_label).ok_or_else(|| {
                         LightningError::Query(format!("Table {dst_label} not found"))
                     })?;
                     self.variables.insert(

@@ -88,6 +88,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 let start_node = Value::from_arrow(chunk.batch.column(self.src_var_idx), i);
                 let start_id = match start_node {
                     Value::Node(id) => id,
+                    Value::Number(n) => n as u64,
                     _ => continue,
                 };
 

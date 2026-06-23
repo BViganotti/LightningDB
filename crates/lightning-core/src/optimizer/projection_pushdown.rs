@@ -511,6 +511,34 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
+            LogicalOperator::RecursiveJoin {
+                child,
+                rel_table,
+                rel_var,
+                src_var,
+                dst_node_table,
+                dst_var,
+                bounds,
+                mask_id,
+            } => {
+                let mut my_indices = required_indices;
+                my_indices.entry(src_var.clone()).or_default().insert(0);
+                my_indices.entry(dst_var.clone()).or_default().insert(0);
+                let (new_child, child_indices) = self.push_down(*child, my_indices)?;
+                Ok((
+                    LogicalOperator::RecursiveJoin {
+                        child: Box::new(new_child),
+                        rel_table,
+                        rel_var,
+                        src_var,
+                        dst_node_table,
+                        dst_var,
+                        bounds,
+                        mask_id,
+                    },
+                    child_indices,
+                ))
+            }
             _ => {
                 if let Some(child) = plan.get_child().cloned() {
                     let (new_child, child_indices) = self.push_down(child, required_indices)?;

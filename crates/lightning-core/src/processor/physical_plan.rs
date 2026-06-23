@@ -81,10 +81,20 @@ impl PhysicalPlanner {
                     scan = scan.with_projected_idxs(idxs);
                 }
                 if let Some(filter) = pushdown_filter {
-                    let planned_filter = self.plan_expression(
+                    let mut planned_filter = self.plan_expression(
                         &LogicalOperator::Scan(table_name.clone(), var.clone(), None, None, None),
                         &filter,
                     )?;
+
+                    {
+                        let mut scan_positions = std::collections::HashMap::new();
+                        scan_positions.insert(var.clone(), 0usize);
+                        Self::remap_property_lookup(
+                            &mut planned_filter,
+                            &scan_positions,
+                            &self.binder_column_offsets,
+                        );
+                    }
 
                     if let Some(candidates) =
                         self.extract_trigram_candidates(&planned_filter, &scan.table)
@@ -192,7 +202,6 @@ impl PhysicalPlanner {
                         &self.binder_column_offsets,
                     );
                 }
-
                 Ok(Box::new(
                     crate::processor::operators::projection::PhysicalProjection::new(
                         planned_child,
@@ -386,14 +395,22 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
-            LogicalOperator::Sort(child, items) => {
+            LogicalOperator::Sort(child, mut items) => {
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
+                for item in &mut items {
+                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets);
+                }
                 Ok(Box::new(
                     crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
                 ))
             }
-            LogicalOperator::TopK(child, items, limit) => {
+            LogicalOperator::TopK(child, mut items, limit) => {
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
+                for item in &mut items {
+                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets);
+                }
                 let sort = Box::new(
                     crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
                 );
@@ -851,8 +868,6 @@ impl PhysicalPlanner {
                 } else {
                     self.get_table_num_columns(table_name)
                 };
-                // If a semi-join mask column is appended to the Scan output,
-                // account for it so downstream operators compute correct offsets.
                 let mask_extra = if mask_opt.is_some() { 1 } else { 0 };
                 positions.insert(var.clone(), start_col);
                 Ok(num_cols + mask_extra)
@@ -1161,18 +1176,6 @@ impl PhysicalPlanner {
     /// the CHILD operator's variable positions and corrects each lookup:
     ///   `new_idx = child_phys_positions[var] + property_index_in_table`
     ///            = child_phys_positions[var] + (idx - binder_column_offsets[var])
-    /// Clone of `remap_property_lookup` that operates on a reference and returns
-    /// a new expression, leaving the original unchanged.
-    fn remap_property_lookup_clone(
-        expr: &BoundExpression,
-        child_phys_positions: &std::collections::HashMap<String, usize>,
-        binder_column_offsets: &std::collections::HashMap<String, usize>,
-    ) -> BoundExpression {
-        let mut cloned = expr.clone();
-        Self::remap_property_lookup(&mut cloned, child_phys_positions, binder_column_offsets);
-        cloned
-    }
-
     fn remap_property_lookup(
         expr: &mut BoundExpression,
         child_phys_positions: &std::collections::HashMap<String, usize>,
@@ -1182,7 +1185,7 @@ impl PhysicalPlanner {
             BoundExpression::PropertyLookup(var, idx, _) => {
                 let binder_base = binder_column_offsets.get(var).copied().unwrap_or(0);
                 let phys_base = child_phys_positions.get(var).copied().unwrap_or(binder_base);
-                let prop_index = idx.saturating_sub(binder_base);
+                let prop_index = if *idx >= binder_base { *idx - binder_base } else { *idx };
                 *idx = phys_base + prop_index;
             }
             BoundExpression::Variable(..)
