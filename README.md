@@ -4,7 +4,7 @@ A graph+vector database server with Cypher queries, MVCC, and full-text search. 
 
 ## Status
 
-**Pre-alpha.** The core engine compiles and passes 400+ tests. Python, Node.js, and C bindings exist. HTTP server with 20+ endpoints works. Expect breaking changes.
+**Pre-alpha.** The core engine compiles and passes 1000+ tests across 60+ test files, including a 90-test relationship traversal crucible (71 passing). Python, Node.js, and C bindings exist. HTTP server with 20+ endpoints works. Expect breaking changes.
 
 ## What It Is
 
@@ -26,9 +26,9 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 
 ## What's Partial / Disabled / Missing
 
-**Optimizer passes — 6 exist but are DISABLED** (commented out in the optimizer pipeline):
-- ProjectionPushdown, SemijoinPushdown, AccHashJoinOptimizer, AggKeyDependencyOptimizer, CountRelTableOptimizer, IndexPushDown
-- All have documented bugs or lifecycle issues. Only 6 passes are active: SubqueryUnnesting, FilterPushDown, JoinReordering, TopKOptimizer, LimitPushDown, OrderByPushDown.
+**Optimizer**: All 12 optimizer passes are enabled: SubqueryUnnesting, FilterPushDown, IndexPushDown, JoinReordering, TopKOptimizer, LimitPushDown, OrderByPushDown, ProjectionPushDown, AggKeyDependencyOptimizer, CountRelTableOptimizer, SemiJoinPushDown, AccHashJoinOptimizer, FactorizationRewriter, ForeignJoinPushDown. Projection pushdown has a known column-remapping gap for rel tables with more properties than their binder offset — this affects queries that RETURN specific rel properties together with node properties from multiple tables.
+
+**Relationship traversal**: Variable-length path patterns (`*min..max`) work correctly. 15 tests remain failing: 7 need `shortestPath()` implementation, others need deeper optimizer/planner work (column remapping, join semantics for self-loops, OptionalMatch).
 
 **Parser gaps**: `CREATE VECTOR INDEX`, `CREATE FULLTEXT INDEX`, `CREATE SEQUENCE`, `CREATE MACRO` exist as AST nodes but have no PEG grammar rules — they cannot be parsed from Cypher text.
 
@@ -318,24 +318,32 @@ for row in &result.rows {
 | `/metrics` | GET | Prometheus metrics |
 | `/v1/subscribe` | GET | WebSocket CDC subscription |
 
-## Test Coverage (32 test files, 400+ tests)
+## Test Coverage (60+ test files, 1000+ tests)
 
 | Suite | Scope |
 |---|---|
+| Relationship traversal crucible (87 tests) | Single/multi-hop, variable-length, shortest-path, self-loops, cycles, CSR, cross-table, rel properties, WHERE filters, aggregation, persistence, concurrency (71 pass) |
 | Comprehensive (13 files) | End-to-end CRUD, DML, DDL, queries, schema evolution, transactions |
 | Join operators | Hash join, intersect, semi-mask, union |
 | Fuzz, torture, crash recovery | Random queries, WAL replay, concurrency, memory pressure |
-| Optimizer | Correctness of 6 active optimizer passes |
+| Optimizer | Correctness of all 12 optimizer passes |
 | Expression, function, date | Scalar evaluation, type handling |
 | Contains, flatten, merge, unwind | Individual operator tests |
+| Vector search | Flat + HNSW insert/query accuracy |
+| Full-text search | BM25 indexing and search |
+| Auth & security | JWT, API keys, RBAC, login rate limiting |
+| WASM UDFs | WAT module execution with fuel metering |
+| CDC | WAL-polling subscriber channels |
 | Benchmark suite | Insert/scan/filter throughput, SQLite comparison |
 | Lightning vs SQLite | Cross-validation of query results |
 
 ## Known Limitations
 
-- 6 optimizer passes are disabled (documented bugs). Projection pushdown, semi-join pushdown, and several others do not run.
+- Variable-length path traversal with column remapping (rel tables with more properties than binder offset) has a known gap affecting RETURN of specific rel properties together with node properties from multiple tables.
+- `shortestPath()` and `allShortestPaths()` functions are not yet implemented.
 - `CREATE VECTOR INDEX`, `CREATE FULLTEXT INDEX`, `CREATE SEQUENCE`, `CREATE MACRO` cannot be parsed from Cypher text (no grammar rules).
 - Window functions, list indexing (`list[0]`), and map literal expressions are not supported in Cypher.
+- `OptionalMatch` is parsed but not yet planned/executed.
 - Python and Node.js HTTP client SDKs are not published to PyPI/npm — install from source.
 - WASM functions must be re-registered after each database restart (no persistence).
 - Login rate limiting (5 fails / 15 min) is in-memory only — resets on restart.
