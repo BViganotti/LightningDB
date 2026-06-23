@@ -786,28 +786,14 @@ impl PhysicalPlanner {
                 ))
             }
             LogicalOperator::OptionalMatch(child, inner) => {
-                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
-                let inner_positions = self.compute_variable_positions(&inner).unwrap_or_default();
-                let planned_child = self.plan(*child)?;
-                let planned_inner = self.plan(*inner)?;
-                let shared = child_positions.keys()
-                    .find(|k| inner_positions.contains_key(*k))
-                    .cloned();
-                if let Some(var) = shared {
-                    let left_key = child_positions[&var];
-                    let right_key = inner_positions[&var];
-                    Ok(Box::new(
-                        crate::processor::operators::hash_join::HashJoin::new_left_outer(
-                            planned_child, planned_inner, left_key, right_key, false,
-                        ),
-                    ))
-                } else {
-                    Ok(Box::new(
-                        crate::processor::operators::hash_join::HashJoin::new_left_outer(
-                            planned_child, planned_inner, 0, 0, true,
-                        ),
-                    ))
-                }
+                let planned_child: Box<dyn PhysicalOperator> = self.plan(*child)?;
+                let planned_inner: Box<dyn PhysicalOperator> = self.plan(*inner)?;
+                let join: Box<dyn PhysicalOperator> = Box::new(
+                    crate::processor::operators::hash_join::HashJoin::new_left_outer(
+                        planned_child, planned_inner, 0, 0, true,
+                    ),
+                );
+                Ok(join)
             }
             LogicalOperator::Merge {
                 child,
