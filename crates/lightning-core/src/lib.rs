@@ -1673,11 +1673,36 @@ impl Connection {
 
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, explicit_tx)?;
         let mut processor = Processor::new(physical_plan);
-        let chunks = processor.execute(
-            Arc::clone(&self.client_context.database),
-            Arc::clone(&tx),
-            params,
-        )?;
+
+        let timeout_ms = self.client_context.query_timeout_ms;
+        let chunks = if timeout_ms > 0 {
+            let db = Arc::clone(&self.client_context.database);
+            let tx_clone = Arc::clone(&tx);
+            let (result_tx, result_rx) = std::sync::mpsc::channel();
+            std::thread::Builder::new()
+                .name("query-exec".into())
+                .spawn(move || {
+                    let _ = result_tx.send(processor.execute(db, tx_clone, params));
+                })
+                .map_err(|e| LightningError::Internal(format!("failed to spawn query thread: {e}")))?;
+            match result_rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+                Ok(result) => result?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(LightningError::Internal(format!(
+                        "Query timed out after {}ms", timeout_ms
+                    )));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(LightningError::Internal("Query thread terminated unexpectedly".into()));
+                }
+            }
+        } else {
+            processor.execute(
+                Arc::clone(&self.client_context.database),
+                Arc::clone(&tx),
+                params,
+            )?
+        };
 
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
