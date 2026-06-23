@@ -68,15 +68,7 @@ impl NWayMerge {
 }
 
 fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Number(na), Value::Number(nb)) => na.partial_cmp(nb).unwrap_or(std::cmp::Ordering::Equal),
-        (Value::String(sa), Value::String(sb)) => sa.cmp(sb),
-        (Value::Boolean(ba), Value::Boolean(bb)) => ba.cmp(bb),
-        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Null, _) => std::cmp::Ordering::Less,
-        (_, Value::Null) => std::cmp::Ordering::Greater,
-        _ => std::cmp::Ordering::Equal,
-    }
+    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
 }
 
 impl PhysicalOperator for NWayMerge {

@@ -95,8 +95,12 @@ impl PhysicalSort {
         // We won the CAS — responsible for sorting. Wait until all partitions
         // have contributed their data before checking or processing batches.
         let num_parts = self.num_partitions.load(Ordering::Acquire);
-        while self.shared.read().num_collected.load(Ordering::Acquire) < num_parts {
-            std::hint::spin_loop();
+        if num_parts > 1 {
+            let mut backoff = std::time::Duration::from_micros(10);
+            while self.shared.read().num_collected.load(Ordering::Acquire) < num_parts {
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, std::time::Duration::from_millis(10));
+            }
         }
 
         let result = self.do_sort(database, params, tx);
@@ -202,11 +206,19 @@ impl PhysicalOperator for PhysicalSort {
         }
 
         loop {
-            // Wait for sort to complete (last collector signals via Condvar)
+            // Wait for sort to complete (last collector signals via Condvar).
+            // Timeout after 30s as a deadman switch — if collect_and_sort
+            // fails to signal sort_done, we return an error instead of
+            // hanging the query forever.
             let (ref lock, ref cvar) = &*self.sort_done;
             let mut done = lock.lock();
             while !*done {
-                cvar.wait(&mut done);
+                let wait_result = cvar.wait_for(&mut done, std::time::Duration::from_secs(30));
+                if wait_result.timed_out() {
+                    return Err(LightningError::Internal(
+                        "Sort timed out: collect_and_sort did not complete within 30s".into(),
+                    ));
+                }
             }
             drop(done);
 
@@ -237,7 +249,7 @@ impl PhysicalOperator for PhysicalSort {
     }
 
     fn is_parallel_safe(&self) -> bool {
-        false
+        true
     }
 
     fn set_partition(&mut self, index: usize, total: usize) {

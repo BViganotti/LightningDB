@@ -411,13 +411,9 @@ impl PhysicalPlanner {
                 for item in &mut items {
                     Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets);
                 }
-                let sort = Box::new(
-                    crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
-                );
                 Ok(Box::new(
-                    crate::processor::operators::limit_skip::PhysicalLimit::new(
-                        sort,
-                        limit as usize,
+                    crate::processor::operators::topk::PhysicalTopK::new(
+                        planned_child, items, limit as u64,
                     ),
                 ))
             }
