@@ -20,6 +20,10 @@ pub struct PhysicalPlanner {
     /// items after optimizer transforms (e.g. join reordering) alter the
     /// physical column layout.
     pub binder_column_offsets: std::collections::HashMap<String, usize>,
+    /// Projected storage column indices per variable, populated when planning
+    /// Scan/IndexScan operators. Used by remap_property_lookup to correctly
+    /// map PropertyLookup indices when the child output subsetted columns.
+    variable_projected_indices: std::collections::HashMap<String, Option<Vec<usize>>>,
 }
 
 impl PhysicalPlanner {
@@ -36,6 +40,7 @@ impl PhysicalPlanner {
             undo_buffer,
             masks: HashMap::new(),
             binder_column_offsets: std::collections::HashMap::new(),
+            variable_projected_indices: std::collections::HashMap::new(),
         }
     }
 
@@ -77,9 +82,11 @@ impl PhysicalPlanner {
                         .clone();
                     scan = scan.with_mask(mask, col_idx);
                 }
-                if let Some(idxs) = projected_idxs {
-                    scan = scan.with_projected_idxs(idxs);
+                let scan_proj = projected_idxs.clone();
+                if let Some(ref idxs) = projected_idxs {
+                    scan = scan.with_projected_idxs(idxs.clone());
                 }
+                self.variable_projected_indices.insert(var.clone(), scan_proj);
                 if let Some(filter) = pushdown_filter {
                     let mut planned_filter = self.plan_expression(
                         &LogicalOperator::Scan(table_name.clone(), var.clone(), None, None, None),
@@ -89,10 +96,16 @@ impl PhysicalPlanner {
                     {
                         let mut scan_positions = std::collections::HashMap::new();
                         scan_positions.insert(var.clone(), 0usize);
+                        // Pass empty projected_indices for filter remapping so it
+                        // keeps storage indices. with_filter/extract_filter_columns
+                        // expect storage indices, and remap_filter_to_projected in
+                        // the scan execution handles the final remapping.
+                        let empty_proj = std::collections::HashMap::new();
                         Self::remap_property_lookup(
                             &mut planned_filter,
                             &scan_positions,
                             &self.binder_column_offsets,
+                            &empty_proj,
                         );
                     }
 
@@ -156,16 +169,18 @@ impl PhysicalPlanner {
                         })?
                 };
                 let mut scan = crate::processor::operators::index_scan::PhysicalIndexScan::new(
-                    table_name,
+                    table_name.clone(),
                     table,
                     index,
                     pk_value_expr,
                     self.db.buffer_manager.clone(),
                     self.read_ts,
                 );
-                if let Some(idxs) = projected_idxs {
-                    scan = scan.with_projected_idxs(idxs);
+                let is_proj = projected_idxs.clone();
+                if let Some(ref idxs) = projected_idxs {
+                    scan = scan.with_projected_idxs(idxs.clone());
                 }
+                self.variable_projected_indices.insert(_var.clone(), is_proj);
                 Ok(Box::new(scan))
             }
             LogicalOperator::Filter(child, mut expr) => {
@@ -176,6 +191,7 @@ impl PhysicalPlanner {
                     &mut expr,
                     &child_positions,
                     &self.binder_column_offsets,
+                    &self.variable_projected_indices,
                 );
                 tracing::debug!(
                     "FILTER child_positions={:?} expr={:?}",
@@ -200,6 +216,7 @@ impl PhysicalPlanner {
                         &mut item.expression,
                         &child_positions,
                         &self.binder_column_offsets,
+                        &self.variable_projected_indices,
                     );
                 }
                 Ok(Box::new(
@@ -305,6 +322,7 @@ impl PhysicalPlanner {
                             &mut cond,
                             &combined_positions,
                             &self.binder_column_offsets,
+                            &self.variable_projected_indices,
                         );
                         filter_conds.push(cond);
                     }
@@ -399,7 +417,7 @@ impl PhysicalPlanner {
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
                 for item in &mut items {
-                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets);
+                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets, &self.variable_projected_indices);
                 }
                 Ok(Box::new(
                     crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
@@ -409,7 +427,7 @@ impl PhysicalPlanner {
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
                 for item in &mut items {
-                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets);
+                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets, &self.variable_projected_indices);
                 }
                 Ok(Box::new(
                     crate::processor::operators::topk::PhysicalTopK::new(
@@ -1186,30 +1204,41 @@ impl PhysicalPlanner {
         expr: &mut BoundExpression,
         child_phys_positions: &std::collections::HashMap<String, usize>,
         binder_column_offsets: &std::collections::HashMap<String, usize>,
+        variable_projected_indices: &std::collections::HashMap<String, Option<Vec<usize>>>,
     ) {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
                 let binder_base = binder_column_offsets.get(var).copied().unwrap_or(0);
                 let phys_base = child_phys_positions.get(var).copied().unwrap_or(binder_base);
                 let prop_index = if *idx >= binder_base { *idx - binder_base } else { *idx };
-                *idx = phys_base + prop_index;
+                // Handle projection pushdown: if the child subsetted the variable's
+                // columns, find the position of prop_index within the projected set.
+                if let Some(Some(proj)) = variable_projected_indices.get(var) {
+                    if let Some(pos) = proj.iter().position(|&p| p == prop_index) {
+                        *idx = phys_base + pos;
+                    } else {
+                        *idx = phys_base + prop_index;
+                    }
+                } else {
+                    *idx = phys_base + prop_index;
+                }
             }
             BoundExpression::Variable(..)
             | BoundExpression::Literal(_)
             | BoundExpression::Parameter(_)
             | BoundExpression::NextVal(_) => {}
             BoundExpression::Not(inner) => {
-                Self::remap_property_lookup(inner, child_phys_positions, binder_column_offsets);
+                Self::remap_property_lookup(inner, child_phys_positions, binder_column_offsets, variable_projected_indices);
             }
             BoundExpression::Arithmetic(left, _, right)
             | BoundExpression::Comparison(left, _, right)
             | BoundExpression::Logical(left, _, right) => {
-                Self::remap_property_lookup(left, child_phys_positions, binder_column_offsets);
-                Self::remap_property_lookup(right, child_phys_positions, binder_column_offsets);
+                Self::remap_property_lookup(left, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                Self::remap_property_lookup(right, child_phys_positions, binder_column_offsets, variable_projected_indices);
             }
             BoundExpression::Function(_, args, _) | BoundExpression::List(args, _) => {
                 for arg in args {
-                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
             }
             BoundExpression::Case {
@@ -1219,30 +1248,30 @@ impl PhysicalPlanner {
                 ..
             } => {
                 if let Some(e) = expression {
-                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
                 for (w, t) in when_then {
-                    Self::remap_property_lookup(w, child_phys_positions, binder_column_offsets);
-                    Self::remap_property_lookup(t, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(w, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(t, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
                 if let Some(e) = else_expression {
-                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
             }
             BoundExpression::Aggregate(_, args, _) => {
                 for arg in args {
-                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
             }
             BoundExpression::Lambda(_, body) => {
-                Self::remap_property_lookup(body, child_phys_positions, binder_column_offsets);
+                Self::remap_property_lookup(body, child_phys_positions, binder_column_offsets, variable_projected_indices);
             }
             BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => {
                 // These contain match clauses, not expressions — nothing to remap
             }
             BoundExpression::Map(items, _) => {
                 for (_, val) in items {
-                    Self::remap_property_lookup(val, child_phys_positions, binder_column_offsets);
+                    Self::remap_property_lookup(val, child_phys_positions, binder_column_offsets, variable_projected_indices);
                 }
             }
         }

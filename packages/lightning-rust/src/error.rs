@@ -53,7 +53,7 @@ pub enum Error {
 impl Error {
     pub fn is_retryable(&self) -> bool {
         match self {
-            Error::Lightning(e) => matches!(e.status, 429 | 502 | 503 | 504),
+            Error::Lightning(e) => matches!(e.status, 429 | 500 | 502 | 503 | 504),
             Error::Http(e) => e.is_timeout() || e.is_connect(),
             _ => false,
         }

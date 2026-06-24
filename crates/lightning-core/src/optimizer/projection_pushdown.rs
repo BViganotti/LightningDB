@@ -12,8 +12,10 @@ struct ColumnUsage {
     /// Per-variable required column indices in the operator's output space.
     indices: HashMap<String, HashSet<usize>>,
     /// Number of columns from the left side (0 for non-Join operators).
+    #[allow(dead_code)]
     left_col_count: usize,
     /// Variables that come from the right side of a Join.
+    #[allow(dead_code)]
     right_vars: HashSet<String>,
     /// Number of projected columns in this operator's output (used for
     /// computing left_col_count in parent Join operators).
@@ -25,10 +27,12 @@ impl ColumnUsage {
         self.indices.get(var)
     }
 
+    #[allow(dead_code)]
     fn is_right_var(&self, var: &str) -> bool {
         self.right_vars.contains(var)
     }
 
+    #[allow(dead_code)]
     fn left_col_count(&self) -> usize {
         self.left_col_count
     }
@@ -242,15 +246,18 @@ impl ProjectionPushDown {
         required_indices: HashMap<String, HashSet<usize>>,
     ) -> Result<(LogicalOperator, ColumnUsage)> {
         match plan {
-            LogicalOperator::Projection(child, mut items) => {
+            LogicalOperator::Projection(child, items) => {
                 let mut my_indices = HashMap::new();
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
-                for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
-                }
+                // NOTE: remap_expression_indices is intentionally NOT called here.
+                // The physical planner's remap_property_lookup handles index
+                // remapping for projection pushdown. Calling it in the optimizer
+                // causes a double-remap bug on subsequent optimizer loop iterations:
+                // extract_property_indices re-extracts the already-remapped local
+                // index as if it were a global index, corrupting the projected set.
                 Ok((
                     LogicalOperator::Projection(Box::new(new_child), items),
                     child_indices,
@@ -260,7 +267,12 @@ impl ProjectionPushDown {
                 let mut my_indices = required_indices;
                 Self::extract_property_indices(&cond, &mut my_indices);
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
-                Self::remap_expression_indices(&mut cond, &child_indices, &self.binder_column_offsets);
+                // NOTE: remap_expression_indices is intentionally NOT called here.
+                // The physical planner's remap_property_lookup handles index
+                // remapping for projection pushdown. Calling it in the optimizer
+                // causes a double-remap bug on subsequent optimizer loop iterations:
+                // extract_property_indices re-extracts the already-remapped local
+                // index as if it were a global index, corrupting the projected set.
                 Ok((
                     LogicalOperator::Filter(Box::new(new_child), cond),
                     child_indices,
@@ -415,29 +427,23 @@ impl ProjectionPushDown {
                     child_indices,
                 ))
             }
-            LogicalOperator::Sort(child, mut items) => {
+            LogicalOperator::Sort(child, items) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
-                for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
-                }
                 Ok((
                     LogicalOperator::Sort(Box::new(new_child), items),
                     child_indices,
                 ))
             }
-            LogicalOperator::TopK(child, mut items, limit) => {
+            LogicalOperator::TopK(child, items, limit) => {
                 let mut my_indices = required_indices;
                 for item in &items {
                     Self::extract_property_indices(&item.expression, &mut my_indices);
                 }
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
-                for item in &mut items {
-                    Self::remap_expression_indices(&mut item.expression, &child_indices, &self.binder_column_offsets);
-                }
                 Ok((
                     LogicalOperator::TopK(Box::new(new_child), items, limit),
                     child_indices,

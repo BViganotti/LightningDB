@@ -107,7 +107,7 @@ impl AppState {
             connection_pool: Arc::new(ConnectionPool::new(Arc::clone(&db), 64)),
             auth_store,
             auth_mode,
-            rate_limiter: Arc::new(RateLimiter::new(100, 1)),
+            rate_limiter: Arc::new(RateLimiter::new(1000, 1)),
             query_semaphore: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_QUERIES)),
         }
     }
