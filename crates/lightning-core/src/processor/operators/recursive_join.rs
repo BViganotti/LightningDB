@@ -92,10 +92,10 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                     _ => continue,
                 };
 
-                let mut visited = HashSet::new();
+                let mut visited: HashSet<(u64, u32)> = HashSet::new();
                 let mut queue = VecDeque::new();
                 queue.push_back((start_id, 0u32));
-                visited.insert(start_id);
+                visited.insert((start_id, 0));
 
                 while let Some((node_id, depth)) = queue.pop_front() {
                     if Instant::now() > deadline {
@@ -123,8 +123,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         if let Some(ref index) = csr {
                             let neighbors = index.get_neighbors(&self.bm, node_id, tx)?;
                             for neighbor_id in neighbors {
-                                if !visited.contains(&neighbor_id) {
-                                    visited.insert(neighbor_id);
+                                if !visited.contains(&(neighbor_id, depth + 1)) {
+                                    visited.insert((neighbor_id, depth + 1));
                                     queue.push_back((neighbor_id, depth + 1));
                                 }
                             }
@@ -156,8 +156,8 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                 .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
                                 for &neighbor_id in neighbors {
-                                    if !visited.contains(&neighbor_id) {
-                                        visited.insert(neighbor_id);
+                                    if !visited.contains(&(neighbor_id, depth + 1)) {
+                                        visited.insert((neighbor_id, depth + 1));
                                         queue.push_back((neighbor_id, depth + 1));
                                     }
                                 }

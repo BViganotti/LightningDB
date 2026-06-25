@@ -804,11 +804,26 @@ impl PhysicalPlanner {
                 ))
             }
             LogicalOperator::OptionalMatch(child, inner) => {
+                // Compute variable positions from both plans before consuming them.
+                // Need to determine the key-based join for correct left-outer semantics.
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
+                let inner_positions = self.compute_variable_positions(&inner).unwrap_or_default();
+                // Find the shared variable (same name in both outer and inner plans)
+                let shared_var = child_positions.keys()
+                    .find(|v| inner_positions.contains_key(*v))
+                    .cloned();
+                let (left_key, right_key, is_cross) = if let Some(ref sv) = shared_var {
+                    let lk = child_positions.get(sv).copied().unwrap_or(0);
+                    let rk = inner_positions.get(sv).copied().unwrap_or(0);
+                    (lk, rk, false)
+                } else {
+                    (0usize, 0usize, true)
+                };
                 let planned_child: Box<dyn PhysicalOperator> = self.plan(*child)?;
                 let planned_inner: Box<dyn PhysicalOperator> = self.plan(*inner)?;
                 let join: Box<dyn PhysicalOperator> = Box::new(
                     crate::processor::operators::hash_join::HashJoin::new_left_outer(
-                        planned_child, planned_inner, 0, 0, true,
+                        planned_child, planned_inner, left_key, right_key, is_cross,
                     ),
                 );
                 Ok(join)
@@ -847,6 +862,16 @@ impl PhysicalPlanner {
                         effective_num_rows,
                     ),
                 ))
+            }
+            LogicalOperator::SemiMasker(child, _var, mask_id) => {
+                let mask = Arc::new(RwLock::new(
+                    crate::processor::operators::semi_mask::SemiMask::new(),
+                ));
+                self.masks.insert(mask_id.clone(), mask);
+                self.plan(*child)
+            }
+            LogicalOperator::Accumulate(child) => {
+                self.plan(*child)
             }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"

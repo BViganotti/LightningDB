@@ -620,6 +620,7 @@ impl LogicalPlanner {
                         .next()
                         .ok_or_else(|| crate::LightningError::Query("Empty MATCH clause".into()))?;
 
+                    let mut rel_vars: Vec<(String, String)> = Vec::new();
                     let mut plan = match first {
                         crate::planner::binder::BoundMatchElement::Node(table, var, properties) => {
                             let mut op =
@@ -745,6 +746,8 @@ impl LogicalPlanner {
                                         ));
                                     }
                                 } else {
+                                    // Save rel table name before it's consumed by Scan
+                                    let rel_table_for_uniqueness = rel_table.clone();
                                     let rel_scan = LogicalOperator::Scan(
                                         rel_table,
                                         rel_var.clone(),
@@ -752,6 +755,9 @@ impl LogicalPlanner {
                                         None,
                                         None,
                                     );
+                                    // Save rel var name before join conditions consume it
+                                    let cur_rel_var = rel_var;
+                                    let rel_var_for_uniqueness = cur_rel_var.clone();
                                     let join_cond = BoundExpression::Comparison(
                                         Box::new(BoundExpression::PropertyLookup(
                                             src_var,
@@ -760,7 +766,7 @@ impl LogicalPlanner {
                                         )),
                                         crate::parser::ast::ComparisonOperator::Equal,
                                         Box::new(BoundExpression::PropertyLookup(
-                                            rel_var.clone(),
+                                            cur_rel_var.clone(),
                                             0,
                                             LogicalType::Uint64,
                                         )),
@@ -806,22 +812,69 @@ impl LogicalPlanner {
                                         }
                                         let join_cond_dst = BoundExpression::Comparison(
                                             Box::new(BoundExpression::PropertyLookup(
-                                                rel_var,
+                                                cur_rel_var,
                                                 1,
                                                 LogicalType::Uint64,
                                             )),
                                             crate::parser::ast::ComparisonOperator::Equal,
                                             Box::new(BoundExpression::PropertyLookup(
-                                        d_var,
-                                                0,
-                                                LogicalType::Uint64,
-                                            )),
+                                            d_var,
+                                                    0,
+                                                    LogicalType::Uint64,
+                                                )),
                                         );
                                         plan = LogicalOperator::Join(
                                             Box::new(plan),
                                             Box::new(dst_op),
                                             join_cond_dst,
                                         );
+                                        // Relationship uniqueness: each relationship in a path
+                                        // must be distinct from all previously traversed ones.
+                                        // Compare by (_src, _dst) since rel tables lack an _id column.
+                                        // Only compare rels from the same table (different tables
+                                        // can never share an edge).
+                                        for (prev_rel, prev_table) in &rel_vars {
+                                            if prev_table != &rel_table_for_uniqueness {
+                                                continue;
+                                            }
+                                            // NOT (prev._src == cur._src AND prev._dst == cur._dst)
+                                            let uniqueness_cond = BoundExpression::Not(
+                                                Box::new(BoundExpression::Logical(
+                                                    Box::new(BoundExpression::Comparison(
+                                                        Box::new(BoundExpression::PropertyLookup(
+                                                            prev_rel.clone(),
+                                                            0,
+                                                            LogicalType::Uint64,
+                                                        )),
+                                                        crate::parser::ast::ComparisonOperator::Equal,
+                                                        Box::new(BoundExpression::PropertyLookup(
+                                                            rel_var_for_uniqueness.clone(),
+                                                            0,
+                                                            LogicalType::Uint64,
+                                                        )),
+                                                    )),
+                                                    crate::parser::ast::LogicalOperator::And,
+                                                    Box::new(BoundExpression::Comparison(
+                                                        Box::new(BoundExpression::PropertyLookup(
+                                                            prev_rel.clone(),
+                                                            1,
+                                                            LogicalType::Uint64,
+                                                        )),
+                                                        crate::parser::ast::ComparisonOperator::Equal,
+                                                        Box::new(BoundExpression::PropertyLookup(
+                                                            rel_var_for_uniqueness.clone(),
+                                                            1,
+                                                            LogicalType::Uint64,
+                                                        )),
+                                                    )),
+                                                )),
+                                            );
+                                            plan = LogicalOperator::Filter(
+                                                Box::new(plan),
+                                                uniqueness_cond,
+                                            );
+                                        }
+                                        rel_vars.push((rel_var_for_uniqueness, rel_table_for_uniqueness));
                                     } else {
                                         return Err(crate::LightningError::Query(
                                             "Rel must be followed by node".into(),

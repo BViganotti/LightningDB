@@ -1257,6 +1257,47 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
 
             Ok(Expression::Function(clean_name, as_, distinct))
         }
+        Rule::shortest_path_pattern | Rule::all_shortest_paths_pattern => {
+            let is_all = i.as_rule() == Rule::all_shortest_paths_pattern;
+            let func_name = if is_all { "ALL_SHORTEST_PATHS" } else { "SHORTEST_PATH" };
+            let mut it = i.into_inner();
+            let start_node = required_pair(it.next(), "pair")?;
+            let rel_chain = required_pair(it.next(), "pair")?;
+            // Parse the start node to extract its variable name
+            let start_var_str = start_node.into_inner().find(|p| p.as_rule() == Rule::variable)
+                .map(|v| v.as_str().to_string())
+                .unwrap_or_default();
+            // Parse the relationship chain for variable and bounds
+            let rel_parts: Vec<_> = rel_chain.into_inner().collect();
+            let _rel_var = rel_parts.iter().find_map(|p| {
+                if p.as_rule() == Rule::variable {
+                    Some(p.as_str().to_string())
+                } else { None }
+            }).unwrap_or_default();
+            // Get the end node variable
+            let end_var_str = rel_parts.iter().filter_map(|p| {
+                if p.as_rule() == Rule::node_pattern {
+                    p.clone().into_inner().find(|pp| pp.as_rule() == Rule::variable)
+                        .map(|v| v.as_str().to_string())
+                } else { None }
+            }).last().unwrap_or_default();
+            // Parse variable-length bounds from the relationship pattern
+            let varlen = rel_parts.iter().find_map(|p| {
+                if p.as_rule() == Rule::relationship_pattern {
+                    parse_relationship_pattern(p.clone()).ok()
+                } else { None }
+            });
+            let (min_depth, max_depth) = varlen.map(|rp| {
+                rp.var_len_bounds.unwrap_or((Some(1), None))
+            }).unwrap_or((Some(1), None));
+            let args = vec![
+                Expression::PropertyLookup(start_var_str.clone(), "_id".to_string()),
+                Expression::PropertyLookup(end_var_str.clone(), "_id".to_string()),
+                Expression::Literal(Literal::Integer(min_depth.unwrap_or(1) as i64)),
+                Expression::Literal(Literal::Integer(max_depth.unwrap_or(0) as i64)),
+            ];
+            Ok(Expression::Function(func_name.to_string(), args, false))
+        }
         Rule::property_lookup => {
             let mut it = i.into_inner();
             Ok(Expression::PropertyLookup(

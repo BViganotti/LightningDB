@@ -5,13 +5,6 @@ use crate::Result;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-/// All Shortest Paths operator.
-///
-/// NOTE: Despite the name, this operator performs standard BFS which finds
-/// the SHORTEST DISTANCE to each reachable node, not ALL shortest paths.
-/// If multiple shortest paths exist between two nodes, only one distance
-/// is reported. A true "all shortest paths" implementation would need to
-/// track path counts at each distance level.
 pub struct PhysicalASP {
     child: Box<dyn PhysicalOperator>,
     rel_table_name: String,
@@ -24,13 +17,15 @@ pub struct PhysicalASP {
     current_chunk: Option<DataChunk>,
     chunk_row_idx: usize,
     results: VecDeque<DataChunk>,
-    bfs_queue: VecDeque<u64>,
-    bfs_distance: HashMap<u64, u32>,
+    bfs_queue: VecDeque<(u64, Vec<u64>)>,
     bfs_src_id: u64,
-    #[allow(dead_code)]
-    bfs_depth: u32,
+    bfs_dst_id: u64,
     bfs_phase: BFSPhase,
     cached_csr: Option<Arc<CSRIndex>>,
+    /// Shortest distance found
+    shortest_dist: u32,
+    /// All shortest paths found so far
+    found_paths: Vec<Vec<u64>>,
 }
 
 enum BFSPhase {
@@ -58,89 +53,152 @@ impl PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_distance: HashMap::new(),
             bfs_src_id: 0,
-            bfs_depth: 0,
+            bfs_dst_id: 0,
             bfs_phase: BFSPhase::Idle,
             cached_csr: None,
+            shortest_dist: u32::MAX,
+            found_paths: Vec::new(),
         }
     }
 
-    /// Get the CSR index, caching it so it's only fetched once per batch.
     fn get_csr(&self, database: &Database, tx: &crate::transaction::transaction_manager::Transaction) -> Option<Arc<CSRIndex>> {
         let sm = database.storage_manager.read();
         let _ = sm.ensure_csr_fresh(&self.rel_table_name, &database.buffer_manager, tx);
         sm.fwd_csr.get(&self.rel_table_name).cloned()
     }
 
-    fn run_bfs(
+    fn find_all_shortest_paths(
         &mut self,
         csr: &CSRIndex,
         src_id: u64,
+        dst_id: u64,
         bm: &crate::storage::buffer_manager::BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<()> {
-        self.bfs_queue.clear();
-        self.bfs_distance.clear();
-        self.bfs_queue.push_back(src_id);
-        self.bfs_distance.insert(src_id, 0);
-        self.bfs_src_id = src_id;
+    ) -> Result<Vec<Vec<u64>>> {
+        if src_id == dst_id {
+            return Ok(vec![vec![src_id]]);
+        }
 
-        while let Some(current) = self.bfs_queue.pop_front() {
-            let dist = match self.bfs_distance.get(&current) {
-                Some(&d) => d,
-                None => continue,
-            };
-            if dist >= self.max_depth {
+        // BFS level by level, tracking all paths
+        let mut visited: HashMap<u64, u32> = HashMap::new();
+        let mut predecessors: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut queue: VecDeque<u64> = VecDeque::new();
+
+        visited.insert(src_id, 0);
+        queue.push_back(src_id);
+        let mut found_distance = u32::MAX;
+
+        while let Some(current) = queue.pop_front() {
+            let dist = visited[&current];
+            if dist >= found_distance || dist >= self.max_depth {
                 continue;
             }
 
             let mut neighbors = Vec::new();
             csr.for_each_neighbor(bm, current, tx, |n| {
-                if !self.bfs_distance.contains_key(&n) {
-                    neighbors.push(n);
-                }
+                neighbors.push(n);
             })?;
 
             for neighbor in neighbors {
-                self.bfs_distance.insert(neighbor, dist + 1);
-                self.bfs_queue.push_back(neighbor);
+                let new_dist = dist + 1;
+
+                if neighbor == dst_id && new_dist <= self.max_depth {
+                    if found_distance == u32::MAX {
+                        found_distance = new_dist;
+                    }
+                    if new_dist == found_distance {
+                        predecessors.entry(neighbor).or_default().push(current);
+                    }
+                    continue;
+                }
+
+                if new_dist >= found_distance {
+                    continue;
+                }
+
+                if let Some(&existing_dist) = visited.get(&neighbor) {
+                    if new_dist == existing_dist {
+                        predecessors.entry(neighbor).or_default().push(current);
+                    }
+                } else if new_dist < *visited.get(&neighbor).unwrap_or(&u32::MAX) {
+                    visited.insert(neighbor, new_dist);
+                    predecessors.entry(neighbor).or_default().push(current);
+                    queue.push_back(neighbor);
+                }
             }
         }
 
-        Ok(())
+        if found_distance == u32::MAX {
+            return Ok(Vec::new());
+        }
+
+        // Reconstruct all shortest paths from dst_id back to src_id
+        let mut all_paths = Vec::new();
+        let mut stack = vec![(dst_id, vec![dst_id])];
+
+        while let Some((node, path)) = stack.pop() {
+            if node == src_id {
+                let mut full_path = path.clone();
+                full_path.reverse();
+                all_paths.push(full_path);
+                continue;
+            }
+            if let Some(preds) = predecessors.get(&node) {
+                for &pred in preds {
+                    let mut new_path = path.clone();
+                    new_path.push(pred);
+                    stack.push((pred, new_path));
+                }
+            }
+        }
+
+        Ok(all_paths)
     }
 
-    fn build_chunk_for_source(&self, src_id: u64) -> DataChunk {
-        let mut src_ids = Vec::new();
-        let mut dst_ids = Vec::new();
-        let mut distances = Vec::new();
+    fn build_chunk_for_source(&self, src_id: u64, dst_id: u64) -> DataChunk {
+        let mut path_values = Vec::new();
 
-        for (&dst_id, &dist) in self.bfs_distance.iter() {
-            if dst_id != src_id {
-                src_ids.push(src_id as f64);
-                dst_ids.push(dst_id as f64);
-                distances.push(dist as f64);
-            }
+        for path in &self.found_paths {
+            let nodes: Vec<Value> = path.iter().map(|&id| Value::Node(id)).collect();
+            path_values.push(Value::List(nodes));
         }
 
-        use arrow::array::Float64Array;
+        use arrow::array::{UInt64Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use std::sync::Arc;
 
+        let num_paths = self.found_paths.len();
+
+        let mut src_ids = Vec::with_capacity(num_paths);
+        let mut dst_ids = Vec::with_capacity(num_paths);
+        for _ in 0..num_paths {
+            src_ids.push(src_id);
+            dst_ids.push(dst_id);
+        }
+
         let schema = Arc::new(Schema::new(vec![
-            Field::new(&self.src_var_name, DataType::Float64, false),
-            Field::new(&self.dst_var_name, DataType::Float64, false),
-            Field::new(&self.path_var_name, DataType::Float64, false),
+            Field::new(&self.src_var_name, DataType::UInt64, false),
+            Field::new(&self.dst_var_name, DataType::UInt64, false),
+            Field::new(&self.path_var_name, DataType::Utf8, true),
         ]));
+
+        let path_strs: Vec<String> = self
+            .found_paths
+            .iter()
+            .map(|p| {
+                let ids: Vec<String> = p.iter().map(|id| id.to_string()).collect();
+                format!("[{}]", ids.join(", "))
+            })
+            .collect();
 
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(Float64Array::from(src_ids)),
-                Arc::new(Float64Array::from(dst_ids)),
-                Arc::new(Float64Array::from(distances)),
+                Arc::new(UInt64Array::from(src_ids)),
+                Arc::new(UInt64Array::from(dst_ids)),
+                Arc::new(StringArray::from(path_strs)),
             ],
         )
         .expect("ASP schema must match columns");
@@ -156,7 +214,6 @@ impl PhysicalOperator for PhysicalASP {
         tx: &crate::transaction::transaction_manager::Transaction,
         params: Option<&HashMap<String, Value>>,
     ) -> Result<Option<DataChunk>> {
-        // Drain any queued results first
         if let Some(res) = self.results.pop_front() {
             return Ok(Some(res));
         }
@@ -164,7 +221,6 @@ impl PhysicalOperator for PhysicalASP {
         let bm = &database.buffer_manager;
 
         loop {
-            // Load next chunk from child if needed
             if self.current_chunk.is_none() {
                 self.current_chunk = self.child.get_next(database, tx, params)?;
                 self.chunk_row_idx = 0;
@@ -177,25 +233,29 @@ impl PhysicalOperator for PhysicalASP {
             if let Some(ref chunk) = self.current_chunk {
                 match self.bfs_phase {
                     BFSPhase::Active => {
-                        if self.chunk_row_idx < chunk.num_rows() {
-                            let col = chunk.batch.column(0);
-                            let src_id = match Value::from_arrow(col, self.chunk_row_idx) {
+                        if self.chunk_row_idx + 1 < chunk.num_rows() {
+                            let src_col = chunk.batch.column(0);
+                            let src_id = match Value::from_arrow(src_col, self.chunk_row_idx) {
                                 Value::Node(id) => id,
                                 Value::Number(n) => n as u64,
                                 _ => return Ok(None),
                             };
-                            self.chunk_row_idx += 1;
+                            let dst_col = chunk.batch.column(1);
+                            let dst_id = match Value::from_arrow(dst_col, self.chunk_row_idx) {
+                                Value::Node(id) => id,
+                                Value::Number(n) => n as u64,
+                                _ => return Ok(None),
+                            };
+                            self.chunk_row_idx += 2;
 
-                            // Cache CSR for the duration of processing this chunk
                             if self.cached_csr.is_none() {
                                 self.cached_csr = self.get_csr(database, tx);
                             }
-                            // Clone the CSR Arc to avoid borrow conflict with self.run_bfs
                             let csr = self.cached_csr.clone();
                             if let Some(csr) = csr {
-                                self.run_bfs(&csr, src_id, bm, tx)?;
-                                let result_chunk = self.build_chunk_for_source(src_id);
-                                if result_chunk.batch.num_rows() > 0 {
+                                self.found_paths = self.find_all_shortest_paths(&csr, src_id, dst_id, bm, tx)?;
+                                if !self.found_paths.is_empty() {
+                                    let result_chunk = self.build_chunk_for_source(src_id, dst_id);
                                     self.results.push_back(result_chunk);
                                     if let Some(res) = self.results.pop_front() {
                                         return Ok(Some(res));
@@ -228,11 +288,12 @@ impl PhysicalOperator for PhysicalASP {
             chunk_row_idx: 0,
             results: VecDeque::new(),
             bfs_queue: VecDeque::new(),
-            bfs_distance: HashMap::new(),
             bfs_src_id: 0,
-            bfs_depth: 0,
+            bfs_dst_id: 0,
             bfs_phase: BFSPhase::Idle,
             cached_csr: None,
+            shortest_dist: u32::MAX,
+            found_paths: Vec::new(),
         })
     }
 }

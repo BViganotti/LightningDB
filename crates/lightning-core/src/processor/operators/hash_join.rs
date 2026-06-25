@@ -156,7 +156,6 @@ impl HashJoin {
             shared.num_active_builders += 1;
         }
 
-        tracing::debug!("HashJoin::build starting: right_key_idx={}", self.right_key_idx);
         let mut total_build_rows = 0;
         let mut build_chunk_count = 0;
         let mut base_offset = 0usize;

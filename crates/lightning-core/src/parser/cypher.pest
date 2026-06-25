@@ -122,7 +122,7 @@ ends_with_op = { ^"ENDS" ~ ^"WITH" ~ term }
 
 comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
 
-atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | all_shortest_paths_pattern | shortest_path_pattern | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
 list_quantifier = { all_q | any_q | none_q | single_q }
 all_q = { ^"ALL" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
 any_q = { ^"ANY" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }

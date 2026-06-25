@@ -363,6 +363,30 @@ impl ExpressionEvaluator {
                 }
 
                 let mut arg_arrays = Vec::new();
+
+                // Special handling for SHORTEST_PATH and ALL_SHORTEST_PATHS
+                // These functions need database access to run BFS.
+                if name == "SHORTEST_PATH" || name == "ALL_SHORTEST_PATHS" {
+                    if let Some(b) = batch {
+                        let num_rows = b.num_rows();
+                        let _start_arg = if let Some(arg) = args.first() {
+                            Self::evaluate(arg, batch, params, num_rows, registry, database)?
+                        } else {
+                            return Err(LightningError::Internal("SHORTEST_PATH requires start node".into()));
+                        };
+                        let _end_arg = if args.len() > 1 {
+                            Self::evaluate(&args[1], batch, params, num_rows, registry, database)?
+                        } else {
+                            return Err(LightningError::Internal("SHORTEST_PATH requires end node".into()));
+                        };
+                        // For now, return empty path arrays as a stub
+                        // Full BFS implementation is a future feature
+                        let null_arr = arrow::array::NullArray::new(num_rows);
+                        return Ok(Arc::new(null_arr));
+                    }
+                    return Err(LightningError::Internal("SHORTEST_PATH requires a batch".into()));
+                }
+
                 for arg in args {
                     arg_arrays.push(Self::evaluate(
                         arg, batch, params, num_rows, registry, database,

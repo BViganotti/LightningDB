@@ -302,6 +302,13 @@ impl PhysicalOperator for PhysicalCreate {
                                 .enumerate()
                                 .filter(|(_, c)| &c.name == pk_name)
                             {
+                                // Check primary key uniqueness before inserting
+                                if index.lookup(&self.buffer_manager, &row_data[idx], tx)?.is_some() {
+                                    return Err(LightningError::Query(format!(
+                                        "Duplicate primary key value '{}' for table '{}'",
+                                        row_data[idx], self.table_name,
+                                    )));
+                                }
                                 index.insert(&self.buffer_manager, &row_data[idx], next_id, tx)?;
                             }
                         }

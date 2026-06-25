@@ -249,7 +249,7 @@ impl PhysicalOperator for PhysicalSort {
     }
 
     fn is_parallel_safe(&self) -> bool {
-        true
+        false
     }
 
     fn set_partition(&mut self, index: usize, total: usize) {

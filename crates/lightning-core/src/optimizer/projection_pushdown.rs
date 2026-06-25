@@ -169,11 +169,19 @@ impl ProjectionPushDown {
     ) {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
+                let base = binder_offsets.get(var).copied().unwrap_or(0);
+                // Convert the expression index to table-relative
+                let table_idx = if *idx >= base { *idx - base } else { *idx };
                 if let Some(set) = column_usage.get(var) {
-                    let mut v: Vec<_> = set.iter().cloned().collect();
+                    // Convert ColumnUsage set to table-relative as well,
+                    // making this function idempotent across fixed-point iterations
+                    let table_set: std::collections::HashSet<usize> = set
+                        .iter()
+                        .map(|&i| if i >= base { i - base } else { i })
+                        .collect();
+                    let mut v: Vec<_> = table_set.into_iter().collect();
                     v.sort();
-                    if let Some(pos) = v.iter().position(|&i| i == *idx) {
-                        let base = binder_offsets.get(var).copied().unwrap_or(0);
+                    if let Some(pos) = v.iter().position(|&i| i == table_idx) {
                         *idx = base + pos;
                     }
                 }
@@ -329,9 +337,22 @@ impl ProjectionPushDown {
                 // If projected_idxs was already set by a previous optimization
                 // pass, don't overwrite it (same rationale as IndexScan).
                 if existing.is_some() {
+                    // Compute clean global indices from existing projected_idxs
+                    // to avoid mixing table-relative and remapped indices across
+                    // fixed-point iterations. This keeps ColumnUsage consistent
+                    // even when re-processed in iteration 2+.
+                    let base = self.binder_column_offsets.get(&var).copied().unwrap_or(0);
+                    let mut clean_indices = std::collections::HashSet::new();
+                    if let Some(ref idxs) = existing {
+                        for &table_local_idx in idxs {
+                            clean_indices.insert(base + table_local_idx);
+                        }
+                    }
+                    let mut single_var_req = std::collections::HashMap::new();
+                    single_var_req.insert(var.clone(), clean_indices);
                     return Ok((
                         LogicalOperator::Scan(table, var, mask, existing, filter),
-                        ColumnUsage::from_single(required_indices),
+                        ColumnUsage::from_single(single_var_req),
                     ));
                 }
                 let mut req = required_indices.clone();
@@ -362,10 +383,18 @@ impl ProjectionPushDown {
                 // ColumnUsage should only track THIS variable's indices (in global
                 // space) so that parent Join handlers don't count other variables'
                 // indices when computing left_col_count.
-                let mut single_var_req = std::collections::HashMap::new();
-                if let Some(set) = req.get(&var) {
-                    single_var_req.insert(var.clone(), set.clone());
+                // Compute clean global indices from projected_idxs (ensures
+                // no mixing of table-relative and remapped indices across
+                // fixed-point iterations).
+                let base = self.binder_column_offsets.get(&var).copied().unwrap_or(0);
+                let mut clean_indices = std::collections::HashSet::new();
+                if let Some(ref idxs) = p {
+                    for &table_local_idx in idxs {
+                        clean_indices.insert(base + table_local_idx);
+                    }
                 }
+                let mut single_var_req = std::collections::HashMap::new();
+                single_var_req.insert(var.clone(), clean_indices);
                 let mut cu = ColumnUsage::from_single(single_var_req);
                 cu.projected_cols = projected_cols;
                 Ok((
