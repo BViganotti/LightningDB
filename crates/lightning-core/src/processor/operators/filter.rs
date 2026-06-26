@@ -37,6 +37,13 @@ impl PhysicalOperator for PhysicalFilter {
                 &database.function_registry,
                 database,
             )?;
+            // Debug: check if filter actually filters
+            if let Some(ba) = eval_res.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                let true_count = ba.iter().filter(|v| v.unwrap_or(false)).count();
+                if true_count > 0 && true_count < num_rows {
+                    tracing::info!("Filter: kept {} of {} rows", true_count, num_rows);
+                }
+            }
             let mask_raw = eval_res.as_boolean();
 
             // Arrow's filter_record_batch reads only the data bits of the
