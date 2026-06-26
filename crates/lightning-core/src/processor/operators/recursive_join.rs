@@ -63,16 +63,19 @@ impl PhysicalRecursiveJoin {
     /// Return the Arrow data type for a given output column index.
     fn get_output_field_type(&self, chunk_schema: &arrow::datatypes::Schema, idx: usize) -> arrow::datatypes::DataType {
         let num_chunk_cols = chunk_schema.fields().len();
+        let num_dst_cols = self.dst_table.columns.len();
         if idx < num_chunk_cols {
             chunk_schema.field(idx).data_type().clone()
-        } else if idx == num_chunk_cols {
+        } else if idx < num_chunk_cols + num_dst_cols {
+            // Destination node property (b._id, b.id, b.name, ...)
+            let prop_idx = idx - num_chunk_cols;
+            crate::processor::arrow_utils::logical_type_to_arrow_type(&self.dst_table.columns[prop_idx].data_type)
+        } else if idx == num_chunk_cols + num_dst_cols {
+            // Path length (depth) — named after rel_var_name
             arrow::datatypes::DataType::Int64
-        } else if idx == num_chunk_cols + 1 {
-            arrow::datatypes::DataType::UInt64
         } else {
-            let col_idx = idx - num_chunk_cols - 2;
-            let logical_t = &self.dst_table.columns[col_idx].data_type;
-            crate::processor::arrow_utils::logical_type_to_arrow_type(logical_t)
+            // Neighbor ID (internal node ID)
+            arrow::datatypes::DataType::UInt64
         }
     }
 }
@@ -91,11 +94,13 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
             };
             let num_dst_cols = self.dst_table.columns.len();
             let num_chunk_cols = chunk.batch.num_columns();
-            // Output columns: [child cols] + [path_length (rel_var)] + [neighbor_id] + [dst_props]
-            // dst_props includes ALL dst_table columns including _id, so existing RETURN
-            // expressions like b.name map to the correct column indices.
+            // Output columns: [child cols] + [dst_props (_id,id,name...)] + [path_length] + [_neighbor]
+            // dst_props are placed directly after child columns so that the `b` variable's
+            // column range ([num_chunk_cols .. num_chunk_cols + num_dst_cols]) matches what
+            // collect_variable_positions expects: b starts at child_cols and has num_dst_cols columns.
+            // This ensures b._id → index 0, b.id → index 1, b.name → index 2, etc.
             let mut final_columns: Vec<Vec<Value>> =
-                vec![Vec::new(); num_chunk_cols + 2 + num_dst_cols];
+                vec![Vec::new(); num_chunk_cols + num_dst_cols + 2];
 
             // Adjacency lookup mechanism
             // Clone the CSR Arc and drop the storage lock immediately so writers
@@ -137,15 +142,20 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         for (col_idx, fc) in final_columns.iter_mut().enumerate().take(num_chunk_cols) {
                             fc.push(Value::from_arrow(chunk.batch.column(col_idx), i));
                         }
-                        // Path length (depth) — stored at index num_chunk_cols
-                        final_columns[num_chunk_cols].push(Value::Number(depth as f64));
-                        // Neighbor ID (internal node ID) — stored at index num_chunk_cols + 1
-                        final_columns[num_chunk_cols + 1].push(Value::Node(node_id));
-                        // All destination table properties, including _id at index 0
+                        // Destination node properties — placed right after child columns.
+                        // This range [num_chunk_cols .. num_chunk_cols + num_dst_cols] represents
+                        // the `b` variable in the RETURN clause.
+                        let dst_base = num_chunk_cols;
                         for (prop_idx, col) in self.dst_table.columns.iter().enumerate() {
                             let val = col.get_value(&self.bm, node_id, tx)?;
-                            final_columns[num_chunk_cols + 2 + prop_idx].push(val);
+                            final_columns[dst_base + prop_idx].push(val);
                         }
+                        // Path length (depth) — after dst properties
+                        let depth_idx = num_chunk_cols + num_dst_cols;
+                        final_columns[depth_idx].push(Value::Number(depth as f64));
+                        // Neighbor ID (internal node ID) — last column
+                        let neighbor_idx = num_chunk_cols + num_dst_cols + 1;
+                        final_columns[neighbor_idx].push(Value::Node(node_id));
                     }
 
                     if depth < self.bounds.1 {
@@ -220,19 +230,9 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
                 let mut schema_fields: Vec<Arc<arrow::datatypes::Field>> =
                     chunk_schema.fields().iter().cloned().collect();
-                // Path length column — named after the relationship variable
-                schema_fields.push(Arc::new(arrow::datatypes::Field::new(
-                    &self.rel_var_name,
-                    arrow::datatypes::DataType::Int64,
-                    true,
-                )));
-                // Neighbor ID column — this represents the `b` variable in the pattern
-                schema_fields.push(Arc::new(arrow::datatypes::Field::new(
-                    "_neighbor",
-                    arrow::datatypes::DataType::UInt64,
-                    true,
-                )));
-                // All destination table properties (including _id at index 0)
+                // Destination table properties — these represent the `b` variable.
+                // Must come right after child columns so collect_variable_positions
+                // correctly maps b._id → 0, b.id → 1, b.name → 2 within b's range.
                 for col in &self.dst_table.columns {
                     schema_fields.push(Arc::new(arrow::datatypes::Field::new(
                         &col.name,
@@ -240,6 +240,18 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         true,
                     )));
                 }
+                // Path length column — named after the relationship variable
+                schema_fields.push(Arc::new(arrow::datatypes::Field::new(
+                    &self.rel_var_name,
+                    arrow::datatypes::DataType::Int64,
+                    true,
+                )));
+                // Neighbor ID column (internal node ID for BFS)
+                schema_fields.push(Arc::new(arrow::datatypes::Field::new(
+                    "_neighbor",
+                    arrow::datatypes::DataType::UInt64,
+                    true,
+                )));
 
                 let schema = Arc::new(arrow::datatypes::Schema::new(schema_fields));
                 let batch = arrow::record_batch::RecordBatch::try_new(schema, arrow_cols)
