@@ -572,6 +572,7 @@ impl PhysicalPlanner {
             LogicalOperator::RecursiveJoin {
                 child,
                 rel_table: rel_table_name,
+                rel_var,
                 src_var: _,
                 dst_node_table,
                 bounds,
@@ -602,6 +603,7 @@ impl PhysicalPlanner {
                         src_idx,
                         (min_d, max_d),
                         self.read_ts,
+                        rel_var,
                     )
                     .with_max_traversal_ms(30_000),
                 ))
