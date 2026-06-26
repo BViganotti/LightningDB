@@ -81,7 +81,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 storage.fwd_csr.get(&self.rel_table.name).cloned()
             };
 
-            let mut fallback_adj: Option<std::collections::HashMap<u64, Vec<u64>>> = None;
+            let mut fallback_adj: Option<std::collections::HashMap<u64, Vec<(u64, u64)>>> = None;
 
             let deadline = Instant::now() + std::time::Duration::from_millis(self.max_traversal_ms);
             for i in 0..chunk.batch.num_rows() {
@@ -92,10 +92,11 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                     _ => continue,
                 };
 
-                let mut visited: HashSet<(u64, u32)> = HashSet::new();
+                let mut visited_nodes: HashSet<(u64, u32)> = HashSet::new();
+                let mut visited_edges: HashSet<(u64, u64, u64)> = HashSet::new();
                 let mut queue = VecDeque::new();
                 queue.push_back((start_id, 0u32));
-                visited.insert((start_id, 0));
+                visited_nodes.insert((start_id, 0));
 
                 while let Some((node_id, depth)) = queue.pop_front() {
                     if Instant::now() > deadline {
@@ -123,10 +124,16 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         if let Some(ref index) = csr {
                             let neighbors = index.get_neighbors(&self.bm, node_id, tx)?;
                             for neighbor_id in neighbors {
-                                if !visited.contains(&(neighbor_id, depth + 1)) {
-                                    visited.insert((neighbor_id, depth + 1));
-                                    queue.push_back((neighbor_id, depth + 1));
+                                if visited_nodes.contains(&(neighbor_id, depth + 1)) {
+                                    continue;
                                 }
+                                let edge_key = (node_id, neighbor_id, depth as u64 + 1);
+                                if visited_edges.contains(&edge_key) {
+                                    continue;
+                                }
+                                visited_nodes.insert((neighbor_id, depth + 1));
+                                visited_edges.insert(edge_key);
+                                queue.push_back((neighbor_id, depth + 1));
                             }
                         } else {
                             if fallback_adj.is_none() {
@@ -142,12 +149,12 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                         total_rels, MAX_FALLBACK_RELS, MAX_FALLBACK_RELS
                                     );
                                 }
-                                let mut map: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
+                                let mut map: std::collections::HashMap<u64, Vec<(u64, u64)>> = std::collections::HashMap::new();
                                 for r_idx in 0..scan_limit {
                                     let Ok(s_val) = src_col.get_value(&self.bm, r_idx, tx) else { continue };
                                     let Ok(d_val) = dst_col.get_value(&self.bm, r_idx, tx) else { continue };
                                     if let (Value::Node(s_id), Value::Node(d_id)) = (s_val, d_val) {
-                                        map.entry(s_id).or_default().push(d_id);
+                                        map.entry(s_id).or_default().push((d_id, r_idx));
                                     }
                                 }
                                 fallback_adj = Some(map);
@@ -155,11 +162,17 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                             let adj = fallback_adj.as_ref()
                                 .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
-                                for &neighbor_id in neighbors {
-                                    if !visited.contains(&(neighbor_id, depth + 1)) {
-                                        visited.insert((neighbor_id, depth + 1));
-                                        queue.push_back((neighbor_id, depth + 1));
+                                for &(neighbor_id, row_id) in neighbors {
+                                    if visited_nodes.contains(&(neighbor_id, depth + 1)) {
+                                        continue;
                                     }
+                                    let edge_key = (node_id, neighbor_id, row_id);
+                                    if visited_edges.contains(&edge_key) {
+                                        continue;
+                                    }
+                                    visited_nodes.insert((neighbor_id, depth + 1));
+                                    visited_edges.insert(edge_key);
+                                    queue.push_back((neighbor_id, depth + 1));
                                 }
                             }
                         }

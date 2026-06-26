@@ -68,7 +68,10 @@ impl ExpressionEvaluator {
                     }
                 }
                 Err(LightningError::Internal(format!(
-                    "Variable {name} not found in batch"
+                    "Variable '{name}' not found in batch. \
+                     If '{name}' is a variable-length path variable (e.g. `[r*1..3]`), \
+                     note that path variables are not yet supported in RETURN clauses. \
+                     Use fixed-length patterns instead or reference node/relationship properties directly."
                 )))
             }
             BoundExpression::Comparison(left, op, right) => {
@@ -369,20 +372,117 @@ impl ExpressionEvaluator {
                 if name == "SHORTEST_PATH" || name == "ALL_SHORTEST_PATHS" {
                     if let Some(b) = batch {
                         let num_rows = b.num_rows();
-                        let _start_arg = if let Some(arg) = args.first() {
+                        let start_arr = if let Some(arg) = args.first() {
                             Self::evaluate(arg, batch, params, num_rows, registry, database)?
                         } else {
                             return Err(LightningError::Internal("SHORTEST_PATH requires start node".into()));
                         };
-                        let _end_arg = if args.len() > 1 {
+                        let end_arr = if args.len() > 1 {
                             Self::evaluate(&args[1], batch, params, num_rows, registry, database)?
                         } else {
                             return Err(LightningError::Internal("SHORTEST_PATH requires end node".into()));
                         };
-                        // For now, return empty path arrays as a stub
-                        // Full BFS implementation is a future feature
-                        let null_arr = arrow::array::NullArray::new(num_rows);
-                        return Ok(Arc::new(null_arr));
+                        let max_depth = if args.len() > 3 {
+                            let depth_arr = Self::evaluate(
+                                &args[3], batch, params, num_rows, registry, database,
+                            )?;
+                            if let Some(arr) = depth_arr.as_any().downcast_ref::<Int64Array>() {
+                                if !arr.is_null(0) { arr.value(0) as u32 } else { 0 }
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+                        let max_depth = if max_depth == 0 { u32::MAX } else { max_depth };
+
+                        let rel_table_name = if args.len() > 4 {
+                            let table_arr = Self::evaluate(
+                                &args[4], batch, params, num_rows, registry, database,
+                            )?;
+                            if let Some(arr) = table_arr.as_any().downcast_ref::<StringArray>() {
+                                if !arr.is_null(0) {
+                                    Some(arr.value(0).to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        let sm = database.storage_manager.read();
+                        let csr = rel_table_name
+                            .as_ref()
+                            .and_then(|name| sm.fwd_csr.get(name))
+                            .cloned();
+                        drop(sm);
+
+                        let bm = &database.buffer_manager;
+                        let bfs_tx = database.transaction_manager.begin(true)?;
+                        let mut paths: Vec<Option<String>> = Vec::with_capacity(num_rows);
+                        for i in 0..num_rows {
+                            let src = if !start_arr.is_null(i) {
+                                if let Some(arr) =
+                                    start_arr.as_any().downcast_ref::<arrow::array::UInt64Array>()
+                                {
+                                    arr.value(i)
+                                } else {
+                                    paths.push(None);
+                                    continue;
+                                }
+                            } else {
+                                paths.push(None);
+                                continue;
+                            };
+                            let dst = if !end_arr.is_null(i) {
+                                if let Some(arr) =
+                                    end_arr.as_any().downcast_ref::<arrow::array::UInt64Array>()
+                                {
+                                    arr.value(i)
+                                } else {
+                                    paths.push(None);
+                                    continue;
+                                }
+                            } else {
+                                paths.push(None);
+                                continue;
+                            };
+
+                            if let Some(ref csr) = csr {
+                                match crate::processor::operators::gds::bfs_shortest_path(
+                                    csr, src, dst, max_depth, bm, &bfs_tx,
+                                ) {
+                                    Ok(found_paths) => {
+                                        if found_paths.is_empty() {
+                                            paths.push(None);
+                                        } else {
+                                            let path_strs: Vec<String> = found_paths
+                                                .iter()
+                                                .map(|p| {
+                                                    let ids: Vec<String> = p
+                                                        .iter()
+                                                        .map(|id| id.to_string())
+                                                        .collect();
+                                                    format!("[{}]", ids.join(", "))
+                                                })
+                                                .collect();
+                                            paths.push(Some(path_strs.join("; ")));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        paths.push(None);
+                                    }
+                                }
+                            } else {
+                                paths.push(None);
+                            }
+                        }
+                        return Ok(Arc::new(StringArray::from_iter(
+                            paths.into_iter().map(|p| p),
+                        )));
                     }
                     return Err(LightningError::Internal("SHORTEST_PATH requires a batch".into()));
                 }

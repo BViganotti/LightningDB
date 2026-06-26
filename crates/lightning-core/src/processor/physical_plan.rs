@@ -863,15 +863,46 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
-            LogicalOperator::SemiMasker(child, _var, mask_id) => {
+            LogicalOperator::SemiMasker(child, var, mask_id) => {
                 let mask = Arc::new(RwLock::new(
                     crate::processor::operators::semi_mask::SemiMask::new(),
                 ));
-                self.masks.insert(mask_id.clone(), mask);
-                self.plan(*child)
+                self.masks.insert(mask_id.clone(), mask.clone());
+                let child_positions =
+                    self.compute_variable_positions(&child).unwrap_or_default();
+                let column_idx = child_positions.get(&var).copied().unwrap_or(0);
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::semi_masker::PhysicalSemiMasker::new(
+                        planned_child,
+                        column_idx,
+                        mask,
+                    ),
+                ))
             }
             LogicalOperator::Accumulate(child) => {
-                self.plan(*child)
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::accumulate::PhysicalAccumulate::new(
+                        planned_child,
+                    ),
+                ))
+            }
+            LogicalOperator::CountRelTable {
+                rel_table,
+                ..
+            } => {
+                let storage = self.db.storage_manager.read();
+                let table = storage
+                    .get_table(&rel_table)
+                    .ok_or_else(|| LightningError::Internal(format!("Table {rel_table} not found for CountRelTable")))?;
+                let count = table
+                    .next_row_id
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .max(table.stats.read().cardinality) as i64;
+                Ok(Box::new(
+                    crate::processor::operators::count::PhysicalCount::new(count),
+                ))
             }
             _ => Err(LightningError::Internal(format!(
                 "Operator not implemented in PhysicalPlanner: {op:?}"

@@ -1,5 +1,7 @@
 use crate::processor::{DataChunk, PhysicalOperator, Value};
+use crate::storage::buffer_manager::BufferManager;
 use crate::storage::index::csr::CSRIndex;
+use crate::transaction::transaction_manager::Transaction;
 use crate::Database;
 use crate::Result;
 use std::collections::{HashMap, VecDeque};
@@ -31,6 +33,93 @@ pub struct PhysicalASP {
 enum BFSPhase {
     Idle,
     Active,
+}
+
+/// Standalone BFS shortest path function usable from both PhysicalASP and the evaluator.
+pub fn bfs_shortest_path(
+    csr: &CSRIndex,
+    src_id: u64,
+    dst_id: u64,
+    max_depth: u32,
+    bm: &BufferManager,
+    tx: &Transaction,
+) -> Result<Vec<Vec<u64>>> {
+    if src_id == dst_id {
+        return Ok(vec![vec![src_id]]);
+    }
+
+    let mut visited: HashMap<u64, u32> = HashMap::new();
+    let mut predecessors: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut queue: VecDeque<u64> = VecDeque::new();
+
+    visited.insert(src_id, 0);
+    queue.push_back(src_id);
+    let mut found_distance = u32::MAX;
+
+    while let Some(current) = queue.pop_front() {
+        let dist = visited[&current];
+        if dist >= found_distance || dist >= max_depth {
+            continue;
+        }
+
+        let mut neighbors = Vec::new();
+        csr.for_each_neighbor(bm, current, tx, |n| {
+            neighbors.push(n);
+        })?;
+
+        for neighbor in neighbors {
+            let new_dist = dist + 1;
+
+            if neighbor == dst_id && new_dist <= max_depth {
+                if found_distance == u32::MAX {
+                    found_distance = new_dist;
+                }
+                if new_dist == found_distance {
+                    predecessors.entry(neighbor).or_default().push(current);
+                }
+                continue;
+            }
+
+            if new_dist >= found_distance {
+                continue;
+            }
+
+            if let Some(&existing_dist) = visited.get(&neighbor) {
+                if new_dist == existing_dist {
+                    predecessors.entry(neighbor).or_default().push(current);
+                }
+            } else if new_dist < *visited.get(&neighbor).unwrap_or(&u32::MAX) {
+                visited.insert(neighbor, new_dist);
+                predecessors.entry(neighbor).or_default().push(current);
+                queue.push_back(neighbor);
+            }
+        }
+    }
+
+    if found_distance == u32::MAX {
+        return Ok(Vec::new());
+    }
+
+    let mut all_paths = Vec::new();
+    let mut stack = vec![(dst_id, vec![dst_id])];
+
+    while let Some((node, path)) = stack.pop() {
+        if node == src_id {
+            let mut full_path = path.clone();
+            full_path.reverse();
+            all_paths.push(full_path);
+            continue;
+        }
+        if let Some(preds) = predecessors.get(&node) {
+            for &pred in preds {
+                let mut new_path = path.clone();
+                new_path.push(pred);
+                stack.push((pred, new_path));
+            }
+        }
+    }
+
+    Ok(all_paths)
 }
 
 impl PhysicalASP {
@@ -73,87 +162,10 @@ impl PhysicalASP {
         csr: &CSRIndex,
         src_id: u64,
         dst_id: u64,
-        bm: &crate::storage::buffer_manager::BufferManager,
-        tx: &crate::transaction::transaction_manager::Transaction,
+        bm: &BufferManager,
+        tx: &Transaction,
     ) -> Result<Vec<Vec<u64>>> {
-        if src_id == dst_id {
-            return Ok(vec![vec![src_id]]);
-        }
-
-        // BFS level by level, tracking all paths
-        let mut visited: HashMap<u64, u32> = HashMap::new();
-        let mut predecessors: HashMap<u64, Vec<u64>> = HashMap::new();
-        let mut queue: VecDeque<u64> = VecDeque::new();
-
-        visited.insert(src_id, 0);
-        queue.push_back(src_id);
-        let mut found_distance = u32::MAX;
-
-        while let Some(current) = queue.pop_front() {
-            let dist = visited[&current];
-            if dist >= found_distance || dist >= self.max_depth {
-                continue;
-            }
-
-            let mut neighbors = Vec::new();
-            csr.for_each_neighbor(bm, current, tx, |n| {
-                neighbors.push(n);
-            })?;
-
-            for neighbor in neighbors {
-                let new_dist = dist + 1;
-
-                if neighbor == dst_id && new_dist <= self.max_depth {
-                    if found_distance == u32::MAX {
-                        found_distance = new_dist;
-                    }
-                    if new_dist == found_distance {
-                        predecessors.entry(neighbor).or_default().push(current);
-                    }
-                    continue;
-                }
-
-                if new_dist >= found_distance {
-                    continue;
-                }
-
-                if let Some(&existing_dist) = visited.get(&neighbor) {
-                    if new_dist == existing_dist {
-                        predecessors.entry(neighbor).or_default().push(current);
-                    }
-                } else if new_dist < *visited.get(&neighbor).unwrap_or(&u32::MAX) {
-                    visited.insert(neighbor, new_dist);
-                    predecessors.entry(neighbor).or_default().push(current);
-                    queue.push_back(neighbor);
-                }
-            }
-        }
-
-        if found_distance == u32::MAX {
-            return Ok(Vec::new());
-        }
-
-        // Reconstruct all shortest paths from dst_id back to src_id
-        let mut all_paths = Vec::new();
-        let mut stack = vec![(dst_id, vec![dst_id])];
-
-        while let Some((node, path)) = stack.pop() {
-            if node == src_id {
-                let mut full_path = path.clone();
-                full_path.reverse();
-                all_paths.push(full_path);
-                continue;
-            }
-            if let Some(preds) = predecessors.get(&node) {
-                for &pred in preds {
-                    let mut new_path = path.clone();
-                    new_path.push(pred);
-                    stack.push((pred, new_path));
-                }
-            }
-        }
-
-        Ok(all_paths)
+        bfs_shortest_path(csr, src_id, dst_id, self.max_depth, bm, tx)
     }
 
     fn build_chunk_for_source(&self, src_id: u64, dst_id: u64) -> DataChunk {

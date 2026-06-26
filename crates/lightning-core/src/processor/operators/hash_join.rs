@@ -503,9 +503,17 @@ impl PhysicalOperator for HashJoin {
                                     None,
                                 )?);
                             }
-                            let refs: Vec<&dyn Array> = partial.iter().map(|a| a.as_ref()).collect();
-                            let concatenated = arrow::compute::concat(&refs)
-                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                            let concatenated = if partial.is_empty() {
+                                arrow::array::new_null_array(
+                                    right_schema.field(col_idx).data_type(),
+                                    left_indices.len(),
+                                )
+                            } else {
+                                let refs: Vec<&dyn Array> =
+                                    partial.iter().map(|a| a.as_ref()).collect();
+                                arrow::compute::concat(&refs)
+                                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?
+                            };
                             final_columns.push(concatenated);
                             final_fields.push(right_schema.field(col_idx).clone());
                         }

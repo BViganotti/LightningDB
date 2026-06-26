@@ -37,9 +37,9 @@ impl Optimizer {
         catalog: Arc<RwLock<Catalog>>,
         binder_column_offsets: std::collections::HashMap<String, usize>,
     ) -> Self {
-        let cat_jr = Arc::clone(&catalog);
+        let _cat_jr = Arc::clone(&catalog);
         let cat_ipd = Arc::clone(&catalog);
-        let _cat_crt = Arc::clone(&catalog);
+        let cat_crt = Arc::clone(&catalog);
         let bco = binder_column_offsets;
             Self {
                 rules: vec![
@@ -47,27 +47,20 @@ impl Optimizer {
                     Box::new(filter_pushdown::FilterPushDown::new()),
                     Box::new(index_pushdown::IndexPushDown::new(cat_ipd)),
                     // JoinReordering disabled: it can reorder joins in ways that
-                    // break the physical planner's variable position computation
-                    // when variables end up with overlapping start columns.
+                    // break the physical planner's variable position computation.
                     // Box::new(join_reordering::JoinReordering::new(cat_jr)),
                     Box::new(topk_optimizer::TopKOptimizer::new()),
                     Box::new(limit_pushdown::LimitPushDown::new()),
                     Box::new(order_by_pushdown::OrderByPushDown::new()),
                     Box::new(projection_pushdown::ProjectionPushDown::new(bco)),
                     Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
-                    // CountRelTableOptimizer disabled: it can return stale catalog row counts
-                    // for rel tables when num_rows isn't updated by regular DML (CREATE).
-                    // This causes COUNT(*) queries to return wrong results.
-                    // Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
-                    // #59: CountRelTableOptimizer — replaces COUNT(*) on a rel table
-                    //   with a direct catalog row count. Now guarded against filtered
-                    //   scans: only applied when the Scan has no WHERE filter.
-                    //   DEEP_AUDIT_FULL_2024.md item #59.
+                    Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
                     //
                     // SemiJoinPushDown and AccHashJoinOptimizer disabled because they emit
-                    // SemiMasker/Accumulate nodes that the physical planner cannot yet handle
-                    // (the Accumulate operator doesn't populate semi-masks). Re-enable once
-                    // the semi-mask infrastructure is complete.
+                    // SemiMasker/Accumulate nodes that create masks in a way that can break
+                    // existing query plans (masks reference variables not yet bound at the
+                    // point of the Scan). Future work: fix mask variable resolution so these
+                    // optimizers can apply correctly.
                     // Box::new(semijoin_pushdown::SemiJoinPushDown::new()),
                     // Box::new(acc_hash_join_optimizer::AccHashJoinOptimizer::new()),
                     Box::new(factorization_rewriter::FactorizationRewriter::new()),

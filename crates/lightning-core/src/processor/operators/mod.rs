@@ -57,5 +57,7 @@ pub mod profile;
 pub use profile::PhysicalProfile;
 pub mod checkpoint;
 pub use checkpoint::{PhysicalCheckpoint, PhysicalVacuum};
+pub mod count;
+pub use count::PhysicalCount;
 pub mod gds;
 pub use gds::PhysicalASP;

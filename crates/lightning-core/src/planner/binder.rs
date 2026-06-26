@@ -1531,6 +1531,35 @@ impl<'a> Binder<'a> {
                     bound_args.push(self.bind_expression(arg)?);
                 }
 
+                // Inject rel table name for SHORTEST_PATH / ALL_SHORTEST_PATHS
+                if actual_name == "SHORTEST_PATH" || actual_name == "ALL_SHORTEST_PATHS" {
+                    if bound_args.len() >= 2 {
+                        if let (
+                            BoundExpression::PropertyLookup(start_var, _, _),
+                            BoundExpression::PropertyLookup(end_var, _, _),
+                        ) = (&bound_args[0], &bound_args[1])
+                        {
+                            let src_table = self
+                                .variables
+                                .get(start_var)
+                                .map(|v| v.table_name.as_str());
+                            let dst_table =
+                                self.variables.get(end_var).map(|v| v.table_name.as_str());
+                            if let (Some(src), Some(dst)) = (src_table, dst_table) {
+                                let rel_table = self.catalog.rel_tables.iter().find(|(_, rel)| {
+                                    (rel.from_table == src && rel.to_table == dst)
+                                        || (rel.from_table == dst && rel.to_table == src)
+                                });
+                                if let Some((name, _)) = rel_table {
+                                    bound_args.push(BoundExpression::Literal(Literal::String(
+                                        name.clone(),
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // CHECK FOR NEXTVAL (after bound_args is populated)
                 if actual_name == "NEXTVAL" {
                     if let [BoundExpression::Literal(Literal::String(seq_name))] =
