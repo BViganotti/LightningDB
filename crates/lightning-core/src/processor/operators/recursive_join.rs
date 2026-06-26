@@ -60,21 +60,21 @@ impl PhysicalRecursiveJoin {
         self
     }
 
-    /// Return the Arrow data type for a given output column index.
     fn get_output_field_type(&self, chunk_schema: &arrow::datatypes::Schema, idx: usize) -> arrow::datatypes::DataType {
         let num_chunk_cols = chunk_schema.fields().len();
         let num_dst_cols = self.dst_table.columns.len();
+        let num_rel_cols = self.rel_table.columns.len();
         if idx < num_chunk_cols {
             chunk_schema.field(idx).data_type().clone()
         } else if idx < num_chunk_cols + num_dst_cols {
-            // Destination node property (b._id, b.id, b.name, ...)
             let prop_idx = idx - num_chunk_cols;
             crate::processor::arrow_utils::logical_type_to_arrow_type(&self.dst_table.columns[prop_idx].data_type)
-        } else if idx == num_chunk_cols + num_dst_cols {
-            // Path length (depth) — named after rel_var_name
+        } else if idx < num_chunk_cols + num_dst_cols + num_rel_cols {
+            let prop_idx = idx - num_chunk_cols - num_dst_cols;
+            crate::processor::arrow_utils::logical_type_to_arrow_type(&self.rel_table.columns[prop_idx].data_type)
+        } else if idx == num_chunk_cols + num_dst_cols + num_rel_cols {
             arrow::datatypes::DataType::Int64
         } else {
-            // Neighbor ID (internal node ID)
             arrow::datatypes::DataType::UInt64
         }
     }
@@ -94,13 +94,13 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
             };
             let num_dst_cols = self.dst_table.columns.len();
             let num_chunk_cols = chunk.batch.num_columns();
-            // Output columns: [child cols] + [dst_props (_id,id,name...)] + [path_length] + [_neighbor]
-            // dst_props are placed directly after child columns so that the `b` variable's
-            // column range ([num_chunk_cols .. num_chunk_cols + num_dst_cols]) matches what
-            // collect_variable_positions expects: b starts at child_cols and has num_dst_cols columns.
-            // This ensures b._id → index 0, b.id → index 1, b.name → index 2, etc.
-            let mut final_columns: Vec<Vec<Value>> =
-                vec![Vec::new(); num_chunk_cols + num_dst_cols + 2];
+            let num_rel_cols = self.rel_table.columns.len();
+            // Output columns: [child cols] + [dst_props] + [rel_props] + [path_length] + [_neighbor]
+            // dst_props at [child, child+dst) represents variable `b`.
+            // rel_props at [child+dst, child+dst+rel) represents variable `r`.
+            // path_length and _neighbor follow after.
+            let total_cols = num_chunk_cols + num_dst_cols + num_rel_cols + 2;
+            let mut final_columns: Vec<Vec<Value>> = vec![Vec::new(); total_cols];
 
             // Adjacency lookup mechanism
             // Clone the CSR Arc and drop the storage lock immediately so writers
@@ -123,12 +123,13 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 };
 
                 let mut visited_nodes: HashSet<(u64, u32)> = HashSet::new();
-                let mut visited_edges: HashSet<(u64, u64, u64)> = HashSet::new();
+                let mut visited_edges: HashSet<(u64, u64)> = HashSet::new();
                 let mut queue = VecDeque::new();
-                queue.push_back((start_id, 0u32));
+                // Queue entries: (node_id, src_id_for_last_rel, depth)
+                queue.push_back((start_id, start_id, 0u32));
                 visited_nodes.insert((start_id, 0));
 
-                while let Some((node_id, depth)) = queue.pop_front() {
+                while let Some((node_id, src_id, depth)) = queue.pop_front() {
                     if Instant::now() > deadline {
                         return Err(LightningError::Internal(format!(
                             "Relationship traversal timed out after {}ms",
@@ -142,19 +143,33 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         for (col_idx, fc) in final_columns.iter_mut().enumerate().take(num_chunk_cols) {
                             fc.push(Value::from_arrow(chunk.batch.column(col_idx), i));
                         }
-                        // Destination node properties — placed right after child columns.
-                        // This range [num_chunk_cols .. num_chunk_cols + num_dst_cols] represents
-                        // the `b` variable in the RETURN clause.
                         let dst_base = num_chunk_cols;
                         for (prop_idx, col) in self.dst_table.columns.iter().enumerate() {
                             let val = col.get_value(&self.bm, node_id, tx)?;
                             final_columns[dst_base + prop_idx].push(val);
                         }
-                        // Path length (depth) — after dst properties
-                        let depth_idx = num_chunk_cols + num_dst_cols;
+                        // Relationship properties (r._src, r._dst, ...) — use the last
+                        // traversed relationship's src/dst node IDs.
+                        let rel_base = num_chunk_cols + num_dst_cols;
+                        for (prop_idx, col) in self.rel_table.columns.iter().enumerate() {
+                            let val = if prop_idx == 0 {
+                                // _src — source node of the last relationship
+                                Value::Node(src_id)
+                            } else if prop_idx == 1 {
+                                // _dst — destination node of the last relationship
+                                Value::Node(node_id)
+                            } else {
+                                // Other rel properties — look up from rel table
+                                // For non-CSR path, row_id is known; for CSR path, skip.
+                                Value::Null
+                            };
+                            final_columns[rel_base + prop_idx].push(val);
+                        }
+                        // Path length (depth)
+                        let depth_idx = num_chunk_cols + num_dst_cols + num_rel_cols;
                         final_columns[depth_idx].push(Value::Number(depth as f64));
-                        // Neighbor ID (internal node ID) — last column
-                        let neighbor_idx = num_chunk_cols + num_dst_cols + 1;
+                        // Neighbor ID (internal node ID)
+                        let neighbor_idx = num_chunk_cols + num_dst_cols + num_rel_cols + 1;
                         final_columns[neighbor_idx].push(Value::Node(node_id));
                     }
 
@@ -162,23 +177,22 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         if let Some(ref index) = csr {
                             let neighbors = index.get_neighbors(&self.bm, node_id, tx)?;
                             for neighbor_id in neighbors {
-                                if visited_nodes.contains(&(neighbor_id, depth + 1)) {
+                                let edge_key = (node_id, neighbor_id);
+                                if visited_edges.contains(&edge_key) {
                                     continue;
                                 }
-                                let edge_key = (node_id, neighbor_id, depth as u64 + 1);
-                                if visited_edges.contains(&edge_key) {
+                                if visited_nodes.contains(&(neighbor_id, depth + 1)) {
                                     continue;
                                 }
                                 visited_nodes.insert((neighbor_id, depth + 1));
                                 visited_edges.insert(edge_key);
-                                queue.push_back((neighbor_id, depth + 1));
+                                queue.push_back((neighbor_id, node_id, depth + 1));
                             }
                         } else {
                             if fallback_adj.is_none() {
                                 let src_col = &self.rel_table.columns[0];
                                 let dst_col = &self.rel_table.columns[1];
                                 let total_rels = self.rel_table.stats.read().cardinality;
-                                // Limit fallback scan to prevent OOM on large graphs
                                 const MAX_FALLBACK_RELS: u64 = 1_000_000;
                                 let scan_limit = total_rels.min(MAX_FALLBACK_RELS);
                                 if total_rels > MAX_FALLBACK_RELS {
@@ -200,17 +214,17 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                             let adj = fallback_adj.as_ref()
                                 .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
-                                for &(neighbor_id, row_id) in neighbors {
-                                    if visited_nodes.contains(&(neighbor_id, depth + 1)) {
+                                for &(neighbor_id, _row_id) in neighbors {
+                                    let edge_key = (node_id, neighbor_id);
+                                    if visited_edges.contains(&edge_key) {
                                         continue;
                                     }
-                                    let edge_key = (node_id, neighbor_id, row_id);
-                                    if visited_edges.contains(&edge_key) {
+                                    if visited_nodes.contains(&(neighbor_id, depth + 1)) {
                                         continue;
                                     }
                                     visited_nodes.insert((neighbor_id, depth + 1));
                                     visited_edges.insert(edge_key);
-                                    queue.push_back((neighbor_id, depth + 1));
+                                    queue.push_back((neighbor_id, node_id, depth + 1));
                                 }
                             }
                         }
@@ -230,9 +244,7 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
                 let mut schema_fields: Vec<Arc<arrow::datatypes::Field>> =
                     chunk_schema.fields().iter().cloned().collect();
-                // Destination table properties — these represent the `b` variable.
-                // Must come right after child columns so collect_variable_positions
-                // correctly maps b._id → 0, b.id → 1, b.name → 2 within b's range.
+                // Destination node properties (variable `b`)
                 for col in &self.dst_table.columns {
                     schema_fields.push(Arc::new(arrow::datatypes::Field::new(
                         &col.name,
@@ -240,13 +252,21 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         true,
                     )));
                 }
-                // Path length column — named after the relationship variable
+                // Relationship properties (variable `r` — _src, _dst, ...)
+                for col in &self.rel_table.columns {
+                    schema_fields.push(Arc::new(arrow::datatypes::Field::new(
+                        &col.name,
+                        crate::processor::arrow_utils::logical_type_to_arrow_type(&col.data_type),
+                        true,
+                    )));
+                }
+                // Path length column (depth)
                 schema_fields.push(Arc::new(arrow::datatypes::Field::new(
                     &self.rel_var_name,
                     arrow::datatypes::DataType::Int64,
                     true,
                 )));
-                // Neighbor ID column (internal node ID for BFS)
+                // Neighbor ID column
                 schema_fields.push(Arc::new(arrow::datatypes::Field::new(
                     "_neighbor",
                     arrow::datatypes::DataType::UInt64,

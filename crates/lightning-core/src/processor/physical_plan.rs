@@ -966,12 +966,16 @@ impl PhysicalPlanner {
                 child,
                 dst_node_table,
                 dst_var,
+                rel_var,
+                rel_table: rel_table_name,
                 ..
             } => {
                 let child_cols = self.collect_variable_positions(child, start_col, positions)?;
                 let dst_cols = self.get_table_num_columns(dst_node_table);
+                let rel_cols = self.get_table_num_columns(&rel_table_name);
                 positions.insert(dst_var.clone(), start_col + child_cols);
-                Ok(child_cols + dst_cols)
+                positions.insert(rel_var.clone(), start_col + child_cols + dst_cols);
+                Ok(child_cols + dst_cols + rel_cols)
             }
             LogicalOperator::Projection(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
