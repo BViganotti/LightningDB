@@ -1375,12 +1375,25 @@ impl<'a> Binder<'a> {
             }
         }
 
-        let order_by = if let Some(items) = &return_clause.order_by {
+        let order_by = if let Some(ob) = &return_clause.order_by {
             let mut bound_items = Vec::new();
-            for item in items {
+            for ob_item in ob {
+                let mut expr = self.bind_expression(&ob_item.expression)?;
+                // Replace alias variables (e.g. `ORDER BY n` after `RETURN ... AS n`)
+                // with the original RETURN expression so the Sort operator can evaluate
+                // it against its child (which may not have the alias column).
+                if let BoundExpression::Variable(var_name, _) = &expr {
+                    if let Some(ret_item) = items.iter().find(|ri| &ri.alias == var_name) {
+                        tracing::debug!("ORDER BY alias '{}' -> {:?}", var_name, ret_item.expression);
+                        expr = ret_item.expression.clone();
+                    } else {
+                        tracing::debug!("ORDER BY variable '{}' not found in RETURN aliases. Aliases: {:?}",
+                            var_name, items.iter().map(|i| &i.alias).collect::<Vec<_>>());
+                    }
+                }
                 bound_items.push(BoundOrderByItem {
-                    expression: self.bind_expression(&item.expression)?,
-                    descending: item.descending,
+                    expression: expr,
+                    descending: ob_item.descending,
                 });
             }
             Some(bound_items)
