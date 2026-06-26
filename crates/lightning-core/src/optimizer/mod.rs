@@ -46,7 +46,10 @@ impl Optimizer {
                     Box::new(subquery_unnesting::SubqueryUnnesting::new()),
                     Box::new(filter_pushdown::FilterPushDown::new()),
                     Box::new(index_pushdown::IndexPushDown::new(cat_ipd)),
-                    Box::new(join_reordering::JoinReordering::new(cat_jr)),
+                    // JoinReordering disabled: it can reorder joins in ways that
+                    // break the physical planner's variable position computation
+                    // when variables end up with overlapping start columns.
+                    // Box::new(join_reordering::JoinReordering::new(cat_jr)),
                     Box::new(topk_optimizer::TopKOptimizer::new()),
                     Box::new(limit_pushdown::LimitPushDown::new()),
                     Box::new(order_by_pushdown::OrderByPushDown::new()),

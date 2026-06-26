@@ -262,10 +262,15 @@ impl ProjectionPushDown {
                 let (new_child, child_indices) = self.push_down(*child, my_indices)?;
                 // NOTE: remap_expression_indices is intentionally NOT called here.
                 // The physical planner's remap_property_lookup handles index
-                // remapping for projection pushdown. Calling it in the optimizer
-                // causes a double-remap bug on subsequent optimizer loop iterations:
-                // extract_property_indices re-extracts the already-remapped local
-                // index as if it were a global index, corrupting the projected set.
+                // remapping for projection pushdown using the variable_projected_indices
+                // map (which is populated from the optimizer's projected_idxs).
+                // Calling remap_expression_indices here would:
+                //   1. Convert table-relative → absolute (optimizer)
+                //   2. Then remap_property_lookup converts absolute → physical (planner)
+                //   → double-remap, wrong result
+                // The idempotent remap (converting both sides to table-relative) avoids
+                // the double-remap but still transforms indices that the physical planner
+                // expects in their original table-relative form for the proj-indices lookup.
                 Ok((
                     LogicalOperator::Projection(Box::new(new_child), items),
                     child_indices,

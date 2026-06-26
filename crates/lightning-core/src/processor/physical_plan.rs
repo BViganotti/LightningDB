@@ -926,7 +926,8 @@ impl PhysicalPlanner {
             }
             LogicalOperator::Join(left, right, ..) => {
                 let left_cols = self.collect_variable_positions(left, start_col, positions)?;
-                self.collect_variable_positions(right, start_col + left_cols, positions)
+                let right_cols = self.collect_variable_positions(right, start_col + left_cols, positions)?;
+                Ok(left_cols + right_cols)
             }
             LogicalOperator::RecursiveJoin {
                 child,
