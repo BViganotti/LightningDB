@@ -48,6 +48,12 @@ impl ExpressionEvaluator {
                 if let Some(b) = batch {
                     if *idx >= b.num_columns() {
                         let col_names: Vec<String> = b.schema().fields().iter().map(|f| f.name().clone()).collect();
+                        // Debug: log the full expression tree
+                        tracing::error!(
+                            "PropertyLookup `{}` idx={} OOB batch_cols={} schema={:?}. \
+                             Use RETURN with explicit alias or property name.",
+                            var_name, idx, b.num_columns(), col_names,
+                        );
                         return Err(LightningError::Internal(format!(
                             "PropertyLookup `{}` index {} out of bounds for batch with {} columns. batch cols: {:?}",
                             var_name, idx, b.num_columns(), col_names,

@@ -1069,7 +1069,7 @@ impl<'a> Binder<'a> {
 
     fn bind_clause(&mut self, clause: &Clause) -> Result<BoundClause> {
         match clause {
-            Clause::Return(ret) => Ok(BoundClause::Return(self.bind_return_clause(ret)?)),
+            Clause::Return(ret) => Ok(BoundClause::Return(self.bind_return_clause(ret, true)?)),
             Clause::Match(match_clause) => {
                 Ok(BoundClause::Match(self.bind_match_clause(match_clause)?))
             }
@@ -1136,17 +1136,36 @@ impl<'a> Binder<'a> {
                 let bound_match = self.bind_match_clause(pat)?;
                 Ok(BoundClause::OptionalMatch(bound_match))
             }
-            Clause::With(ret, bound_where) => {
-                let bound_ret = self.bind_return_clause(ret)?;
+             Clause::With(ret, bound_where) => {
+                let bound_ret = self.bind_return_clause(ret, true)?;
+                let original_vars = self.variables.clone();
                 self.variables.clear(); // Re-scope according to WITH items
+                // First, re-insert any bare node/rel variables referenced in the WITH
+                // clause's original AST (before expansion). This is needed so that
+                // subsequent WHERE/RETURN clauses can resolve p.id when `WITH p` was used.
+                for item in &ret.items {
+                    if let crate::parser::ast::ProjectionItem::Expression(expr, _) = item {
+                        if let crate::parser::ast::Expression::Variable(v) = expr {
+                            if let Some(bv) = original_vars.get(v) {
+                                self.variables.insert(v.clone(), bv.clone());
+                            }
+                        }
+                    }
+                }
                 for item in &bound_ret.items {
-                    self.variables.insert(
-                        item.alias.clone(),
+                    self.variables.entry(item.alias.clone()).or_insert_with(|| {
+                        let table_name = if let BoundExpression::Variable(v, _) = &item.expression {
+                            original_vars.get(v)
+                                .map(|bv| bv.table_name.clone())
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
                         BoundVariable {
-                            table_name: "".into(),
+                            table_name,
                             type_: item.expression.get_type(),
-                        },
-                    );
+                        }
+                    });
                 }
                 let bw = bound_where
                     .as_ref()
@@ -1289,7 +1308,11 @@ impl<'a> Binder<'a> {
         Ok(bound_properties)
     }
 
-    fn bind_return_clause(&mut self, return_clause: &ReturnClause) -> Result<BoundReturnClause> {
+    fn bind_return_clause(
+        &mut self,
+        return_clause: &ReturnClause,
+        expand_variables: bool,
+    ) -> Result<BoundReturnClause> {
         let mut items = Vec::new();
         for item in &return_clause.items {
             match item {
@@ -1321,6 +1344,9 @@ impl<'a> Binder<'a> {
                 ProjectionItem::Expression(expr, alias) => {
                     // Expand bare Variable expressions (e.g. RETURN n) into per-property
                     // columns when the variable refers to a node or relationship table.
+                    // WITH clauses skip expansion so the variable remains available for
+                    // subsequent WHERE/RETURN clauses (e.g. `WITH p WHERE p.id > 1`).
+                    if expand_variables {
                     if let Expression::Variable(v) = expr {
                         if let Some(bv) = self.variables.get(v) {
                             let table_info = self.catalog
@@ -1348,6 +1374,7 @@ impl<'a> Binder<'a> {
                             }
                         }
                     }
+                    } // end expand_variables
 
                     let bound_expr = self.bind_expression(expr)?;
                     let alias = alias.clone().unwrap_or_else(|| match expr {
@@ -1414,10 +1441,16 @@ impl<'a> Binder<'a> {
         match expr {
             Expression::Literal(lit) => Ok(BoundExpression::Literal(lit.clone())),
             Expression::Variable(var) => {
+                tracing::debug!("bind_expression Variable('{}') — variables: {:?}", var,
+                    self.variables.keys().collect::<Vec<_>>());
                 let binding = self
                     .variables
                     .get(var)
-                    .ok_or_else(|| LightningError::Query(format!("Variable {var} not found")))?;
+                    .ok_or_else(|| {
+                        tracing::error!("Variable '{}' not found in scope. Available: {:?}",
+                            var, self.variables.keys().collect::<Vec<_>>());
+                        LightningError::Query(format!("Variable {var} not found"))
+                    })?;
                 Ok(BoundExpression::Variable(
                     var.clone(),
                     binding.type_.clone(),

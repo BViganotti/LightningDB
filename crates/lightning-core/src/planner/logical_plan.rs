@@ -1152,6 +1152,53 @@ impl LogicalPlanner {
                             on_create_assignments: merge.on_create_assignments.clone(),
                             on_match_assignments: merge.on_match_assignments.clone(),
                         },
+                        BoundClause::With(ret, bound_where) => {
+                            // WITH is like a RETURN + Projection that creates a new scope.
+                            // It does NOT use the LogicalOperator::With variant directly;
+                            // instead we create a Projection for the WITH items and a
+                            // Filter for the WHERE clause, if present.
+                            let mut current_plan = plan;
+                            // Build aggregate-like processing (same as RETURN)
+                            for item in &ret.items {
+                                if item.expression.is_aggregate() {
+                                    // For simplicity, WITH + aggregates not fully supported yet
+                                }
+                            }
+                            // Apply WHERE
+                            if let Some(w) = bound_where {
+                                current_plan = LogicalOperator::Filter(
+                                    Box::new(current_plan),
+                                    w.expression.clone(),
+                                );
+                            }
+                            // Apply ORDER BY
+                            if let Some(order_by) = &ret.order_by {
+                                current_plan = LogicalOperator::Sort(
+                                    Box::new(current_plan),
+                                    order_by.clone(),
+                                );
+                            }
+                            // Apply projection
+                            // WITH always projects (distinct or plain)
+                            current_plan = LogicalOperator::Projection(
+                                Box::new(current_plan),
+                                ret.items.clone(),
+                            );
+                            // Apply skip/limit
+                            if let Some(skip) = ret.skip {
+                                let skip_val = if skip < 0.0 { 0u64 } else { skip as u64 };
+                                current_plan = LogicalOperator::Skip(
+                                    Box::new(current_plan), skip_val,
+                                );
+                            }
+                            if let Some(limit) = ret.limit {
+                                let limit_val = if limit < 0.0 { 0u64 } else { limit as u64 };
+                                current_plan = LogicalOperator::Limit(
+                                    Box::new(current_plan), limit_val,
+                                );
+                            }
+                            current_plan
+                        }
                         BoundClause::OptionalMatch(opt_match) => {
                             let inner_plan = Self::plan(BoundStatement::Query(
                                 Some(opt_match.clone()),

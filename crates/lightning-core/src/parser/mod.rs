@@ -484,6 +484,10 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 let pats = parse_match_clause(i)?;
                 clauses.push(Clause::OptionalMatch(MatchClause { patterns: pats }));
             }
+            Rule::with_clause => {
+                let rc = parse_return_clause(i)?;
+                clauses.push(Clause::With(rc, where_clause_opt.take()));
+            }
             Rule::unwind_clause => {
                 let mut it = i.into_inner();
                 let expr = parse_expression(required_pair(it.next(), "pair")?)?;
