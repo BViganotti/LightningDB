@@ -40,6 +40,7 @@ pub struct LazyCatalog {
     dirty: AtomicBool,
     last_saved_tx_count: AtomicU64,
     path: parking_lot::RwLock<Option<std::path::PathBuf>>,
+    save_mutex: parking_lot::Mutex<()>,
 }
 
 impl LazyCatalog {
@@ -49,6 +50,7 @@ impl LazyCatalog {
             dirty: AtomicBool::new(false),
             last_saved_tx_count: AtomicU64::new(0),
             path: parking_lot::RwLock::new(path),
+            save_mutex: parking_lot::Mutex::new(()),
         }
     }
 
@@ -145,6 +147,9 @@ impl LazyCatalog {
                 return Ok(());
             }
         };
+        // Serialize catalog saves across all save paths to prevent
+        // concurrent writes to the same shadow file from corrupting data.
+        let _save_guard = self.save_mutex.lock();
         catalog.save_to_disk(&path)?;
         self.dirty.store(false, Ordering::Release);
         self.last_saved_tx_count.store(current + 1, Ordering::Release);
@@ -162,6 +167,11 @@ impl LazyCatalog {
 
         let catalog_guard = self.inner.read();
 
+        // Serialize catalog saves across all save paths to prevent
+        // concurrent writes to the same shadow file from corrupting data.
+        // The save_mutex is acquired AFTER the catalog read lock to avoid
+        // deadlock with force_save_with_catalog which holds the write lock.
+        let _save_guard = self.save_mutex.lock();
         info!("Saving catalog to disk: {}", path.display());
         catalog_guard.save_to_disk(&path)?;
 
@@ -187,6 +197,7 @@ impl Clone for LazyCatalog {
             dirty: AtomicBool::new(self.dirty.load(Ordering::Acquire)),
             last_saved_tx_count: AtomicU64::new(self.last_saved_tx_count.load(Ordering::Acquire)),
             path: parking_lot::RwLock::new(self.path.read().clone()),
+            save_mutex: parking_lot::Mutex::new(()),
         }
     }
 }

@@ -1431,76 +1431,69 @@ impl Connection {
         // the same key, causing stale literal values to be reused from cache).
         let query_hash = hash_cache_key(query_str);
         let pp_shard = cache_shard(query_str, 4);
+        let db: &Database = &self.client_context.database;
+        let bm = &db.buffer_manager;
 
         // Try physical plan cache first (fastest path: saves logical plan,
-        // optimizer, and physical planner)
+        // optimizer, and physical planner). Cached plans are always read-only
+        // so the transaction can be created as read-only.
         let cached_pp = {
-            let mut cache = self.client_context.database.physical_plan_caches[pp_shard].lock();
+            let mut cache = db.physical_plan_caches[pp_shard].lock();
             cache.get(&query_hash).cloned()
         };
         if let Some(cached_plan) = cached_pp {
-            // Read-only plans are safe to reuse across any transaction
             let plan = cached_plan.clone_box();
             let tx = match (snapshot_ts, explicit_tx) {
                 (_, Some(tx)) => tx,
                 (Some(ts), None) => Arc::new(
-                    self.client_context
-                        .database
-                        .transaction_manager
-                        .begin_at(true, ts)?,
+                    db.transaction_manager.begin_at(true, ts)?,
                 ),
                 (None, None) => Arc::new(
-                    self.client_context
-                        .database
-                        .transaction_manager
-                        .begin(false)?,
+                    db.transaction_manager.begin(true)?,
                 ),
             };
-            let bm = &self.client_context.database.buffer_manager;
-            let db: &Database = &self.client_context.database;
-            db.storage_manager.read().flush_all_pending(bm, &tx)?;
             return Ok((plan, tx));
         }
+
+        // Cache miss: parse first to determine if query is read-only.
+        // This lets us create a read-only transaction for read-only
+        // queries, avoiding catalog write locks during commit.
+        let query = parse(query_str)
+            .map_err(|e| LightningError::Query(e.to_string()))?;
+        if !self.skip_auth_check {
+            validate_no_auth_table_access(&query)?;
+        }
+        let is_read_only = query.is_read_only();
 
         let tx = match (snapshot_ts, explicit_tx) {
             (_, Some(tx)) => tx,
             (Some(ts), None) => Arc::new(
-                self.client_context
-                    .database
-                    .transaction_manager
-                    .begin_at(true, ts)?,
+                db.transaction_manager.begin_at(true, ts)?,
             ),
             (None, None) => Arc::new(
-                self.client_context
-                    .database
-                    .transaction_manager
-                    .begin(false)?,
+                db.transaction_manager.begin(is_read_only)?,
             ),
         };
-        let bm = &self.client_context.database.buffer_manager;
-        let db: &Database = &self.client_context.database;
-        db.storage_manager.read().flush_all_pending(bm, &tx)?;
+
+        if !is_read_only {
+            db.storage_manager.read().flush_all_pending(bm, &tx)?;
+        }
 
         // Try bound statement cache
         let (bound_stmt, binder_column_offsets) = {
             let plan_cache_key = query_str.to_string();
             let cache_shard_idx = cache_shard(&plan_cache_key, 4);
-            let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
+            let mut cache = db.plan_caches[cache_shard_idx].lock();
             let cached = cache.get(&plan_cache_key).cloned();
             if let Some(pair) = cached {
                 let (stmt, offsets) = &*pair;
                 (stmt.clone(), offsets.clone())
             } else {
                 drop(cache);
-                let query = parse(query_str)
-                    .map_err(|e| LightningError::Query(e.to_string()))?;
-                if !self.skip_auth_check {
-                    validate_no_auth_table_access(&query)?;
-                }
-                let catalog = self.client_context.database.catalog.read();
+                let catalog = db.catalog.read();
                 let mut binder = Binder::new(
                     &catalog,
-                    &self.client_context.database.function_registry,
+                    &db.function_registry,
                 );
                 let bound_query = binder.bind_query(&query)?;
                 drop(catalog);
@@ -1520,7 +1513,7 @@ impl Connection {
                 // query string (not normalized) as the cache key to avoid
                 // collisions between queries with different literal values.
                 if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
-                    let mut cache = self.client_context.database.plan_caches[cache_shard_idx].lock();
+                    let mut cache = db.plan_caches[cache_shard_idx].lock();
                     cache.put(plan_cache_key, Arc::new((stmt.clone(), binder_offsets.clone())));
                 }
                 (stmt, binder_offsets)
@@ -1542,9 +1535,7 @@ impl Connection {
         // Non-read-only plans (DML, DDL) have tx_id baked into operators and
         // cannot be safely reused.
         if physical_plan.is_read_only() {
-            self.client_context
-                .database
-                .physical_plan_caches[pp_shard]
+            db.physical_plan_caches[pp_shard]
                 .lock()
                 .put(query_hash, Arc::from(physical_plan.clone_box()));
         }

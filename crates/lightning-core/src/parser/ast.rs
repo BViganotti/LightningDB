@@ -39,10 +39,23 @@ pub struct Query {
     pub is_profile: bool,
 }
 
+impl Query {
+    pub fn is_read_only(&self) -> bool {
+        self.union_queries.iter().all(|uq| uq.is_read_only())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnionQuery {
     pub statement: Statement,
     pub next_union: Option<(Box<UnionQuery>, bool)>,
+}
+
+impl UnionQuery {
+    pub fn is_read_only(&self) -> bool {
+        self.statement.is_read_only()
+            && self.next_union.as_ref().map(|(uq, _)| uq.is_read_only()).unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +125,39 @@ pub enum Statement {
         fields: Vec<String>,
     },
     DropIndex(String),
+}
+
+impl Statement {
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Statement::Match(_, _, clauses) => {
+                !clauses.iter().any(|c| matches!(c,
+                    Clause::Delete(..) | Clause::Set(..) | Clause::Remove(..) |
+                    Clause::Create(..) | Clause::Merge(..)
+                ))
+            }
+            | Statement::StandaloneCall(..)
+            | Statement::CopyTo { .. } => true,
+            | Statement::Create(..)
+            | Statement::CreateTableNode { .. }
+            | Statement::CreateTableRel { .. }
+            | Statement::AlterTable { .. }
+            | Statement::DropTable(..)
+            | Statement::CopyFrom { .. }
+            | Statement::Checkpoint
+            | Statement::Vacuum
+            | Statement::Transaction(..)
+            | Statement::CreateSequence { .. }
+            | Statement::CreateMacro { .. }
+            | Statement::Merge(..)
+            | Statement::CreateConstraint { .. }
+            | Statement::DropConstraint(..)
+            | Statement::CreateIndex { .. }
+            | Statement::CreateVectorIndex { .. }
+            | Statement::CreateFtsIndex { .. }
+            | Statement::DropIndex(..) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
