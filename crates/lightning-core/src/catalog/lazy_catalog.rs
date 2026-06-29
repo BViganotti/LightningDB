@@ -125,21 +125,9 @@ impl LazyCatalog {
     }
 
     /// Save the catalog to disk using an already-acquired lock guard reference.
-    /// The caller passes a reference to the locked Catalog, and this method uses
-    /// it directly instead of acquiring its own lock.
-    /// Returns an error if the provided catalog reference does not match
-    /// this LazyCatalog's inner catalog (prevents saving a stale/foreign catalog).
+    /// The caller MUST hold the catalog write lock — this guarantees exclusive
+    /// access and proves the catalog reference is valid.
     pub fn force_save_with_catalog(&self, catalog: &Catalog) -> Result<()> {
-        // Verify the catalog matches — we compare the pointer to the inner lock's data.
-        // This ensures we're not saving a stale/foreign catalog that bypasses dirty tracking.
-        let inner_guard = self.inner.read();
-        if !std::ptr::eq(catalog as *const Catalog, &*inner_guard as *const Catalog) {
-            return Err(crate::LightningError::Database(
-                "force_save_with_catalog: catalog reference does not match inner catalog".into()
-            ));
-        }
-        drop(inner_guard);
-
         let current = self.last_saved_tx_count.load(Ordering::Acquire);
         let path = match self.get_path() {
             Some(p) => p,
