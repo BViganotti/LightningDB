@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::debug;
 
 pub const CATALOG_SAVE_TX_INTERVAL: u64 = 1000;
 
@@ -160,7 +160,7 @@ impl LazyCatalog {
         // The save_mutex is acquired AFTER the catalog read lock to avoid
         // deadlock with force_save_with_catalog which holds the write lock.
         let _save_guard = self.save_mutex.lock();
-        info!("Saving catalog to disk: {}", path.display());
+        debug!("Saving catalog to disk: {}", path.display());
         catalog_guard.save_to_disk(&path)?;
 
         self.dirty.store(false, Ordering::Release);

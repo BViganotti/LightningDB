@@ -383,6 +383,12 @@ impl WAL {
                     }
                     true
                 }
+                0 => {
+                    // Zero bytes are valid alignment padding written by align_position()
+                    // after commit records to maintain 8-byte alignment boundaries.
+                    // Skip silently — they carry no data and are not unknown records.
+                    false
+                }
                 _ => {
                     tracing::warn!(
                         "Skipping unknown WAL record type: {}",

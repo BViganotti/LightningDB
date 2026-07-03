@@ -98,13 +98,13 @@ projection_items = { star | (projection_item ~ ("," ~ projection_item)*) }
 
 expression = { or_expr }
 or_expr = { xor_expr ~ (or_op ~ xor_expr)* }
-or_op = { ^"OR" }
+or_op = @{ ^"OR" ~ !ASCII_ALPHANUMERIC }
 xor_expr = { and_expr ~ (xor_op ~ and_expr)* }
-xor_op = { ^"XOR" }
+xor_op = @{ ^"XOR" ~ !ASCII_ALPHANUMERIC }
 and_expr = { not_expr ~ (and_op ~ not_expr)* }
-and_op = { ^"AND" }
+and_op = @{ ^"AND" ~ !ASCII_ALPHANUMERIC }
 not_expr = { (not_op)* ~ comparison_expr }
-not_op = { ^"NOT" }
+not_op = @{ ^"NOT" ~ !ASCII_ALPHANUMERIC }
 comparison_expr = { term ~ ( comparison_operator ~ term | string_predicate | is_null_check | in_check )? }
 term = { factor ~ ((add_op | sub_op) ~ factor)* }
 factor = { atom ~ ((mul_op | div_op | mod_op) ~ atom)* }
@@ -151,5 +151,5 @@ number_literal = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 boolean_literal = @{ (^"TRUE" | ^"FALSE") ~ !ASCII_ALPHANUMERIC }
 null_literal = @{ ^"NULL" ~ !ASCII_ALPHANUMERIC }
 
-AS_OP = _{ ^"AS" }
+AS_OP = _{ ^"AS" ~ !ASCII_ALPHANUMERIC }
 projection_item = { expression ~ (AS_OP ~ variable)? }

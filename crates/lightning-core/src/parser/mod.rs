@@ -485,8 +485,72 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 clauses.push(Clause::OptionalMatch(MatchClause { patterns: pats }));
             }
             Rule::with_clause => {
-                let rc = parse_return_clause(i)?;
-                clauses.push(Clause::With(rc, where_clause_opt.take()));
+                let distinct = false;
+                let mut items = Vec::new();
+                let mut order_by = None;
+                let mut skip = None;
+                let mut limit = None;
+                let mut where_expr = None;
+                for inner in i.into_inner() {
+                    match inner.as_rule() {
+                        Rule::projection_items => {
+                            for j in inner.into_inner() {
+                                match j.as_rule() {
+                                    Rule::star => items.push(ProjectionItem::Star),
+                                    Rule::projection_item => {
+                                        let mut it = j.into_inner();
+                                        let expr = parse_expression(required_pair(it.next(), "pair")?)?;
+                                        let alias = it.next().map(|a| a.as_str().to_string());
+                                        items.push(ProjectionItem::Expression(expr, alias));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Rule::where_clause => {
+                            let expr = parse_expression(required_pair(inner.into_inner().next(), "pair")?)?;
+                            where_expr = Some(WhereClause { expression: expr });
+                        }
+                        Rule::order_by_clause => {
+                            let mut obi = Vec::new();
+                            for j in inner.into_inner() {
+                                if j.as_rule() == Rule::sort_item {
+                                    let mut sit = j.into_inner();
+                                    let expr = parse_expression(required_pair(sit.next(), "pair")?)?;
+                                    let desc = sit
+                                        .next()
+                                        .map(|d| d.as_str().to_uppercase().contains("DESC"))
+                                        .unwrap_or(false);
+                                    obi.push(OrderByItem { expression: expr, descending: desc });
+                                }
+                            }
+                            order_by = Some(obi);
+                        }
+                        Rule::skip_clause => {
+                            let val = inner
+                                .into_inner()
+                                .next()
+                                .ok_or_else(|| ParserError::Internal("SKIP clause missing value".into()))?
+                                .as_str()
+                                .parse::<f64>()
+                                .map_err(|e| ParserError::Internal(format!("Invalid SKIP value: {e}")))?;
+                            skip = Some(val);
+                        }
+                        Rule::limit_clause => {
+                            let val = inner
+                                .into_inner()
+                                .next()
+                                .ok_or_else(|| ParserError::Internal("LIMIT clause missing value".into()))?
+                                .as_str()
+                                .parse::<f64>()
+                                .map_err(|e| ParserError::Internal(format!("Invalid LIMIT value: {e}")))?;
+                            limit = Some(val);
+                        }
+                        _ => {}
+                    }
+                }
+                let rc = ReturnClause { distinct, items, order_by, skip, limit };
+                clauses.push(Clause::With(rc, where_expr));
             }
             Rule::unwind_clause => {
                 let mut it = i.into_inner();
@@ -1651,5 +1715,50 @@ mod tests {
         let query = "MATCH (t:Test) WHERE t.val NOT IN [1, 3] RETURN count(*)";
         let result = parse(query);
         assert!(result.is_ok(), "Failed to parse NOT IN: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_where() {
+        let result = parse("MATCH (p:Person) WITH p WHERE p.age > 25 RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH+WHERE: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_order() {
+        let result = parse("MATCH (p:Person) WITH p ORDER BY p.age SKIP 1 LIMIT 2 RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH+ORDER: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_return_order_by() {
+        let result = parse("MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 1 LIMIT 2");
+        assert!(result.is_ok(), "Failed RETURN ORDER BY: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_without_order_by() {
+        // Test WITH without ORDER BY/SKIP/LIMIT - should work
+        let result = parse("MATCH (p:Person) WITH p RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH basic: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_order_by_only() {
+        // Minimal WITH + ORDER BY
+        let result = parse("MATCH (p:Person) WITH p ORDER BY p.age RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH+ORDER BY only: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_where_order_by() {
+        // WITH + WHERE + ORDER BY
+        let result = parse("MATCH (p:Person) WITH p WHERE p.age > 25 ORDER BY p.name RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH+WHERE+ORDER: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_with_only() {
+        let result = parse("MATCH (p:Person) WITH p RETURN p.name");
+        assert!(result.is_ok(), "Failed WITH only: {:?}", result.err());
     }
 }

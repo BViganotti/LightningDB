@@ -311,6 +311,7 @@ impl VectorIndex {
         }
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
+        let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
         let num_entries = self.get_num_entries(bm, tx)? as usize;
 
@@ -327,8 +328,9 @@ impl VectorIndex {
             .fold(
                 || BinaryHeap::with_capacity(k),
                 |mut heap, entry_idx| {
-                    let page_idx = VI_DATA_START_PAGE + ((entry_idx * entry_bytes) / bps) as u64;
-                    let page_off = (entry_idx * entry_bytes) % bps;
+                    let page_idx = VI_DATA_START_PAGE + (entry_idx / eps) as u64;
+                    let slot_in_page = entry_idx % eps;
+                    let offset = slot_in_page * entry_bytes;
 
                     if page_idx >= num_pages {
                         return heap;
@@ -339,8 +341,7 @@ impl VectorIndex {
                         Err(_) => return heap,
                     };
 
-                    let offset = page_off;
-                    if offset + dim * 4 > bps {
+                    if offset + 12 + dim * 4 > bps {
                         bm.unpin_page(&self.file_handle, page_idx, frame);
                         return heap;
                     }
