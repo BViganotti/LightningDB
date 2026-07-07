@@ -83,14 +83,11 @@ fn test_semi_mask_filtering() {
             rel_table,
             dst_table,
             db.buffer_manager().clone(),
-            2, // rel rows
-            0, // src_var_idx (PhysicalSingleRow has no cols, but RJ will try to read from it)
-            // Wait, PhysicalSingleRow returns a DataChunk with no columns.
-            // But RJ expects a src_id in the child output.
-            // I'll skip the RJ execution test here as it needs a more complex child setup.
-            // But let's at least verify it compiles.
+            2,
+            0,
             (0, 0),
-            0
+            0,
+            "rel".to_string(),
         );
         let _rj = rj.with_mask(mask_arc);
     }
