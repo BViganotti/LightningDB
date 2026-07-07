@@ -767,6 +767,13 @@ impl StorageManager {
         self.indexes.get(table_name).cloned()
     }
 
+    pub fn resolve_index(&self, table_name: &str, index_key: &str) -> Option<Arc<HashIndex>> {
+        self.indexes
+            .get(index_key)
+            .or_else(|| self.indexes.get(table_name))
+            .cloned()
+    }
+
     pub fn get_file_handle(&self, file_id: u64) -> Option<Arc<FileHandle>> {
         self.file_handles.get(&file_id).cloned()
     }

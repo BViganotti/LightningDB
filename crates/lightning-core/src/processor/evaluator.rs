@@ -4,7 +4,7 @@ use crate::processor::arrow_utils::values_to_array;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray,
+    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
 };
 
 use arrow::compute::{cast, interleave};
@@ -63,6 +63,35 @@ impl ExpressionEvaluator {
                 } else {
                     Err(LightningError::Internal(
                         "PropertyLookup requires a RecordBatch".to_string(),
+                    ))
+                }
+            }
+            BoundExpression::UnwindProperty(var_name, field_idx, _) => {
+                if let Some(b) = batch {
+                    let schema = b.schema();
+                    if let Ok(col_idx) = schema.index_of(var_name) {
+                        let col = b.column(col_idx);
+                        if let Some(struct_arr) = col.as_any().downcast_ref::<StructArray>() {
+                            if *field_idx < struct_arr.num_columns() {
+                                return Ok(struct_arr.column(*field_idx).clone());
+                            }
+                            return Err(LightningError::Internal(format!(
+                                "UnwindProperty `{}` field index {} out of bounds for struct with {} fields",
+                                var_name, field_idx, struct_arr.num_columns(),
+                            )));
+                        }
+                        return Err(LightningError::Internal(format!(
+                            "UnwindProperty `{}` is not a struct column (type: {:?})",
+                            var_name, col.data_type(),
+                        )));
+                    }
+                    Err(LightningError::Internal(format!(
+                        "UnwindProperty `{}` not found in batch schema: {:?}",
+                        var_name, b.schema().fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+                    )))
+                } else {
+                    Err(LightningError::Internal(
+                        "UnwindProperty requires a RecordBatch".to_string(),
                     ))
                 }
             }

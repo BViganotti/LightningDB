@@ -39,6 +39,7 @@ pub struct NodeTableCatalogEntry {
     pub primary_key: Option<String>,
     pub constraints: Vec<NodeConstraint>,
     pub stats: TableStats,
+    pub secondary_indexes: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +262,7 @@ impl Catalog {
                 primary_key,
                 constraints: Vec::new(),
                 stats: TableStats::new(num_props),
+                secondary_indexes: HashMap::new(),
             },
         );
         Ok(())

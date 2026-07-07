@@ -19,7 +19,7 @@ pub enum LogicalOperator {
         Option<Vec<usize>>,
         Option<BoundExpression>, // pushed down filter
     ), // table_name, variable, (mask_id, mask_column_idx), projected_idxs, filter
-    IndexScan(String, String, String, BoundExpression, Option<Vec<usize>>), // table_name, variable, pk_name, pk_value, projected_idxs
+    IndexScan(String, String, String, BoundExpression, Option<Vec<usize>>), // table_name, variable, index_key, pk_value, projected_idxs
     SingleRow, // Dummy scan for queries without MATCH
     Filter(Box<LogicalOperator>, BoundExpression),
     Projection(Box<LogicalOperator>, Vec<BoundProjectionItem>),

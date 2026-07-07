@@ -20,77 +20,82 @@ impl IndexPushDown {
             LogicalOperator::Filter(child, cond) => {
                 let pushed_child = self.apply_recursive(*child)?;
 
-                // Look for Filter(Scan(T, var), pk_col = literal)
+                // Look for Filter(Scan(T, var), col = literal) — PK or secondary index
                 if let LogicalOperator::Scan(table_name, var, _, proj, _) = &pushed_child {
                     let cat = self.catalog.read();
                     if let Some(table_entry) = cat.get_node_table(table_name) {
-                        if let Some(pk_name) = &table_entry.primary_key {
-                            // Check if condition is pk_col = literal
-                            if let BoundExpression::Comparison(
-                                left,
-                                crate::parser::ast::ComparisonOperator::Equal,
-                                right,
-                            ) = &cond
-                            {
-                                match (&**left, &**right) {
-                                    (
-                                        BoundExpression::PropertyLookup(v, _, _),
-                                        BoundExpression::Literal(_),
-                                    ) if v == var => {
-                                        // Check if this property lookup is for the PK column
-                                        // Actually property lookup uses index. We need to check if that index matches PK index.
-                                        // For simplicity, let's assume if it matches the name.
-                                        // Wait, PropertyLookup only has index. We need to check the catalog.
-                                        if let Some(pk_idx) = table_entry
-                                            .properties
-                                            .iter()
-                                            .position(|p| p.name == *pk_name)
-                                        {
-                                            if let BoundExpression::PropertyLookup(
-                                                _,
-                                                lookup_idx,
-                                                _,
-                                            ) = &**left
-                                            {
-                                                if *lookup_idx == pk_idx {
-                                                // Only apply IndexScan when the pk_value is a simple
-                                                // literal. If it references outer-scope variables
-                                                // (correlated subquery), constant folding produces
-                                                // wrong values. In that case, keep the Filter+Scan.
+                        let pk_name_opt = table_entry.primary_key.clone();
+                        let pk_idx_opt = pk_name_opt
+                            .as_ref()
+                            .and_then(|pk| table_entry.properties.iter().position(|p| p.name == *pk));
+
+                        if let BoundExpression::Comparison(
+                            left,
+                            crate::parser::ast::ComparisonOperator::Equal,
+                            right,
+                        ) = &cond
+                        {
+                            match (&**left, &**right) {
+                                (
+                                    BoundExpression::PropertyLookup(v, _, _),
+                                    BoundExpression::Literal(_),
+                                ) if v == var => {
+                                    if let BoundExpression::PropertyLookup(_, lookup_idx, _) =
+                                        &**left
+                                    {
+                                        let is_pk = pk_idx_opt == Some(*lookup_idx);
+                                        let prop_name = table_entry.properties.get(*lookup_idx).map(|p| &p.name);
+                                        if is_pk {
+                                            if !expr_has_outer_variables(right) {
+                                                return Ok(LogicalOperator::IndexScan(
+                                                    table_name.clone(),
+                                                    var.clone(),
+                                                    table_name.clone(),
+                                                    *right.clone(),
+                                                    proj.clone(),
+                                                ));
+                                            }
+                                        } else if let Some(prop) = prop_name {
+                                            if let Some(secondary_name) = table_entry.secondary_indexes.get(prop) {
                                                 if !expr_has_outer_variables(right) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
-                                                        pk_name.clone(),
+                                                        secondary_name.clone(),
                                                         *right.clone(),
                                                         proj.clone(),
                                                     ));
                                                 }
                                             }
-                                            }
                                         }
                                     }
-                                    (
-                                        BoundExpression::Literal(_),
-                                        BoundExpression::PropertyLookup(v, _, _),
-                                    ) if v == var => {
-                                        if let Some(pk_idx) = table_entry
-                                            .properties
-                                            .iter()
-                                            .position(|p| p.name == *pk_name)
-                                        {
-                                            if let BoundExpression::PropertyLookup(
-                                                _,
-                                                lookup_idx,
-                                                _,
-                                            ) = &**right
-                                            {
-                                                if *lookup_idx == pk_idx
-                                                && !expr_has_outer_variables(left) {
+                                }
+                                (
+                                    BoundExpression::Literal(_),
+                                    BoundExpression::PropertyLookup(v, _, _),
+                                ) if v == var => {
+                                    if let BoundExpression::PropertyLookup(_, lookup_idx, _) =
+                                        &**right
+                                    {
+                                        let is_pk = pk_idx_opt == Some(*lookup_idx);
+                                        let prop_name = table_entry.properties.get(*lookup_idx).map(|p| &p.name);
+                                        if is_pk {
+                                            if !expr_has_outer_variables(left) {
+                                                return Ok(LogicalOperator::IndexScan(
+                                                    table_name.clone(),
+                                                    var.clone(),
+                                                    table_name.clone(),
+                                                    *left.clone(),
+                                                    proj.clone(),
+                                                ));
+                                            }
+                                        } else if let Some(prop) = prop_name {
+                                            if let Some(secondary_name) = table_entry.secondary_indexes.get(prop) {
+                                                if !expr_has_outer_variables(left) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
                                                         var.clone(),
-                                                        pk_name.clone(),
+                                                        secondary_name.clone(),
                                                         *left.clone(),
                                                         proj.clone(),
                                                     ));
@@ -98,8 +103,8 @@ impl IndexPushDown {
                                             }
                                         }
                                     }
-                                    _ => {}
                                 }
+                                _ => {}
                             }
                         }
                     }
@@ -256,7 +261,7 @@ fn expr_has_outer_variables(expr: &BoundExpression) -> bool {
     match expr {
         BoundExpression::Literal(_) => false,
         BoundExpression::Variable(_, _) => true,
-        BoundExpression::PropertyLookup(_, _, _) => true,
+        BoundExpression::PropertyLookup(_, _, _) | BoundExpression::UnwindProperty(..) => true,
         BoundExpression::Function(_, args, _) => args.iter().any(expr_has_outer_variables),
         BoundExpression::Aggregate(_, args, _) => args.iter().any(expr_has_outer_variables),
         BoundExpression::Arithmetic(left, _, right) => {

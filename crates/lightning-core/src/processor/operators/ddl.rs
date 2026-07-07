@@ -508,7 +508,7 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
             DDLAction::CreateIndex {
                 name,
                 table_name,
-                property: _,
+                property,
             } => {
                 fn sanitize(s: &str) -> String {
                     s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
@@ -521,20 +521,49 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     &index_path,
                 )?;
                 storage.indexes.insert(name.clone(), Arc::new(index));
-                database.catalog.mark_dirty();
+                {
+                    let mut cat = database.catalog.write();
+                    if let Some(entry) = cat.get_node_table_mut(table_name) {
+                        entry
+                            .secondary_indexes
+                            .insert(property.clone(), name.clone());
+                    }
+                    database.catalog.mark_dirty();
+                }
                 self.undo_buffer.push(UndoRecord::CreateIndex {
                     name: name.clone(),
+                    table_name: table_name.clone(),
+                    property: property.clone(),
                     index_path,
                 });
             }
             DDLAction::DropIndex(name) => {
                 let mut storage = database.storage_manager.write();
                 storage.indexes.remove(name);
-                database.catalog.mark_dirty();
+                let (found_table, found_property) = {
+                    let cat = database.catalog.read();
+                    let mut table = None;
+                    let mut property = None;
+                    for entry in cat.node_tables.values() {
+                        if let Some(found_name) = entry.secondary_indexes.iter().find_map(|(k, v)| if v == name { Some((k.clone(), v.clone())) } else { None }) {
+                            table = Some(entry.name.clone());
+                            property = Some(found_name.0);
+                            break;
+                        }
+                    }
+                    (table, property)
+                };
+                {
+                    let mut cat = database.catalog.write();
+                    for entry in cat.node_tables.values_mut() {
+                        entry.secondary_indexes.retain(|_, idx_name| idx_name != name);
+                    }
+                    database.catalog.mark_dirty();
+                }
                 self.undo_buffer.push(UndoRecord::DropIndex {
                     name: name.clone(),
-                    table_name: String::new(),
-                    property: String::new(),
+                    table_name: found_table.unwrap_or_default(),
+                    property: found_property.unwrap_or_default(),
                 });
             }
             DDLAction::CreateVectorIndex {

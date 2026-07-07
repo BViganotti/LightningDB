@@ -1143,6 +1143,23 @@ impl PhysicalOperator for PhysicalMerge {
             // Process chunks incrementally instead of collecting all into
             // memory first, avoiding OOM for large result sets.
             let standalone = self.child.is_none();
+            let (index_opt, fts_opt, pk_col_idx, pk_name) = {
+                let storage = database.storage_manager.read();
+                let index_opt = storage.get_index(&self.table_name);
+                let fts_opt = storage.fts_indexes.get(&self.table_name).cloned();
+                drop(storage);
+                let cat = database.catalog.read();
+                let (pk_idx, pk_name) = cat
+                    .get_node_table(&self.table_name)
+                    .and_then(|t| t.primary_key.as_ref())
+                    .map(|pk| {
+                        let idx = self.table.columns.iter().position(|c| c.name == *pk);
+                        (idx, Some(pk.clone()))
+                    })
+                    .unwrap_or((None, None));
+                (index_opt, fts_opt, pk_idx, pk_name)
+            };
+            let mut fts_pending: Vec<(u64, Vec<(String, String)>)> = Vec::new();
             loop {
                 let chunk_opt = if let Some(ref mut c) = self.child {
                     match c.get_next(database, tx, params)? {
@@ -1169,26 +1186,13 @@ impl PhysicalOperator for PhysicalMerge {
 
                 for row_idx in 0..num_rows {
                     let mut existing_id = None;
-                    let index_opt = database.storage_manager.read().get_index(&self.table_name);
-
-                    if let Some(index) = index_opt {
-                        // Find the primary key column index from the catalog and
-                        // look up the corresponding pattern property value.
-                        let pk_col_idx = database.catalog.read()
-                            .get_node_table(&self.table_name)
-                            .and_then(|t| t.primary_key.clone())
-                            .and_then(|pk| {
-                                self.table.columns.iter().position(|c| c.name == pk)
-                            });
-                        if let Some(pk_idx) = pk_col_idx {
-                            // Find the pattern property that matches the PK column
-                            for (i, (prop_idx, _)) in self.pattern.properties.iter().enumerate() {
-                                if *prop_idx == pk_idx {
-                                    let pk_val = Value::from_arrow(&prop_arrays[i], row_idx);
-                                    if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
-                                        existing_id = Some(id);
-                                        break;
-                                    }
+                    if let (Some(ref index), Some(pk_idx)) = (&index_opt, pk_col_idx) {
+                        for (i, (prop_idx, _)) in self.pattern.properties.iter().enumerate() {
+                            if *prop_idx == pk_idx {
+                                let pk_val = Value::from_arrow(&prop_arrays[i], row_idx);
+                                if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
+                                    existing_id = Some(id);
+                                    break;
                                 }
                             }
                         }
@@ -1274,57 +1278,36 @@ impl PhysicalOperator for PhysicalMerge {
                             row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
                         }
 
-                        {
-                            let storage = database.storage_manager.read();
-                            if let Some(t) = storage.get_table(&self.table_name) {
-                                t.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
-                            } else {
-                                self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
-                            }
-                        }
+                        self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
 
-                        let storage = database.storage_manager.read();
-
-                        if let Some(index) = storage.get_index(&self.table_name) {
-                            if let Some(pk_name) = database
-                                .catalog
-                                .read()
-                                .get_node_table(&self.table_name)
-                                .and_then(|t| t.primary_key.as_ref())
+                        if let (Some(ref index), Some(ref pk_name)) = (&index_opt, &pk_name) {
+                            for (idx, _) in self
+                                .table
+                                .columns
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, c)| c.name.as_str() == pk_name.as_str())
                             {
-                                for (idx, _) in self
-                                    .table
-                                    .columns
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, c)| &c.name == pk_name)
-                                {
-                                    index.insert(&self.buffer_manager, &row_data[idx], next_id, tx)?;
-                                }
+                                index.insert(&self.buffer_manager, &row_data[idx], next_id, tx)?;
                             }
                         }
 
-                        if let Some(fts) = storage.fts_indexes.get(&self.table_name) {
+                        if let Some(ref _fts) = fts_opt {
                             let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
                                 .enumerate()
                                 .map(|(i, c)| (c.name.as_str(), i))
                                 .collect();
-                            let text_fields: Vec<(String, &str)> = self.table.columns.iter()
+                            let text_fields: Vec<(String, String)> = self.table.columns.iter()
                                 .filter_map(|col| {
                                     let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row_data.get(idx).and_then(|v| match v {
-                                        Value::String(s) => Some((col.name.clone(), s.as_str())),
+                                        Value::String(s) => Some((col.name.clone(), s.clone())),
                                         _ => None,
                                     })
                                 })
                                 .collect();
                             if !text_fields.is_empty() {
-                                if let Err(e) = fts.insert_multi_field(next_id, &text_fields) {
-                                    tracing::error!("FTS insert_multi_field error during merge: {}", e);
-                                }
-                                if let Err(e) = fts.commit() {
-                                    tracing::error!("FTS commit error during merge: {}", e);
-                                }
+                                fts_pending.push((next_id, text_fields));
                             }
                         }
 
@@ -1339,6 +1322,22 @@ impl PhysicalOperator for PhysicalMerge {
                         if let Some(t) = cat.get_node_table_mut(&self.table_name) {
                             t.num_rows += 1;
                         }
+                    }
+                }
+            }
+            if !fts_pending.is_empty() {
+                if let Some(ref fts) = fts_opt {
+                    let batch: Vec<(u64, Vec<(String, &str)>)> = fts_pending
+                        .iter()
+                        .map(|(id, fields)| {
+                            (*id, fields.iter().map(|(k, v)| (k.clone(), v.as_str())).collect())
+                        })
+                        .collect();
+                    if let Err(e) = fts.insert_multi_field_batch(&batch) {
+                        tracing::error!("FTS insert_multi_field_batch error during merge: {}", e);
+                    }
+                    if let Err(e) = fts.commit() {
+                        tracing::error!("FTS commit error during merge: {}", e);
                     }
                 }
             }

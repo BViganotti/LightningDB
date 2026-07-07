@@ -231,10 +231,16 @@ fn rename_var_in_expr(expr: &BoundExpression, old_name: &str, new_name: &str) ->
         BoundExpression::PropertyLookup(name, idx, typ) if name == old_name => {
             BoundExpression::PropertyLookup(new_name.to_string(), *idx, typ.clone())
         }
+        BoundExpression::UnwindProperty(name, idx, typ) if name == old_name => {
+            BoundExpression::UnwindProperty(new_name.to_string(), *idx, typ.clone())
+        }
         BoundExpression::Literal(lit) => BoundExpression::Literal(lit.clone()),
         BoundExpression::Variable(name, typ) => BoundExpression::Variable(name.clone(), typ.clone()),
         BoundExpression::PropertyLookup(name, idx, typ) => {
             BoundExpression::PropertyLookup(name.clone(), *idx, typ.clone())
+        }
+        BoundExpression::UnwindProperty(name, idx, typ) => {
+            BoundExpression::UnwindProperty(name.clone(), *idx, typ.clone())
         }
         BoundExpression::Comparison(left, op, right) => BoundExpression::Comparison(
             Box::new(rename_var_in_expr(left, old_name, new_name)),

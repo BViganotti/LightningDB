@@ -22,7 +22,8 @@ impl FilterPushDown {
             BoundExpression::Variable(name, _) => {
                 vars.insert(name.clone());
             }
-            BoundExpression::PropertyLookup(name, _, _) => {
+            BoundExpression::PropertyLookup(name, _, _)
+            | BoundExpression::UnwindProperty(name, _, _) => {
                 vars.insert(name.clone());
             }
             BoundExpression::Comparison(left, _, right)

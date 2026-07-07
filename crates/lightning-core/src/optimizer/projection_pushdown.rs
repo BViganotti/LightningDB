@@ -158,7 +158,8 @@ impl ProjectionPushDown {
             }
             BoundExpression::Parameter(_)
             | BoundExpression::Literal(_)
-            | BoundExpression::NextVal(_) => {}
+            | BoundExpression::NextVal(_)
+            | BoundExpression::UnwindProperty(..) => {}
         }
     }
 

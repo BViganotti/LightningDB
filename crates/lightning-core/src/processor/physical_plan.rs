@@ -148,7 +148,7 @@ impl PhysicalPlanner {
                 }
                 Ok(Box::new(scan))
             }
-            LogicalOperator::IndexScan(table_name, _var, _pk_name, pk_value_expr, projected_idxs) => {
+            LogicalOperator::IndexScan(table_name, _var, index_key, pk_value_expr, projected_idxs) => {
                 let table = {
                     let storage = self.db.storage_manager.read();
                     storage
@@ -161,10 +161,10 @@ impl PhysicalPlanner {
                 let index = {
                     let storage = self.db.storage_manager.read();
                     storage
-                        .get_index(&table_name)
+                        .resolve_index(&table_name, &index_key)
                         .ok_or_else(|| {
                             LightningError::Internal(format!(
-                                "No index found for table {table_name}"
+                                "No index found for table {table_name} with key {index_key}"
                             ))
                         })?
                 };
@@ -1289,7 +1289,8 @@ impl PhysicalPlanner {
             BoundExpression::Variable(..)
             | BoundExpression::Literal(_)
             | BoundExpression::Parameter(_)
-            | BoundExpression::NextVal(_) => {}
+            | BoundExpression::NextVal(_)
+            | BoundExpression::UnwindProperty(..) => {}
             BoundExpression::Not(inner) => {
                 Self::remap_property_lookup(inner, child_phys_positions, binder_column_offsets, variable_projected_indices);
             }
@@ -1560,6 +1561,7 @@ impl PhysicalPlanner {
             BoundExpression::Literal(_)
             | BoundExpression::Variable(_, _)
             | BoundExpression::PropertyLookup(_, _, _)
+            | BoundExpression::UnwindProperty(..)
             | BoundExpression::Parameter(_)
             | BoundExpression::NextVal(_)
             | BoundExpression::Exists(_)

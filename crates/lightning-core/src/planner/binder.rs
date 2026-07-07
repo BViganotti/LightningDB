@@ -284,6 +284,9 @@ pub enum BoundExpression {
     Exists(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
     CountSubquery(Vec<(BoundMatchClause, Option<BoundWhereClause>)>),
     Map(Vec<(String, BoundExpression)>, LogicalType),
+    /// Struct field access on an UNWIND variable (e.g., `row.score`).
+    /// (variable_name, struct_field_index, field_type)
+    UnwindProperty(String, usize, LogicalType),
 }
 
 impl BoundExpression {
@@ -317,6 +320,7 @@ impl BoundExpression {
             BoundExpression::Lambda(_, body) => LogicalType::Lambda(Box::new(body.get_type())),
             BoundExpression::Parameter(_) => LogicalType::Any,
             BoundExpression::NextVal(_) => LogicalType::Uint64,
+            BoundExpression::UnwindProperty(_, _, t) => t.clone(),
         }
     }
 
@@ -363,6 +367,7 @@ impl BoundExpression {
             | BoundExpression::Parameter(_)
             | BoundExpression::NextVal(_) => false,
             BoundExpression::Literal(_) => false,
+            BoundExpression::UnwindProperty(_, _, _) => false,
         }
     }
 }
@@ -1106,12 +1111,16 @@ impl<'a> Binder<'a> {
             Clause::Merge(merge) => Ok(BoundClause::Merge(self.bind_merge_clause(merge)?)),
             Clause::Unwind(unwind) => {
                 let bound_expr = self.bind_expression(&unwind.expression)?;
-                // For now, assume list element type is Any if we can't determine it
+                // Infer element type from list expression
+                let element_type = match bound_expr.get_type() {
+                    LogicalType::List(inner) => *inner,
+                    other => other,
+                };
                 self.variables.insert(
                     unwind.alias.clone(),
                     BoundVariable {
                         table_name: "".into(),
-                        type_: LogicalType::Any,
+                        type_: element_type,
                     },
                 );
                 Ok(BoundClause::Unwind(BoundUnwind {
@@ -1474,6 +1483,26 @@ impl<'a> Binder<'a> {
                 ))
             }
             Expression::PropertyLookup(var, prop_name) => {
+                // Check if this is an UNWIND variable with struct type
+                if let Some(bv) = self.variables.get(var) {
+                    if bv.table_name.is_empty() {
+                        if let LogicalType::Struct(fields) = &bv.type_ {
+                            for (i, field) in fields.iter().enumerate() {
+                                if field.name == *prop_name {
+                                    return Ok(BoundExpression::UnwindProperty(
+                                        var.clone(),
+                                        i,
+                                        field.type_.clone(),
+                                    ));
+                                }
+                            }
+                            return Err(LightningError::Query(format!(
+                                "Property {prop_name} not found on UNWIND variable {var}"
+                            )));
+                        }
+                    }
+                }
+
                 let (properties, column_offset, table_name, _table_kind) = self.get_table_properties(var)?;
 
                 for (i, prop) in properties.iter().enumerate() {

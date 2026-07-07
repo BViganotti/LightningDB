@@ -43,6 +43,8 @@ pub enum UndoRecord {
     },
     CreateIndex {
         name: String,
+        table_name: String,
+        property: String,
         index_path: std::path::PathBuf,
     },
     DropIndex {
@@ -275,6 +277,8 @@ impl UndoBuffer {
                 }
                 UndoRecord::CreateIndex {
                     name,
+                    table_name,
+                    property,
                     index_path,
                 } => {
                     let mut storage = db.storage_manager.write();
@@ -282,10 +286,16 @@ impl UndoBuffer {
                     if let Err(e) = std::fs::remove_file(&index_path) {
                         tracing::error!("Rollback CreateIndex: failed to remove index file {}: {}", index_path.display(), e);
                     }
+                    drop(storage);
+                    {
+                        let mut cat = db.catalog.write();
+                        if let Some(entry) = cat.get_node_table_mut(&table_name) {
+                            entry.secondary_indexes.remove(&property);
+                        }
+                        db.catalog.mark_dirty();
+                    }
                 }
-                UndoRecord::DropIndex { name, table_name: _, property: _ } => {
-                    // Re-create the index that was dropped.
-                    // The index data is gone (file removed), so we can only re-create an empty index.
+                UndoRecord::DropIndex { name, table_name, property } => {
                     let mut storage = db.storage_manager.write();
                     fn sanitize(s: &str) -> String {
                         s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
@@ -301,7 +311,15 @@ impl UndoBuffer {
                         }
                     }
                     drop(storage);
-                    db.catalog.mark_dirty();
+                    {
+                        let mut cat = db.catalog.write();
+                        if let Some(entry) = cat.get_node_table_mut(&table_name) {
+                            entry
+                                .secondary_indexes
+                                .insert(property.clone(), name.clone());
+                        }
+                        db.catalog.mark_dirty();
+                    }
                 }
             }
         }
@@ -406,6 +424,7 @@ mod tests {
                 num_rows: 0,
                 stats: crate::storage::stats::TableStats::new(0),
                 constraints: Vec::new(),
+                secondary_indexes: std::collections::HashMap::new(),
             },
         );
 
@@ -519,6 +538,7 @@ mod tests {
             num_rows: 0,
             stats: crate::storage::stats::TableStats::new(0),
             constraints: Vec::new(),
+            secondary_indexes: std::collections::HashMap::new(),
         };
 
         let undo = UndoBuffer::new();
