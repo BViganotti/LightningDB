@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub const PAGE_SIZE: usize = 4096;
 
 const UNCOMMITTED_BIT: u64 = 1 << 63;
-const INITIAL_SLOTS_PER_SHARD: usize = 256;
+const INITIAL_SLOTS_PER_SHARD: usize = 4096;
 
 pub struct Frame {
     pub data: UnsafeCell<[u8; PAGE_SIZE]>,
@@ -365,7 +365,7 @@ impl BufferManager {
             .insert(fh_arc.file_id, Arc::clone(&fh_arc));
 
         let mut slot_idx_opt: Option<usize> = None;
-        const MAX_EVICT_RETRIES: u32 = 5;
+        const MAX_EVICT_RETRIES: u32 = 50;
         for retry in 0..MAX_EVICT_RETRIES {
             match self.evict_with_clock(&mut pool)? {
                 EvictResult::Found(idx) => {
@@ -373,15 +373,26 @@ impl BufferManager {
                     break;
                 }
                 EvictResult::NeedRetry => {
+                    if retry >= 10 && retry % 10 == 0 {
+                        tracing::warn!(
+                            "Buffer pool shard {} still exhausted after {} retries (capacity={}, slots={})",
+                            shard_idx, retry, pool.capacity, pool.slots.len(),
+                        );
+                    }
                     drop(pool);
-                    std::thread::sleep(std::time::Duration::from_millis(5u64 * (retry as u64 + 1)));
+                    let sleep_ms = 5u64.saturating_mul(1u64 << retry.min(20));
+                    std::thread::sleep(std::time::Duration::from_millis(sleep_ms.min(10_000)));
                     pool = self.shards[shard_idx].write();
                 }
             }
         }
         let slot_idx = slot_idx_opt.ok_or_else(|| {
+            tracing::error!(
+                "Buffer pool permanently exhausted after {} retries (capacity={}, max_capacity={}, num_shards={})",
+                MAX_EVICT_RETRIES, pool.capacity, pool.max_capacity, self.num_shards,
+            );
             LightningError::Internal(format!(
-                "Buffer pool exhausted after {} retries (capacity={})",
+                "Buffer pool exhausted after {} retries (capacity={}). Increase buffer_pool_size or reduce concurrency",
                 MAX_EVICT_RETRIES, pool.capacity
             ))
         })?;

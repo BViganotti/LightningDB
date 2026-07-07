@@ -642,6 +642,23 @@ impl<'a> Binder<'a> {
                     Self::check_auth_table_access(&m.patterns)?;
                 }
 
+                // Bind UNWIND clauses BEFORE MATCH so their variables are available
+                // in MATCH property patterns (e.g. `UNWIND [...] AS fp MATCH (n:T {k: fp})`).
+                let unwound: Vec<BoundClause>;
+                let rest: Vec<&Clause>;
+                {
+                    let mut u = Vec::new();
+                    let mut r = Vec::new();
+                    for clause in clauses.iter() {
+                        match clause {
+                            Clause::Unwind(_) => u.push(clause),
+                            other => r.push(other),
+                        }
+                    }
+                    unwound = u.into_iter().map(|c| self.bind_clause(c)).collect::<Result<Vec<_>>>()?;
+                    rest = r;
+                }
+
                 let bound_match = if let Some(m) = match_clause {
                     Some(self.bind_match_clause(m)?)
                 } else {
@@ -655,8 +672,8 @@ impl<'a> Binder<'a> {
                     None
                 };
 
-                let mut bound_clauses = Vec::new();
-                for clause in clauses {
+                let mut bound_clauses = unwound;
+                for clause in rest {
                     bound_clauses.push(self.bind_clause(clause)?);
                 }
 

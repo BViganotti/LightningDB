@@ -60,6 +60,14 @@ impl VectorIndex {
         self.dimension
     }
 
+    pub fn len(&self) -> usize {
+        self.node_index.lock().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     // --- SIMD-accelerated dot product ---
     // Uses runtime detection (is_x86_feature_detected!, NEON on aarch64)
     fn dot_product(a: &[f32], b: &[f32]) -> f32 {

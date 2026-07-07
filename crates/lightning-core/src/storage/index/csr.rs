@@ -347,44 +347,14 @@ impl CSRIndex {
         F: FnMut(u64),
     {
         let byte_pos = csr_offset_byte(node_id);
-        let start_page = byte_pos / PAGE_SIZE as u64;
-        let start_offset_in_page = byte_pos % PAGE_SIZE as u64;
-        if start_page >= self.offset_fh.get_num_pages() {
+        if byte_pos / PAGE_SIZE as u64 >= self.offset_fh.get_num_pages() {
             return Ok(());
         }
 
-        let end_node_id = node_id + 1;
-        let end_byte_pos = csr_offset_byte(end_node_id);
-        let end_page = end_byte_pos / PAGE_SIZE as u64;
-        let end_offset_in_page = end_byte_pos % PAGE_SIZE as u64;
+        let end_byte_pos = csr_offset_byte(node_id + 1);
 
-        let (start, end) = {
-            let start_frame = bm.pin_page(self.offset_fh.clone(), start_page, tx)?;
-            let start = u64::from_le_bytes(
-                start_frame.as_slice()[start_offset_in_page as usize..start_offset_in_page as usize + 8]
-                    .try_into()
-                    .expect("infallible: fixed-size array conversion"),
-            );
-
-            let end = if start_page == end_page {
-                u64::from_le_bytes(
-                    start_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
-                        .try_into()
-                        .expect("infallible: fixed-size array conversion"),
-                )
-            } else {
-                if end_page >= self.offset_fh.get_num_pages() {
-                    return Ok(());
-                }
-                let end_frame = bm.pin_page(self.offset_fh.clone(), end_page, tx)?;
-                u64::from_le_bytes(
-                    end_frame.as_slice()[end_offset_in_page as usize..end_offset_in_page as usize + 8]
-                        .try_into()
-                        .expect("infallible: fixed-size array conversion"),
-                )
-            };
-            (start, end)
-        };
+        let start = self.read_u64_at(bm, &self.offset_fh, byte_pos, tx)?;
+        let end = self.read_u64_at(bm, &self.offset_fh, end_byte_pos, tx)?;
 
         if end <= start {
             return Ok(());
