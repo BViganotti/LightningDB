@@ -1077,15 +1077,38 @@ impl StorageManager {
         if fwd_csr.is_none() && bwd_csr.is_none() {
             return Ok(());
         }
-
-        // Scan the table to get all edges
-        let num_rows = table.stats.read().cardinality;
+        // Scan the table to get all edges. Cap num_rows at the
+        // actual file size to prevent scanning inflated cardinalities
+        // that may have persisted after a crash during bulk insert.
+        let num_rows = {
+            let stats_count = table.stats.read().cardinality;
+            if !table.columns.is_empty() {
+                let file_size = table.columns[0].fh.get_file_size();
+                let esize = table.columns[0].element_size();
+                if esize > 0 && file_size > 0 {
+                    let file_rows = file_size / esize as u64;
+                    if file_rows > 0 && stats_count > file_rows * 2 {
+                        tracing::warn!(
+                            "rebuild_csr: cardinality ({stats_count}) is >2x file rows ({file_rows}) for {table_name}; capping at file count"
+                        );
+                        table.stats.write().cardinality = file_rows;
+                        table.next_row_id.store(file_rows, std::sync::atomic::Ordering::Release);
+                        file_rows
+                    } else {
+                        stats_count
+                    }
+                } else {
+                    stats_count
+                }
+            } else {
+                stats_count
+            }
+        };
         if num_rows == 0 {
             return Ok(());
         }
 
         if table.columns.is_empty() || table.columns.len() < 2 {
-            tracing::warn!("rebuild_csr: table {} has {} columns, need 2; skipping", table_name, table.columns.len());
             return Ok(());
         }
 

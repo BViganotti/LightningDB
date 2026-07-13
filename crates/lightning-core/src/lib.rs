@@ -511,6 +511,12 @@ impl Database {
             replay_report.records_read
         );
 
+        // If the WAL had corrupt records (torn writes from a prior crash), schedule
+        // a post-construction checkpoint so the WAL gets truncated and future restarts
+        // don't re-process the same corrupt entries.
+        let needs_checkpoint = replay_report.corrupt_records_skipped > 0
+            || replay_report.partial_record_at_eof;
+
         let fsm_path = path.join("free_space.bin");
         let free_space_manager = Arc::new(
             crate::storage::FreeSpaceManager::load(&fsm_path)
@@ -578,6 +584,21 @@ impl Database {
 
         // Register the SEARCH scalar function for BM25 scoring
         Self::register_search_function(&db)?;
+
+        // Checkpoint to truncate WAL if corrupt records were found during replay.
+        // This prevents re-processing the same torn writes on every restart.
+        if needs_checkpoint {
+            tracing::warn!("Checkpointing to truncate WAL after {} corrupt records", replay_report.corrupt_records_skipped);
+            if let Err(e) = db.checkpoint() {
+                tracing::warn!("WAL cleanup checkpoint failed (non-fatal): {e}");
+            }
+        }
+
+        // Repair cardinalities from actual file sizes to fix any stale/inflated
+        // counts that may have persisted after a crash.
+        if let Err(e) = db.repair_cardinalities() {
+            tracing::warn!("Cardinality repair failed (non-fatal): {e}");
+        }
 
         Ok(db)
     }
@@ -995,14 +1016,25 @@ impl Database {
 
     /// Repair table cardinalities from actual data file sizes.
     /// Called after init_schema to fix databases where catalog cardinality
-    /// was reset to 0 (e.g., by old versions of init_fusion_schema).
+    /// was reset to 0 (e.g., by old versions of init_fusion_schema), or
+    /// was inflated due to a crash during bulk insert.
     pub fn repair_cardinalities(&self) -> Result<()> {
         let mut repairs: Vec<(String, u64, bool)> = Vec::new(); // name, actual_rows, is_rel
         {
             let storage = self.storage_manager.read();
             for (name, table) in &storage.node_tables {
                 let stats = table.stats.read();
-                if stats.cardinality == 0 && !table.columns.is_empty() {
+                let needs_repair = if stats.cardinality == 0 && !table.columns.is_empty() {
+                    true
+                } else if !table.columns.is_empty() {
+                    let file_size = table.columns[0].fh.get_file_size();
+                    let esize = table.columns[0].element_size();
+                    esize > 0 && file_size > 0 && file_size / esize as u64 > 0
+                        && stats.cardinality > file_size / esize as u64 * 2
+                } else {
+                    false
+                };
+                if needs_repair {
                     let file_size = table.columns[0].fh.get_file_size();
                     let esize = table.columns[0].element_size();
                     if esize > 0 && file_size > 0 {
@@ -1015,7 +1047,17 @@ impl Database {
             }
             for (name, table) in &storage.rel_tables {
                 let stats = table.stats.read();
-                if stats.cardinality == 0 && !table.columns.is_empty() {
+                let needs_repair = if stats.cardinality == 0 && !table.columns.is_empty() {
+                    true
+                } else if !table.columns.is_empty() {
+                    let file_size = table.columns[0].fh.get_file_size();
+                    let esize = table.columns[0].element_size();
+                    esize > 0 && file_size > 0 && file_size / esize as u64 > 0
+                        && stats.cardinality > file_size / esize as u64 * 2
+                } else {
+                    false
+                };
+                if needs_repair {
                     let file_size = table.columns[0].fh.get_file_size();
                     let esize = table.columns[0].element_size();
                     if esize > 0 && file_size > 0 {

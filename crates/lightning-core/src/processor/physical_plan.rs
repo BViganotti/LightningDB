@@ -898,10 +898,24 @@ impl PhysicalPlanner {
                 let table = storage
                     .get_table(&rel_table)
                     .ok_or_else(|| LightningError::Internal(format!("Table {rel_table} not found for CountRelTable")))?;
-                let count = table
+                let metadata_count = table
                     .next_row_id
                     .load(std::sync::atomic::Ordering::Acquire)
-                    .max(table.stats.read().cardinality) as i64;
+                    .max(table.stats.read().cardinality);
+                let file_derived_count: u64 = if !table.columns.is_empty() {
+                    let col = &table.columns[0];
+                    let fsize = col.fh.get_file_size();
+                    let esize = col.element_size();
+                    if esize > 0 { fsize / esize as u64 } else { 0 }
+                } else { 0 };
+                let count = if file_derived_count > 0 && metadata_count > file_derived_count * 2 {
+                    tracing::warn!(
+                        "CountRelTable: metadata count ({metadata_count}) is >2x file-derived count ({file_derived_count}) for table {rel_table}; using file-derived count"
+                    );
+                    file_derived_count as i64
+                } else {
+                    metadata_count as i64
+                };
                 Ok(Box::new(
                     crate::processor::operators::count::PhysicalCount::new(count),
                 ))

@@ -3,6 +3,7 @@ use crate::storage::file_handle::FileHandle;
 use crate::Result;
 use crc::{Algorithm, Crc};
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -97,6 +98,10 @@ pub struct CSRIndex {
 
     /// Total number of edges in the base CSR (used for compaction ratio).
     base_edge_count: AtomicU64,
+
+    /// Cumulative count of edge deletions since the last compaction.
+    /// Used to trigger compaction when deletions accumulate without new inserts.
+    deletion_count: AtomicU64,
 }
 
 impl CSRIndex {
@@ -107,6 +112,7 @@ impl CSRIndex {
             pending_edges: RwLock::new(Vec::new()),
             pending_deletions: RwLock::new(Vec::new()),
             base_edge_count: AtomicU64::new(0),
+            deletion_count: AtomicU64::new(0),
         }
     }
 
@@ -147,18 +153,24 @@ impl CSRIndex {
     /// is applied by skipping the matching (src, dst) pair.
     pub fn delete_edge(&self, src: u64, dst: u64) {
         self.pending_deletions.write().push((src, dst));
+        self.deletion_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Check if the pending buffer has grown large enough to warrant
     /// a full rebuild. Returns `true` when pending edges exceed 10% of
-    /// the base edge count (or when base has no edges but pending is non-empty).
+    /// the base edge count (or when base has no edges but pending is non-empty),
+    /// OR when accumulated deletions exceed 10% of the base edge count.
     pub fn needs_compaction(&self) -> bool {
         let pending = self.pending_edges.read().len() as u64;
-        if pending == 0 {
+        let deleted = self.deletion_count.load(Ordering::Relaxed);
+        if pending == 0 && deleted == 0 {
             return false;
         }
         let base = self.base_edge_count.load(Ordering::Relaxed);
-        base == 0 || pending > base / 10
+        if base == 0 {
+            return pending > 0 || deleted > 0;
+        }
+        pending > base / 10 || deleted > base / 10
     }
 
     /// Compact the pending buffer into the base CSR by rebuilding
@@ -182,6 +194,7 @@ impl CSRIndex {
         self.pending_edges.write().clear();
         self.pending_deletions.write().clear();
         self.base_edge_count.store(all_edges.len() as u64, Ordering::Relaxed);
+        self.deletion_count.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -206,30 +219,71 @@ impl CSRIndex {
         Ok(all_edges)
     }
 
-    /// Read all edges from the base CSR by scanning the offset and adjacency files.
-    /// Returns (src, dst) pairs. Skips adjacency entries with DELETED_BIT set.
+    /// Read a u64 value at a specific byte offset within a file handle, handling
+    /// page boundary crossing. Each call pins and unpins the required pages, so
+    /// this is safe to call in loops without leaking buffer pool slots.
     fn read_u64_at(&self, bm: &BufferManager, fh: &Arc<FileHandle>, byte_pos: u64, tx: &crate::transaction::transaction_manager::Transaction) -> Result<u64> {
         let page_idx = byte_pos / PAGE_SIZE as u64;
         let offset_in_page = byte_pos as usize % PAGE_SIZE;
         if offset_in_page + 8 <= PAGE_SIZE {
             let frame = bm.pin_page(fh.clone(), page_idx, tx)?;
-            return Ok(u64::from_le_bytes(
+            let val = u64::from_le_bytes(
                 frame.as_slice()[offset_in_page..offset_in_page + 8]
                     .try_into()
                     .expect("infallible: u64 read"),
-            ));
+            );
+            bm.unpin_page(fh, page_idx, frame);
+            return Ok(val);
         }
         let mut buf = [0u8; 8];
         let first_part = PAGE_SIZE - offset_in_page;
-        {
-            let frame = bm.pin_page(fh.clone(), page_idx, tx)?;
-            buf[..first_part].copy_from_slice(&frame.as_slice()[offset_in_page..]);
-        }
-        {
-            let frame = bm.pin_page(fh.clone(), page_idx + 1, tx)?;
-            buf[first_part..8].copy_from_slice(&frame.as_slice()[..8 - first_part]);
-        }
+        let frame0 = bm.pin_page(fh.clone(), page_idx, tx)?;
+        buf[..first_part].copy_from_slice(&frame0.as_slice()[offset_in_page..]);
+        bm.unpin_page(fh, page_idx, frame0);
+        let frame1 = bm.pin_page(fh.clone(), page_idx + 1, tx)?;
+        buf[first_part..8].copy_from_slice(&frame1.as_slice()[..8 - first_part]);
+        bm.unpin_page(fh, page_idx + 1, frame1);
         Ok(u64::from_le_bytes(buf))
+    }
+
+    /// Batch-read u64 values from a given byte range in a file handle.
+    /// Each page is pinned once, all values on it are extracted, then unpinned.
+    /// Returns all u64 values from `start_byte` to `end_byte` (exclusive).
+    fn read_u64_batch(
+        &self,
+        bm: &BufferManager,
+        fh: &Arc<FileHandle>,
+        start_byte: u64,
+        end_byte: u64,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<Vec<u64>> {
+        if start_byte >= end_byte {
+            return Ok(Vec::new());
+        }
+        let num_values = ((end_byte - start_byte) / 8) as usize;
+        let mut result = Vec::with_capacity(num_values);
+        let mut byte_pos = start_byte;
+        while byte_pos < end_byte {
+            let page_idx = byte_pos / PAGE_SIZE as u64;
+            let offset_in_page = byte_pos as usize % PAGE_SIZE;
+            let remaining_in_page = PAGE_SIZE - offset_in_page;
+            let bytes_in_page = std::cmp::min(remaining_in_page as u64, end_byte - byte_pos);
+            let values_in_page = (bytes_in_page / 8) as usize;
+            if values_in_page == 0 {
+                byte_pos += bytes_in_page;
+                continue;
+            }
+            let frame = bm.pin_page(fh.clone(), page_idx, tx)?;
+            for k in 0..values_in_page {
+                let start = offset_in_page + k * 8;
+                result.push(u64::from_le_bytes(
+                    frame.as_slice()[start..start + 8].try_into().expect("infallible: u64 read"),
+                ));
+            }
+            bm.unpin_page(fh, page_idx, frame);
+            byte_pos += bytes_in_page as u64;
+        }
+        Ok(result)
     }
 
     fn scan_edges_from_csr(
@@ -242,39 +296,28 @@ impl CSRIndex {
             return Ok(Vec::new());
         }
 
-        // Validate offset file header
         let header_frame = bm.pin_page(self.offset_fh.clone(), 0, tx)?;
         let mut header_buf = [0u8; PAGE_SIZE];
         header_buf.copy_from_slice(header_frame.as_slice());
+        bm.unpin_page(&self.offset_fh, 0, header_frame);
         validate_csr_header(&header_buf, CSR_OFFSET_MAGIC)?;
 
-        // Validate adjacency file header if it has pages
         if self.adj_node_fh.get_num_pages() > 0 {
             let adj_header = bm.pin_page(self.adj_node_fh.clone(), 0, tx)?;
             let mut adj_buf = [0u8; PAGE_SIZE];
             adj_buf.copy_from_slice(adj_header.as_slice());
+            bm.unpin_page(&self.adj_node_fh, 0, adj_header);
             validate_csr_header(&adj_buf, CSR_ADJ_MAGIC)?
         }
 
-        // Read all offsets using header-aware positions with page-boundary safety
         let max_entries = ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
-        let mut offsets = Vec::with_capacity(max_entries as usize + 1);
-        for i in 0..=max_entries as usize {
-            let byte_pos = csr_offset_byte(i as u64);
-            let page_idx = byte_pos / PAGE_SIZE as u64;
-            if page_idx >= self.offset_fh.get_num_pages() {
-                break;
-            }
-            match self.read_u64_at(bm, &self.offset_fh, byte_pos, tx) {
-                Ok(val) => offsets.push(val),
-                Err(_) => break,
-            }
-        }
+        let offset_end = csr_offset_byte(max_entries + 1);
+        let offsets = self.read_u64_batch(bm, &self.offset_fh, CSR_HEADER_SIZE as u64, offset_end.min(num_offset_pages * PAGE_SIZE as u64), tx)?;
+
         if offsets.len() < 2 {
             return Ok(Vec::new());
         }
 
-        // Find the actual number of active nodes by looking at the last non-zero offset
         let num_entries = offsets.len() - 1;
         let mut num_nodes = 0u64;
         for i in 0..num_entries {
@@ -283,26 +326,15 @@ impl CSRIndex {
             }
         }
 
-        let total_adj = offsets[num_nodes as usize];
+        let total_adj = *offsets.get(num_nodes as usize).unwrap_or(&0);
         if total_adj == 0 {
             return Ok(Vec::new());
         }
 
-        // Read all adjacency values using header-aware positions
-        let mut adj_values = Vec::with_capacity(total_adj as usize);
-        for adj_idx in 0..total_adj {
-            let adj_byte = (CSR_HEADER_SIZE as u64) + adj_idx * 8;
-            match self.read_u64_at(bm, &self.adj_node_fh, adj_byte, tx) {
-                Ok(val) => {
-                    if val & DELETED_BIT == 0 {
-                        adj_values.push(val);
-                    }
-                }
-                Err(_) => break,
-            }
-        }
+        let adj_start = CSR_HEADER_SIZE as u64;
+        let adj_end = adj_start + total_adj * 8;
+        let adj_values = self.read_u64_batch(bm, &self.adj_node_fh, adj_start, adj_end, tx)?;
 
-        // Pair adjacency values with their src nodes using the offset array
         let mut result = Vec::with_capacity(adj_values.len());
         let mut pos = 0usize;
         for src in 0..num_nodes as usize {
@@ -311,7 +343,9 @@ impl CSRIndex {
             }
             let end = offsets[src + 1] as usize;
             while pos < end && pos < adj_values.len() {
-                result.push((src as u64, adj_values[pos]));
+                if adj_values[pos] & DELETED_BIT == 0 {
+                    result.push((src as u64, adj_values[pos]));
+                }
                 pos += 1;
             }
             pos = end;
@@ -363,6 +397,8 @@ impl CSRIndex {
         let deletions = self.pending_deletions.read();
         let has_deletions = !deletions.is_empty();
 
+        let deletion_set: HashSet<(u64, u64)> = deletions.iter().copied().collect();
+
         let mut i = start;
         while i < end {
             let adj_byte = (CSR_HEADER_SIZE as u64) + i * 8;
@@ -384,11 +420,12 @@ impl CSRIndex {
                 if val & DELETED_BIT != 0 {
                     continue;
                 }
-                if has_deletions && deletions.contains(&(node_id, neighbor)) {
+                if has_deletions && deletion_set.contains(&(node_id, neighbor)) {
                     continue;
                 }
                 f(neighbor);
             }
+            bm.unpin_page(&self.adj_node_fh, adj_page, adj_frame);
             i += to_read as u64;
         }
 
@@ -401,9 +438,10 @@ impl CSRIndex {
     {
         let pending = self.pending_edges.read();
         let deletions = self.pending_deletions.read();
+        let deletion_set: HashSet<(u64, u64)> = deletions.iter().copied().collect();
 
         for &(src, dst) in pending.iter() {
-            if src == node_id && !deletions.contains(&(src, dst)) {
+            if src == node_id && !deletion_set.contains(&(src, dst)) {
                 f(dst);
             }
         }
@@ -464,23 +502,33 @@ impl CSRIndex {
                 PAGE_SIZE,
             );
         }
+        bm.unpin_page(&offset_fh, 0, header_frame);
 
+        // Batch offset writes by page: group all entries per page,
+        // then create one version per page, write all values, unpin.
+        let mut offset_page_entries: HashMap<u64, Vec<(u64, u64)>> = HashMap::new();
         for (i, &val) in offsets.iter().enumerate() {
             let byte_pos = csr_offset_byte(i as u64);
             let page_idx = byte_pos / PAGE_SIZE as u64;
-            let offset_in_page = byte_pos % PAGE_SIZE as u64;
+            offset_page_entries.entry(page_idx).or_default().push((byte_pos, val));
+        }
+        for (&page_idx, entries) in &offset_page_entries {
             while offset_fh.get_num_pages() <= page_idx {
                 offset_fh.add_new_page()?;
             }
             let frame = bm.create_new_version(offset_fh.clone(), page_idx, tx)?;
             unsafe {
                 let ptr = frame.as_ptr();
-                std::ptr::copy_nonoverlapping(
-                    val.to_le_bytes().as_ptr(),
-                    ptr.add(offset_in_page as usize),
-                    8,
-                );
+                for &(byte_pos, val) in entries {
+                    let offset_in_page = (byte_pos % PAGE_SIZE as u64) as usize;
+                    std::ptr::copy_nonoverlapping(
+                        val.to_le_bytes().as_ptr(),
+                        ptr.add(offset_in_page),
+                        8,
+                    );
+                }
             }
+            bm.unpin_page(&offset_fh, page_idx, frame);
         }
 
         // Write adjacency file header + data
@@ -498,23 +546,32 @@ impl CSRIndex {
                 PAGE_SIZE,
             );
         }
+        bm.unpin_page(&adj_node_fh, 0, adj_header_frame);
 
+        // Batch adjacency writes by page — one create_new_version per page.
+        let mut adj_page_entries: HashMap<u64, Vec<(u64, u64)>> = HashMap::new();
         for (i, &(_, dst)) in sorted_edges.iter().enumerate() {
             let adj_byte = (CSR_HEADER_SIZE as u64) + (i as u64 * 8);
             let page_idx = adj_byte / PAGE_SIZE as u64;
-            let offset_in_page = adj_byte % PAGE_SIZE as u64;
+            adj_page_entries.entry(page_idx).or_default().push((adj_byte, dst));
+        }
+        for (&page_idx, entries) in &adj_page_entries {
             while adj_node_fh.get_num_pages() <= page_idx {
                 adj_node_fh.add_new_page()?;
             }
             let frame = bm.create_new_version(adj_node_fh.clone(), page_idx, tx)?;
             unsafe {
                 let ptr = frame.as_ptr();
-                std::ptr::copy_nonoverlapping(
-                    dst.to_le_bytes().as_ptr(),
-                    ptr.add(offset_in_page as usize),
-                    8,
-                );
+                for &(adj_byte, dst) in entries {
+                    let offset_in_page = (adj_byte % PAGE_SIZE as u64) as usize;
+                    std::ptr::copy_nonoverlapping(
+                        dst.to_le_bytes().as_ptr(),
+                        ptr.add(offset_in_page),
+                        8,
+                    );
+                }
             }
+            bm.unpin_page(&adj_node_fh, page_idx, frame);
         }
 
         Ok(())
