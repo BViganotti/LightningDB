@@ -1908,12 +1908,11 @@ impl Connection {
                 .collect();
             for &i in &update_indices {
                 let row_id = existing_row_ids[i].unwrap();
-                for (col_idx, col) in table.columns.iter().enumerate() {
-                    let batch_col_idx = col_idx + 1;
-                    if batch_col_idx >= final_batch.num_columns() {
+                for (col_idx, col) in table.columns.iter().enumerate().skip(1) {
+                    if col_idx >= final_batch.num_columns() {
                         break;
                     }
-                    let array = final_batch.column(batch_col_idx);
+                    let array = final_batch.column(col_idx);
                     let val = Value::from_arrow(array, i);
                     col.append_value(&bm, &val, row_id, &tx)?;
                 }
@@ -1998,7 +1997,7 @@ impl Connection {
                 .iter()
                 .enumerate()
                 .filter(|(col_idx, col)| {
-                    col_idx + 1 < final_batch.num_columns()
+                    *col_idx < final_batch.num_columns()
                         && col.data_type == lightning_types::LogicalType::String
                 })
                 .map(|(i, _)| i)
@@ -2014,7 +2013,7 @@ impl Connection {
                     let node_id = row_ids[i];
                     fields_vec.clear();
                     for (j, &col_idx) in string_cols.iter().enumerate() {
-                        let array = final_batch.column(col_idx + 1);
+                        let array = final_batch.column(col_idx);
                         if let Some(str_arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
                         {
