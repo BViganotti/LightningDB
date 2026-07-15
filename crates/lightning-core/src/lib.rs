@@ -1872,21 +1872,52 @@ impl Connection {
         let final_schema = Arc::new(arrow::datatypes::Schema::new(fields));
         let final_batch = RecordBatch::try_new(final_schema, columns)?;
 
-        if update_count > 0 {
-            for (col_idx, col) in table.columns.iter().enumerate() {
-                let batch_col_idx = col_idx + 1;
-                if batch_col_idx >= final_batch.num_columns() {
-                    break;
-                }
-                let array = final_batch.column(batch_col_idx);
-                for i in 0..num_rows {
-                    let val = Value::from_arrow(array, i);
-                    col.append_value(&bm, &val, row_ids[i], &tx)?;
-                }
-            }
-        } else {
+        if update_count == 0 {
+            // All-new: fast bulk append path
             table.bulk_append_batch(&bm, &final_batch, start_id, &tx)?;
             table.bulk_append_trigram_batch(start_id, &final_batch)?;
+        } else {
+            // Mixed: bulk-append new rows, per-value update existing rows
+            let new_indices: Vec<u32> = (0..num_rows as u32)
+                .filter(|&i| existing_row_ids[i as usize].is_none())
+                .collect();
+            let new_rows_count = new_indices.len();
+
+            if !new_indices.is_empty() {
+                let new_id_field =
+                    arrow::datatypes::Field::new("_id", arrow::datatypes::DataType::UInt64, false);
+                let take_indices = arrow::array::UInt32Array::from(new_indices);
+                let new_id_values: UInt64Array = (start_id..start_id + new_rows_count as u64).collect();
+                let mut new_fields = vec![new_id_field];
+                let mut new_cols: Vec<ArrayRef> = vec![Arc::new(new_id_values)];
+                for col_idx in 0..batch.num_columns() {
+                    let taken = arrow::compute::take(batch.column(col_idx).as_ref(), &take_indices, None)
+                        .map_err(|e| LightningError::Internal(format!("take failed: {e}")))?;
+                    new_fields.push(batch.schema().field(col_idx).clone());
+                    new_cols.push(taken);
+                }
+                let new_schema = Arc::new(arrow::datatypes::Schema::new(new_fields));
+                let new_batch = RecordBatch::try_new(new_schema, new_cols)?;
+                table.bulk_append_batch(&bm, &new_batch, start_id, &tx)?;
+                table.bulk_append_trigram_batch(start_id, &new_batch)?;
+            }
+
+            // Per-value update for existing rows
+            let update_indices: Vec<usize> = (0..num_rows)
+                .filter(|&i| existing_row_ids[i].is_some())
+                .collect();
+            for &i in &update_indices {
+                let row_id = existing_row_ids[i].unwrap();
+                for (col_idx, col) in table.columns.iter().enumerate() {
+                    let batch_col_idx = col_idx + 1;
+                    if batch_col_idx >= final_batch.num_columns() {
+                        break;
+                    }
+                    let array = final_batch.column(batch_col_idx);
+                    let val = Value::from_arrow(array, i);
+                    col.append_value(&bm, &val, row_id, &tx)?;
+                }
+            }
         }
 
         if let (Some(index), Some(pk_col_idx)) = (&index_opt, pk_idx) {
