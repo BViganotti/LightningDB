@@ -1781,12 +1781,86 @@ impl Connection {
         let bm = db.buffer_manager.clone();
         let num_rows = batch.num_rows();
 
+        let storage = db.storage_manager.read();
+        let fts_opt = storage.fts_indexes.get(table_name).cloned();
+        let vec_opt = storage.vector_indexes.get(table_name).cloned();
+        let index_opt = storage.get_index(table_name);
+        drop(storage);
+
+        let pk_idx = db
+            .catalog
+            .read()
+            .get_node_table(table_name)
+            .and_then(|t| t.primary_key.as_ref())
+            .and_then(|pk| table.columns.iter().position(|c| c.name == pk.as_str()));
+
+        let mut existing_row_ids: Vec<Option<u64>> = vec![None; num_rows];
+        let mut new_count: usize = num_rows;
+        let mut update_count: usize = 0;
+
+        if let (Some(index), Some(pk_col_idx)) = (&index_opt, pk_idx) {
+            let pk_array = batch.column(pk_col_idx);
+            new_count = 0;
+            if let Some(str_arr) = pk_array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+            {
+                for i in 0..num_rows {
+                    if str_arr.is_valid(i) {
+                        let pk_val = Value::String(str_arr.value(i).to_string());
+                        if let Ok(Some(old_id)) = index.lookup(&bm, &pk_val, &tx) {
+                            existing_row_ids[i] = Some(old_id);
+                            update_count += 1;
+                        } else {
+                            new_count += 1;
+                        }
+                    } else {
+                        new_count += 1;
+                    }
+                }
+            } else if let Some(int_arr) =
+                pk_array.as_any().downcast_ref::<arrow::array::Int64Array>()
+            {
+                for i in 0..num_rows {
+                    if int_arr.is_valid(i) {
+                        let pk_val = Value::Number(int_arr.value(i) as f64);
+                        if let Ok(Some(old_id)) = index.lookup(&bm, &pk_val, &tx) {
+                            existing_row_ids[i] = Some(old_id);
+                            update_count += 1;
+                        } else {
+                            new_count += 1;
+                        }
+                    } else {
+                        new_count += 1;
+                    }
+                }
+            }
+        }
+
+        if update_count > 0 {
+            tracing::info!(
+                "bulk_insert_batch({table_name}): upsert: {new_count} new, {update_count} existing (of {num_rows} total)"
+            );
+        }
+
         let start_id = table
             .next_row_id
-            .fetch_add(num_rows as u64, Ordering::SeqCst);
+            .fetch_add(new_count as u64, Ordering::SeqCst);
 
-        // Prepend _id column to the batch to align with table schema
-        let id_values: UInt64Array = (start_id..start_id + num_rows as u64).collect();
+        let mut new_id_counter = start_id;
+        let row_ids: Vec<u64> = (0..num_rows)
+            .map(|i| {
+                if let Some(old_id) = existing_row_ids[i] {
+                    old_id
+                } else {
+                    let id = new_id_counter;
+                    new_id_counter += 1;
+                    id
+                }
+            })
+            .collect();
+
+        let id_values: UInt64Array = row_ids.iter().copied().collect();
         let id_field =
             arrow::datatypes::Field::new("_id", arrow::datatypes::DataType::UInt64, false);
         let mut fields = vec![id_field];
@@ -1798,62 +1872,57 @@ impl Connection {
         let final_schema = Arc::new(arrow::datatypes::Schema::new(fields));
         let final_batch = RecordBatch::try_new(final_schema, columns)?;
 
-        table.bulk_append_batch(&bm, &final_batch, start_id, &tx)?;
+        if update_count > 0 {
+            for (col_idx, col) in table.columns.iter().enumerate() {
+                let batch_col_idx = col_idx + 1;
+                if batch_col_idx >= final_batch.num_columns() {
+                    break;
+                }
+                let array = final_batch.column(batch_col_idx);
+                for i in 0..num_rows {
+                    let val = Value::from_arrow(array, i);
+                    col.append_value(&bm, &val, row_ids[i], &tx)?;
+                }
+            }
+        } else {
+            table.bulk_append_batch(&bm, &final_batch, start_id, &tx)?;
+            table.bulk_append_trigram_batch(start_id, &final_batch)?;
+        }
 
-        table.bulk_append_trigram_batch(start_id, &final_batch)?;
-
-        let storage = db.storage_manager.read();
-        let fts_opt = storage.fts_indexes.get(table_name).cloned();
-        let vec_opt = storage.vector_indexes.get(table_name).cloned();
-        let index_opt = storage.get_index(table_name);
-        drop(storage);
-
-        // Find primary key column index if it exists
-        let pk_idx = db
-            .catalog
-            .read()
-            .get_node_table(table_name)
-            .and_then(|t| t.primary_key.as_ref())
-            .and_then(|pk| table.columns.iter().position(|c| c.name == pk.as_str()));
-
-        // Insert into primary key hash index
         if let (Some(index), Some(pk_col_idx)) = (&index_opt, pk_idx) {
-            if pk_col_idx < final_batch.num_columns() {
-                let pk_array = final_batch.column(pk_col_idx);
-                if let Some(str_arr) = pk_array
-                    .as_any()
-                    .downcast_ref::<arrow::array::StringArray>()
-                {
-                    for i in 0..num_rows {
-                        if str_arr.is_valid(i) {
-                            index.insert(
-                                &bm,
-                                &Value::String(str_arr.value(i).to_string()),
-                                start_id + i as u64,
-                                &tx,
-                            )?;
-                        }
+            // +1 because final_batch has _id prepended at index 0
+            let pk_batch_col = pk_col_idx + 1;
+            let pk_array = final_batch.column(pk_batch_col);
+            if let Some(str_arr) = pk_array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+            {
+                for i in 0..num_rows {
+                    if existing_row_ids[i].is_none() && str_arr.is_valid(i) {
+                        index.insert(
+                            &bm,
+                            &Value::String(str_arr.value(i).to_string()),
+                            row_ids[i],
+                            &tx,
+                        )?;
                     }
-                } else if let Some(int_arr) =
-                    pk_array.as_any().downcast_ref::<arrow::array::Int64Array>()
-                {
-                    for i in 0..num_rows {
-                        if int_arr.is_valid(i) {
-                            index.insert(
-                                &bm,
-                                &Value::Number(int_arr.value(i) as f64),
-                                start_id + i as u64,
-                                &tx,
-                            )?;
-                        }
+                }
+            } else if let Some(int_arr) =
+                pk_array.as_any().downcast_ref::<arrow::array::Int64Array>()
+            {
+                for i in 0..num_rows {
+                    if existing_row_ids[i].is_none() && int_arr.is_valid(i) {
+                        index.insert(
+                            &bm,
+                            &Value::Number(int_arr.value(i) as f64),
+                            row_ids[i],
+                            &tx,
+                        )?;
                     }
                 }
             }
         }
 
-        // Index all FixedSizeList(Float32) columns as vector embeddings
-        // Iterate over final_batch columns (skip _id at index 0) to catch
-        // dynamic embedding columns not present in the table catalog definition.
         if let Some(vec_idx) = vec_opt {
             let idx_dim = vec_idx.dimension();
             for col_idx in 1..final_batch.num_columns() {
@@ -1874,7 +1943,7 @@ impl Connection {
                                 let start = i * arr_dim;
                                 let end = (i + 1) * arr_dim;
                                 let emb = values.values()[start..end].to_vec();
-                                batch_vecs.push((start_id + i as u64, emb));
+                                batch_vecs.push((row_ids[i], emb));
                             }
                             if let Err(e) = vec_idx.insert_batch(&batch_vecs, &bm, &tx) {
                                 tracing::warn!(
@@ -1892,15 +1961,13 @@ impl Connection {
         db.storage_manager.read().flush_all_pending(&bm, &tx)?;
         db.transaction_manager.commit(&tx, &bm, &db)?;
 
-        // Commit FTS index AFTER the database transaction so readers never see
-        // an FTS document pointing to an uncommitted node_id.
         if let Some(fts) = fts_opt {
             let string_cols: Vec<usize> = table
                 .columns
                 .iter()
                 .enumerate()
                 .filter(|(col_idx, col)| {
-                    *col_idx < final_batch.num_columns()
+                    col_idx + 1 < final_batch.num_columns()
                         && col.data_type == lightning_types::LogicalType::String
                 })
                 .map(|(i, _)| i)
@@ -1911,22 +1978,22 @@ impl Connection {
                     .map(|&i| table.columns[i].name.clone())
                     .collect();
                 let mut batch_docs: Vec<(u64, Vec<(String, &str)>)> = Vec::with_capacity(num_rows);
-                let mut fields: Vec<(String, &str)> = Vec::new();
+                let mut fields_vec: Vec<(String, &str)> = Vec::new();
                 for i in 0..num_rows {
-                    let node_id = start_id + i as u64;
-                    fields.clear();
+                    let node_id = row_ids[i];
+                    fields_vec.clear();
                     for (j, &col_idx) in string_cols.iter().enumerate() {
-                        let array = final_batch.column(col_idx);
+                        let array = final_batch.column(col_idx + 1);
                         if let Some(str_arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
                         {
                             if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
-                                fields.push((col_names[j].clone(), str_arr.value(i)));
+                                fields_vec.push((col_names[j].clone(), str_arr.value(i)));
                             }
                         }
                     }
-                    if !fields.is_empty() {
-                        batch_docs.push((node_id, std::mem::take(&mut fields)));
+                    if !fields_vec.is_empty() {
+                        batch_docs.push((node_id, std::mem::take(&mut fields_vec)));
                     }
                 }
                 if !batch_docs.is_empty() {
@@ -1944,19 +2011,16 @@ impl Connection {
             }
         }
 
-        // Update catalog with the new row count
         {
             let mut cat = db.catalog.write();
             if let Some(entry) = cat.get_node_table_mut(table_name) {
-                entry.num_rows += num_rows as u64;
+                entry.num_rows += new_count as u64;
             } else if let Some(entry) = cat.get_rel_table_mut(table_name) {
-                entry.num_rows += num_rows as u64;
+                entry.num_rows += new_count as u64;
             }
             db.catalog.mark_dirty();
         }
 
-        // Sync catalog stats from storage manager for the inserted table only.
-        // Acquire catalog lock FIRST, then storage lock, to avoid deadlocks.
         let stats_snapshot = {
             let storage = db.storage_manager.read();
             (

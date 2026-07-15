@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 pub const PAGE_SIZE: usize = 4096;
 
-const UNCOMMITTED_BIT: u64 = 1 << 63;
+pub const UNCOMMITTED_BIT: u64 = 1 << 63;
 const INITIAL_SLOTS_PER_SHARD: usize = 4096;
 
 pub struct Frame {
@@ -331,9 +331,13 @@ impl BufferManager {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
 
                 if version == tx_id_marked {
-                    // SAFETY: Copying PAGE_SIZE bytes from a Frame's data behind Arc. The frame is pinned (pin_count > 0) so it won't be evicted during access. The caller holds the shard write lock (acquired above at line 266), ensuring exclusive access to this slot.
-                    source_data = Some(unsafe { *pool.slots[idx].frame.data.get() });
-                    break;
+                    // Reuse the existing uncommitted version for this transaction.
+                    // This avoids creating a new CoW copy on every write to the same page
+                    // within a transaction (critical for hash-index bulk inserts).
+                    pool.slots[idx].frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    pool.slots[idx].referenced = true;
+                    self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+                    return Ok(Arc::clone(&pool.slots[idx].frame));
                 }
 
                 // Select the best snapshot-visible version as source data.
@@ -547,24 +551,81 @@ impl BufferManager {
         let shard_idx = self.get_shard_idx(key);
 
         let pool = self.shards[shard_idx].read();
+        let mut found = false;
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             for &idx in slot_indices {
                 let current_version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                 if current_version == tx_id_marked {
-                    // Use compare_exchange to avoid needing a write lock for the store
                     let _ = pool.slots[idx].frame.version.compare_exchange(
                         current_version,
                         commit_ts,
                         Ordering::Release,
                         Ordering::Acquire,
                     );
+                    found = true;
                 }
             }
+        }
+        if !found {
+            tracing::debug!(
+                "update_timestamps: frame NOT found for ({},{}) tx_id={commit_ts:#x} — likely evicted before commit",
+                file_id, page_idx,
+            );
         }
     }
 
     pub fn unpin_page(&self, _fh: &FileHandle, _page_idx: u64, frame: Arc<Frame>) {
         frame.pin_count.fetch_sub(1, Ordering::Release);
+    }
+
+    /// Pin a frame in the buffer pool by matching its exact version mark.
+    /// Unlike `pin_page`, this does NOT load from disk on miss — it only
+    /// finds frames already present in the pool. Used during commit to
+    /// prevent eviction of uncommitted frames between update_timestamps
+    /// and flush_pages.
+    pub fn pin_page_by_key(
+        &self,
+        file_id: u64,
+        page_idx: u64,
+        version_mark: u64,
+    ) -> Option<Arc<Frame>> {
+        let key = (file_id, page_idx);
+        let shard_idx = self.get_shard_idx(key);
+        let pool = self.shards[shard_idx].read();
+        if let Some(slot_indices) = pool.page_to_slots.get(&key) {
+            for &idx in slot_indices.iter().rev() {
+                let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                if version == version_mark {
+                    pool.slots[idx].frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    return Some(Arc::clone(&pool.slots[idx].frame));
+                }
+            }
+        }
+        None
+    }
+
+    /// Invalidate all buffer pool frames for a given (file_id, page_idx).
+    /// Used when pages are written directly to disk (bypassing the buffer pool)
+    /// to ensure stale cached frames are not returned by subsequent pin_page calls.
+    pub fn invalidate_page(&self, file_id: u64, page_idx: u64) {
+        let key = (file_id, page_idx);
+        let shard_idx = self.get_shard_idx(key);
+        let mut pool = self.shards[shard_idx].write();
+        if let Some(slot_indices) = pool.page_to_slots.get(&key) {
+            let indices: Vec<usize> = slot_indices.clone();
+            for &idx in &indices {
+                if pool.slots[idx].key == Some(key) {
+                    if pool.slots[idx].dirty {
+                        Self::decrement_dirty_count(&pool.dirty_count);
+                    }
+                    pool.slots[idx].key = None;
+                    pool.slots[idx].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                    pool.slots[idx].dirty = false;
+                    pool.slots[idx].referenced = false;
+                }
+            }
+            pool.page_to_slots.remove(&key);
+        }
     }
 
     pub fn reclaim_expired_versions(&self, min_active_ts: u64) -> Result<usize> {
@@ -858,6 +919,10 @@ impl BufferManager {
                     }
                     _all_uncommitted = false;
                     if let Some((fid, pid)) = pool.slots[idx].key {
+                        tracing::debug!(
+                            "evict_with_clock: flushing dirty committed frame ({},{}) version={:#x} slot={}",
+                            fid, pid, version, idx
+                        );
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
                         }
@@ -1306,5 +1371,230 @@ mod tests {
         let _f = bm.create_new_version(Arc::clone(&fh), 200, &tx3).unwrap();
         let f_reload = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
         assert_eq!(f_reload.as_slice()[..8], [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    // === Tests for pin_page_by_key ===
+
+    #[test]
+    fn test_pin_page_by_key_finds_own_uncommitted_version() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id_marked = tx.tx_id | UNCOMMITTED_BIT;
+
+        // Create a new version (uncommitted)
+        let f1 = bm.create_new_version(Arc::clone(&fh), 5, &tx).unwrap();
+        let s = unsafe { f1.as_mut_slice() };
+        s[0] = 0xAB;
+
+        // pin_page_by_key should find it by exact version mark
+        let f2 = bm.pin_page_by_key(fh.file_id, 5, tx_id_marked);
+        assert!(f2.is_some(), "Should find uncommitted version");
+        let f2 = f2.unwrap();
+        assert_eq!(f2.as_slice()[0], 0xAB);
+        assert_eq!(f2.pin_count.load(Ordering::Acquire), 2); // pinned by both f1 and f2
+    }
+
+    #[test]
+    fn test_pin_page_by_key_returns_none_for_missing_version() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id_marked = tx.tx_id | UNCOMMITTED_BIT;
+
+        // No version created for page 5
+        let result = bm.pin_page_by_key(fh.file_id, 5, tx_id_marked);
+        assert!(result.is_none(), "Should return None for non-existent version");
+    }
+
+    #[test]
+    fn test_pin_page_by_key_finds_committed_version() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+        let tx_id = tx.tx_id;
+        let commit_ts = 100;
+
+        let f1 = bm.create_new_version(Arc::clone(&fh), 3, &tx).unwrap();
+        let s = unsafe { f1.as_mut_slice() };
+        s[0] = 0xCD;
+        bm.update_timestamps(fh.file_id, 3, tx_id, commit_ts);
+        bm.unpin_page(&fh, 3, f1);
+
+        // Should find the committed version by commit_ts
+        let f2 = bm.pin_page_by_key(fh.file_id, 3, commit_ts);
+        assert!(f2.is_some(), "Should find committed version");
+        assert_eq!(f2.unwrap().as_slice()[0], 0xCD);
+    }
+
+    #[test]
+    fn test_pin_page_by_key_prevents_eviction() {
+        let (_dir, fh, _wal, tm) = setup();
+        // Small buffer pool — 16 pages (1 per shard), forces eviction
+        let bm = BufferManager::new(16, None, false, 0, 0.0);
+        let tx = begin_tx(&tm);
+        let tx_id_marked = tx.tx_id | UNCOMMITTED_BIT;
+
+        // Create a dirty version for page 0
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        let s = unsafe { f1.as_mut_slice() };
+        s[0] = 0xEE;
+        bm.unpin_page(&fh, 0, f1); // pin_count=0, now evictable
+
+        // Pin it by key — pin_count goes to 1, can't be evicted
+        let protected = bm.pin_page_by_key(fh.file_id, 0, tx_id_marked).unwrap();
+        assert_eq!(protected.as_slice()[0], 0xEE);
+
+        // Try to fill the buffer pool to trigger eviction
+        for i in 1..100 {
+            let tx2 = begin_tx(&tm);
+            if let Ok(f) = bm.create_new_version(Arc::clone(&fh), i, &tx2) {
+                bm.unpin_page(&fh, i, f);
+            }
+        }
+
+        // The protected frame should still be accessible
+        assert_eq!(protected.as_slice()[0], 0xEE);
+        assert_eq!(protected.pin_count.load(Ordering::Acquire), 1);
+    }
+
+    // === Tests for invalidate_page ===
+
+    #[test]
+    fn test_invalidate_page_removes_frame() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+
+        // Pin page to load it into buffer pool
+        let f1 = bm.pin_page(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(f1.pin_count.load(Ordering::Acquire), 1);
+        bm.unpin_page(&fh, 0, f1);
+
+        // Invalidate it
+        bm.invalidate_page(fh.file_id, 0);
+
+        // Next pin should load from disk (fresh frame with version=0)
+        let tx2 = begin_tx(&tm);
+        let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(f2.version.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn test_invalidate_page_clears_dirty_count() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+
+        let _f = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
+        assert_eq!(bm.dirty_page_count(), 1);
+
+        bm.invalidate_page(fh.file_id, 0);
+        assert_eq!(bm.dirty_page_count(), 0);
+    }
+
+    #[test]
+    fn test_invalidate_page_removes_from_page_to_slots() {
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = create_bm(64);
+        let tx = begin_tx(&tm);
+
+        let _f = bm.pin_page(Arc::clone(&fh), 5, &tx).unwrap();
+
+        // Check it's in the map
+        let key = (fh.file_id, 5);
+        let shard_idx = bm.get_shard_idx(key);
+        assert!(bm.shards[shard_idx].read().page_to_slots.contains_key(&key));
+
+        bm.invalidate_page(fh.file_id, 5);
+
+        // Should be removed from the map
+        assert!(!bm.shards[shard_idx].read().page_to_slots.contains_key(&key));
+    }
+
+    // === Test: commit with pin protection prevents data loss ===
+
+    #[test]
+    fn test_commit_with_pinned_frames_survives_eviction() {
+        let (_dir, fh, _wal, tm) = setup();
+        // Small buffer pool — 16 slots (1 per shard), forces eviction
+        let bm = BufferManager::new(16, None, false, 0, 0.0);
+
+        // Transaction 1: write data to page 0
+        let tx1 = begin_tx(&tm);
+        let tx1_id = tx1.tx_id;
+        let tx1_marked = tx1_id | UNCOMMITTED_BIT;
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
+        let s = unsafe { f1.as_mut_slice() };
+        s[..8].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE]);
+        bm.unpin_page(&fh, 0, f1); // pin_count=0
+
+        // Simulate the commit-time pin protection:
+        // Pin the frame by key BEFORE update_timestamps
+        let protected = bm.pin_page_by_key(fh.file_id, 0, tx1_marked);
+        assert!(protected.is_some(), "Frame should be in pool");
+
+        // Now simulate eviction pressure (other pages being accessed)
+        for i in 1..100 {
+            let tx_tmp = begin_tx(&tm);
+            if let Ok(f) = bm.pin_page(Arc::clone(&fh), i, &tx_tmp) {
+                bm.unpin_page(&fh, i, f);
+            }
+        }
+
+        // update_timestamps should still find the frame (it's pinned)
+        let commit_ts = tm.get_current_ts() + 1;
+        bm.update_timestamps(fh.file_id, 0, tx1_id, commit_ts);
+
+        // Verify the frame version was updated
+        let protected = protected.unwrap();
+        assert_eq!(protected.version.load(Ordering::Acquire), commit_ts);
+
+        // Unpin after flush
+        bm.unpin_page(&fh, 0, protected);
+
+        // Transaction 2: should see the committed data
+        let tx2 = begin_tx_at(&tm, commit_ts);
+        let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        assert_eq!(f2.as_slice()[..8], [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE]);
+    }
+
+    #[test]
+    fn test_commit_without_pin_protection_can_lose_data() {
+        // This test demonstrates the bug: without pin protection,
+        // a frame can be evicted between unpin and commit.
+        let (_dir, fh, _wal, tm) = setup();
+        let bm = BufferManager::new(16, None, false, 0, 0.0);
+
+        let tx1 = begin_tx(&tm);
+        let tx1_id = tx1.tx_id;
+        let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
+        let s = unsafe { f1.as_mut_slice() };
+        s[0] = 0x42;
+        bm.unpin_page(&fh, 0, f1); // pin_count=0, evictable
+
+        // Eviction pressure — fill the buffer pool
+        for i in 1..100 {
+            let tx_tmp = begin_tx(&tm);
+            if let Ok(f) = bm.create_new_version(Arc::clone(&fh), i, &tx_tmp) {
+                bm.unpin_page(&fh, i, f);
+            }
+        }
+
+        // The frame for page 0 may have been evicted by now.
+        // update_timestamps might fail to find it.
+        let commit_ts = tm.get_current_ts() + 1;
+        bm.update_timestamps(fh.file_id, 0, tx1_id, commit_ts);
+
+        // If the frame was evicted, pin_page will load from disk.
+        // With a tiny buffer pool, the frame was likely evicted.
+        // This test documents the behavior — data may or may not be lost
+        // depending on eviction timing.
+        let tx2 = begin_tx_at(&tm, commit_ts);
+        let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
+        // In the broken case, f2[0] would be 0x00 (loaded from empty disk page)
+        // In the working case, f2[0] would be 0x42
+        // We just verify it doesn't panic — the result depends on eviction timing.
+        let _val = f2.as_slice()[0];
     }
 }

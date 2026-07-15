@@ -278,6 +278,24 @@ impl TransactionManager {
             // Phase 2: Update timestamps for non-bulk pages
             // Scope block ensures the MutexGuard is dropped before the flush
             // phase below, avoiding a double-lock deadlock on modified_pages.
+            //
+            // Pin all modified pages BEFORE update_timestamps to prevent
+            // eviction between the UNCOMMITTED_BIT clear and the disk flush.
+            // Without this pin, evict_with_clock can evict an uncommitted-but-
+            // dirty frame (pin_count=0, referenced=false) after update_timestamps
+            // clears UNCOMMITTED_BIT but before flush_pages writes it to disk.
+            let tx_id_marked = tx.tx_id | crate::storage::buffer_manager::UNCOMMITTED_BIT;
+            let pinned_frames: Vec<Arc<crate::storage::buffer_manager::Frame>> = {
+                let modified = tx.modified_pages.lock();
+                let mut frames = Vec::with_capacity(modified.len());
+                for &(file_id, page_idx) in modified.iter() {
+                    if let Some(frame) = bm.pin_page_by_key(file_id, page_idx, tx_id_marked) {
+                        frames.push(frame);
+                    }
+                }
+                frames
+            };
+
             {
                 let modified = tx.modified_pages.lock();
                 if !modified.is_empty() {
@@ -308,6 +326,9 @@ impl TransactionManager {
                     bm.flush_pages(&modified);
                 }
             }
+
+            // Release the eviction protection pins — data is now on disk.
+            drop(pinned_frames);
 
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
