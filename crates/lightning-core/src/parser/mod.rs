@@ -25,18 +25,16 @@ pub fn parse(query_str: &str) -> Result<Query, ParserError> {
     let normalized = normalize_query(query_str);
     let preprocessed = preprocess_distinct_functions(&normalized);
 
-    let (clean, order_by, skip, limit) = strip_modifiers(&preprocessed);
-    let mut pairs = CypherParser::parse(Rule::query, &clean)?;
-    let mut q = parse_query(
+    // ORDER BY / SKIP / LIMIT are parsed natively by the grammar (both in
+    // return_clause and with_clause). The old strip_modifiers/inject_modifiers
+    // string-munging hack only handled modifiers after `RETURN`, silently
+    // dropped them elsewhere, and broke on string literals containing keywords.
+    let mut pairs = CypherParser::parse(Rule::query, &preprocessed)?;
+    parse_query(
         pairs
             .next()
             .ok_or_else(|| ParserError::Internal("unexpected end of input".into()))?,
-    )?;
-
-    if order_by.is_some() || skip.is_some() || limit.is_some() {
-        inject_modifiers(&mut q, order_by, skip, limit)?;
-    }
-    Ok(q)
+    )
 }
 
 fn preprocess_distinct_functions(s: &str) -> String {
@@ -107,149 +105,6 @@ fn normalize_query(s: &str) -> String {
     }
 
     result.trim().to_string()
-}
-
-fn strip_modifiers(s: &str) -> (String, Option<String>, Option<f64>, Option<f64>) {
-    let mut result = s.replace(['\n', '\r'], " ");
-    let mut ord = None;
-    let mut skp = None;
-    let mut lmt = None;
-
-    // Extract ORDER BY
-    let upper = result.to_uppercase();
-    if let Some(p) = upper.find("RETURN ") {
-        let after_return = p + 7;
-        let after_upper = &upper[after_return..];
-        if let Some(pos) = after_upper.find("ORDER BY ") {
-            let order_by_pos = after_return + pos;
-            let order_expr_start = order_by_pos + 9;
-            let order_rest = &result[order_expr_start..];
-            let order_upper = &upper[order_expr_start..];
-            let end = {
-                let l = order_upper.find(" LIMIT ");
-                let s = order_upper.find(" SKIP ");
-                match (l, s) {
-                    (Some(lp), Some(sp)) => std::cmp::min(lp, sp),
-                    (Some(lp), None) => lp,
-                    (None, Some(sp)) => sp,
-                    (None, None) => order_rest.len(),
-                }
-            };
-            let raw = order_rest[..end].trim().to_string();
-            // Strip trailing ASC/DESC so the expression parser can handle it
-            let upper_raw = raw.to_uppercase();
-            let desc = upper_raw.ends_with(" DESC");
-            let cleaned = if desc {
-                raw[..raw.len() - 5].trim().to_string()
-            } else if upper_raw.ends_with(" ASC") {
-                raw[..raw.len() - 4].trim().to_string()
-            } else {
-                raw.clone()
-            };
-            // Store expression + direction as "expr|DIR" for inject_modifiers
-            let direction = if desc { "DESC" } else { "ASC" };
-            ord = Some(format!("{cleaned}|{direction}"));
-            let _removed_len = 9 + end;
-            result = format!("{}{}", &result[..order_by_pos], &result[order_expr_start + end..]);
-        }
-    }
-
-    // Recalculate upper after result mutation so byte indices stay in sync
-    let upper = result.to_uppercase();
-    if let Some(p) = upper.find("RETURN ") {
-        let after_return = p + 7;
-        let after_upper = &upper[after_return..];
-        if let Some(pos) = after_upper.find(" SKIP ") {
-            let skip_pos = after_return + pos;
-            let skip_val_start = skip_pos + 6;
-            let skip_rest = &result[skip_val_start..];
-            let skip_upper = &upper[skip_val_start..];
-            let end = skip_upper.find(" LIMIT ").unwrap_or(skip_rest.len());
-            let raw = skip_rest[..end].trim();
-            if let Ok(v) = raw.parse::<f64>() {
-                skp = Some(v);
-            }
-            result = format!("{}{}", &result[..skip_pos], &result[skip_val_start + end..]);
-        }
-    }
-
-    // Recalculate upper after SKIP removal
-    let upper = result.to_uppercase();
-    if let Some(p) = upper.find("RETURN ") {
-        let after_return = p + 7;
-        let after_upper = &upper[after_return..];
-        if let Some(pos) = after_upper.find(" LIMIT ") {
-            let limit_pos = after_return + pos;
-            let limit_val_start = limit_pos + 7;
-            let limit_rest = &result[limit_val_start..];
-            let mut end = 0;
-            for (i, c) in limit_rest.chars().enumerate() {
-                if !c.is_numeric() && !c.is_whitespace() {
-                    break;
-                }
-                end = i + 1;
-            }
-            if let Ok(v) = limit_rest[..end].trim().parse::<f64>() {
-                lmt = Some(v);
-            }
-            result = format!(
-                "{}{}",
-                &result[..limit_pos],
-                &result[limit_val_start + end..]
-            );
-        }
-    }
-    (result.trim().to_string(), ord, skp, lmt)
-}
-
-fn inject_modifiers(
-    q: &mut Query,
-    ord: Option<String>,
-    skp: Option<f64>,
-    lmt: Option<f64>,
-) -> Result<(), ParserError> {
-    let order_by_item = if let Some(ref e) = ord {
-        let (expr_str, desc) = if let Some(pipe) = e.rfind('|') {
-            let dir = &e[pipe + 1..];
-            let clean_expr = &e[..pipe];
-            (clean_expr.to_string(), dir == "DESC")
-        } else {
-            (e.clone(), e.to_uppercase().contains("DESC"))
-        };
-        let p = CypherParser::parse(Rule::expression, &expr_str)
-            .map_err(|_| ParserError::Internal(format!("Failed to parse ORDER BY expression: '{expr_str}'")))?;
-        let expr = parse_expression(p.into_iter().next().ok_or_else(|| {
-            ParserError::Internal("empty ORDER BY expression".to_string())
-        })?)?;
-        Some(OrderByItem {
-            expression: expr,
-            descending: desc,
-        })
-    } else {
-        None
-    };
-    for u in &mut q.union_queries {
-        let clauses = match &mut u.statement {
-            Statement::Match(_, _, cs) => Some(cs),
-            _ => None,
-        };
-        if let Some(cs) = clauses {
-            for c in cs.iter_mut() {
-                if let Clause::Return(ref mut r) = c {
-                    if let Some(ref item) = order_by_item {
-                        r.order_by = Some(vec![item.clone()]);
-                    }
-                    if let Some(v) = skp {
-                        r.skip = Some(v);
-                    }
-                    if let Some(v) = lmt {
-                        r.limit = Some(v);
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParserError> {

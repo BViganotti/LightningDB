@@ -433,6 +433,15 @@ impl Table {
         }
 
         self.stats.write().cardinality += num_rows as u64;
+        // Keep next_row_id in sync with the rows appended. Rel tables reach
+        // this path directly (they are not routed through the DML executor's
+        // fetch_add), so without this next_row_id stays 0 and direct column
+        // scans (scan_rel_edges / export_graph / find_connected_nodes) read 0
+        // rows even though edges were written. next_row_id is restored on
+        // restart from the catalog, so this must be an absolute store (not a
+        // fetch_add) to stay correct across restarts.
+        self.next_row_id
+            .store(start_id + num_rows as u64, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 

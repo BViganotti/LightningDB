@@ -86,25 +86,34 @@ property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 where_clause = { ^"WHERE" ~ expression }
 
 return_clause = { ^"RETURN" ~ distinct_literal? ~ projection_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
-distinct_literal = { ^"DISTINCT" }
+distinct_literal = @{ ^"DISTINCT" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ sort_item ~ ("," ~ sort_item)* }
 sort_item = { expression ~ (ASC | DESC)? }
-ASC = { ^"ASC" | ^"ASCENDING" }
-DESC = { ^"DESC" | ^"DESCENDING" }
+// Longest match first: bare ^"ASC" would otherwise consume the "ASC" prefix of
+// "ASCENDING", leaving "ENDING" to fail downstream clause parsing.
+ASC = @{ ^"ASCENDING" | (^"ASC" ~ !"_" ~ !ASCII_ALPHANUMERIC) }
+DESC = @{ ^"DESCENDING" | (^"DESC" ~ !"_" ~ !ASCII_ALPHANUMERIC) }
 skip_clause = { ^"SKIP" ~ number_literal }
 limit_clause = { ^"LIMIT" ~ number_literal }
 star = { "*" }
 projection_items = { star | (projection_item ~ ("," ~ projection_item)*) }
 
+// Word-boundary guard: atomic rules that match a keyword only when it is not
+// the prefix of a longer identifier. Required because expression parsers retry
+// these operators after every sub-expression: without the boundary, `^"OR"`
+// matches the "OR" prefix of "ORDER BY", consuming it and leaving "DER" to be
+// parsed as a variable — which broke `WITH ... ORDER BY ...` queries.
+// The rules must be atomic (@) so implicit WHITESPACE is not skipped between
+// the keyword and the boundary predicate.
 expression = { or_expr }
 or_expr = { xor_expr ~ (or_op ~ xor_expr)* }
-or_op = { ^"OR" }
 xor_expr = { and_expr ~ (xor_op ~ and_expr)* }
-xor_op = { ^"XOR" }
 and_expr = { not_expr ~ (and_op ~ not_expr)* }
-and_op = { ^"AND" }
 not_expr = { (not_op)* ~ comparison_expr }
-not_op = { ^"NOT" }
+or_op = @{ ^"OR" ~ !"_" ~ !ASCII_ALPHANUMERIC }
+xor_op = @{ ^"XOR" ~ !"_" ~ !ASCII_ALPHANUMERIC }
+and_op = @{ ^"AND" ~ !"_" ~ !ASCII_ALPHANUMERIC }
+not_op = @{ ^"NOT" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 comparison_expr = { term ~ ( comparison_operator ~ term | string_predicate | is_null_check | in_check )? }
 term = { factor ~ ((add_op | sub_op) ~ factor)* }
 factor = { atom ~ ((mul_op | div_op | mod_op) ~ atom)* }
@@ -114,8 +123,8 @@ mul_op = { "*" }
 div_op = { "/" }
 mod_op = { "%" }
 string_predicate = { contains_op | starts_with_op | ends_with_op }
-is_null_check = { ^"IS" ~ ^"NOT"? ~ ^"NULL" }
-in_check = { (^"NOT" ~ ^"IN" | ^"IN") ~ "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+is_null_check = { ^"IS" ~ not_op? ~ ^"NULL" }
+in_check = { (not_op ~ ^"IN" | ^"IN") ~ "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
 contains_op = { ^"CONTAINS" ~ term }
 starts_with_op = { ^"STARTS" ~ ^"WITH" ~ term }
 ends_with_op = { ^"ENDS" ~ ^"WITH" ~ term }
@@ -148,8 +157,8 @@ literal = { string_literal | number_literal | boolean_literal | null_literal }
 list_literal = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
 string_literal = @{ ("'" ~ (!"'" ~ ANY)* ~ "'") | ("\"" ~ (!"\"" ~ ANY)* ~ "\"") }
 number_literal = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
-boolean_literal = @{ (^"TRUE" | ^"FALSE") }
-null_literal = @{ ^"NULL" }
+boolean_literal = @{ (^"TRUE" | ^"FALSE") ~ !"_" ~ !ASCII_ALPHANUMERIC }
+null_literal = @{ ^"NULL" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 
 AS_OP = _{ ^"AS" }
 projection_item = { expression ~ (AS_OP ~ variable)? }

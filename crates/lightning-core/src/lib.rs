@@ -1479,11 +1479,11 @@ impl Connection {
         // Try physical plan cache first (fastest path: saves logical plan,
         // optimizer, and physical planner). Cached plans are always read-only
         // so the transaction can be created as read-only.
-        let cached_pp = {
+        let cache_hit = {
             let mut cache = db.physical_plan_caches[pp_shard].lock();
             cache.get(&query_hash).cloned()
         };
-        if let Some(cached_plan) = cached_pp {
+        if let Some(cached_plan) = cache_hit {
             let plan = cached_plan.clone_box();
             let tx = match (snapshot_ts, explicit_tx) {
                 (_, Some(tx)) => tx,
@@ -1494,6 +1494,7 @@ impl Connection {
                     db.transaction_manager.begin(true)?,
                 ),
             };
+            println!("DEBUG_PLAN: CACHE HIT for query_hash={}", query_hash);
             return Ok((plan, tx));
         }
 
@@ -2071,6 +2072,12 @@ impl Connection {
                 }
             }
             db.catalog.mark_dirty();
+        }
+
+        // Invalidate physical plan caches so subsequent MATCH queries see
+        // the updated num_rows and scan the newly inserted rows.
+        for cache in &db.physical_plan_caches {
+            cache.lock().clear();
         }
 
         Ok(num_rows)

@@ -195,7 +195,6 @@ fn rel_07_three_hop_chain() -> TestResult {
 }
 
 #[test]
-#[ignore = "pre-existing: hash join chain hang"]
 fn rel_08_four_hop_chain() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();

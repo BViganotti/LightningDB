@@ -214,12 +214,14 @@ impl TrigramIndex {
             let trigrams = Self::extract_trigrams(value);
             let mut map = self.trigrams.write();
             for tri in trigrams {
+                let old_len = map.get(&tri).map_or(0, |l| l.len());
                 let list = map.entry(tri).or_default();
                 if list.last() != Some(&row_id) {
                     if let Err(pos) = list.binary_search(&row_id) {
                         list.insert(pos, row_id);
                     }
                 }
+                self.record_posting_stats(old_len, list.len());
             }
         }
         {
@@ -246,6 +248,24 @@ impl TrigramIndex {
                 }
             }
         }
+        // Track row/trigram counts on the single-insert path too, so adaptive
+        // query planning (total_rows-based ratios) stays accurate when rows are
+        // inserted outside of batches.
+        self.total_rows.fetch_add(1, Ordering::Relaxed);
+        self.total_trigrams
+            .fetch_add(Self::extract_trigrams(value).len() as u64, Ordering::Relaxed);
+    }
+
+    /// Update posting-list statistics by the delta of a single list mutation.
+    /// `insert` and `insert_batch` both route through here so `stats()` stays
+    /// consistent regardless of which write path was used.
+    fn record_posting_stats(&self, old_len: usize, new_len: usize) {
+        if new_len > old_len {
+            self.posting_size_sum
+                .fetch_add((new_len - old_len) as u64, Ordering::Relaxed);
+        }
+        self.max_posting_size
+            .fetch_max(new_len as u64, Ordering::Relaxed);
     }
 
     /// Batch insert multiple (row_id, value) pairs.
@@ -284,27 +304,58 @@ impl TrigramIndex {
             }
         }
 
-        for (_, set) in tri_map {
-            let mut list: Vec<u64> = set.into_iter().collect();
-            list.sort_unstable();
-            let size = list.len() as u64;
-            self.posting_size_sum.fetch_add(size, Ordering::Relaxed);
-            self.max_posting_size.fetch_max(size, Ordering::Relaxed);
+        // CRITICAL: merge the batch-local posting lists back into the shared
+        // index maps under the write locks. The lists were only accumulated in
+        // the local maps above; without this write-back, every row batch-indexed
+        // is silently missing from queries (data loss).
+        {
+            let mut map = self.trigrams.write();
+            for (tri, set) in tri_map {
+                let mut batch: Vec<u64> = set.into_iter().collect();
+                batch.sort_unstable();
+                let old_len = map.get(&tri).map_or(0, |l| l.len());
+                let list = map.entry(tri).or_default();
+                Self::merge_sorted_batch(list, batch);
+                self.record_posting_stats(old_len, list.len());
+            }
         }
-
-        for (_, set) in bi_map {
-            let mut list: Vec<u64> = set.into_iter().collect();
-            list.sort_unstable();
+        {
+            let mut map = self.bigrams.write();
+            for (bi, set) in bi_map {
+                let mut list: Vec<u64> = set.into_iter().collect();
+                list.sort_unstable();
+                let list_ref = map.entry(bi).or_default();
+                Self::merge_sorted_batch(list_ref, list);
+            }
         }
-
-        for (_, set) in uni_map {
-            let mut list: Vec<u64> = set.into_iter().collect();
-            list.sort_unstable();
+        {
+            let mut map = self.unigrams.write();
+            for (u, set) in uni_map {
+                let mut batch: Vec<u64> = set.into_iter().collect();
+                batch.sort_unstable();
+                let list = map.entry(u).or_default();
+                Self::merge_sorted_batch(list, batch);
+            }
         }
 
         self.total_rows.fetch_add(entry_count, Ordering::Relaxed);
         self.total_trigrams
             .fetch_add(trigram_count, Ordering::Relaxed);
+    }
+
+    /// Merge a sorted, deduplicated batch posting list into an existing sorted
+    /// posting list in place, preserving sort order and uniqueness.
+    fn merge_sorted_batch(existing: &mut Vec<u64>, batch: Vec<u64>) {
+        if batch.is_empty() {
+            return;
+        }
+        if existing.is_empty() {
+            *existing = batch;
+            return;
+        }
+        existing.extend_from_slice(&batch);
+        existing.sort_unstable();
+        existing.dedup();
     }
 
     /// Query the index with adaptive threshold check.
@@ -675,5 +726,56 @@ mod tests {
 
         // The trigram index returns candidates based on trigram matching,
         // verification (str::contains) happens at query execution time
+    }
+
+    #[test]
+    fn test_batch_merge_with_existing_inserts() {
+        // Regression: insert_batch previously dropped its sorted posting lists
+        // instead of writing them back, silently losing batch-indexed rows.
+        let idx = TrigramIndex::new("name".to_string());
+        idx.insert(0, "alpha");
+        idx.insert_batch(&[(1, "alphabet"), (2, "beta")]);
+        idx.insert(3, "gamma");
+
+        let candidates = idx.query("alp").expect("internal invariant violated");
+        assert_eq!(candidates, vec![0, 1]);
+
+        // Dedup: re-batching an overlapping row must not duplicate postings.
+        idx.insert_batch(&[(1, "alpine")]);
+        let candidates = idx.query("alp").expect("internal invariant violated");
+        assert_eq!(candidates, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_batch_short_pattern_queries() {
+        // Bigram and unigram posting lists written by insert_batch must be queryable.
+        let idx = TrigramIndex::new("name".to_string());
+        idx.insert_batch(&[
+            (0, "hello"),
+            (1, "world"),
+            (2, "help"),
+        ]);
+
+        let candidates = idx.query("he").expect("internal invariant violated");
+        assert_eq!(candidates, vec![0, 2]);
+
+        let candidates = idx.query("o").expect("internal invariant violated");
+        assert_eq!(candidates, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_stats_consistent_across_paths() {
+        let idx = TrigramIndex::new("name".to_string());
+        idx.insert(0, "compression");
+        idx.insert_batch(&[(1, "expression"), (2, "compression_utils")]);
+
+        let stats = idx.stats();
+        assert_eq!(stats.total_rows, 3);
+        // Delta-based accounting must match the real sum of posting-list lengths,
+        // regardless of which write path (insert vs insert_batch) was used.
+        let actual_total: usize = idx.trigrams.read().values().map(|v| v.len()).sum();
+        let tracked_sum = idx.posting_size_sum.load(Ordering::Relaxed);
+        assert_eq!(tracked_sum, actual_total as u64);
+        assert_eq!(stats.avg_posting_list_size, actual_total as f64 / idx.trigram_count() as f64);
     }
 }

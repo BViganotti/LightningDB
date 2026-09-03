@@ -1417,6 +1417,7 @@ impl Column {
             return Ok(());
         }
 
+
         self.dirty.store(true, Ordering::Release);
 
         // 1. Write null bitmap in bulk

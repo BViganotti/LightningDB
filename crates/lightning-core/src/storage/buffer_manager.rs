@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub const PAGE_SIZE: usize = 4096;
 
 pub const UNCOMMITTED_BIT: u64 = 1 << 63;
-const INITIAL_SLOTS_PER_SHARD: usize = 4096;
+const INITIAL_SLOTS_PER_SHARD: usize = 256;
 
 pub struct Frame {
     pub data: UnsafeCell<[u8; PAGE_SIZE]>,
@@ -137,7 +137,7 @@ impl BufferManager {
             let _lock_cap = NonZeroUsize::new(shard_capacity.max(1024))
                 .expect("shard_capacity.max(1024) >= 1024 > 0");
             shards.push(RwLock::new(BufferPool {
-                page_to_slots: HashMap::with_capacity(shard_capacity),
+                page_to_slots: HashMap::with_capacity(initial_cap),
                 file_handles: HashMap::new(),
                 slots,
                 clock_ptr: 0,
@@ -255,9 +255,8 @@ impl BufferManager {
             }
         }
 
-        // Load from disk — retry loop for eviction (releases lock on NeedRetry)
         let mut slot_idx_opt: Option<usize> = None;
-        const MAX_EVICT_RETRIES: u32 = 5;
+        const MAX_EVICT_RETRIES: u32 = 10;
         for retry in 0..MAX_EVICT_RETRIES {
             match self.evict_with_clock(&mut pool)? {
                 EvictResult::Found(idx) => {
@@ -265,9 +264,14 @@ impl BufferManager {
                     break;
                 }
                 EvictResult::NeedRetry => {
-                    // Drop the lock, sleep briefly, and retry
+                    // Drop the lock, sleep briefly, and retry. Bounded linear
+                    // backoff caps the worst-case stall at ~275ms per call —
+                    // callers that hit genuine exhaustion get a clear error
+                    // instead of a multi-minute hang.
                     drop(pool);
-                    std::thread::sleep(std::time::Duration::from_millis(5u64 * (retry as u64 + 1)));
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        5u64.saturating_mul(retry as u64 + 1).min(50),
+                    ));
                     pool = self.shards[shard_idx].write();
                 }
             }
@@ -369,7 +373,7 @@ impl BufferManager {
             .insert(fh_arc.file_id, Arc::clone(&fh_arc));
 
         let mut slot_idx_opt: Option<usize> = None;
-        const MAX_EVICT_RETRIES: u32 = 50;
+        const MAX_EVICT_RETRIES: u32 = 10;
         for retry in 0..MAX_EVICT_RETRIES {
             match self.evict_with_clock(&mut pool)? {
                 EvictResult::Found(idx) => {
@@ -377,15 +381,23 @@ impl BufferManager {
                     break;
                 }
                 EvictResult::NeedRetry => {
-                    if retry >= 10 && retry % 10 == 0 {
+                    if retry >= 5 {
                         tracing::warn!(
-                            "Buffer pool shard {} still exhausted after {} retries (capacity={}, slots={})",
+                            "Buffer pool shard {} exhausted after {} retries (capacity={}, slots={}) — callers may see 'Buffer pool exhausted' errors under sustained contention",
                             shard_idx, retry, pool.capacity, pool.slots.len(),
                         );
                     }
                     drop(pool);
-                    let sleep_ms = 5u64.saturating_mul(1u64 << retry.min(20));
-                    std::thread::sleep(std::time::Duration::from_millis(sleep_ms.min(10_000)));
+                    // Bounded linear backoff: 5ms growing to 50ms per retry,
+                    // ~275ms total. The previous exponential schedule (capped
+                    // at 10s per sleep, 50 retries) could stall a writer for
+                    // ~6.5 minutes while holding the per-page lock, freezing
+                    // the commit path for that page across all threads. Fail
+                    // fast with a clear error instead — callers (e.g. the
+                    // UNWIND SET path) already checkpoint-and-retry on this
+                    // error class.
+                    let sleep_ms = 5u64.saturating_mul(retry as u64 + 1).min(50);
+                    std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
                     pool = self.shards[shard_idx].write();
                 }
             }
@@ -899,48 +911,56 @@ impl BufferManager {
         }
 
         // Single scan of the clock — no sleeping while holding the lock.
-        let start_ptr = pool.clock_ptr;
-        let mut _all_uncommitted = true;
+        //
+        // Termination: the sweep below is bounded by `pool.capacity` steps per
+        // pass. The previous implementation detected "full scan" via
+        // `clock_ptr == start_ptr`, but the skip branches (`continue`) bypassed
+        // that check — with a 1-slot shard holding an uncommitted dirty frame
+        // the hand never moved ((ptr+1) % 1 == ptr) and the loop spun forever.
         loop {
-            let idx = pool.clock_ptr;
-            pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
+            let mut scanned = 0usize;
+            while scanned < pool.capacity {
+                let idx = pool.clock_ptr;
+                pool.clock_ptr = (pool.clock_ptr + 1) % pool.capacity;
+                scanned += 1;
 
-            let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
-            if pin_count == 0 {
-                if pool.slots[idx].referenced {
-                    pool.slots[idx].referenced = false;
-                    _all_uncommitted = false;
-                    continue;
-                }
-                if pool.slots[idx].dirty {
-                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
-                    if version & UNCOMMITTED_BIT != 0 {
+                let pin_count = pool.slots[idx].frame.pin_count.load(Ordering::Acquire);
+                if pin_count == 0 {
+                    if pool.slots[idx].referenced {
+                        // Second-chance: clear the bit and keep sweeping.
+                        pool.slots[idx].referenced = false;
                         continue;
                     }
-                    _all_uncommitted = false;
-                    if let Some((fid, pid)) = pool.slots[idx].key {
-                        tracing::debug!(
-                            "evict_with_clock: flushing dirty committed frame ({},{}) version={:#x} slot={}",
-                            fid, pid, version, idx
-                        );
-                        if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
+                    if pool.slots[idx].dirty {
+                        let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                        if version & UNCOMMITTED_BIT != 0 {
+                            // Never evict an uncommitted frame — its data is
+                            // not yet durable anywhere. Skipped on this sweep.
+                            continue;
+                        }
+                        if let Some((fid, pid)) = pool.slots[idx].key {
+                            tracing::debug!(
+                                "evict_with_clock: flushing dirty committed frame ({},{}) version={:#x} slot={}",
+                                fid, pid, version, idx
+                            );
+                            if let Some(fh) = pool.file_handles.get(&fid) {
+                                fh.write_page(pid, pool.slots[idx].frame.as_slice())?;
+                            }
                         }
                     }
+                    return Ok(EvictResult::Found(idx));
                 }
-                return Ok(EvictResult::Found(idx));
             }
 
-            if pool.clock_ptr == start_ptr {
-                // Full scan complete — no evictable slot found.
-                if pool.capacity < pool.max_capacity {
-                    self.grow_pool(pool);
-                    // Retry immediately with larger pool
-                    continue;
-                }
-                // Caller should release the lock, sleep briefly, and retry.
-                return Ok(EvictResult::NeedRetry);
+            // Full sweep complete — no evictable slot found.
+            if pool.capacity < pool.max_capacity {
+                self.grow_pool(pool);
+                // Retry immediately with the larger pool (bounded: capacity
+                // strictly grows up to max_capacity, so this terminates).
+                continue;
             }
+            // Caller should release the lock, sleep briefly, and retry.
+            return Ok(EvictResult::NeedRetry);
         }
     }
 
@@ -1445,15 +1465,18 @@ mod tests {
         let protected = bm.pin_page_by_key(fh.file_id, 0, tx_id_marked).unwrap();
         assert_eq!(protected.as_slice()[0], 0xEE);
 
-        // Try to fill the buffer pool to trigger eviction
-        for i in 1..100 {
+        // Try to fill the buffer pool to trigger eviction. Once every slot in a
+        // shard holds an uncommitted frame from these throwaway transactions,
+        // create_new_version fails fast (bounded backoff) — the loop tolerates
+        // that because the point is eviction PRESSURE, not successful writes.
+        for i in 1..24 {
             let tx2 = begin_tx(&tm);
             if let Ok(f) = bm.create_new_version(Arc::clone(&fh), i, &tx2) {
                 bm.unpin_page(&fh, i, f);
             }
         }
 
-        // The protected frame should still be accessible
+        // The protected frame should still be accessible (pinned → unevictable)
         assert_eq!(protected.as_slice()[0], 0xEE);
         assert_eq!(protected.pin_count.load(Ordering::Acquire), 1);
     }
@@ -1560,9 +1583,17 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_without_pin_protection_can_lose_data() {
-        // This test demonstrates the bug: without pin protection,
-        // a frame can be evicted between unpin and commit.
+    fn test_uncommitted_frame_survives_eviction_pressure() {
+        // Regression guard for the commit-without-pin data-loss scenario.
+        //
+        // The frame is unpinned (pin_count=0) between write and commit, so it is
+        // nominally evictable. It is NOT actually evictable, because the frame
+        // is dirty with the UNCOMMITTED_BIT set — `evict_with_clock` skips
+        // uncommitted dirty frames unconditionally. That invariant is what
+        // prevents commit-time data loss even without explicit pin protection.
+        //
+        // If this test ever fails, eviction has started reclaiming uncommitted
+        // frames and commits can silently lose data.
         let (_dir, fh, _wal, tm) = setup();
         let bm = BufferManager::new(16, None, false, 0, 0.0);
 
@@ -1571,30 +1602,27 @@ mod tests {
         let f1 = bm.create_new_version(Arc::clone(&fh), 0, &tx1).unwrap();
         let s = unsafe { f1.as_mut_slice() };
         s[0] = 0x42;
-        bm.unpin_page(&fh, 0, f1); // pin_count=0, evictable
+        bm.unpin_page(&fh, 0, f1); // pin_count=0, nominally evictable
 
-        // Eviction pressure — fill the buffer pool
-        for i in 1..100 {
+        // Eviction pressure — fill the buffer pool with uncommitted frames.
+        // Failures are expected once the pool saturates (fail-fast backoff).
+        for i in 1..24 {
             let tx_tmp = begin_tx(&tm);
             if let Ok(f) = bm.create_new_version(Arc::clone(&fh), i, &tx_tmp) {
                 bm.unpin_page(&fh, i, f);
             }
         }
 
-        // The frame for page 0 may have been evicted by now.
-        // update_timestamps might fail to find it.
+        // The uncommitted version of page 0 must still be resident — eviction
+        // skips uncommitted dirty frames. Commit must therefore find it.
         let commit_ts = tm.get_current_ts() + 1;
         bm.update_timestamps(fh.file_id, 0, tx1_id, commit_ts);
 
-        // If the frame was evicted, pin_page will load from disk.
-        // With a tiny buffer pool, the frame was likely evicted.
-        // This test documents the behavior — data may or may not be lost
-        // depending on eviction timing.
         let tx2 = begin_tx_at(&tm, commit_ts);
         let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
-        // In the broken case, f2[0] would be 0x00 (loaded from empty disk page)
-        // In the working case, f2[0] would be 0x42
-        // We just verify it doesn't panic — the result depends on eviction timing.
-        let _val = f2.as_slice()[0];
+        assert_eq!(
+            f2.as_slice()[0], 0x42,
+            "uncommitted write must survive eviction pressure until commit"
+        );
     }
 }

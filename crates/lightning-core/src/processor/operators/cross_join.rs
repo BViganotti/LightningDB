@@ -99,11 +99,20 @@ impl PhysicalCrossJoin {
         Ok(())
     }
 
-    fn wait_for_build(&self) {
+    fn wait_for_build(&self) -> Result<()> {
         let mut done = self.build_mutex.lock();
+        // Deadman switch: if the build side never signals completion (e.g. a
+        // builder errored and leaked num_active_builders), return an error
+        // instead of hanging the query forever.
         while !*done {
-            self.build_cv.wait(&mut done);
+            let wait_result = self.build_cv.wait_for(&mut done, std::time::Duration::from_secs(30));
+            if wait_result.timed_out() {
+                return Err(crate::LightningError::Internal(
+                    "Cross join build timed out after 30s".into(),
+                ));
+            }
         }
+        Ok(())
     }
 }
 
@@ -122,7 +131,7 @@ impl PhysicalOperator for PhysicalCrossJoin {
             }
         }
 
-        self.wait_for_build();
+        self.wait_for_build()?;
         let shared = self.shared_build.read();
 
         loop {

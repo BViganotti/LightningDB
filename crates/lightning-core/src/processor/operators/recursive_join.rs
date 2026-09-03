@@ -123,7 +123,6 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                 };
 
                 let mut visited_nodes: HashSet<(u64, u32)> = HashSet::new();
-                let mut visited_edges: HashSet<(u64, u64)> = HashSet::new();
                 let mut queue = VecDeque::new();
                 // Queue entries: (node_id, src_id_for_last_rel, depth)
                 queue.push_back((start_id, start_id, 0u32));
@@ -177,15 +176,10 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         if let Some(ref index) = csr {
                             let neighbors = index.get_neighbors(&self.bm, node_id, tx)?;
                             for neighbor_id in neighbors {
-                                let edge_key = (node_id, neighbor_id);
-                                if visited_edges.contains(&edge_key) {
-                                    continue;
-                                }
                                 if visited_nodes.contains(&(neighbor_id, depth + 1)) {
                                     continue;
                                 }
                                 visited_nodes.insert((neighbor_id, depth + 1));
-                                visited_edges.insert(edge_key);
                                 queue.push_back((neighbor_id, node_id, depth + 1));
                             }
                         } else {
@@ -215,15 +209,10 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                 .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
                                 for &(neighbor_id, _row_id) in neighbors {
-                                    let edge_key = (node_id, neighbor_id);
-                                    if visited_edges.contains(&edge_key) {
-                                        continue;
-                                    }
                                     if visited_nodes.contains(&(neighbor_id, depth + 1)) {
                                         continue;
                                     }
                                     visited_nodes.insert((neighbor_id, depth + 1));
-                                    visited_edges.insert(edge_key);
                                     queue.push_back((neighbor_id, node_id, depth + 1));
                                 }
                             }
