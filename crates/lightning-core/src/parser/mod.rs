@@ -55,7 +55,10 @@ fn preprocess_distinct_functions(s: &str) -> String {
                 result.replace_range(pos..pos + search.len(), &replace);
                 pos += replace.len();
             } else {
-                pos += 1;
+                // Advance by a whole UTF-8 character (not a single byte) so
+                // `result[pos..]` never slices into the middle of a multi-byte
+                // character, which would panic.
+                pos += result[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
             }
         }
     }
@@ -68,40 +71,47 @@ fn preprocess_distinct_functions(s: &str) -> String {
 /// 2. Strip block comments (`/* ... */`)
 /// 3. Collapse contiguous whitespace to single space
 fn normalize_query(s: &str) -> String {
+    // Iterate over `char`s, not bytes: the previous byte-based loop cast each
+    // byte to `char`, silently corrupting multi-byte UTF-8 string literals.
     let mut result = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
+    let mut chars = s.chars().peekable();
 
-    while i < len {
-        // Single-line comment: // ... \n
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < len && bytes[i] != b'\n' {
-                i += 1;
+    while let Some(c) = chars.next() {
+        match c {
+            // Single-line comment: // ... \n
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next(); // consume second '/'
+                while let Some(&cc) = chars.peek() {
+                    if cc == '\n' {
+                        break;
+                    }
+                    chars.next();
+                }
             }
-            continue;
-        }
-        // Block comment: /* ... */
-        if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+            // Block comment: /* ... */
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next(); // consume '*'
+                let mut prev = '\0';
+                for cc in chars.by_ref() {
+                    if prev == '*' && cc == '/' {
+                        break;
+                    }
+                    prev = cc;
+                }
             }
-            i += 2;
-            continue;
-        }
-        // Collapse contiguous whitespace to single space
-        if bytes[i].is_ascii_whitespace() {
-            result.push(' ');
-            i += 1;
-            while i < len && bytes[i].is_ascii_whitespace() {
-                i += 1;
+            // Collapse contiguous whitespace to a single space.
+            c if c.is_whitespace() => {
+                result.push(' ');
+                while let Some(&cc) = chars.peek() {
+                    if cc.is_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
             }
-            continue;
+            _ => result.push(c),
         }
-        result.push(bytes[i] as char);
-        i += 1;
     }
 
     result.trim().to_string()
