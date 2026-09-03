@@ -351,12 +351,13 @@ impl Column {
                     }
 
                     if !self.name.starts_with('_') {
-                        if let Err(e) = self
-                            .version_info
+                        // Propagate write-write conflicts to the caller so the DML
+                        // statement fails and the transaction is retried/rolled back.
+                        // Swallowing this error allowed concurrent writers to
+                        // overwrite each other's committed changes (lost updates).
+                        self.version_info
                             .mark_row(current_row, tx.tx_id, tx.read_ts)
-                        {
-                            tracing::error!("Failed to mark row {} in version_info: {}", current_row, e);
-                        }
+                            .map_err(crate::LightningError::Database)?;
                         modified_rows_batch.push((self.version_info.clone(), current_row));
                     }
 
@@ -1323,9 +1324,13 @@ impl Column {
         }
 
         if !self.name.starts_with('_') {
-            if let Err(e) = self.version_info.mark_row(row_id, tx.tx_id, tx.read_ts) {
-                tracing::error!("Failed to mark row {} in version_info: {}", row_id, e);
-            }
+            // Propagate write-write conflicts to the caller so the DML
+            // statement fails and the transaction is retried/rolled back.
+            // Swallowing this error allowed concurrent writers to overwrite
+            // each other's committed changes (lost updates).
+            self.version_info
+                .mark_row(row_id, tx.tx_id, tx.read_ts)
+                .map_err(crate::LightningError::Database)?;
             tx.modified_rows
                 .lock()
                 .push((self.version_info.clone(), row_id));
@@ -2442,19 +2447,19 @@ mod tests {
     }
 
     #[test]
-    fn test_long_string_without_overflow_falls_back_to_inline() {
+    fn test_long_string_without_overflow_errors() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::String, false);
         let tx = begin_tx(&tm);
-        // No overflow file handle — long string will be truncated to 63 bytes
+        // No overflow file handle — appending a string longer than the 63-byte
+        // inline limit must fail rather than silently truncate (data corruption).
         let s = "b".repeat(200);
-        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
-        let result = col.get_value(&bm, 0, &tx).unwrap();
-        if let Value::String(roundtrip) = &result {
-            assert!(roundtrip.len() < 200, "without overflow, string should be truncated");
-            assert!(roundtrip.len() <= 63, "truncated to at most 63 chars");
-        } else {
-            panic!("expected Value::String, got {result:?}");
-        }
+        let result = col.append_value(&bm, &Value::String(s), 0, &tx);
+        assert!(result.is_err(), "oversized string without overflow must error");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("exceeds inline limit"),
+            "unexpected error message: {msg}"
+        );
     }
 
     #[test]

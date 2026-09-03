@@ -1610,6 +1610,16 @@ impl Connection {
         query_str: &str,
         params: Option<HashMap<String, Value>>,
     ) -> Result<crossbeam::channel::Receiver<Result<crate::processor::DataChunk>>> {
+        // Route transaction control statements to the Connection-level
+        // transaction state (see execute_transaction_statement).
+        if Self::looks_like_transaction_statement(query_str) {
+            let result = self.execute_transaction_statement(query_str)?;
+            let (result_tx, result_rx) = crossbeam::channel::bounded(result.batches.len() + 1);
+            for batch in result.batches {
+                let _ = result_tx.send(Ok(crate::processor::DataChunk::new(batch)));
+            }
+            return Ok(result_rx);
+        }
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, None)?;
         let mut processor = Processor::new(physical_plan);
         processor.execute_stream(
@@ -1617,6 +1627,69 @@ impl Connection {
             tx,
             params,
         )
+    }
+
+    /// Cheap pre-filter for transaction control statements: returns true when
+    /// the query's first token could be BEGIN, COMMIT, or ROLLBACK. The full
+    /// parse in `execute_transaction_statement` confirms it (handles casing
+    /// and the optional TRANSACTION keyword via the grammar).
+    fn looks_like_transaction_statement(query_str: &str) -> bool {
+        let trimmed = query_str.trim();
+        let trimmed = trimmed.strip_suffix(';').map(str::trim).unwrap_or(trimmed);
+        match trimmed.split_whitespace().next() {
+            Some(first) => {
+                let upper = first.to_ascii_uppercase();
+                matches!(upper.as_str(), "BEGIN" | "COMMIT" | "ROLLBACK")
+            }
+            None => false,
+        }
+    }
+
+    /// Execute a BEGIN/COMMIT/ROLLBACK statement at the Connection level so
+    /// the explicit transaction is pinned for subsequent queries on this
+    /// connection.
+    ///
+    /// Without this routing, a string BEGIN ran inside a throwaway autocommit
+    /// transaction: the Connection never pinned a transaction, so subsequent
+    /// queries on this connection each got a fresh MVCC snapshot (breaking
+    /// snapshot isolation for BEGIN), and a string COMMIT committed nothing
+    /// (and double-committed the throwaway transaction).
+    fn execute_transaction_statement(&self, query_str: &str) -> Result<QueryResult> {
+        let parsed = parse(query_str)
+            .map_err(|e| LightningError::Query(e.to_string()))?;
+        let action = match parsed.union_queries.first().map(|uq| &uq.statement) {
+            Some(Statement::Transaction(action)) => action.clone(),
+            _ => {
+                return Err(LightningError::Query(
+                    "Expected a transaction statement (BEGIN, COMMIT, or ROLLBACK)".into(),
+                ));
+            }
+        };
+        let message = match action {
+            crate::parser::ast::TransactionAction::Begin => {
+                self.begin()?;
+                "Transaction started"
+            }
+            crate::parser::ast::TransactionAction::Commit => {
+                self.commit()?;
+                "Transaction committed"
+            }
+            crate::parser::ast::TransactionAction::Rollback => {
+                self.rollback()?;
+                "Transaction rolled back"
+            }
+        };
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
+            "result",
+            arrow::datatypes::DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(arrow::array::StringArray::from(vec![message]))],
+        )
+        .map_err(|e| LightningError::Internal(e.to_string()))?;
+        Ok(QueryResult::new_arrow(vec![], vec![], vec![batch]))
     }
 
     /// Execute a query as of a specific point in time (time-travel).
@@ -1688,6 +1761,14 @@ impl Connection {
             .fetch_add(1, Ordering::SeqCst);
         self.client_context.database.metrics.record_query();
 
+        // Route explicit transaction statements (BEGIN/COMMIT/ROLLBACK) to
+        // the Connection-level transaction state. Without this, a string
+        // BEGIN ran inside a throwaway autocommit transaction and never
+        // pinned a snapshot for subsequent queries on this connection.
+        if Self::looks_like_transaction_statement(query_str) {
+            return self.execute_transaction_statement(query_str);
+        }
+
         let active_tx_guard = self.transaction.lock();
         let explicit_tx = active_tx_guard.as_ref().map(Arc::clone);
         let is_autocommit = explicit_tx.is_none();
@@ -1709,7 +1790,7 @@ impl Connection {
         let mut processor = Processor::new(physical_plan);
 
         let timeout_ms = self.client_context.query_timeout_ms;
-        let chunks = if timeout_ms > 0 {
+        let exec_result = if timeout_ms > 0 {
             let db = Arc::clone(&self.client_context.database);
             let tx_clone = Arc::clone(&tx);
             let (result_tx, result_rx) = std::sync::mpsc::channel();
@@ -1720,7 +1801,7 @@ impl Connection {
                 })
                 .map_err(|e| LightningError::Internal(format!("failed to spawn query thread: {e}")))?;
             match result_rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-                Ok(result) => result?,
+                Ok(result) => result,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     return Err(LightningError::Internal(format!(
                         "Query timed out after {}ms", timeout_ms
@@ -1735,7 +1816,22 @@ impl Connection {
                 Arc::clone(&self.client_context.database),
                 Arc::clone(&tx),
                 params,
-            )?
+            )
+        };
+        let chunks = match exec_result {
+            Ok(chunks) => chunks,
+            Err(exec_err) => {
+                // Roll back the autocommit transaction so partially-applied
+                // writes and row-version marks don't leak into future
+                // transactions (e.g. after a write-write conflict).
+                if is_autocommit {
+                    let db = &*self.client_context.database;
+                    if let Err(rb_err) = db.transaction_manager.rollback(db, &tx) {
+                        tracing::warn!("Rollback after execution failure failed: {}", rb_err);
+                    }
+                }
+                return Err(exec_err);
+            }
         };
 
         if is_autocommit {

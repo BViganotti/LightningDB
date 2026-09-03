@@ -149,7 +149,8 @@ count_subquery = { ^"COUNT" ~ "{" ~ (match_clause ~ where_clause?)+ ~ "}" }
 case_expression = { ^"CASE" ~ expression? ~ when_then_clause+ ~ else_clause? ~ ^"END" }
 when_then_clause = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
 else_clause = { ^"ELSE" ~ expression }
-function_call = { variable ~ "(" ~ (star | (expression ~ ("," ~ expression)*)) ~ ")" }
+// Argument group is optional so zero-arg functions (date(), timestamp()) parse.
+function_call = { variable ~ "(" ~ (star | (expression ~ ("," ~ expression)*))? ~ ")" }
 property_lookup = { variable ~ "." ~ property_key }
 parenthesized_expression = { "(" ~ expression ~ ")" }
 

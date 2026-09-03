@@ -194,9 +194,16 @@ fn test_dml_where_and() -> TestResult {
     let conn = db.connect();
     setup_person_table(&conn)?;
     let res = conn.execute("MATCH (p:Person) WHERE p.age > 25 AND p.city = 'NYC' RETURN p.name", None)?;
-    let name = res.batches[0].column(0).as_any().downcast_ref::<StringArray>().unwrap();
-    assert_eq!(name.value(0), "Alice");
-    assert_eq!(count_rows(&res), 2);
+    // Row order is unspecified without ORDER BY — assert the result set.
+    let mut names: Vec<&str> = Vec::new();
+    for batch in &res.batches {
+        let name = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+        for i in 0..batch.num_rows() {
+            names.push(name.value(i));
+        }
+    }
+    names.sort();
+    assert_eq!(names, vec!["Alice", "Charlie"]);
     Ok(())
 }
 

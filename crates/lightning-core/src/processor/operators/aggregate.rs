@@ -27,6 +27,44 @@ pub struct SharedAggregateState {
     pub final_result: RwLock<Option<RecordBatch>>,
 }
 
+/// RAII guard for an in-flight aggregate builder.
+///
+/// Decrementing `num_active_builders` on drop guarantees the counter cannot
+/// leak when a builder exits early via `?` (child error, arrow kernel error,
+/// finalize error). A leaked counter would leave `is_done` unset forever,
+/// so when the last builder exits without completing, the guard marks the
+/// build done (with no result) and downstream get_next calls return cleanly.
+struct BuilderGuard {
+    shared: Arc<SharedAggregateState>,
+    /// Set when the normal completion path takes over responsibility for
+    /// the counter and completion signaling; Drop then becomes a no-op.
+    released: bool,
+}
+
+impl BuilderGuard {
+    fn release(mut self) {
+        self.released = true;
+    }
+}
+
+impl Drop for BuilderGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        if self
+            .shared
+            .num_active_builders
+            .fetch_sub(1, Ordering::SeqCst)
+            == 1
+            && !self.shared.is_done.load(Ordering::SeqCst)
+        {
+            // Last builder exited via an error path before finalizing.
+            self.shared.is_done.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 pub struct Aggregate {
     child: Box<dyn PhysicalOperator>,
     group_by_indices: Vec<usize>,
@@ -104,6 +142,13 @@ impl Aggregate {
         self.shared_state
             .num_active_builders
             .fetch_add(1, Ordering::SeqCst);
+        // If this builder exits early (child/kernel error mid-build), the
+        // guard keeps num_active_builders consistent and completes the build
+        // so downstream operators are not left waiting on a never-done state.
+        let guard = BuilderGuard {
+            shared: Arc::clone(&self.shared_state),
+            released: false,
+        };
 
         // FIX: Specialized fast path for global aggregation (no GROUP BY)
         if self.group_by_indices.is_empty() {
@@ -274,6 +319,10 @@ impl Aggregate {
                 }
             }
         }
+
+        // Success path: the finalize block below owns the counter decrement
+        // and completion signaling from here on.
+        guard.release();
 
         if self
             .shared_state

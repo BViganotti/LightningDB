@@ -32,9 +32,10 @@ fn test_expr_add_literals() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
     setup_person_table(&conn)?;
+    // INT64 arithmetic stays INT64 (type-preserving; overflow promotes to Float64).
     let res = conn.execute("MATCH (p:Person) WHERE p.id = 1 RETURN p.age + 10", None)?;
-    let val = res.batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap();
-    assert!((val.value(0) - 40.0).abs() < 1e-10);
+    let val = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+    assert_eq!(val.value(0), 40);
     Ok(())
 }
 
@@ -44,8 +45,8 @@ fn test_expr_sub_literals() -> TestResult {
     let conn = db.connect();
     setup_person_table(&conn)?;
     let res = conn.execute("MATCH (p:Person) WHERE p.id = 1 RETURN 100 - p.age", None)?;
-    let val = res.batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap();
-    assert!((val.value(0) - 70.0).abs() < 1e-10);
+    let val = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+    assert_eq!(val.value(0), 70);
     Ok(())
 }
 
@@ -77,8 +78,8 @@ fn test_expr_complex_arithmetic() -> TestResult {
     let conn = db.connect();
     setup_person_table(&conn)?;
     let res = conn.execute("MATCH (p:Person) WHERE p.id = 1 RETURN (p.age + p.age) * 2", None)?;
-    let val = res.batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap();
-    assert!((val.value(0) - 120.0).abs() < 1e-10);
+    let val = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+    assert_eq!(val.value(0), 120);
     Ok(())
 }
 

@@ -71,22 +71,18 @@ fn test_bitpacking_offset() {
 
 #[test]
 fn test_bitpacking_width_0() {
+    // bit_width=0 is a documented no-op fast path: the caller derives the bit
+    // width from the data, so width 0 means the block is constant zero. Both
+    // pack and unpack leave their buffers untouched.
     let mut values = [0u64; 32];
     let bit_width = 0;
     let mut output = [0xFFu8; 1];
     BitPacker::pack_32(&values, bit_width, &mut output);
+    assert_eq!(output, [0xFFu8; 1], "width-0 pack must not write to output");
 
-    let mut unpacked = [0u64; 32];
+    let mut unpacked = [7u64; 32];
     BitPacker::unpack_32(&output, bit_width, &mut unpacked);
-
-    assert_eq!(unpacked, [0u64; 32]);
-    // Non-zero values should panic (all values must be 0 for bit_width=0)
-    let mut bad_values = [0u64; 32];
-    bad_values[0] = 1;
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        BitPacker::pack_32(&bad_values, 0, &mut [0u8; 1]);
-    }));
-    assert!(result.is_err(), "bit_width=0 with non-zero values should panic");
+    assert_eq!(unpacked, [7u64; 32], "width-0 unpack must be a no-op on the buffer");
 }
 
 #[test]

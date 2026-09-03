@@ -10,8 +10,51 @@ use std::sync::Arc;
 pub struct SharedCrossJoinBuild {
     pub right_chunks: Vec<DataChunk>,
     pub build_done: AtomicBool,
+    /// Set when every builder exited without completing the build (e.g. the
+    /// right child errored mid-build). Waiters fail fast on this instead of
+    /// blocking until the deadman switch.
+    pub build_failed: AtomicBool,
     pub right_schema: Option<Arc<Schema>>,
     pub num_active_builders: usize,
+}
+
+/// RAII guard for an in-flight cross-join builder.
+///
+/// Decrementing `num_active_builders` on drop guarantees the counter cannot
+/// leak when a builder exits early via `?` (e.g. `right.get_next()` errors
+/// mid-build). When the last builder leaves without completing the build,
+/// the guard marks the build as failed and wakes all waiters so they fail
+/// fast instead of blocking until the 30s deadman switch.
+struct BuilderGuard {
+    shared: Arc<RwLock<SharedCrossJoinBuild>>,
+    build_mutex: Arc<Mutex<bool>>,
+    build_cv: Arc<Condvar>,
+    /// Set when the normal completion path takes over responsibility for
+    /// the counter and completion signaling; Drop then becomes a no-op.
+    released: bool,
+}
+
+impl BuilderGuard {
+    fn release(mut self) {
+        self.released = true;
+    }
+}
+
+impl Drop for BuilderGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let mut shared = self.shared.write();
+        shared.num_active_builders = shared.num_active_builders.saturating_sub(1);
+        if !shared.build_done.load(Ordering::Acquire) && shared.num_active_builders == 0 {
+            shared.build_failed.store(true, Ordering::Release);
+            shared.build_done.store(true, Ordering::Release);
+            let mut done = self.build_mutex.lock();
+            *done = true;
+            self.build_cv.notify_all();
+        }
+    }
 }
 
 pub struct PhysicalCrossJoin {
@@ -38,6 +81,7 @@ impl PhysicalCrossJoin {
             shared_build: Arc::new(RwLock::new(SharedCrossJoinBuild {
                 right_chunks: Vec::new(),
                 build_done: AtomicBool::new(false),
+                build_failed: AtomicBool::new(false),
                 right_schema: None,
                 num_active_builders: 0,
             })),
@@ -63,6 +107,14 @@ impl PhysicalCrossJoin {
             }
             shared.num_active_builders += 1;
         }
+        // If this builder exits early (right child error mid-build), the guard
+        // keeps num_active_builders consistent and wakes blocked waiters.
+        let guard = BuilderGuard {
+            shared: Arc::clone(&self.shared_build),
+            build_mutex: Arc::clone(&self.build_mutex),
+            build_cv: Arc::clone(&self.build_cv),
+            released: false,
+        };
 
         while let Some(chunk) = self.right.get_next(database, tx, params)? {
             let mut shared = self.shared_build.write();
@@ -74,6 +126,10 @@ impl PhysicalCrossJoin {
             }
             shared.right_chunks.push(chunk);
         }
+
+        // Success path: the finalize block below owns the counter decrement
+        // and completion signaling from here on.
+        guard.release();
 
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
@@ -111,6 +167,11 @@ impl PhysicalCrossJoin {
                     "Cross join build timed out after 30s".into(),
                 ));
             }
+        }
+        if self.shared_build.read().build_failed.load(Ordering::Acquire) {
+            return Err(crate::LightningError::Internal(
+                "Cross join build side failed; right child errored mid-build".into(),
+            ));
         }
         Ok(())
     }

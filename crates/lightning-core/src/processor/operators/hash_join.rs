@@ -15,9 +15,54 @@ pub struct SharedBuildSide {
     pub chunk_offsets: Vec<usize>,
     pub build_row_count: usize,
     pub build_done: bool,
+    /// Set when every builder exited without completing the build (e.g. the
+    /// right child errored mid-build). Waiters fail fast on this instead of
+    /// blocking until the deadman switch.
+    pub build_failed: bool,
     pub right_schema: Option<Arc<Schema>>,
     pub num_active_builders: usize,
     pub key_type: Option<DataType>,
+}
+
+/// RAII guard for an in-flight hash-join builder.
+///
+/// Decrementing `num_active_builders` on drop guarantees the counter cannot
+/// leak when a builder exits early via `?` (e.g. `right.get_next()` errors
+/// mid-build). When the last builder leaves without completing the build,
+/// the guard marks the build as failed and wakes all waiters so they fail
+/// fast instead of blocking until the 30s deadman switch.
+struct BuilderGuard {
+    shared: Arc<RwLock<SharedBuildSide>>,
+    build_mutex: Arc<Mutex<bool>>,
+    build_cv: Arc<Condvar>,
+    /// Set when the normal completion path takes over responsibility for
+    /// the counter and completion signaling; Drop then becomes a no-op.
+    released: bool,
+}
+
+impl BuilderGuard {
+    fn release(mut self) {
+        self.released = true;
+    }
+}
+
+impl Drop for BuilderGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let mut shared = self.shared.write();
+        shared.num_active_builders = shared.num_active_builders.saturating_sub(1);
+        if !shared.build_done && shared.num_active_builders == 0 {
+            shared.build_failed = true;
+            // Mark the build complete (with build_failed set) so probe-side
+            // callers skip pointless rebuild attempts and fail fast.
+            shared.build_done = true;
+            let mut done = self.build_mutex.lock();
+            *done = true;
+            self.build_cv.notify_all();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,6 +113,7 @@ impl HashJoin {
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
+                build_failed: false,
                 right_schema: None,
                 num_active_builders: 0,
                 key_type: None,
@@ -98,6 +144,7 @@ impl HashJoin {
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
+                build_failed: false,
                 right_schema: None,
                 num_active_builders: 0,
                 key_type: None,
@@ -131,6 +178,7 @@ impl HashJoin {
                 chunk_offsets: Vec::new(),
                 build_row_count: 0,
                 build_done: false,
+                build_failed: false,
                 right_schema: None,
                 num_active_builders: 0,
                 key_type: None,
@@ -155,6 +203,14 @@ impl HashJoin {
             }
             shared.num_active_builders += 1;
         }
+        // If this builder exits early (right child error mid-build), the guard
+        // keeps num_active_builders consistent and wakes blocked waiters.
+        let guard = BuilderGuard {
+            shared: Arc::clone(&self.shared_build),
+            build_mutex: Arc::clone(&self.build_mutex),
+            build_cv: Arc::clone(&self.build_cv),
+            released: false,
+        };
 
         let mut total_build_rows = 0;
         let mut build_chunk_count = 0;
@@ -234,6 +290,10 @@ impl HashJoin {
             build_chunk_count, total_build_rows, self.right_key_idx
         );
 
+        // Success path: the finalize block below owns the counter decrement
+        // and completion signaling from here on.
+        guard.release();
+
         let mut shared = self.shared_build.write();
         shared.num_active_builders -= 1;
         if shared.num_active_builders == 0 {
@@ -266,6 +326,11 @@ impl HashJoin {
                     "Hash join build timed out after 30s".into(),
                 ));
             }
+        }
+        if self.shared_build.read().build_failed {
+            return Err(crate::LightningError::Internal(
+                "Hash join build side failed; right child errored mid-build".into(),
+            ));
         }
         Ok(())
     }

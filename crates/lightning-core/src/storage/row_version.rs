@@ -2,9 +2,23 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Per-row commit history. Both timestamps are needed to answer the two
+/// MVCC questions independently:
+/// - Visibility: the row existed as of snapshot `read_ts` iff `first_ts <= read_ts`.
+/// - Conflict detection: another transaction changed the row after our
+///   snapshot iff `last_ts > read_ts`.
+/// Storing only the latest commit timestamp conflated the two: a reader whose
+/// snapshot predated an update saw the row as "not yet created" and silently
+/// skipped it (lost updates / disappearing rows).
+#[derive(Debug, Clone, Copy)]
+struct CommittedVersion {
+    first_ts: u64,
+    last_ts: u64,
+}
+
 pub struct RowVersionShard {
-    versions: RwLock<HashMap<u64, u64>>,  // row_id -> tx_id
-    committed: RwLock<HashMap<u64, u64>>, // row_id -> commit_ts
+    versions: RwLock<HashMap<u64, u64>>,           // row_id -> tx_id
+    committed: RwLock<HashMap<u64, CommittedVersion>>, // row_id -> commit history
 }
 
 pub struct RowVersion {
@@ -53,10 +67,11 @@ impl RowVersion {
             }
         }
         let committed = self.shards[shard_idx].committed.read();
-        if let Some(&commit_ts) = committed.get(&row_id) {
-            if commit_ts > _read_ts {
+        if let Some(&entry) = committed.get(&row_id) {
+            if entry.last_ts > _read_ts {
                 return Err(format!(
-                    "Write-Write Conflict: Row {row_id} modified by committed tx at {commit_ts}"
+                    "Write-Write Conflict: Row {row_id} modified by committed tx at {}",
+                    entry.last_ts
                 ));
             }
         }
@@ -88,10 +103,12 @@ impl RowVersion {
         let shard_idx = self.get_shard_idx(row_id);
         let mut versions = self.shards[shard_idx].versions.write();
         versions.remove(&row_id);
-        self.shards[shard_idx]
-            .committed
-            .write()
-            .insert(row_id, commit_ts);
+        let mut committed = self.shards[shard_idx].committed.write();
+        let entry = committed
+            .entry(row_id)
+            .or_insert(CommittedVersion { first_ts: commit_ts, last_ts: commit_ts });
+        entry.first_ts = entry.first_ts.min(commit_ts);
+        entry.last_ts = entry.last_ts.max(commit_ts);
     }
 
     pub fn commit_row_batch(&self, row_ids: std::ops::Range<u64>, commit_ts: u64) {
@@ -108,7 +125,11 @@ impl RowVersion {
             let mut committed = self.shards[shard_idx].committed.write();
             for row_id in ids {
                 versions.remove(row_id);
-                committed.insert(*row_id, commit_ts);
+                let entry = committed
+                    .entry(*row_id)
+                    .or_insert(CommittedVersion { first_ts: commit_ts, last_ts: commit_ts });
+                entry.first_ts = entry.first_ts.min(commit_ts);
+                entry.last_ts = entry.last_ts.max(commit_ts);
             }
         }
     }
@@ -125,14 +146,16 @@ impl RowVersion {
             if mod_tx == tx_id {
                 return true;
             }
-            // Row is being modified by another uncommitted tx — not visible to us
+            // Row is being modified by another uncommitted tx — we see the
+            // last committed version, but only if the row existed as of our
+            // snapshot (first_ts <= read_ts).
             drop(versions);
             let committed = self.shards[shard_idx].committed.read();
-            return committed.get(&row_id).is_some_and(|&commit_ts| commit_ts <= read_ts);
+            return committed.get(&row_id).is_some_and(|e| e.first_ts <= read_ts);
         }
         let committed = self.shards[shard_idx].committed.read();
-        if let Some(&commit_ts) = committed.get(&row_id) {
-            return commit_ts <= read_ts;
+        if let Some(entry) = committed.get(&row_id) {
+            return entry.first_ts <= read_ts;
         }
         true
     }
@@ -168,10 +191,19 @@ impl RowVersion {
                 let mut visible = true;
                 if let Some(&mod_tx) = versions.get(row_id) {
                     if mod_tx != tx_id {
-                        visible = false;
+                        // Row is uncommitted by another transaction. Fall back to
+                        // the committed history (mirroring is_visible): the row is
+                        // visible iff it existed as of our snapshot (first_ts <=
+                        // read_ts). Hiding the row entirely made concurrent writers
+                        // match 0 rows and silently skip their update (lost
+                        // update). Rows with no committed version (new inserts)
+                        // remain invisible.
+                        visible = committed
+                            .get(row_id)
+                            .is_some_and(|e| e.first_ts <= read_ts);
                     }
-                } else if let Some(&commit_ts) = committed.get(row_id) {
-                    visible = commit_ts <= read_ts;
+                } else if let Some(entry) = committed.get(row_id) {
+                    visible = entry.first_ts <= read_ts;
                 }
                 mask[*idx] = visible;
             }
@@ -205,16 +237,25 @@ impl RowVersion {
         false
     }
 
-    /// Remove committed entries with `commit_ts < min_active_ts`.
-    /// These entries are no longer needed because no active transaction
-    /// can reference a state older than `min_active_ts`.
+    /// Reclaim committed history that no active transaction can reference.
+    /// Entries whose latest commit predates `min_active_ts` are removed
+    /// entirely; entries that still have a recent commit keep only the
+    /// recent portion of their history (first_ts is clamped upward).
     /// Returns the number of removed entries for metrics.
     pub fn vacuum(&self, min_active_ts: u64) -> usize {
         let mut total_removed = 0;
         for shard in &self.shards {
             let mut committed = shard.committed.write();
             let before = committed.len();
-            committed.retain(|_, &mut commit_ts| commit_ts >= min_active_ts);
+            committed.retain(|_, entry| {
+                if entry.last_ts < min_active_ts {
+                    return false;
+                }
+                if entry.first_ts < min_active_ts {
+                    entry.first_ts = min_active_ts;
+                }
+                true
+            });
             total_removed += before - committed.len();
         }
         total_removed

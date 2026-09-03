@@ -7,6 +7,7 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 use arrow::datatypes::{Schema, Field, DataType};
 use lightning_core::processor::arrow_utils::values_to_array;
+use tempfile::tempdir;
 
 #[test]
 fn test_expression_evaluator() {
@@ -18,7 +19,11 @@ fn test_expression_evaluator() {
         Field::new("col1", DataType::Utf8, false),
     ]));
     let batch = RecordBatch::try_new(schema, vec![col0, col1]).unwrap();
-    let db_arc = lightning_core::Database::new(":memory:", lightning_core::SystemConfig::default()).unwrap();
+    // Database::new treats its argument as a filesystem path — use an isolated
+    // tempdir (":memory:" previously created CWD-relative junk state that
+    // broke re-runs after the on-disk format changed).
+    let dir = tempdir().unwrap();
+    let db_arc = lightning_core::Database::new(dir.path(), lightning_core::SystemConfig::default()).unwrap();
     let database = &*db_arc;
     let registry = database.function_registry();
 

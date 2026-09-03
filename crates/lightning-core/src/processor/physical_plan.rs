@@ -187,6 +187,7 @@ impl PhysicalPlanner {
                 // Remap PropertyLookup indices in filter expressions to match
                 // the physical plan layout (same rationale as Projection).
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
+                Self::collect_logical_projected_indices(&child, &mut self.variable_projected_indices);
                 Self::remap_property_lookup(
                     &mut expr,
                     &child_positions,
@@ -208,6 +209,7 @@ impl PhysicalPlanner {
                 // before consuming it. These are needed to remap PropertyLookup
                 // indices from binder-relative to physical-plan-relative offsets.
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
+                Self::collect_logical_projected_indices(&child, &mut self.variable_projected_indices);
                 let planned_child = self.plan(*child)?;
 
                 let mut remapped = items;
@@ -247,6 +249,8 @@ impl PhysicalPlanner {
                     self.collect_variable_positions(&left, 0, &mut left_positions)?;
                     let mut right_positions = std::collections::HashMap::new();
                     self.collect_variable_positions(&right, 0, &mut right_positions)?;
+                    Self::collect_logical_projected_indices(&left, &mut self.variable_projected_indices);
+                    Self::collect_logical_projected_indices(&right, &mut self.variable_projected_indices);
 
                     // Collect all equality comparisons
                     let mut comparisons = Vec::new();
@@ -1262,6 +1266,81 @@ impl PhysicalPlanner {
             _ => Err(LightningError::Internal(format!(
                 "{side} join key must be a PropertyLookup",
             ))),
+        }
+    }
+
+    /// Pre-populate `variable_projected_indices` from the logical plan tree.
+    ///
+    /// The physical planner remaps PropertyLookup indices top-down (Filter,
+    /// Projection, Join) *before* planning its children, but Scan/IndexScan
+    /// operators only register their projected storage-column subsets when
+    /// they are planned (bottom-up). Without this look-ahead, top-down
+    /// remapping cannot see projection-pushdown subsets and computes wrong
+    /// column indices (the original cause of join crashes / 0-row joins when
+    /// projection pushdown is active).
+    ///
+    /// Entries are refreshed again when the scans are actually planned, so
+    /// this walk only needs to be consistent about variable names; variable
+    /// names are unique within a well-formed plan, so last-write-wins is safe.
+    fn collect_logical_projected_indices(
+        op: &LogicalOperator,
+        out: &mut std::collections::HashMap<String, Option<Vec<usize>>>,
+    ) {
+        match op {
+            LogicalOperator::Scan(_, var, _, projected_idxs, _) => {
+                out.insert(var.clone(), projected_idxs.clone());
+            }
+            LogicalOperator::IndexScan(_, var, _, _, projected_idxs) => {
+                out.insert(var.clone(), projected_idxs.clone());
+            }
+            LogicalOperator::Filter(child, _)
+            | LogicalOperator::Projection(child, _)
+            | LogicalOperator::SemiMasker(child, _, _)
+            | LogicalOperator::Unwind(child, _, _)
+            | LogicalOperator::Subquery(child)
+            | LogicalOperator::Flatten(child)
+            | LogicalOperator::UnwindDedup(child, _)
+            | LogicalOperator::Profile(child)
+            | LogicalOperator::Explain(child)
+            | LogicalOperator::Accumulate(child)
+            | LogicalOperator::Distinct(child, _)
+            | LogicalOperator::Sort(child, _)
+            | LogicalOperator::Limit(child, _)
+            | LogicalOperator::TopK(child, _, _)
+            | LogicalOperator::Skip(child, _)
+            | LogicalOperator::Delete(child, ..)
+            | LogicalOperator::Set(child, _)
+            | LogicalOperator::Merge { child, .. }
+            | LogicalOperator::With(child, ..)
+            | LogicalOperator::Aggregate { child, .. }
+            | LogicalOperator::RecursiveJoin { child, .. }
+            | LogicalOperator::AllShortestPaths { child, .. } => {
+                Self::collect_logical_projected_indices(child, out);
+            }
+            LogicalOperator::Join(left, right, _)
+            | LogicalOperator::Union(left, right, _)
+            | LogicalOperator::OptionalMatch(left, right)
+            | LogicalOperator::SemiJoin(left, right, _, _) => {
+                Self::collect_logical_projected_indices(left, out);
+                Self::collect_logical_projected_indices(right, out);
+            }
+            LogicalOperator::Intersect {
+                probe_child,
+                build_children,
+                ..
+            } => {
+                Self::collect_logical_projected_indices(probe_child, out);
+                for build in build_children {
+                    Self::collect_logical_projected_indices(build, out);
+                }
+            }
+            LogicalOperator::CreateNode(child_opt, _) | LogicalOperator::CreateRel(child_opt, _) => {
+                if let Some(child) = child_opt {
+                    Self::collect_logical_projected_indices(child, out);
+                }
+            }
+            // Leaves and DDL/utility operators contain no scans.
+            _ => {}
         }
     }
 

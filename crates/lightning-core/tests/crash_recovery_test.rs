@@ -92,14 +92,36 @@ fn test_wal_header_validated_on_open() -> TestResult {
             wal_data[0] ^= 0xFF;
             std::fs::write(&wal_path, &wal_data).unwrap();
         }
+    } else {
+        // No WAL survived the clean shutdown — simulate a corrupt one directly.
+        std::fs::write(&wal_path, b"BOGUS-HEADER").unwrap();
     }
 
-    let result = Database::new(&db_path, SystemConfig::default());
-    assert!(result.is_err(), "Should reject WAL with corrupted header magic");
-    if let Err(e) = result {
-        let msg = format!("{}", e);
-        assert!(msg.contains("LNIW"), "Error should mention expected magic: {}", msg);
-    }
+    // The WAL auto-repairs a corrupt header on open (all checkpointed data is
+    // already on the data files; uncheckpointed txs are treated as lost, same
+    // as a crash before the next checkpoint). Failing the open would brick the
+    // database, so the open must succeed and produce a fresh, valid header.
+    let db2 = Database::new(&db_path, SystemConfig::default())
+        .expect("open with corrupt WAL header must auto-repair, not fail");
+
+    let wal_data = std::fs::read(&wal_path).unwrap();
+    assert!(wal_data.len() >= 5, "repaired WAL must have a fresh header");
+    assert_eq!(
+        &wal_data[0..4],
+        b"LNIW",
+        "repaired WAL header must carry the LNIW magic"
+    );
+
+    // The database must remain fully functional after the repair.
+    let conn2 = db2.connect();
+    let r = conn2.execute("MATCH (t:T) RETURN count(*) as cnt", None)?;
+    assert_eq!(
+        r.batches[0].column(0)
+            .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap()
+            .value(0),
+        1,
+        "checkpointed data must survive WAL auto-repair"
+    );
     Ok(())
 }
 
