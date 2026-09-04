@@ -779,25 +779,33 @@ impl Column {
             let slot_offset = page_offset + offset_in_page;
 
             let marker = data_buf[slot_offset];
-            let s_bytes = if marker == 255 && !overflow_data.is_empty() {
-                let of_page = u64::from_le_bytes(
-                    data_buf[slot_offset + 1..slot_offset + 9].try_into().expect("infallible: fixed-size array conversion"),
-                ) as usize;
-                let of_offset = u64::from_le_bytes(
-                    data_buf[slot_offset + 9..slot_offset + 17].try_into().expect("infallible: fixed-size array conversion"),
-                ) as usize;
-                let of_len = std::cmp::min(
-                    u32::from_le_bytes(
-                        data_buf[slot_offset + 17..slot_offset + 21].try_into().expect("infallible: fixed-size array conversion"),
-                    ) as usize,
-                    4096,
-                );
-                let of_start = of_page * 4096 + of_offset;
-                let of_end = std::cmp::min(of_start + of_len, overflow_data.len());
-                if of_end > of_start {
-                    &overflow_data[of_start..of_end]
-                } else {
+            let s_bytes: &[u8] = if marker == 255 {
+                if overflow_data.is_empty() {
+                    // Overflow pointer but no overflow data available (file
+                    // missing, empty, or beyond the pre-read cap): return an
+                    // empty string instead of decoding the pointer bytes as
+                    // string content (source of NUL/garbage corruption).
                     &[]
+                } else {
+                    let of_page = u64::from_le_bytes(
+                        data_buf[slot_offset + 1..slot_offset + 9].try_into().expect("infallible: fixed-size array conversion"),
+                    ) as usize;
+                    let of_offset = u64::from_le_bytes(
+                        data_buf[slot_offset + 9..slot_offset + 17].try_into().expect("infallible: fixed-size array conversion"),
+                    ) as usize;
+                    // Values may span multiple consecutive overflow pages, so
+                    // do not cap the length at one page; cap only at the end
+                    // of the pre-read overflow data.
+                    let of_len = u32::from_le_bytes(
+                        data_buf[slot_offset + 17..slot_offset + 21].try_into().expect("infallible: fixed-size array conversion"),
+                    ) as usize;
+                    let of_start = of_page * 4096 + of_offset;
+                    let of_end = std::cmp::min(of_start + of_len, overflow_data.len());
+                    if of_end > of_start {
+                        &overflow_data[of_start..of_end]
+                    } else {
+                        &[]
+                    }
                 }
             } else {
                 let len = marker as usize;
@@ -1913,21 +1921,44 @@ impl Column {
             ))),
             LogicalType::Bool => Ok(Value::Boolean(data[0] != 0)),
             LogicalType::String => {
-                if data[0] == 255 && self.overflow_fh.is_some() {
+                if data[0] == 255 {
+                    let Some(ofh) = self.overflow_fh.as_ref() else {
+                        // Overflow pointer without an overflow file: return an
+                        // empty string instead of decoding the pointer bytes
+                        // as string content (source of NUL/garbage corruption).
+                        return Ok(Value::String(String::new()));
+                    };
                     let page_idx = u64::from_le_bytes(data[1..9].try_into().expect("infallible: fixed-size array conversion"));
-                    let offset = u64::from_le_bytes(data[9..17].try_into().expect("infallible: fixed-size array conversion"));
+                    let offset = u64::from_le_bytes(data[9..17].try_into().expect("infallible: fixed-size array conversion")) as usize;
                     let len = u32::from_le_bytes(data[17..21].try_into().expect("infallible: fixed-size array conversion")) as usize;
-                    let read_len = std::cmp::min(len, 4096 - offset as usize);
-                    let overflow_page =
-                        bm.pin_page(self.overflow_fh.as_ref().ok_or_else(|| {
-                            crate::LightningError::Internal("overflow file handle required but missing — possible data corruption".into())
-                        })?.clone(), page_idx, tx)?;
-                    let end = std::cmp::min(offset as usize + read_len, 4096);
-                    let raw = &overflow_page.as_slice()[offset as usize..end];
-                    let s = if let Ok(s) = std::str::from_utf8(raw) {
+                    // The value may span multiple consecutive overflow pages.
+                    // Stop at the end of the overflow file so a stale length
+                    // from an older build cannot read out of bounds.
+                    let num_overflow_pages = ofh.get_num_pages();
+                    let mut out: Vec<u8> = Vec::with_capacity(len.min(4096 * 16));
+                    let mut pos = page_idx as usize * 4096 + offset;
+                    let mut remaining = len;
+                    while remaining > 0 {
+                        let page = (pos / 4096) as u64;
+                        if page >= num_overflow_pages {
+                            break;
+                        }
+                        let off = pos % 4096;
+                        let chunk = std::cmp::min(remaining, 4096 - off);
+                        let frame = bm.pin_page(ofh.clone(), page, tx)?;
+                        let avail = std::cmp::min(chunk, frame.as_slice().len() - off);
+                        out.extend_from_slice(&frame.as_slice()[off..off + avail]);
+                        bm.unpin_page(ofh, page, frame);
+                        pos += avail;
+                        remaining -= avail;
+                        if avail < chunk {
+                            break;
+                        }
+                    }
+                    let s = if let Ok(s) = std::str::from_utf8(&out) {
                         s.to_string()
                     } else {
-                        String::from_utf8_lossy(raw).into_owned()
+                        String::from_utf8_lossy(&out).into_owned()
                     };
                     Ok(Value::String(s))
                 } else {
@@ -2021,17 +2052,32 @@ impl Column {
             .overflow_fh
             .as_ref()
             .ok_or_else(|| crate::LightningError::Internal("No overflow file".into()))?;
-        let page_idx = fh.add_new_page()?;
-        let frame = bm.create_new_version(fh.clone(), page_idx, tx)?;
-        let len = std::cmp::min(data.len(), 4096);
-        // SAFETY: SAFETY: Pinned frame access in overflow read path.
-        unsafe {
-            let ptr = frame.as_ptr();
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, len);
+        // Values larger than one page span consecutive overflow pages. Pages
+        // are allocated sequentially by add_new_page, so the value occupies
+        // the byte range [first_page*4096, first_page*4096 + data.len()).
+        // The full length is recorded in the inline slot by the caller; reads
+        // must therefore be able to reconstruct every stored byte.
+        let first_page = fh.add_new_page()?;
+        let num_pages = data.len().div_ceil(4096).max(1);
+        for _ in 1..num_pages {
+            fh.add_new_page()?;
         }
-        bm.log_page_update(fh.file_id, page_idx, frame.as_slice())?;
-        bm.unpin_page(fh, page_idx, frame);
-        Ok((page_idx, 0))
+        for page_off in 0..num_pages {
+            let page_idx = first_page + page_off as u64;
+            let frame = bm.create_new_version(fh.clone(), page_idx, tx)?;
+            let start = page_off * 4096;
+            let end = std::cmp::min(start + 4096, data.len());
+            if end > start {
+                // SAFETY: Pinned frame access in overflow write path.
+                unsafe {
+                    let ptr = frame.as_ptr();
+                    std::ptr::copy_nonoverlapping(data.as_ptr().add(start), ptr, end - start);
+                }
+            }
+            bm.log_page_update(fh.file_id, page_idx, frame.as_slice())?;
+            bm.unpin_page(fh, page_idx, frame);
+        }
+        Ok((first_page, 0))
     }
 
     pub fn element_size(&self) -> usize {
@@ -2629,5 +2675,197 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    // --- String round-trip across both read paths (NUL-corruption regression) ---
+
+    /// Deterministic ASCII string of `len` chars (no NUL/control bytes).
+    fn ascii_string(len: usize, seed: u8) -> String {
+        (0..len)
+            .map(|j| char::from(b'a' + ((seed as usize + j) % 26) as u8))
+            .collect()
+    }
+
+    /// Simulate the commit sequence for the column test harness: re-version
+    /// this tx's uncommitted frames to a committed timestamp and flush them
+    /// to disk, mirroring TransactionManager::commit (update_timestamps +
+    /// flush_pages). After this, raw-file read paths see the data.
+    fn commit_and_flush(
+        bm: &Arc<BufferManager>,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) {
+        let modified = tx.modified_pages.lock().clone();
+        for (fid, pid) in &modified {
+            bm.update_timestamps(*fid, *pid, tx.tx_id, 1000 + tx.tx_id);
+        }
+        if !modified.is_empty() {
+            bm.flush_pages(&modified);
+        }
+    }
+
+    fn collect_strings(arr: &ArrayRef, n: usize) -> Vec<String> {
+        let sa = arr
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .expect("expected StringArray");
+        (0..n).map(|i| sa.value(i).to_string()).collect()
+    }
+
+    fn assert_no_nul_bytes(strings: &[String], context: &str) {
+        for (i, s) in strings.iter().enumerate() {
+            assert!(
+                !s.contains('\0'),
+                "{context}: string {i} contains NUL bytes: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_string_roundtrip_boundary_lengths_both_read_paths() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+
+        let lens = [1usize, 31, 63, 64, 100, 4095, 4096, 5000];
+        let strings: Vec<String> = lens
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| ascii_string(l, i as u8))
+            .collect();
+        for (i, s) in strings.iter().enumerate() {
+            col.append_value(&bm, &Value::String(s.clone()), i as u64, &tx)
+                .unwrap();
+        }
+        col.flush_pending_nulls(&bm, &tx).unwrap();
+
+        // --- Read path 1: pinned-frame scan (version_info has modifications) ---
+        assert!(col.version_info.has_modifications());
+        let n = strings.len();
+        let pinned = collect_strings(
+            &col.scan_to_array(&bm, 0, n as u64, &tx, None).unwrap(),
+            n,
+        );
+        assert_eq!(pinned, strings, "pinned-path scan round-trip failed");
+        assert_no_nul_bytes(&pinned, "pinned-path scan");
+
+        // --- Per-row get_value path (parse_value for overflow slots) ---
+        for (i, s) in strings.iter().enumerate() {
+            let v = col.get_value(&bm, i as u64, &tx).unwrap();
+            assert_eq!(v, Value::String(s.clone()), "get_value row {i}");
+        }
+
+        // --- Read path 2: scan_string_direct on flushed data ---
+        // Simulate commit (re-version + flush) and checkpoint, then read via
+        // a fresh Column whose RowVersion has no modifications, forcing the
+        // raw-file fast path.
+        commit_and_flush(&bm, &tx);
+        bm.checkpoint().unwrap();
+
+        let reader = Column::new(
+            col.name.clone(),
+            LogicalType::String,
+            Arc::clone(&col.null_fh),
+            Arc::clone(&col.fh),
+            col.overflow_fh.as_ref().map(Arc::clone),
+            Arc::new(RowVersion::new()),
+        );
+        assert!(!reader.version_info.has_modifications());
+        let direct = collect_strings(
+            &reader.scan_to_array(&bm, 0, n as u64, &tx, None).unwrap(),
+            n,
+        );
+        assert_eq!(direct, strings, "direct-path scan round-trip failed");
+        assert_no_nul_bytes(&direct, "direct-path scan");
+
+        // --- Per-row get_value after checkpoint (parse_value on flushed pages) ---
+        for (i, s) in strings.iter().enumerate() {
+            let v = reader.get_value(&bm, i as u64, &tx).unwrap();
+            assert_eq!(v, Value::String(s.clone()), "get_value row {i} after checkpoint");
+        }
+    }
+
+    #[test]
+    fn test_marker_255_without_overflow_data_returns_empty_not_garbage() {
+        let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
+        let tx = begin_tx(&tm);
+
+        // Long strings go to overflow (marker 255 in the inline slot).
+        let strings: Vec<String> = (0..3u8)
+            .map(|i| ascii_string(100 + i as usize * 37, i))
+            .collect();
+        for (i, s) in strings.iter().enumerate() {
+            col.append_value(&bm, &Value::String(s.clone()), i as u64, &tx)
+                .unwrap();
+        }
+        col.flush_pending_nulls(&bm, &tx).unwrap();
+        commit_and_flush(&bm, &tx);
+        bm.checkpoint().unwrap();
+
+        let n = strings.len();
+
+        // Reader that lost its overflow file handle (e.g. reopen-config
+        // bug): marker==255 slots have no overflow data available. Reading
+        // them must NOT emit inline-garbage (pointer bytes + NUL padding).
+        let orphan_reader = Column::new(
+            col.name.clone(),
+            LogicalType::String,
+            Arc::clone(&col.null_fh),
+            Arc::clone(&col.fh),
+            None,
+            Arc::new(RowVersion::new()),
+        );
+
+        // Direct (raw-file) path: overflow pre-read is empty.
+        let direct = collect_strings(
+            &orphan_reader
+                .scan_to_array(&bm, 0, n as u64, &tx, None)
+                .unwrap(),
+            n,
+        );
+        assert_no_nul_bytes(&direct, "direct scan without overflow");
+        for s in &direct {
+            assert!(
+                s.is_empty(),
+                "expected empty string without overflow data, got {s:?}"
+            );
+        }
+
+        // Pinned path (shares the writer's RowVersion => has_modifications):
+        // parse_value falls through to the inline branch without a guard.
+        let pinned_reader = Column::new(
+            col.name.clone(),
+            LogicalType::String,
+            Arc::clone(&col.null_fh),
+            Arc::clone(&col.fh),
+            None,
+            Arc::clone(&col.version_info),
+        );
+        assert!(pinned_reader.version_info.has_modifications());
+        let pinned = collect_strings(
+            &pinned_reader
+                .scan_to_array(&bm, 0, n as u64, &tx, None)
+                .unwrap(),
+            n,
+        );
+        assert_no_nul_bytes(&pinned, "pinned scan without overflow");
+        for s in &pinned {
+            assert!(
+                s.is_empty(),
+                "expected empty string without overflow data, got {s:?}"
+            );
+        }
+
+        // Per-row path: get_value must not return pointer-byte garbage either.
+        for i in 0..n {
+            let v = orphan_reader.get_value(&bm, i as u64, &tx).unwrap();
+            match v {
+                Value::String(s) => {
+                    assert!(
+                        !s.contains('\0'),
+                        "get_value row {i} returned NUL bytes: {s:?}"
+                    );
+                    assert!(s.is_empty(), "get_value row {i} returned garbage: {s:?}");
+                }
+                other => panic!("expected string, got {other:?}"),
+            }
+        }
+    }
 
 }
