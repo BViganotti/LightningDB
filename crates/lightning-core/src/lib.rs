@@ -496,13 +496,17 @@ impl Database {
         )?;
 
         if replay_report.corrupt_records_skipped > 0 {
-            tracing::warn!(
+            // Torn writes are recoverable (we skip them and truncate below), but
+            // they indicate a prior crash or concurrent-write race and must be
+            // surfaced loudly so operators notice potential data loss rather than
+            // silently continuing with a partially-recovered graph.
+            tracing::error!(
                 "WAL replay: {} corrupt records skipped (torn writes)",
                 replay_report.corrupt_records_skipped
             );
         }
         if replay_report.partial_record_at_eof {
-            tracing::warn!(
+            tracing::error!(
                 "WAL replay: incomplete record at end of WAL (partial write on last crash)"
             );
         }
@@ -1896,7 +1900,11 @@ impl Connection {
         let mut update_count: usize = 0;
 
         if let (Some(index), Some(pk_col_idx)) = (&index_opt, pk_idx) {
-            let pk_array = batch.column(pk_col_idx);
+            // `pk_col_idx` is the position of the PK column within `table.columns`,
+            // which includes the synthetic `_id` column at index 0. The input
+            // `batch` does NOT contain `_id`, so the PK column sits one index
+            // earlier in `batch` than in `table.columns`.
+            let pk_array = batch.column(pk_col_idx.saturating_sub(1));
             new_count = 0;
             if let Some(str_arr) = pk_array
                 .as_any()
@@ -2017,9 +2025,10 @@ impl Connection {
         }
 
         if let (Some(index), Some(pk_col_idx)) = (&index_opt, pk_idx) {
-            // +1 because final_batch has _id prepended at index 0
-            let pk_batch_col = pk_col_idx + 1;
-            let pk_array = final_batch.column(pk_batch_col);
+            // `final_batch` has `_id` prepended at index 0, giving it the SAME
+            // column layout as `table.columns` (which also holds `_id` at 0).
+            // Therefore the PK column index is identical in both.
+            let pk_array = final_batch.column(pk_col_idx);
             if let Some(str_arr) = pk_array
                 .as_any()
                 .downcast_ref::<arrow::array::StringArray>()

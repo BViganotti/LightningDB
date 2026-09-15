@@ -1249,21 +1249,27 @@ impl Column {
         Ok(builder.finish())
     }
 
+    const PENDING_NULLS_FLUSH_THRESHOLD: usize = 100_000;
+
     pub fn set_null(
         &self,
-        _bm: &BufferManager,
+        bm: &BufferManager,
         row_id: u64,
         is_null: bool,
-        _tx: &crate::transaction::transaction_manager::Transaction,
+        tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         self.dirty.store(true, Ordering::Release);
-        let mut pending = self.pending_nulls.lock();
-        pending.push((row_id as usize, if is_null { 1 } else { 0 }));
-        if pending.len() > 100_000 {
-            tracing::warn!(
-                "pending_nulls for column '{}' has {} entries — consider flushing more frequently",
-                self.name, pending.len()
-            );
+        let entries_to_flush = {
+            let mut pending = self.pending_nulls.lock();
+            pending.push((row_id as usize, if is_null { 1 } else { 0 }));
+            if pending.len() >= Self::PENDING_NULLS_FLUSH_THRESHOLD {
+                std::mem::take(&mut *pending)
+            } else {
+                Vec::new()
+            }
+        };
+        if !entries_to_flush.is_empty() {
+            self.write_null_entries(bm, tx, entries_to_flush)?;
         }
         Ok(())
     }
@@ -1279,6 +1285,15 @@ impl Column {
         if pending.is_empty() {
             return Ok(());
         }
+        self.write_null_entries(bm, tx, pending)
+    }
+
+    fn write_null_entries(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        pending: Vec<(usize, u8)>,
+    ) -> Result<()> {
         let mut by_page: std::collections::HashMap<u64, Vec<(usize, u8)>> =
             std::collections::HashMap::new();
         for (row_id, val) in &pending {
@@ -1805,29 +1820,40 @@ impl Column {
                     data_vec[local_offset + 1..local_offset + 1 + s_bytes.len()]
                         .copy_from_slice(s_bytes);
                 } else if let Some(ref ofh) = self.overflow_fh {
-                    // Overflow path: write to overflow file, store pointer
-                    let page_idx = ofh.add_new_page()?;
-                    let frame = bm.create_new_version(ofh.clone(), page_idx, tx)?;
-                    let copy_len = std::cmp::min(s_bytes.len(), 4096);
-                    // SAFETY: SAFETY: Overflow string write — pinned frame for overflow page.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            s_bytes.as_ptr(),
-                            frame.as_ptr(),
-                            copy_len,
-                        );
+                    // Overflow path: strings longer than one page span consecutive
+                    // overflow pages. Writing only the first page (or clamping the
+                    // stored length to 4096) silently truncated long strings.
+                    let first_page = ofh.add_new_page()?;
+                    let num_pages = s_bytes.len().div_ceil(4096).max(1);
+                    for _ in 1..num_pages {
+                        ofh.add_new_page()?;
                     }
-                    bm.log_page_update(ofh.file_id, page_idx, frame.as_slice())?;
-                    bm.unpin_page(ofh, page_idx, frame);
+                    for page_off in 0..num_pages {
+                        let page_idx = first_page + page_off as u64;
+                        let frame = bm.create_new_version(ofh.clone(), page_idx, tx)?;
+                        let start = page_off * 4096;
+                        let end = std::cmp::min(start + 4096, s_bytes.len());
+                        if end > start {
+                            // SAFETY: SAFETY: Overflow string write — pinned frame for overflow page.
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    s_bytes.as_ptr().add(start),
+                                    frame.as_ptr(),
+                                    end - start,
+                                );
+                            }
+                        }
+                        bm.log_page_update(ofh.file_id, page_idx, frame.as_slice())?;
+                        bm.unpin_page(ofh, page_idx, frame);
+                    }
 
                     data_vec[local_offset] = 255u8;
                     data_vec[local_offset + 1..local_offset + 9]
-                        .copy_from_slice(&page_idx.to_le_bytes());
+                        .copy_from_slice(&first_page.to_le_bytes());
                     data_vec[local_offset + 9..local_offset + 17]
                         .copy_from_slice(&0u64.to_le_bytes());
-                    let stored_len = std::cmp::min(s_bytes.len(), 4096);
                     data_vec[local_offset + 17..local_offset + 21]
-                        .copy_from_slice(&(stored_len as u32).to_le_bytes());
+                        .copy_from_slice(&(s_bytes.len() as u32).to_le_bytes());
                 }
             }
         }

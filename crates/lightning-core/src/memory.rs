@@ -327,6 +327,10 @@ impl MemoryStore {
     }
 
     pub fn store_batch(&self, entities: Vec<MemoryEntity>) -> Result<usize> {
+        // Ensure the Entity table/indexes exist before the bulk insert. `store`
+        // calls this indirectly, but callers may invoke `store_batch` directly
+        // on a fresh connection where the table has not been created yet.
+        self.ensure_schema()?;
 
         if entities.is_empty() {
             return Ok(0);

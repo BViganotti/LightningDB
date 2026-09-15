@@ -669,6 +669,23 @@ impl PhysicalOperator for PhysicalDelete {
         if !self.shared_state.is_built.swap(true, Ordering::SeqCst) {
             // Collect all deleted node IDs upfront to batch the detach phase
             let mut deleted_ids: Vec<u64> = Vec::new();
+            // Capture the primary-key hash index and the PK column position once.
+            // Nodes are deterministically keyed (stable hash of name+file), so a
+            // re-index deletes then re-inserts the SAME ids. Without tombstoning
+            // the PK index here, a subsequent bulk_insert_batch would treat those
+            // re-inserted rows as in-place updates against deleted rows and the
+            // nodes would be silently lost.
+            let (pk_index, pk_col_idx) = {
+                let storage = database.storage_manager.read();
+                let idx = storage.get_index(&self.table.name);
+                drop(storage);
+                let cat = database.catalog.read();
+                let col_idx = cat
+                    .get_node_table(&self.table.name)
+                    .and_then(|t| t.primary_key.as_ref())
+                    .and_then(|pk| self.table.columns.iter().position(|c| &c.name == pk));
+                (idx, col_idx)
+            };
             while let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let num_rows = chunk.num_rows();
                 for i in 0..num_rows {
@@ -683,6 +700,10 @@ impl PhysicalOperator for PhysicalDelete {
                         let v = col.get_value(&self.buffer_manager, id, tx).unwrap_or(Value::Null);
                         row_data.push(v);
                     }
+                    // Snapshot the PK value before row_data is moved, then
+                    // tombstone the primary-key index entry so re-indexing the
+                    // same deterministic id is treated as a fresh insert.
+                    let pk_value = pk_col_idx.and_then(|ci| row_data.get(ci).cloned());
                     self.shared_state.affected_rows.write().push(row_data);
                     self.shared_state.affected_ids.write().push(id);
                     deleted_ids.push(id);
@@ -691,6 +712,16 @@ impl PhysicalOperator for PhysicalDelete {
 
                     for col in &self.table.columns {
                         col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
+                    }
+
+                    if let (Some(ref index), Some(pk)) = (&pk_index, pk_value) {
+                        if let Err(e) = index.delete(&self.buffer_manager, &pk, id, tx) {
+                            tracing::warn!(
+                                "PK index delete failed for {} node {}: {e}",
+                                self.table.name,
+                                id
+                            );
+                        }
                     }
 
                     // Remove from FTS and vector indexes
@@ -1278,7 +1309,21 @@ impl PhysicalOperator for PhysicalMerge {
                             row_data[assign.property_idx] = Value::from_arrow(&v, row_idx);
                         }
 
-                        self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                        // Append via the CANONICAL table looked up from the storage
+                        // manager, not `self.table`. `self.table` is a plan-time
+                        // clone whose `write_buffer` is private (Table::clone starts
+                        // it empty), so rows buffered there are never flushed by the
+                        // storage manager's flush/commit — they silently vanish.
+                        // PhysicalCreate already re-fetches the canonical table for
+                        // exactly this reason.
+                        {
+                            let storage = database.storage_manager.read();
+                            if let Some(canonical) = storage.get_table(&self.table_name) {
+                                canonical.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                            } else {
+                                self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                            }
+                        }
 
                         if let (Some(ref index), Some(ref pk_name)) = (&index_opt, &pk_name) {
                             for (idx, _) in self

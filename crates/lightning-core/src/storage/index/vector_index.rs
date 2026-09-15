@@ -9,12 +9,18 @@ const VI_HEADER_PAGE: u64 = 0;
 const VI_DATA_START_PAGE: u64 = 1;
 
 fn vi_entry_bytes(dim: usize) -> usize {
-    4 + dim * 4
+    // A stored entry is node_id (8 bytes) + inv_norm (4 bytes) + dim floats.
+    12 + dim * 4
 }
 
 fn vi_entries_per_page(dim: usize) -> usize {
     let bps = 4096usize;
     let entry_bytes = vi_entry_bytes(dim);
+    if entry_bytes == 0 || entry_bytes > bps {
+        // A single entry does not fit in a page — dimensions this large cannot
+        // be stored with the current fixed-page layout.
+        return 0;
+    }
     bps / entry_bytes
 }
 
@@ -202,6 +208,11 @@ impl VectorIndex {
         let entry_bytes = vi_entry_bytes(dim);
         let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
+        if eps == 0 {
+            return Err(crate::LightningError::Internal(format!(
+                "Vector index cannot store embeddings of dimension {dim}: a single entry ({entry_bytes} bytes) exceeds the {bps}-byte page size"
+            )));
+        }
 
         // Ensure header page exists
         if self.file_handle.get_num_pages() == 0 {
@@ -321,6 +332,9 @@ impl VectorIndex {
         let entry_bytes = vi_entry_bytes(dim);
         let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
+        if eps == 0 {
+            return Ok(Vec::new());
+        }
         let num_entries = self.get_num_entries(bm, tx)? as usize;
 
         if num_entries == 0 {
