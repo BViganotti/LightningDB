@@ -48,6 +48,7 @@ pub extern "C" fn lightning_database_init(
         copy_base_dir: None,
         wasm_base_dir: None,
         embedding_dim: 384,
+        wal_checkpoint_threshold_bytes: 256 * 1024 * 1024,
     };
 
     match Database::new(path_str, sys_config) {

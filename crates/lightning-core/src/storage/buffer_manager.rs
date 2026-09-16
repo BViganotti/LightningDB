@@ -878,6 +878,17 @@ impl BufferManager {
         Ok(())
     }
 
+    /// Current on-disk WAL size in bytes. All shards share one WAL, so the
+    /// first one that has it is authoritative.
+    pub fn wal_size(&self) -> u64 {
+        for shard in &self.shards {
+            if let Some(wal) = &shard.read().wal {
+                return wal.size().unwrap_or(0);
+            }
+        }
+        0
+    }
+
     fn grow_pool(&self, pool: &mut BufferPool) {
         let old_cap = pool.capacity;
         let new_cap = (old_cap * 2).min(pool.max_capacity);

@@ -273,6 +273,11 @@ pub struct SystemConfig {
     pub wasm_base_dir: Option<std::path::PathBuf>,
     /// Default embedding dimension for memory/vector operations.
     pub embedding_dim: usize,
+    /// Soft cap on WAL size in bytes. After an autocommit write, if the WAL has
+    /// grown past this, a checkpoint runs to flush dirty pages and truncate the
+    /// WAL. Guards long write loops (e.g. batched SET/UNWIND) against the WAL
+    /// growing to gigabytes. Set to 0 to disable automatic checkpoints.
+    pub wal_checkpoint_threshold_bytes: u64,
 }
 
 impl Default for SystemConfig {
@@ -290,6 +295,7 @@ impl Default for SystemConfig {
             copy_base_dir: None,
             wasm_base_dir: None,
             embedding_dim: 384,
+            wal_checkpoint_threshold_bytes: 256 * 1024 * 1024,
         }
     }
 }
@@ -960,6 +966,32 @@ impl Database {
         }
 
         self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
+        Ok(())
+    }
+
+    /// Current WAL size in bytes (0 when WAL is disabled).
+    pub fn wal_size(&self) -> u64 {
+        self.buffer_manager.wal_size()
+    }
+
+    /// Run a checkpoint if the WAL has grown past
+    /// [`SystemConfig::wal_checkpoint_threshold_bytes`]. Cheap to call after
+    /// every autocommit write: it only does work once the threshold is crossed,
+    /// bounding WAL growth during long batched-write loops.
+    pub fn maybe_checkpoint_wal(&self) -> Result<()> {
+        let threshold = self._config.wal_checkpoint_threshold_bytes;
+        if threshold == 0 {
+            return Ok(());
+        }
+        let size = self.wal_size();
+        if size >= threshold {
+            tracing::info!(
+                "WAL size {} bytes >= threshold {} bytes; checkpointing",
+                size,
+                threshold
+            );
+            self.checkpoint()?;
+        }
         Ok(())
     }
 
@@ -1676,10 +1708,14 @@ impl Connection {
             }
             crate::parser::ast::TransactionAction::Commit => {
                 self.commit()?;
+                // A large explicit transaction writes its buffered WAL records
+                // at commit; bound the WAL right after.
+                let _ = self.client_context.database.maybe_checkpoint_wal();
                 "Transaction committed"
             }
             crate::parser::ast::TransactionAction::Rollback => {
                 self.rollback()?;
+                let _ = self.client_context.database.maybe_checkpoint_wal();
                 "Transaction rolled back"
             }
         };
@@ -1744,6 +1780,7 @@ impl Connection {
                     tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
                 }
             })?;
+            let _ = self.client_context.database.maybe_checkpoint_wal();
         }
 
         Ok(QueryResult::new_arrow(
@@ -1792,6 +1829,8 @@ impl Connection {
 
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, explicit_tx)?;
         let mut processor = Processor::new(physical_plan);
+        // Only write statements can grow the WAL, so avoid a stat on read paths.
+        let is_write = !processor.root.is_read_only();
 
         let timeout_ms = self.client_context.query_timeout_ms;
         let exec_result = if timeout_ms > 0 {
@@ -1846,6 +1885,16 @@ impl Connection {
                     tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
                 }
             })?;
+        }
+
+        // Bound WAL growth for all write statements, including inside an
+        // explicit transaction. This is safe mid-transaction: a checkpoint
+        // flushes only committed frames (the active txn's frames carry
+        // UNCOMMITTED_BIT and are skipped) and truncates the WAL — and commit
+        // already makes data durable by syncing data files *before* writing the
+        // WAL commit record.
+        if is_write {
+            let _ = self.client_context.database.maybe_checkpoint_wal();
         }
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -2096,6 +2145,8 @@ impl Connection {
 
         db.storage_manager.read().flush_all_pending(&bm, &tx)?;
         db.transaction_manager.commit(&tx, &bm, &db)?;
+        // Bulk inserts are a common source of WAL growth (edges/nodes); bound it.
+        let _ = db.maybe_checkpoint_wal();
 
         if let Some(fts) = fts_opt {
             let string_cols: Vec<usize> = table

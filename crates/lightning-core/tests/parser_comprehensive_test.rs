@@ -158,6 +158,21 @@ fn test_parse_delete_node() {
 #[test]
 fn test_parse_detach_delete() {
     test_parse("MATCH (n:Person) WHERE n.name = 'Alice' DETACH DELETE n");
+    // `DETACH` must survive parsing into DeleteClause.detach; the anonymous
+    // literal was previously dropped so detach was always false.
+    let ast = parse("MATCH (n:Person) WHERE n.name = 'Alice' DETACH DELETE n").unwrap();
+    let stmt = &ast.union_queries[0].statement;
+    let debug = format!("{stmt:?}");
+    assert!(
+        debug.contains("detach: true"),
+        "DETACH DELETE should parse with detach:true, got: {debug}"
+    );
+    let plain = parse("MATCH (n:Person) WHERE n.name = 'Alice' DELETE n").unwrap();
+    let plain_debug = format!("{:?}", plain.union_queries[0].statement);
+    assert!(
+        plain_debug.contains("detach: false"),
+        "plain DELETE should parse with detach:false"
+    );
 }
 
 #[test]

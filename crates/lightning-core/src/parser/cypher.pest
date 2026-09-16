@@ -49,7 +49,8 @@ create_clause = { ^"CREATE" ~ pattern }
 merge_clause = { ^"MERGE" ~ pattern ~ (on_create_clause | on_match_clause)* }
 on_create_clause = { ^"ON" ~ ^"CREATE" ~ ^"SET" ~ property_assignment ~ ("," ~ property_assignment)* }
 on_match_clause = { ^"ON" ~ ^"MATCH" ~ ^"SET" ~ property_assignment ~ ("," ~ property_assignment)* }
-delete_clause = { (^"DETACH" ~ ^"DELETE" | ^"DELETE") ~ variable ~ ("," ~ variable)* }
+delete_clause = { (detach_kw ~ ^"DELETE" | ^"DELETE") ~ variable ~ ("," ~ variable)* }
+detach_kw = { ^"DETACH" }
 set_clause = { ^"SET" ~ set_item ~ ("," ~ set_item)* }
 set_item = { property_assignment | map_assignment }
 property_assignment = { property_lookup ~ "=" ~ expression }

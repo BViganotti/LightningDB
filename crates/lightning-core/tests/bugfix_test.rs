@@ -1,4 +1,4 @@
-use lightning_core::{Database, SystemConfig};
+use lightning_core::{Database, SyncMode, SystemConfig};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -152,5 +152,127 @@ fn bug3_mvcc_concurrent_writes() -> TestResult {
         println!("BUG3: WARN: final counter is 0 despite {} successes — value retention issue", s);
     }
     println!("BUG3: MVCC concurrent write test PASS (with known limitations)");
+    Ok(())
+}
+
+// ===== BUG 4: DETACH DELETE must remove relationship endpoints =====
+//
+// `delete_clause` used an anonymous `DETACH` literal (never captured, so
+// `detach` was always false), and the detach path looked for `FROM`/`TO`
+// endpoint columns while rel tables store `_src`/`_dst`. Result: DETACH DELETE
+// silently left dangling edges and never decremented rel cardinality.
+#[test]
+fn bug4_detach_delete_removes_edges() -> TestResult {
+    let dir = tempdir().unwrap();
+    let db = Database::new(dir.path(), SystemConfig::default())?;
+    let conn = db.connect();
+
+    conn.execute("CREATE NODE TABLE N(id INT64, name STRING, PRIMARY KEY (id))", None)?;
+    conn.execute("CREATE REL TABLE E(FROM N TO N)", None)?;
+    for i in 1..=4 {
+        conn.execute(&format!("CREATE (:N {{id: {i}, name: 'n{i}'}})"), None)?;
+    }
+    conn.execute("MATCH (a:N {id: 1}), (b:N {id: 2}) CREATE (a)-[:E]->(b)", None)?;
+    conn.execute("MATCH (a:N {id: 2}), (b:N {id: 3}) CREATE (a)-[:E]->(b)", None)?;
+    conn.execute("MATCH (a:N {id: 3}), (b:N {id: 4}) CREATE (a)-[:E]->(b)", None)?;
+
+    let before = conn.execute("MATCH (a:N)-[:E]->(b:N) RETURN count(*)", None)?;
+    let before = before.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    assert_eq!(before, 3, "expected 3 edges before delete");
+
+    conn.execute("MATCH (n:N {id: 3}) DETACH DELETE n", None)?;
+
+    let after = conn.execute("MATCH (a:N)-[:E]->(b:N) RETURN count(*)", None)?;
+    let after = after.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    assert_eq!(after, 1, "DETACH DELETE should leave only 1->2");
+
+    // Rel cardinality must reflect the removed edges (2 edges detached).
+    let card = {
+        let s = db.storage_manager().read();
+        let t = s.get_table("E").expect("E table");
+        let c = t.stats.read().cardinality;
+        c
+    };
+    assert_eq!(card, 1, "rel cardinality should drop to 1 after detach");
+
+    // Idempotency: re-running the delete must not underflow or change counts.
+    let no_match = conn.execute("MATCH (n:N {id: 3}) DETACH DELETE n", None);
+    assert!(no_match.is_ok(), "second detach delete should not error");
+    Ok(())
+}
+
+// ===== BUG 5: WAL must stay bounded during long write loops =====
+//
+// Previously nothing checkpointed mid-loop, so a batched SET/UNWIND write could
+// grow wal.ltng to gigabytes. The connection now checkpoints once the WAL
+// crosses SystemConfig::wal_checkpoint_threshold_bytes.
+#[test]
+fn bug5_wal_stays_bounded_during_bulk_writes() -> TestResult {
+    let dir = tempdir().unwrap();
+    let mut cfg = SystemConfig::default();
+    cfg.sync_mode = SyncMode::Off; // keep the test fast; durability is unrelated
+    cfg.wal_checkpoint_threshold_bytes = 512 * 1024; // 512 KB
+    let db = Database::new(dir.path(), cfg)?;
+    let conn = db.connect();
+
+    conn.execute("CREATE NODE TABLE T(id INT64, payload STRING, PRIMARY KEY (id))", None)?;
+    let payload = "x".repeat(4000);
+    // ~1.6 MB of payload written as many small autocommit statements, so the
+    // WAL would exceed the threshold several times without auto-checkpointing.
+    for i in 0..400 {
+        conn.execute(
+            &format!("CREATE (:T {{id: {i}, payload: '{payload}'}})"),
+            None,
+        )?;
+    }
+
+    let wal = db.wal_size();
+    assert!(
+        wal < 4 * 1024 * 1024,
+        "WAL should be bounded by the checkpoint threshold, got {wal} bytes"
+    );
+    Ok(())
+}
+
+// ===== BUG 6: WAL bounded inside a single explicit transaction =====
+//
+// Autocommit writes checkpoint between statements, but one big explicit
+// transaction previously buffered all page-update records and could grow
+// without bound. Mid-transaction checkpoints are safe (committed frames are
+// flushed; the active txn's frames carry UNCOMMITTED_BIT and are skipped) and
+// the in-memory WAL buffer now spills to disk past a threshold.
+#[test]
+fn bug6_wal_bounded_inside_explicit_transaction() -> TestResult {
+    let dir = tempdir().unwrap();
+    let mut cfg = SystemConfig::default();
+    cfg.sync_mode = SyncMode::Off;
+    cfg.wal_checkpoint_threshold_bytes = 512 * 1024; // 512 KB
+    let db = Database::new(dir.path(), cfg)?;
+    let conn = db.connect();
+
+    conn.execute("CREATE NODE TABLE T(id INT64, payload STRING, PRIMARY KEY (id))", None)?;
+    conn.execute("BEGIN", None)?;
+    let payload = "y".repeat(4000);
+    for i in 0..300 {
+        conn.execute(
+            &format!("CREATE (:T {{id: {i}, payload: '{payload}'}})"),
+            None,
+        )?;
+    }
+    conn.execute("COMMIT", None)?;
+
+    let wal = db.wal_size();
+    assert!(
+        wal < 4 * 1024 * 1024,
+        "WAL should stay bounded inside an explicit transaction, got {wal} bytes"
+    );
+    let res = conn.execute("MATCH (t:T) RETURN count(*)", None)?;
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(count, 300, "all rows committed inside the transaction must persist");
     Ok(())
 }

@@ -3,6 +3,7 @@ use crate::storage::file_handle::FileHandle;
 use crate::Result;
 use rayon::prelude::*;
 use std::collections::BinaryHeap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 const VI_HEADER_PAGE: u64 = 0;
@@ -50,6 +51,8 @@ pub struct VectorIndex {
     #[allow(dead_code)]
     page_header_size: usize,
     node_index: parking_lot::Mutex<std::collections::HashMap<u64, usize>>,
+    /// Whether `node_index` has been populated from the on-disk entries.
+    loaded: AtomicBool,
 }
 
 impl VectorIndex {
@@ -59,7 +62,68 @@ impl VectorIndex {
             dimension,
             page_header_size: 0,
             node_index: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            loaded: AtomicBool::new(false),
         }
+    }
+
+    /// Populate `node_index` (node_id → latest slot) from the on-disk entries.
+    /// Without this, `len()` reported 0 for a reopened index and repeated
+    /// `insert_batch` calls appended duplicate vectors for the same node.
+    fn ensure_loaded(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        if self.loaded.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let mut idx = self.node_index.lock();
+        if self.loaded.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        idx.clear();
+        let dim = self.dimension;
+        let eps = vi_entries_per_page(dim);
+        if eps == 0 {
+            self.loaded.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let entry_bytes = vi_entry_bytes(dim);
+        let count = self.get_num_entries(bm, tx)? as usize;
+        let num_pages = self.file_handle.get_num_pages();
+        for entry_idx in 0..count {
+            let page_idx = VI_DATA_START_PAGE + (entry_idx / eps) as u64;
+            if page_idx >= num_pages {
+                break;
+            }
+            let offset = (entry_idx % eps) * entry_bytes;
+            if offset + 8 > 4096 {
+                continue;
+            }
+            let frame = match bm.pin_page(Arc::clone(&self.file_handle), page_idx, tx) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&frame.as_slice()[offset..offset + 8]);
+            bm.unpin_page(&self.file_handle, page_idx, frame);
+            // Later duplicates overwrite earlier ones → latest slot wins.
+            idx.insert(u64::from_le_bytes(buf), entry_idx);
+        }
+        drop(idx);
+        self.loaded.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Number of distinct nodes with a stored vector (loads the index if
+    /// needed).
+    pub fn stored_entries(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<usize> {
+        self.ensure_loaded(bm, tx)?;
+        Ok(self.node_index.lock().len())
     }
 
     pub fn dimension(&self) -> usize {
@@ -233,15 +297,30 @@ impl VectorIndex {
         let current_entries = u64::from_le_bytes(header_frame.as_slice()[0..8].try_into()                .expect("header entry count is 8 bytes"));
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
 
+        // Load the on-disk node→slot map so repeated embedding passes upsert
+        // instead of appending duplicate vectors for the same node.
+        self.ensure_loaded(bm, tx)?;
+
         let mut next_entry_idx = current_entries as usize;
-        let total_new = vectors.len();
+        let mut idx = self.node_index.lock();
 
         for (node_id, vec) in vectors {
+            // Existing node: overwrite its latest slot. New node: append.
+            let slot_idx = match idx.get(node_id).copied() {
+                Some(s) => s,
+                None => {
+                    let s = next_entry_idx;
+                    next_entry_idx += 1;
+                    idx.insert(*node_id, s);
+                    s
+                }
+            };
+
             // Accumulate in f64 to avoid overflow for large f32 values
             let norm_sq: f64 = vec.iter().map(|v| *v as f64 * *v as f64).sum();
             let inv_norm = 1.0 / (norm_sq.sqrt() as f32 + 1e-10);
-            let page_idx = VI_DATA_START_PAGE + (next_entry_idx / eps) as u64;
-            let slot_in_page = next_entry_idx % eps;
+            let page_idx = VI_DATA_START_PAGE + (slot_idx / eps) as u64;
+            let slot_in_page = slot_idx % eps;
 
             while self.file_handle.get_num_pages() <= page_idx {
                 self.file_handle.add_new_page()?;
@@ -288,8 +367,8 @@ impl VectorIndex {
 
             bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;
             bm.unpin_page(&self.file_handle, page_idx, frame);
-            next_entry_idx += 1;
         }
+        drop(idx);
 
         // Update header entry count
         let header_frame = bm.create_new_version(
@@ -297,7 +376,9 @@ impl VectorIndex {
             VI_HEADER_PAGE,
             tx,
         )?;
-        let new_count = (current_entries as usize + total_new) as u64;
+        // `next_entry_idx` is the total number of allocated slots (existing
+        // overwrites keep their slot), i.e. the new header entry count.
+        let new_count = next_entry_idx as u64;
         // SAFETY: SAFETY: Copying vector data into CoW page frame.
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -335,9 +416,11 @@ impl VectorIndex {
         if eps == 0 {
             return Ok(Vec::new());
         }
-        let num_entries = self.get_num_entries(bm, tx)? as usize;
-
-        if num_entries == 0 {
+        // Iterate the unique, latest slot per node so superseded duplicate
+        // entries are never returned.
+        self.ensure_loaded(bm, tx)?;
+        let slots: Vec<usize> = { self.node_index.lock().values().copied().collect() };
+        if slots.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -345,7 +428,7 @@ impl VectorIndex {
         let query_normed: Vec<f32> = query.iter().map(|v| v * query_norm).collect();
         let num_pages = self.file_handle.get_num_pages();
 
-        let heap: BinaryHeap<ScoredNode> = (0..num_entries)
+        let heap: BinaryHeap<ScoredNode> = slots
             .into_par_iter()
             .fold(
                 || BinaryHeap::with_capacity(k),

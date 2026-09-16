@@ -755,17 +755,22 @@ impl PhysicalOperator for PhysicalDelete {
                     let storage = database.storage_manager.read();
                     let Some(rel_table) = storage.get_table(rel_name) else { continue };
                     let bm = &self.buffer_manager;
-                    let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "FROM") else { continue };
-                    let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "TO") else { continue };
-                    let num_rel_rows = {
-                        let cat2 = database.catalog.read();
-                        cat2.get_rel_table(rel_name)
-                            .map(|t| t.num_rows)
-                            .unwrap_or(0)
-                    };
+                    // Relationship endpoints live in the `_src` / `_dst`
+                    // columns (not `FROM` / `TO`), so the old lookup always
+                    // failed and DETACH DELETE silently left dangling edges.
+                    let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "_src") else { continue };
+                    let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "_dst") else { continue };
+                    // Use the authoritative physical row count, not the catalog's
+                    // `num_rows` (which is stale/0 until a catalog sync runs).
+                    // The old code silently skipped every rel table with a stale
+                    // count, leaving dangling edges after DELETE n.
+                    let num_rel_rows = rel_table
+                        .next_row_id
+                        .load(Ordering::Acquire);
                     if num_rel_rows == 0 { continue; }
                     let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
                     let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
+                    let mut detached: u64 = 0;
                     for row_idx in 0..num_rel_rows as usize {
                         let from_val = match Value::from_arrow(&from_arr, row_idx) {
                             Value::Node(id) => id,
@@ -785,6 +790,7 @@ impl PhysicalOperator for PhysicalDelete {
                                 ));
                                 col.append_value(bm, &Value::Null, row_idx as u64, tx)?;
                             }
+                            detached += 1;
                             let storage_guard = database.storage_manager.read();
                             if let Some(fwd) = storage_guard.fwd_csr.get(rel_name) {
                                 fwd.delete_edge(from_val, to_val);
@@ -793,6 +799,13 @@ impl PhysicalOperator for PhysicalDelete {
                                 bwd.delete_edge(to_val, from_val);
                             }
                         }
+                    }
+                    // Keep the live cardinality in sync so raw counts (health,
+                    // planner estimates) do not keep growing with every
+                    // delete-then-reinsert refresh.
+                    if detached > 0 {
+                        let mut st = rel_table.stats.write();
+                        st.cardinality = st.cardinality.saturating_sub(detached);
                     }
                 }
             }
@@ -807,6 +820,14 @@ impl PhysicalOperator for PhysicalDelete {
                         t.num_rows = 0;
                     }
                 }
+            }
+            // Also decrement the storage-level cardinality: it is the value
+            // `get_system_stats` sums and the optimizer reads. Without this the
+            // count grows with every re-index (deletes tombstone rows but never
+            // lower the counter).
+            {
+                let mut stats = self.table.stats.write();
+                stats.cardinality = stats.cardinality.saturating_sub(total);
             }
         }
         if self

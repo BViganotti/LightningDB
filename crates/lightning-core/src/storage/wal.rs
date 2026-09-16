@@ -74,6 +74,12 @@ const WAL_ALIGNMENT: usize = 8;
 /// Prevents infinite loops on severely corrupted WALs.
 const MAX_SKIP_PER_CORRUPT_RECORD: usize = 65536;
 
+/// Flush buffered page-update records to the WAL file once the in-memory
+/// buffer reaches this size. Bounds memory for a single very large
+/// transaction (records are appended without a commit record until commit, so
+/// replay ignores them if the process dies first).
+const WAL_PENDING_FLUSH_BYTES: usize = 8 * 1024 * 1024;
+
 pub struct WAL {
     file: Mutex<File>,
     committed_txs: Mutex<HashSet<u64>>,
@@ -269,12 +275,37 @@ impl WAL {
         payload.extend_from_slice(data);
         let checksum = Self::compute_checksum_v2(RECORD_TYPE_PAGE_UPDATE, length, &payload);
 
-        let mut buf = self.pending_buf.lock();
-        buf.extend_from_slice(&[RECORD_TYPE_PAGE_UPDATE]);
-        buf.extend_from_slice(&length.to_le_bytes());
-        buf.extend_from_slice(&checksum.to_le_bytes());
-        buf.extend_from_slice(&payload);
+        let should_flush = {
+            let mut buf = self.pending_buf.lock();
+            buf.extend_from_slice(&[RECORD_TYPE_PAGE_UPDATE]);
+            buf.extend_from_slice(&length.to_le_bytes());
+            buf.extend_from_slice(&checksum.to_le_bytes());
+            buf.extend_from_slice(&payload);
+            buf.len() >= WAL_PENDING_FLUSH_BYTES
+        };
 
+        if should_flush {
+            self.flush_pending()?;
+        }
+        Ok(())
+    }
+
+    /// Write buffered page-update records to the WAL file without emitting a
+    /// commit record. Lets a large in-flight transaction bound its memory use;
+    /// if the process crashes before commit, replay discards these records.
+    pub fn flush_pending(&self) -> Result<()> {
+        let pending = {
+            let mut buf = self.pending_buf.lock();
+            if buf.is_empty() {
+                return Ok(());
+            }
+            std::mem::take(&mut *buf)
+        };
+        let _cdc_guard = self.cdc_lock.write();
+        let mut file = self.file.lock();
+        file.write_all(&pending)?;
+        Self::align_position(&mut file)?;
+        file.flush()?;
         Ok(())
     }
 

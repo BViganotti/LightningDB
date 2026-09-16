@@ -438,10 +438,12 @@ impl Table {
         // fetch_add), so without this next_row_id stays 0 and direct column
         // scans (scan_rel_edges / export_graph / find_connected_nodes) read 0
         // rows even though edges were written. next_row_id is restored on
-        // restart from the catalog, so this must be an absolute store (not a
-        // fetch_add) to stay correct across restarts.
+        // restart from the catalog, so this must be absolute rather than a
+        // fetch_add. Use fetch_max (not store): a stale/lower caller-supplied
+        // `start_id` must never roll the counter backwards and let subsequent
+        // inserts reuse ids that are already occupied.
         self.next_row_id
-            .store(start_id + num_rows as u64, std::sync::atomic::Ordering::Release);
+            .fetch_max(start_id + num_rows as u64, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
