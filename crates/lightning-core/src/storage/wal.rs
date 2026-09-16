@@ -390,7 +390,7 @@ impl WAL {
     pub fn replay<F>(
         &self,
         mut apply_page: F,
-        last_checkpoint_ts: u64,
+        last_checkpoint_tx: u64,
     ) -> Result<WALReplayReport>
     where
         F: FnMut(u64, u64, &[u8]) -> Result<()>,
@@ -404,6 +404,7 @@ impl WAL {
         let mut records_read = 0u64;
         let mut corrupt_records_skipped = 0u64;
         let mut partial_record_at_eof = false;
+        let mut max_tx_id = 0u64;
 
         let mut record_type = [0u8; 1];
         loop {
@@ -415,7 +416,7 @@ impl WAL {
 
             let record_ok = match record_type[0] {
                 RECORD_TYPE_PAGE_UPDATE => {
-                    if !self.read_and_apply_page_update(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_ts, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                    if !self.read_and_apply_page_update(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
                         if partial_record_at_eof {
                             break;
                         }
@@ -424,7 +425,7 @@ impl WAL {
                     true
                 }
                 RECORD_TYPE_COMMIT => {
-                    if !self.read_and_apply_commit(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_ts, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                    if !self.read_and_apply_commit(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
                         if partial_record_at_eof {
                             break;
                         }
@@ -455,7 +456,7 @@ impl WAL {
         // Drain remaining pending: apply committed transactions that
         // had page updates before the commit record in the WAL.
         for (tx_id, updates) in pending.drain() {
-            if tx_id > last_checkpoint_ts && commits.contains(&tx_id) {
+            if tx_id > last_checkpoint_tx && commits.contains(&tx_id) {
                 for (file_id, page_idx, data) in updates {
                     apply_page(file_id, page_idx, &data)?;
                 }
@@ -463,7 +464,7 @@ impl WAL {
         }
 
         for tx_id in &commits {
-            if *tx_id > last_checkpoint_ts {
+            if *tx_id > last_checkpoint_tx {
                 self.committed_txs.lock().insert(*tx_id);
             }
         }
@@ -472,6 +473,7 @@ impl WAL {
             records_read,
             corrupt_records_skipped,
             partial_record_at_eof,
+            max_tx_id,
         })
     }
 
@@ -484,7 +486,8 @@ impl WAL {
         commits: &mut HashSet<u64>,
         pending: &mut HashMap<u64, Vec<(u64, u64, Vec<u8>)>>,
         apply_page: &mut F,
-        last_checkpoint_ts: u64,
+        last_checkpoint_tx: u64,
+        max_tx_id: &mut u64,
         corrupt_records_skipped: &mut u64,
         partial_record_at_eof: &mut bool,
     ) -> bool
@@ -528,11 +531,15 @@ impl WAL {
                 return false;
             }
 
-            if payload_size < 24 {
+            // A page-update payload is exactly tx_id + file_id + page_idx + one
+            // PAGE_SIZE page. Reject anything else: apply_page writes at a
+            // page-aligned offset, so a wrong length would misalign the file.
+            if payload_size != 24 + PAGE_SIZE {
                 *corrupt_records_skipped += 1;
                 tracing::warn!(
-                    "Skipping WAL page update record with truncated payload ({} bytes)",
-                    payload_size
+                    "Skipping WAL page update record with invalid payload size {} (expected {})",
+                    payload_size,
+                    24 + PAGE_SIZE
                 );
                 return false;
             }
@@ -541,8 +548,9 @@ impl WAL {
             let file_id = u64::from_le_bytes(payload[8..16].try_into().unwrap());
             let page_idx = u64::from_le_bytes(payload[16..24].try_into().unwrap());
             let data = &payload[24..];
+            *max_tx_id = (*max_tx_id).max(tx_id);
 
-            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_ts, tx_id, file_id, page_idx, data);
+            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_tx, tx_id, file_id, page_idx, data);
             true
         } else {
             // v1 format: [type:1][crc32c:4][tx_id:8][file_id:8][page_idx:8][data:4096]
@@ -581,8 +589,9 @@ impl WAL {
             let tx_id = u64::from_le_bytes(tx_id_bytes);
             let file_id = u64::from_le_bytes(file_id_bytes);
             let page_idx = u64::from_le_bytes(page_idx_bytes);
+            *max_tx_id = (*max_tx_id).max(tx_id);
 
-            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_ts, tx_id, file_id, page_idx, &data);
+            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_tx, tx_id, file_id, page_idx, &data);
             true
         }
     }
@@ -591,7 +600,7 @@ impl WAL {
         commits: &HashSet<u64>,
         pending: &mut HashMap<u64, Vec<(u64, u64, Vec<u8>)>>,
         apply_page: &mut F,
-        last_checkpoint_ts: u64,
+        last_checkpoint_tx: u64,
         tx_id: u64,
         file_id: u64,
         page_idx: u64,
@@ -599,7 +608,7 @@ impl WAL {
     ) where
         F: FnMut(u64, u64, &[u8]) -> Result<()>,
     {
-        if commits.contains(&tx_id) && tx_id > last_checkpoint_ts {
+        if commits.contains(&tx_id) && tx_id > last_checkpoint_tx {
             let _ = apply_page(file_id, page_idx, data);
         } else {
             pending.entry(tx_id).or_default().push((file_id, page_idx, data.to_vec()));
@@ -615,7 +624,8 @@ impl WAL {
         commits: &mut HashSet<u64>,
         pending: &mut HashMap<u64, Vec<(u64, u64, Vec<u8>)>>,
         apply_page: &mut F,
-        last_checkpoint_ts: u64,
+        last_checkpoint_tx: u64,
+        max_tx_id: &mut u64,
         corrupt_records_skipped: &mut u64,
         partial_record_at_eof: &mut bool,
     ) -> bool
@@ -671,9 +681,10 @@ impl WAL {
             }
 
             let tx_id = u64::from_le_bytes(tx_id_bytes);
+            *max_tx_id = (*max_tx_id).max(tx_id);
             commits.insert(tx_id);
 
-            if tx_id > last_checkpoint_ts {
+            if tx_id > last_checkpoint_tx {
                 if let Some(updates) = pending.remove(&tx_id) {
                     for (fid, pid, data) in updates {
                         let _ = apply_page(fid, pid, &data);
@@ -705,9 +716,10 @@ impl WAL {
             }
 
             let tx_id = u64::from_le_bytes(tx_id_bytes);
+            *max_tx_id = (*max_tx_id).max(tx_id);
             commits.insert(tx_id);
 
-            if tx_id > last_checkpoint_ts {
+            if tx_id > last_checkpoint_tx {
                 if let Some(updates) = pending.remove(&tx_id) {
                     for (fid, pid, data) in updates {
                         let _ = apply_page(fid, pid, &data);
@@ -1151,6 +1163,9 @@ pub struct WALReplayReport {
     pub records_read: u64,
     pub corrupt_records_skipped: u64,
     pub partial_record_at_eof: bool,
+    /// Highest transaction id observed in the WAL. Used to restore
+    /// `next_tx_id` on open so ids never collide with a previous run.
+    pub max_tx_id: u64,
 }
 
 #[cfg(test)]

@@ -1062,6 +1062,16 @@ impl StorageManager {
     }
 
     pub fn apply_page(&mut self, file_id: u64, page_idx: u64, data: &[u8]) -> Result<()> {
+        if data.len() != crate::storage::buffer_manager::PAGE_SIZE {
+            tracing::warn!(
+                "WAL replay: skipping page {} for file {} with invalid size {} (expected {})",
+                page_idx,
+                file_id,
+                data.len(),
+                crate::storage::buffer_manager::PAGE_SIZE
+            );
+            return Ok(());
+        }
         if let Some(fh) = self.file_handles.get(&file_id) {
             fh.write_page(page_idx, data)?;
         } else {

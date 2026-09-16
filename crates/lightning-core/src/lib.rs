@@ -488,17 +488,29 @@ impl Database {
         let mut storage_manager = crate::storage::storage_manager::StorageManager::new(&path)?;
 
         let catalog_path = path.join("catalog.ltng");
-        let catalog = Arc::new(
-            LazyCatalog::from_disk(&catalog_path)
-                .unwrap_or_else(|_| LazyCatalog::new(Catalog::new(), Some(catalog_path.clone()))),
-        );
+        // Surface (don't silently swallow) a corrupt catalog: starting from an
+        // empty catalog loses all table metadata, so make it loud.
+        let catalog = Arc::new(match LazyCatalog::from_disk(&catalog_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to load catalog {}: {e}; starting from an empty catalog. \
+                     Table metadata for this database may be unavailable.",
+                    catalog_path.display()
+                );
+                LazyCatalog::new(Catalog::new(), Some(catalog_path.clone()))
+            }
+        });
 
         Self::restore_tables_from_catalog(&catalog, &mut storage_manager)?;
 
-        // REPLAY WAL after tables are created so apply_page can find file handles
+        // REPLAY WAL after tables are created so apply_page can find file handles.
+        // Gate on the durable *transaction-id* watermark, not the commit clock:
+        // earlier versions mixed two counters that both reset on restart, which
+        // dropped committed transactions written after the last checkpoint.
         let replay_report = wal.replay(
             |fid, pid, data| storage_manager.apply_page(fid, pid, data),
-            header.last_checkpoint_ts,
+            header.last_checkpoint_tx,
         )?;
 
         if replay_report.corrupt_records_skipped > 0 {
@@ -528,10 +540,19 @@ impl Database {
             || replay_report.partial_record_at_eof;
 
         let fsm_path = path.join("free_space.bin");
-        let free_space_manager = Arc::new(
-            crate::storage::FreeSpaceManager::load(&fsm_path)
-                .unwrap_or_else(|_| crate::storage::FreeSpaceManager::new()),
-        );
+        // Surface a corrupt free-space map: silently starting fresh can hand out
+        // pages that are still referenced.
+        let free_space_manager = Arc::new(match crate::storage::FreeSpaceManager::load(&fsm_path) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to load free-space map {}: {e}; starting fresh. Freed pages \
+                     may be reallocated unsafely until the next checkpoint.",
+                    fsm_path.display()
+                );
+                crate::storage::FreeSpaceManager::new()
+            }
+        });
 
         // Wire FreeSpaceManager into all existing file handles so page
         // allocation reuses freed pages before extending files.
@@ -549,6 +570,18 @@ impl Database {
             config.prefetch_depth,
             config.prefetch_confidence,
         ));
+
+        // Restore transaction/commit counters so ids never collide with (or get
+        // gated below) transactions from a previous run, and so WAL replay keeps
+        // every committed transaction still in the log.
+        {
+            let next_tx = header
+                .next_tx_id
+                .max(header.last_checkpoint_tx.saturating_add(1))
+                .max(replay_report.max_tx_id.saturating_add(1));
+            let current_ts = header.current_ts.max(next_tx.saturating_sub(1)).max(1);
+            transaction_manager.restore_counters(next_tx, current_ts);
+        }
 
         transaction_manager.set_self_weak(Arc::downgrade(&transaction_manager));
         transaction_manager.set_bm_weak(Arc::downgrade(&buffer_manager));
@@ -941,11 +974,19 @@ impl Database {
             drop(cat);
         }
 
-        // Update the last checkpoint timestamp so recovery can skip these entries
-        let last_ts = self.transaction_manager.get_current_ts();
+        // Persist the recovery watermark. `last_checkpoint_tx` is the highest
+        // resolved transaction id whose committed data is now flushed; replay
+        // skips records at or below it. Also persist the live counters so a
+        // restart never resets them to 1.
         {
+            let watermark = self.transaction_manager.resolved_tx_watermark();
+            let next_tx = self.transaction_manager.next_tx_id();
+            let current_ts = self.transaction_manager.get_current_ts();
             let mut header = self.header.write();
-            header.last_checkpoint_ts = last_ts;
+            header.last_checkpoint_tx = watermark;
+            header.next_tx_id = next_tx;
+            header.current_ts = current_ts;
+            header.last_checkpoint_ts = current_ts; // legacy field
             let header_path = self._path.join("database.header");
             header.save(&header_path)?;
         }

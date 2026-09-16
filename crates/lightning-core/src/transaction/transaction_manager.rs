@@ -391,6 +391,42 @@ impl TransactionManager {
         self.current_ts.load(Ordering::Acquire)
     }
 
+    pub fn next_tx_id(&self) -> u64 {
+        self.next_tx_id.load(Ordering::Acquire)
+    }
+
+    /// Restore the transaction/commit counters after a restart. Uses max
+    /// semantics so an already-advanced in-memory counter is never rolled back.
+    /// Without this, `next_tx_id` resets to 1 while the WAL is keyed by tx id,
+    /// causing replay to discard committed transactions from prior runs.
+    pub fn restore_counters(&self, next_tx_id: u64, current_ts: u64) {
+        self.next_tx_id.fetch_max(next_tx_id.max(1), Ordering::AcqRel);
+        self.current_ts.fetch_max(current_ts.max(1), Ordering::AcqRel);
+    }
+
+    /// Largest transaction id below the next-to-allocate that is resolved (not
+    /// currently in flight). A checkpoint may persist this as the durable
+    /// recovery watermark: every committed transaction with `tx_id <= it` has
+    /// its data flushed. In-flight ids (which could commit *after* the
+    /// checkpoint) are deliberately excluded.
+    pub fn resolved_tx_watermark(&self) -> u64 {
+        let next = self.next_tx_id.load(Ordering::Acquire);
+        if next <= 1 {
+            return 0;
+        }
+        let active = self.active_tx_ids.read();
+        let mut w = next - 1;
+        loop {
+            if !active.contains(&w) {
+                return w;
+            }
+            if w == 0 {
+                return 0;
+            }
+            w -= 1;
+        }
+    }
+
     fn get_page_merge_lock(&self, file_id: u64, page_idx: u64) -> Arc<Mutex<()>> {
         let mut locks = self.page_merge_locks.lock();
         locks
