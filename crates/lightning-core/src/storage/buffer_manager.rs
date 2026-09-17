@@ -81,7 +81,6 @@ struct BufferPool {
     /// Uses a regular HashMap (not LRU) to prevent eviction of in-use locks.
     /// If an LRU cache evicts a lock that another thread is holding, a new
     /// lock would be created for the same page, breaking mutual exclusion.
-    page_locks: HashMap<(u64, u64), Arc<Mutex<()>>>,
     shutdown: AtomicBool,
     dirty_count: AtomicU64,
     /// Free candidate queue: slot indices whose pin_count dropped to 0.
@@ -99,6 +98,11 @@ pub struct BufferManager {
     /// Lock-free shutdown flag to avoid deadlocking with shard RwLocks.
     /// The vacuum thread checks this instead of reading through a shard lock.
     shutting_down: AtomicBool,
+    /// Per-(file,page) merge locks, independent of the shard locks. Acquired
+    /// BEFORE the shard lock in `create_new_version` to keep a consistent
+    /// lock order; taking it while holding a shard lock (and dropping that lock
+    /// during backoff) inverted the order and deadlocked writers.
+    page_locks: parking_lot::Mutex<HashMap<(u64, u64), Arc<parking_lot::Mutex<()>>>>,
 }
 
 enum EvictResult {
@@ -144,7 +148,6 @@ impl BufferManager {
                 capacity: initial_cap,
                 max_capacity: shard_capacity,
                 wal: wal.as_ref().map(Arc::clone),
-                page_locks: HashMap::new(),
                 shutdown: AtomicBool::new(false),
                 dirty_count: AtomicU64::new(0),
                 free_candidates: VecDeque::new(),
@@ -159,6 +162,7 @@ impl BufferManager {
             prefetch_depth,
             prefetch_confidence,
             shutting_down: AtomicBool::new(false),
+            page_locks: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 
@@ -173,11 +177,28 @@ impl BufferManager {
         (h as usize) & (self.num_shards - 1)
     }
 
-    fn get_page_lock(&self, pool: &mut BufferPool, key: (u64, u64)) -> Arc<Mutex<()>> {
-        pool.page_locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+    /// Bounded shard-write acquisition. A lock-order deadlock between shard
+    /// locks and file/WAL locks used to hang writers forever; bound the wait so
+    /// the caller fails fast and retries instead.
+    fn lock_shard_write(
+        &self,
+        shard_idx: usize,
+    ) -> Result<parking_lot::RwLockWriteGuard<'_, BufferPool>> {
+        self.shards[shard_idx]
+            .try_write_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| {
+                LightningError::Internal(format!(
+                    "buffer pool shard {shard_idx} write lock timed out (possible lock-order deadlock); retry"
+                ))
+            })
+    }
+
+    /// Non-failing variant for best-effort maintenance paths.
+    fn lock_shard_write_or_skip(
+        &self,
+        shard_idx: usize,
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, BufferPool>> {
+        self.shards[shard_idx].try_write_for(std::time::Duration::from_secs(2))
     }
 
     pub fn pin_page(
@@ -224,7 +245,7 @@ impl BufferManager {
         }
 
         // 2. Fallback to write lock
-        let mut pool = self.shards[shard_idx].write();
+        let mut pool = self.lock_shard_write(shard_idx)?;
 
         // Double check after acquiring write lock
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
@@ -272,7 +293,7 @@ impl BufferManager {
                     std::thread::sleep(std::time::Duration::from_millis(
                         5u64.saturating_mul(retry as u64 + 1).min(50),
                     ));
-                    pool = self.shards[shard_idx].write();
+                    pool = self.lock_shard_write(shard_idx)?;
                 }
             }
         }
@@ -320,9 +341,21 @@ impl BufferManager {
 
         tx.modified_pages.lock().push(key);
 
-        let mut pool = self.shards[shard_idx].write();
-        let lock = self.get_page_lock(&mut pool, key);
-        let _guard = lock.lock();
+        // Acquire the per-page lock BEFORE the shard lock (consistent order:
+        // page -> shard). Taking it while holding the shard lock, then dropping
+        // the shard lock during eviction backoff while still holding the page
+        // lock, let another thread hold the shard lock and wait for the page
+        // lock -> deadlock.
+        let page_lock = {
+            let mut locks = self.page_locks.lock();
+            locks
+                .entry(key)
+                .or_insert_with(|| Arc::new(parking_lot::Mutex::new(())))
+                .clone()
+        };
+        let _guard = page_lock.lock();
+
+        let mut pool = self.lock_shard_write(shard_idx)?;
 
         let mut source_data: Option<[u8; PAGE_SIZE]> = None;
         let mut best_version: u64 = 0;
@@ -398,7 +431,7 @@ impl BufferManager {
                     // error class.
                     let sleep_ms = 5u64.saturating_mul(retry as u64 + 1).min(50);
                     std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
-                    pool = self.shards[shard_idx].write();
+                    pool = self.lock_shard_write(shard_idx)?;
                 }
             }
         }
@@ -493,7 +526,7 @@ impl BufferManager {
                     let pf_frame = Arc::new(Frame::new(pf_data, 0));
 
                     // Insert into buffer pool (write lock, brief)
-                    let mut pool = self.shards[shard_idx].write();
+                    let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { continue; };
                     if pool.page_to_slots.contains_key(&pf_key) {
                         continue; // Another thread already cached it
                     }
@@ -622,7 +655,7 @@ impl BufferManager {
     pub fn invalidate_page(&self, file_id: u64, page_idx: u64) {
         let key = (file_id, page_idx);
         let shard_idx = self.get_shard_idx(key);
-        let mut pool = self.shards[shard_idx].write();
+        let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { return; };
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             let indices: Vec<usize> = slot_indices.clone();
             for &idx in &indices {
@@ -725,7 +758,7 @@ impl BufferManager {
         for page in first_page..last_page {
             let key = (file_id, page);
             let shard_idx = self.get_shard_idx(key);
-            let mut pool = self.shards[shard_idx].write();
+            let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { continue; };
             if let Some(slot_indices) = pool.page_to_slots.get(&key) {
                 let indices: Vec<usize> = slot_indices.clone();
                 for &idx in &indices {
