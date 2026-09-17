@@ -1083,6 +1083,45 @@ impl StorageManager {
         Ok(())
     }
 
+    /// Upper bound (exclusive) on any valid node id, derived from the node
+    /// tables' on-disk row capacity.
+    ///
+    /// Node ids are row indices, so no edge may reference an id `>=` this bound;
+    /// anything larger is corruption and must not be used to size a CSR offsets
+    /// array. Returns `0` when no node table is known (treated as "unbounded"),
+    /// in which case callers rely on `CSRIndex::build`'s own safety ceiling.
+    fn node_id_capacity(&self) -> u64 {
+        fn table_capacity(t: &Table) -> u64 {
+            let cardinality = t.stats.read().cardinality;
+            let file_rows = t
+                .columns
+                .first()
+                .map(|c| {
+                    let esize = c.element_size() as u64;
+                    if esize > 0 {
+                        c.fh.get_file_size() / esize
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0);
+            // Prefer the smaller of the tracked cardinality and the physical row
+            // capacity, but fall back to whichever is non-zero so an unflushed
+            // (in-memory) table or an un-repaired cardinality still yields a bound.
+            match (cardinality, file_rows) {
+                (0, f) => f,
+                (c, 0) => c,
+                (c, f) => c.min(f),
+            }
+        }
+
+        self.node_tables
+            .values()
+            .map(table_capacity)
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn rebuild_csr(
         &self,
         table_name: &str,
@@ -1133,6 +1172,11 @@ impl StorageManager {
             return Ok(());
         }
 
+        // Authoritative bound on valid node ids. Endpoints outside it are
+        // corrupt and must be dropped before they can size the CSR offsets
+        // array (which would otherwise attempt a huge allocation).
+        let node_capacity = self.node_id_capacity();
+
         let mut src_ids = Vec::new();
         let mut dst_ids = Vec::new();
 
@@ -1141,12 +1185,33 @@ impl StorageManager {
 
         let mut edges = Vec::with_capacity(num_rows as usize);
         let mut max_node_id = 0;
+        let mut dropped_corrupt = 0u64;
         for (src, dst) in src_ids.into_iter().zip(dst_ids.into_iter()) {
             let s = src.as_node();
             let d = dst.as_node();
+            if node_capacity > 0 && (s >= node_capacity || d >= node_capacity) {
+                dropped_corrupt += 1;
+                continue;
+            }
             edges.push((s, d));
             max_node_id = std::cmp::max(max_node_id, std::cmp::max(s, d));
         }
+        if dropped_corrupt > 0 {
+            tracing::error!(
+                "rebuild_csr: dropped {dropped_corrupt} edge(s) in {table_name} whose node id is \
+                 >= the node-table capacity ({node_capacity}); the rel table contains corrupt \
+                 endpoints"
+            );
+        }
+
+        // Cover every valid node id, not just ids that happen to have edges, so
+        // a query for an edge-less node can never read stale offset bytes left
+        // behind by a previous, larger build.
+        let num_nodes = if node_capacity > 0 {
+            node_capacity - 1
+        } else {
+            max_node_id
+        };
 
         if let Some(fwd) = fwd_csr {
             crate::storage::index::csr::CSRIndex::build(
@@ -1154,7 +1219,7 @@ impl StorageManager {
                 fwd.offset_fh.clone(),
                 fwd.adj_node_fh.clone(),
                 &edges,
-                max_node_id,
+                num_nodes,
                 tx,
             )?;
         }
@@ -1166,11 +1231,42 @@ impl StorageManager {
                 bwd.offset_fh.clone(),
                 bwd.adj_node_fh.clone(),
                 &reversed_edges,
-                max_node_id,
+                num_nodes,
                 tx,
             )?;
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node_columns() -> Vec<(String, LogicalType)> {
+        vec![
+            ("_id".to_string(), LogicalType::Uint64),
+            ("name".to_string(), LogicalType::String),
+        ]
+    }
+
+    #[test]
+    fn node_id_capacity_tracks_node_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sm = StorageManager::new(dir.path()).unwrap();
+        // No tables -> no bound (callers fall back to CSRIndex's safety ceiling).
+        assert_eq!(sm.node_id_capacity(), 0);
+
+        sm.create_table("N".into(), node_columns(), false, None)
+            .unwrap();
+        sm.create_table("M".into(), node_columns(), false, None)
+            .unwrap();
+        // Fresh tables have neither file rows nor tracked cardinality.
+        assert_eq!(sm.node_id_capacity(), 0);
+
+        sm.node_tables.get("N").unwrap().stats.write().cardinality = 1_234;
+        sm.node_tables.get("M").unwrap().stats.write().cardinality = 50;
+        assert_eq!(sm.node_id_capacity(), 1_234, "bound is the largest node table");
     }
 }

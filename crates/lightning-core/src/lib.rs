@@ -528,6 +528,13 @@ impl Database {
                 "WAL replay: incomplete record at end of WAL (partial write on last crash)"
             );
         }
+        if replay_report.framing_lost {
+            tracing::error!(
+                "WAL replay: stopped early - a record length prefix was corrupt so record \
+                 boundaries could no longer be trusted; records after the corruption were \
+                 deliberately not replayed"
+            );
+        }
         tracing::info!(
             "WAL replay: {} records processed",
             replay_report.records_read
@@ -537,7 +544,8 @@ impl Database {
         // a post-construction checkpoint so the WAL gets truncated and future restarts
         // don't re-process the same corrupt entries.
         let needs_checkpoint = replay_report.corrupt_records_skipped > 0
-            || replay_report.partial_record_at_eof;
+            || replay_report.partial_record_at_eof
+            || replay_report.framing_lost;
 
         let fsm_path = path.join("free_space.bin");
         // Surface a corrupt free-space map: silently starting fresh can hand out

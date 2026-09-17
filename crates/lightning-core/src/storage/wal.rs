@@ -65,6 +65,20 @@ const WAL_HEADER_SIZE: usize = 5;
 const RECORD_TYPE_PAGE_UPDATE: u8 = 1;
 const RECORD_TYPE_COMMIT: u8 = 2;
 
+/// Payload sizes for the two v2 record kinds. A page update carries
+/// `tx_id + file_id + page_idx + PAGE_SIZE` bytes of data; a commit carries a
+/// single `tx_id`.
+const PAGE_UPDATE_PAYLOAD_SIZE: usize = 24 + PAGE_SIZE;
+const COMMIT_PAYLOAD_SIZE: usize = 8;
+
+/// Exact on-disk `length` values for v2 records. `length` covers everything
+/// after the 2-byte length field (CRC + payload), so a valid page update is
+/// `WAL_CHECKSUM_SIZE + PAGE_UPDATE_PAYLOAD_SIZE` and a valid commit is
+/// `WAL_CHECKSUM_SIZE + COMMIT_PAYLOAD_SIZE`. Any other length means the record
+/// framing itself is corrupt and record boundaries can no longer be trusted.
+const VALID_PAGE_UPDATE_LENGTH: usize = WAL_CHECKSUM_SIZE + PAGE_UPDATE_PAYLOAD_SIZE;
+const VALID_COMMIT_LENGTH: usize = WAL_CHECKSUM_SIZE + COMMIT_PAYLOAD_SIZE;
+
 const WAL_CHECKSUM_SIZE: usize = 4;
 const WAL_LENGTH_SIZE: usize = 2;
 const WAL_ALIGNMENT: usize = 8;
@@ -405,6 +419,7 @@ impl WAL {
         let mut corrupt_records_skipped = 0u64;
         let mut partial_record_at_eof = false;
         let mut max_tx_id = 0u64;
+        let mut framing_lost = false;
 
         let mut record_type = [0u8; 1];
         loop {
@@ -416,8 +431,8 @@ impl WAL {
 
             let record_ok = match record_type[0] {
                 RECORD_TYPE_PAGE_UPDATE => {
-                    if !self.read_and_apply_page_update(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
-                        if partial_record_at_eof {
+                    if !self.read_and_apply_page_update(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                        if partial_record_at_eof || framing_lost {
                             break;
                         }
                         continue;
@@ -425,8 +440,8 @@ impl WAL {
                     true
                 }
                 RECORD_TYPE_COMMIT => {
-                    if !self.read_and_apply_commit(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
-                        if partial_record_at_eof {
+                    if !self.read_and_apply_commit(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                        if partial_record_at_eof || framing_lost {
                             break;
                         }
                         continue;
@@ -440,8 +455,8 @@ impl WAL {
                     false
                 }
                 _ => {
-                    self.skip_unknown_record(&mut file, record_type[0], &mut corrupt_records_skipped, &mut partial_record_at_eof);
-                    if partial_record_at_eof {
+                    self.skip_unknown_record(&mut file, record_type[0], &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof);
+                    if partial_record_at_eof || framing_lost {
                         break;
                     }
                     false
@@ -474,12 +489,17 @@ impl WAL {
             corrupt_records_skipped,
             partial_record_at_eof,
             max_tx_id,
+            framing_lost,
         })
     }
 
     /// Read and process a v1 or v2 PAGE_UPDATE record.
-    /// Returns false if the record was corrupt and should be skipped.
-    /// Sets partial_record_at_eof if EOF was encountered mid-record.
+    ///
+    /// Returns `false` if the record was corrupt and should be skipped. Sets
+    /// `partial_record_at_eof` when EOF is hit mid-record (benign torn tail) and
+    /// `framing_lost` when the length prefix itself is corrupt, in which case
+    /// record boundaries can no longer be trusted and replay must stop.
+    #[allow(clippy::too_many_arguments)]
     fn read_and_apply_page_update<F>(
         &self,
         file: &mut File,
@@ -488,6 +508,7 @@ impl WAL {
         apply_page: &mut F,
         last_checkpoint_tx: u64,
         max_tx_id: &mut u64,
+        framing_lost: &mut bool,
         corrupt_records_skipped: &mut u64,
         partial_record_at_eof: &mut bool,
     ) -> bool
@@ -505,13 +526,27 @@ impl WAL {
             }
             let record_length = u16::from_le_bytes(length_bytes) as usize;
 
+            // Validate the length *before* consuming the payload. If it is not
+            // exactly the size of a page-update record, the framing is corrupt:
+            // we cannot know where the next record starts, so stop replaying
+            // rather than interpreting arbitrary file bytes as page updates.
+            if record_length != VALID_PAGE_UPDATE_LENGTH {
+                *corrupt_records_skipped += 1;
+                *framing_lost = true;
+                tracing::error!(
+                    "WAL replay stopped: page update record has corrupt length {} (expected {})",
+                    record_length,
+                    VALID_PAGE_UPDATE_LENGTH
+                );
+                return false;
+            }
+
             if file.read_exact(&mut checksum_bytes).is_err() {
                 *partial_record_at_eof = true;
                 return false;
             }
 
-            let payload_size = record_length.saturating_sub(WAL_CHECKSUM_SIZE);
-            let mut payload = vec![0u8; payload_size];
+            let mut payload = vec![0u8; PAGE_UPDATE_PAYLOAD_SIZE];
             if file.read_exact(&mut payload).is_err() {
                 *partial_record_at_eof = true;
                 return false;
@@ -524,22 +559,11 @@ impl WAL {
                 &payload,
             );
             if expected_crc != stored_crc {
+                // Framing is intact (length was valid and fully consumed), so
+                // the next record can still be parsed: skip and continue.
                 *corrupt_records_skipped += 1;
                 tracing::warn!(
                     "Skipping corrupt WAL page update record (checksum mismatch)"
-                );
-                return false;
-            }
-
-            // A page-update payload is exactly tx_id + file_id + page_idx + one
-            // PAGE_SIZE page. Reject anything else: apply_page writes at a
-            // page-aligned offset, so a wrong length would misalign the file.
-            if payload_size != 24 + PAGE_SIZE {
-                *corrupt_records_skipped += 1;
-                tracing::warn!(
-                    "Skipping WAL page update record with invalid payload size {} (expected {})",
-                    payload_size,
-                    24 + PAGE_SIZE
                 );
                 return false;
             }
@@ -616,8 +640,12 @@ impl WAL {
     }
 
     /// Read and process a v1 or v2 COMMIT record.
-    /// Returns false if the record was corrupt and should be skipped.
-    /// Sets partial_record_at_eof if EOF was encountered mid-record.
+    ///
+    /// Returns `false` if the record was corrupt and should be skipped. Sets
+    /// `partial_record_at_eof` when EOF is hit mid-record (benign torn tail) and
+    /// `framing_lost` when the length prefix itself is corrupt, in which case
+    /// record boundaries can no longer be trusted and replay must stop.
+    #[allow(clippy::too_many_arguments)]
     fn read_and_apply_commit<F>(
         &self,
         file: &mut File,
@@ -626,6 +654,7 @@ impl WAL {
         apply_page: &mut F,
         last_checkpoint_tx: u64,
         max_tx_id: &mut u64,
+        framing_lost: &mut bool,
         corrupt_records_skipped: &mut u64,
         partial_record_at_eof: &mut bool,
     ) -> bool
@@ -643,26 +672,25 @@ impl WAL {
             }
             let record_length = u16::from_le_bytes(length_bytes) as usize;
 
+            // A commit record's length is fixed; anything else means the framing
+            // is corrupt, so stop rather than guessing at the next boundary.
+            if record_length != VALID_COMMIT_LENGTH {
+                *corrupt_records_skipped += 1;
+                *framing_lost = true;
+                tracing::error!(
+                    "WAL replay stopped: commit record has corrupt length {} (expected {})",
+                    record_length,
+                    VALID_COMMIT_LENGTH
+                );
+                return false;
+            }
+
             if file.read_exact(&mut checksum_bytes).is_err() {
                 *partial_record_at_eof = true;
                 return false;
             }
 
-            let payload_size = record_length.saturating_sub(WAL_CHECKSUM_SIZE);
-            // Sanity check: a commit record payload should be exactly 8 bytes (tx_id)
-            if payload_size != 8 {
-                *corrupt_records_skipped += 1;
-                tracing::warn!(
-                    "Skipping corrupt WAL commit record with invalid payload size {}",
-                    payload_size
-                );
-                // Skip the payload bytes to maintain file position
-                let mut discard = vec![0u8; payload_size.min(65536)];
-                let _ = file.read(&mut discard);
-                return false;
-            }
-
-            let mut tx_id_bytes = [0u8; 8];
+            let mut tx_id_bytes = [0u8; COMMIT_PAYLOAD_SIZE];
             if file.read_exact(&mut tx_id_bytes).is_err() {
                 *partial_record_at_eof = true;
                 return false;
@@ -735,11 +763,13 @@ impl WAL {
     /// In v2 format, we read the 2-byte length and skip that many bytes.
     /// In v1 format, we can only advance 1 byte (no length prefix).
     ///
-    /// A max skip limit prevents infinite loops on heavily corrupted WALs.
+    /// An implausible length means we cannot trust the record boundary, so
+    /// replay stops (`framing_lost`) instead of jumping into unrelated data.
     fn skip_unknown_record(
         &self,
         file: &mut File,
         record_type_byte: u8,
+        framing_lost: &mut bool,
         corrupt_records_skipped: &mut u64,
         partial_record_at_eof: &mut bool,
     ) {
@@ -751,10 +781,23 @@ impl WAL {
             }
             let record_length = u16::from_le_bytes(length_bytes) as usize;
 
-            // Cap skip to prevent massive jumps from corrupted length fields
-            let skip_bytes = record_length.min(MAX_SKIP_PER_CORRUPT_RECORD);
-            let mut discard = vec![0u8; skip_bytes.min(8192)];
-            let mut remaining = skip_bytes;
+            // An implausible length cannot be trusted as a record boundary.
+            // Stop replaying rather than skipping into unrelated data.
+            if record_length > MAX_SKIP_PER_CORRUPT_RECORD {
+                *corrupt_records_skipped += 1;
+                *framing_lost = true;
+                tracing::error!(
+                    "WAL replay stopped: unknown record type {} has implausible length {} \
+                     (max {} bytes)",
+                    record_type_byte,
+                    record_length,
+                    MAX_SKIP_PER_CORRUPT_RECORD
+                );
+                return;
+            }
+
+            let mut discard = vec![0u8; record_length.min(8192)];
+            let mut remaining = record_length;
             while remaining > 0 {
                 let to_read = remaining.min(discard.len());
                 match file.read(&mut discard[..to_read]) {
@@ -776,18 +819,10 @@ impl WAL {
             }
 
             *corrupt_records_skipped += 1;
-            if record_length > MAX_SKIP_PER_CORRUPT_RECORD {
-                tracing::warn!(
-                    "Skipping unknown WAL record type: {} with implausible length {} \
-                     (capped at {} byte skip)",
-                    record_type_byte, record_length, MAX_SKIP_PER_CORRUPT_RECORD
-                );
-            } else {
-                tracing::warn!(
-                    "Skipping unknown WAL record type: {} ({} byte record)",
-                    record_type_byte, 1 + WAL_LENGTH_SIZE + record_length
-                );
-            }
+            tracing::warn!(
+                "Skipping unknown WAL record type: {} ({} byte record)",
+                record_type_byte, 1 + WAL_LENGTH_SIZE + record_length
+            );
         } else {
             // v1: no length prefix — advance one byte and retry.
             // This will produce one warning per byte of corrupted data,
@@ -1166,6 +1201,11 @@ pub struct WALReplayReport {
     /// Highest transaction id observed in the WAL. Used to restore
     /// `next_tx_id` on open so ids never collide with a previous run.
     pub max_tx_id: u64,
+    /// True when replay stopped early because a record's length prefix was
+    /// corrupt, so record boundaries could no longer be trusted. Records after
+    /// the corruption are deliberately not replayed (they are never applied);
+    /// the WAL should be truncated at the next checkpoint.
+    pub framing_lost: bool,
 }
 
 #[cfg(test)]
@@ -1562,25 +1602,125 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wal_path = dir.path().join("wal.ltng");
 
-        // Write a v2 record with a CRC that doesn't match the payload
+        // A page-update record with a *valid* length but a CRC that does not
+        // match its payload: framing stays intact, so replay skips the record
+        // and continues instead of stopping.
         {
             let mut f = std::fs::File::create(&wal_path).unwrap();
             f.write_all(&WAL_MAGIC).unwrap();
             f.write_all(&[WAL_VERSION]).unwrap();
 
-            let length: u16 = (WAL_CHECKSUM_SIZE + 12) as u16; // small record
+            let length: u16 = VALID_PAGE_UPDATE_LENGTH as u16;
             f.write_all(&[RECORD_TYPE_PAGE_UPDATE]).unwrap();
             f.write_all(&length.to_le_bytes()).unwrap();
             // Deliberately wrong CRC (computed over different data)
-            let wrong_crc: u32 = 0xDEADBEEF;
-            f.write_all(&wrong_crc.to_le_bytes()).unwrap();
-            f.write_all(&[0x42u8; 12]).unwrap();
+            f.write_all(&0xDEADBEEFu32.to_le_bytes()).unwrap();
+            f.write_all(&vec![0x42u8; PAGE_UPDATE_PAYLOAD_SIZE]).unwrap();
         }
 
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
         let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
-        // CRC mismatch should be detected
+        // CRC mismatch should be detected, but framing must remain intact.
         assert_eq!(report.corrupt_records_skipped, 1);
+        assert!(!report.framing_lost);
+        assert!(!report.partial_record_at_eof);
+    }
+
+    #[test]
+    fn test_replay_corrupt_length_stops_without_applying_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.ltng");
+        {
+            let mut f = std::fs::File::create(&wal_path).unwrap();
+            f.write_all(&WAL_MAGIC).unwrap();
+            f.write_all(&[WAL_VERSION]).unwrap();
+            // A page update whose length prefix is a valid u16 but not a valid
+            // record size: framing is corrupt and cannot be resynchronized.
+            f.write_all(&[RECORD_TYPE_PAGE_UPDATE]).unwrap();
+            f.write_all(&(VALID_PAGE_UPDATE_LENGTH as u16 + 1).to_le_bytes())
+                .unwrap();
+            f.write_all(&[0x7Fu8; 128]).unwrap();
+        }
+
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let mut applied = 0u64;
+        let report = wal
+            .replay(
+                |_, _, _| {
+                    applied += 1;
+                    Ok(())
+                },
+                0,
+            )
+            .unwrap();
+        assert!(report.framing_lost, "corrupt length must lose framing");
+        assert_eq!(applied, 0, "no page may be applied from corrupt framing");
+    }
+
+    #[test]
+    fn test_replay_corrupt_crc_continues_to_later_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.ltng");
+        {
+            let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+            wal.log_page_update(1, 7, 1, &vec![0x11u8; PAGE_SIZE]).unwrap();
+            wal.log_commit(1).unwrap();
+            wal.log_page_update(2, 7, 2, &vec![0x22u8; PAGE_SIZE]).unwrap();
+            wal.log_commit(2).unwrap();
+        }
+        // Corrupt the first page-update record's CRC (which follows the record
+        // type and length fields) while leaving its length intact.
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&wal_path)
+                .unwrap();
+            let crc_pos = (WAL_HEADER_SIZE + 1 + WAL_LENGTH_SIZE) as u64;
+            f.seek(std::io::SeekFrom::Start(crc_pos)).unwrap();
+            let mut b = [0u8; 1];
+            f.read_exact(&mut b).unwrap();
+            f.seek(std::io::SeekFrom::Start(crc_pos)).unwrap();
+            f.write_all(&[b[0] ^ 0xFF]).unwrap();
+        }
+
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let mut applied = Vec::new();
+        let report = wal
+            .replay(
+                |fid, pid, _| {
+                    applied.push((fid, pid));
+                    Ok(())
+                },
+                0,
+            )
+            .unwrap();
+        assert!(!report.framing_lost, "valid length keeps framing intact");
+        assert!(report.corrupt_records_skipped >= 1);
+        // The second transaction's page update must still be replayed.
+        assert!(
+            applied.contains(&(7, 2)),
+            "later committed record must survive a checksum-only corruption: {applied:?}"
+        );
+    }
+
+    #[test]
+    fn test_replay_commit_corrupt_length_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal_path = dir.path().join("wal.ltng");
+        {
+            let mut f = std::fs::File::create(&wal_path).unwrap();
+            f.write_all(&WAL_MAGIC).unwrap();
+            f.write_all(&[WAL_VERSION]).unwrap();
+            f.write_all(&[RECORD_TYPE_COMMIT]).unwrap();
+            f.write_all(&(VALID_COMMIT_LENGTH as u16 + 4).to_le_bytes())
+                .unwrap();
+            f.write_all(&[0u8; 8]).unwrap();
+        }
+
+        let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
+        let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
+        assert!(report.framing_lost, "corrupt commit length must lose framing");
     }
 
     #[test]

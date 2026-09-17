@@ -11,7 +11,8 @@ const VI_DATA_START_PAGE: u64 = 1;
 
 fn vi_entry_bytes(dim: usize) -> usize {
     // A stored entry is node_id (8 bytes) + inv_norm (4 bytes) + dim floats.
-    12 + dim * 4
+    // Saturating arithmetic keeps an absurd dimension from overflowing usize.
+    12usize.saturating_add(dim.saturating_mul(4))
 }
 
 fn vi_entries_per_page(dim: usize) -> usize {
@@ -23,6 +24,17 @@ fn vi_entries_per_page(dim: usize) -> usize {
         return 0;
     }
     bps / entry_bytes
+}
+
+/// Clamp a header-reported entry count to what the data pages can physically
+/// hold. A corrupt or oversized header count must never drive a scan, a
+/// pre-allocation, or slot placement beyond the end of the file.
+fn clamp_entries_to_file(count: u64, num_pages: u64, eps: usize) -> u64 {
+    if eps == 0 || num_pages <= VI_DATA_START_PAGE {
+        return 0;
+    }
+    let max_entries = (num_pages - VI_DATA_START_PAGE).saturating_mul(eps as u64);
+    count.min(max_entries)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,10 +304,9 @@ impl VectorIndex {
             bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         }
 
-        // Read current entry count from header
-        let header_frame = bm.pin_page(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
-        let current_entries = u64::from_le_bytes(header_frame.as_slice()[0..8].try_into()                .expect("header entry count is 8 bytes"));
-        bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
+        // Current entry count, clamped to what the file can physically hold so a
+        // corrupt header cannot push new slots (and page allocation) far past EOF.
+        let current_entries = self.get_num_entries(bm, tx)?;
 
         // Load the on-disk node→slot map so repeated embedding passes upsert
         // instead of appending duplicate vectors for the same node.
@@ -534,7 +545,13 @@ impl VectorIndex {
         let header_frame = bm.pin_page(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
         let num_entries = u64::from_le_bytes(header_frame.as_slice()[0..8].try_into()                .expect("header entry count is 8 bytes"));
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
-        Ok(num_entries)
+        // Bound the reported count by the data pages actually present.
+        let eps = vi_entries_per_page(self.dimension);
+        Ok(clamp_entries_to_file(
+            num_entries,
+            self.file_handle.get_num_pages(),
+            eps,
+        ))
     }
 
     pub fn delete(
@@ -692,5 +709,39 @@ impl VectorIndex {
         }
 
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_size_saturates_for_absurd_dimension() {
+        assert_eq!(vi_entry_bytes(0), 12);
+        assert_eq!(vi_entry_bytes(384), 12 + 384 * 4);
+        // No overflow panic for an absurd dimension.
+        let huge = vi_entry_bytes(usize::MAX);
+        assert!(huge >= 12);
+        assert_eq!(vi_entries_per_page(usize::MAX), 0);
+    }
+
+    #[test]
+    fn entries_per_page_matches_page_layout() {
+        // dim 384: entry = 12 + 1536 = 1548 bytes -> 2 entries per 4096 page.
+        assert_eq!(vi_entries_per_page(384), 2);
+        // dim 1024: entry = 4108 > 4096 -> cannot store.
+        assert_eq!(vi_entries_per_page(1024), 0);
+    }
+
+    #[test]
+    fn entry_count_is_clamped_to_file_size() {
+        // 5 data pages at 2 entries/page -> at most 10 entries are addressable.
+        assert_eq!(clamp_entries_to_file(10, 6, 2), 10);
+        assert_eq!(clamp_entries_to_file(1_000_000, 6, 2), 10);
+        // Header-only (no data pages) or unusable dimension -> nothing.
+        assert_eq!(clamp_entries_to_file(42, 1, 2), 0);
+        assert_eq!(clamp_entries_to_file(42, 0, 2), 0);
+        assert_eq!(clamp_entries_to_file(42, 6, 0), 0);
     }
 }

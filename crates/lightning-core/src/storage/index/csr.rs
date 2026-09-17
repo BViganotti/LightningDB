@@ -26,6 +26,50 @@ const DELETED_BIT: u64 = 1 << 63;
 /// Size of the CSR format safety header in bytes.
 const CSR_HEADER_SIZE: usize = 12;
 
+/// Hard ceiling on the number of offset slots a single CSR build may allocate.
+///
+/// Node ids are row indices, so an id beyond this cannot correspond to a real
+/// table row; such a value can only come from corrupt edge data. Refusing to
+/// allocate here returns a recoverable error instead of aborting the process on
+/// a multi-gigabyte allocation. Normal databases are bounded far below this by
+/// the node-table capacity supplied by the storage layer
+/// (`StorageManager::node_id_capacity`), so this ceiling is a last-resort net.
+const MAX_CSR_NODES: u64 = 1 << 27; // 134,217,728 slots = 1 GiB offset table
+
+/// Compute the number of offset slots required for `num_nodes + 2` entries
+/// (the `+2` matches the inclusive sentinel entry written by `build`).
+///
+/// Rejects overflow and absurd counts *before* any allocation, so a corrupt
+/// node id surfaces as a `Result::Err` rather than an OOM abort.
+fn checked_offset_slots(num_nodes: u64) -> Result<usize> {
+    let slots = num_nodes.checked_add(2).ok_or_else(|| {
+        crate::LightningError::Internal(format!(
+            "CSR build refused: node count {num_nodes} overflows the offset table"
+        ))
+    })?;
+    if slots > MAX_CSR_NODES {
+        return Err(crate::LightningError::Internal(format!(
+            "CSR build refused: {num_nodes} nodes exceeds the {MAX_CSR_NODES}-node safety \
+             limit (offsets would need {slots} slots); the edge data likely contains a \
+             corrupt node id"
+        )));
+    }
+    Ok(slots as usize)
+}
+
+/// Number of whole u64 values that can be read from `[start_byte, end_byte)`
+/// without reading past the end of a file of `file_bytes` bytes.
+///
+/// Bounds corrupt offset/adjacency counts by the on-disk size so a garbage
+/// count cannot trigger a huge pre-allocation.
+fn bounded_value_count(start_byte: u64, end_byte: u64, file_bytes: u64) -> usize {
+    let end = end_byte.min(file_bytes);
+    if start_byte >= end {
+        return 0;
+    }
+    ((end - start_byte) / 8) as usize
+}
+
 /// Magic bytes for the CSR offset file.
 const CSR_OFFSET_MAGIC: [u8; 4] = *b"CSRO";
 /// Magic bytes for the CSR adjacency file.
@@ -260,8 +304,21 @@ impl CSRIndex {
         if start_byte >= end_byte {
             return Ok(Vec::new());
         }
-        let num_values = ((end_byte - start_byte) / 8) as usize;
-        let mut result = Vec::with_capacity(num_values);
+        // Never read past the end of the file, and never pre-allocate a buffer
+        // sized from an unvalidated count: a corrupt offset/adjacency value must
+        // not turn into a huge allocation.
+        let file_bytes = fh.get_num_pages().saturating_mul(PAGE_SIZE as u64);
+        let end_byte = end_byte.min(file_bytes);
+        if start_byte >= end_byte {
+            return Ok(Vec::new());
+        }
+        let num_values = bounded_value_count(start_byte, end_byte, file_bytes);
+        let mut result = Vec::new();
+        result.try_reserve_exact(num_values).map_err(|e| {
+            crate::LightningError::Internal(format!(
+                "CSR read refused: cannot allocate {num_values} values: {e}"
+            ))
+        })?;
         let mut byte_pos = start_byte;
         while byte_pos < end_byte {
             let page_idx = byte_pos / PAGE_SIZE as u64;
@@ -332,7 +389,10 @@ impl CSRIndex {
         }
 
         let adj_start = CSR_HEADER_SIZE as u64;
-        let adj_end = adj_start + total_adj * 8;
+        // `total_adj` comes from the on-disk offset table and may be corrupt;
+        // saturate here and let `read_u64_batch` clamp to the real file size so
+        // a garbage count cannot drive a huge allocation.
+        let adj_end = adj_start.saturating_add(total_adj.saturating_mul(8));
         let adj_values = self.read_u64_batch(bm, &self.adj_node_fh, adj_start, adj_end, tx)?;
 
         let mut result = Vec::with_capacity(adj_values.len());
@@ -475,10 +535,24 @@ impl CSRIndex {
         let mut sorted_edges = edges.to_vec();
         sorted_edges.sort_by_key(|e| e.0);
 
-        let mut offsets = vec![0u64; (num_nodes + 2) as usize];
+        // Size the offset table defensively: reject corrupt/overflowing node
+        // counts before allocating (see `checked_offset_slots`). This is a
+        // recoverable error, not an OOM abort.
+        let offset_slots = checked_offset_slots(num_nodes)?;
+        let mut offsets: Vec<u64> = Vec::new();
+        offsets.try_reserve_exact(offset_slots).map_err(|e| {
+            crate::LightningError::Internal(format!(
+                "CSR build refused: cannot allocate {offset_slots} offset slots: {e}"
+            ))
+        })?;
+        offsets.resize(offset_slots, 0);
         for &(src, _) in &sorted_edges {
             if src <= num_nodes {
-                offsets[(src + 1) as usize] += 1;
+                // `src <= num_nodes` and `num_nodes + 2` did not overflow, so
+                // `src + 1` is in bounds; checked() keeps this panic-free anyway.
+                if let Some(idx) = src.checked_add(1) {
+                    offsets[idx as usize] += 1;
+                }
             }
         }
         for i in 1..offsets.len() {
@@ -575,5 +649,103 @@ impl CSRIndex {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::buffer_manager::BufferManager;
+    use crate::storage::wal::WAL;
+    use crate::transaction::TransactionManager;
+    use crate::SyncMode;
+
+    type CsrFixture = (
+        tempfile::TempDir,
+        BufferManager,
+        Arc<FileHandle>,
+        Arc<FileHandle>,
+        Arc<crate::transaction::transaction_manager::Transaction>,
+    );
+
+    fn setup_csr() -> CsrFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let offset_fh = Arc::new(FileHandle::open(&dir.path().join("fwd_offset.ltng")).unwrap());
+        let adj_fh = Arc::new(FileHandle::open(&dir.path().join("fwd_adj.ltng")).unwrap());
+        let wal = Arc::new(WAL::new(dir.path(), SyncMode::Off).unwrap());
+        let tm = Arc::new(TransactionManager::new(Arc::clone(&wal)));
+        tm.set_self_weak(Arc::downgrade(&tm));
+        let tx = Arc::new(tm.begin(false).unwrap());
+        let bm = BufferManager::new(256, None, false, 0, 0.0);
+        (dir, bm, offset_fh, adj_fh, tx)
+    }
+
+    #[test]
+    fn build_rejects_overflowing_and_absurd_node_counts() {
+        let (_dir, bm, offset_fh, adj_fh, tx) = setup_csr();
+        let edges = vec![(0u64, 1u64)];
+        // u64::MAX overflows; MAX_CSR_NODES exceeds the safety ceiling. Both
+        // must return an error instead of attempting a huge allocation.
+        assert!(
+            CSRIndex::build(&bm, offset_fh.clone(), adj_fh.clone(), &edges, u64::MAX, &tx).is_err()
+        );
+        assert!(CSRIndex::build(
+            &bm,
+            offset_fh.clone(),
+            adj_fh.clone(),
+            &edges,
+            MAX_CSR_NODES,
+            &tx
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn build_and_scan_round_trip() {
+        let (_dir, bm, offset_fh, adj_fh, tx) = setup_csr();
+        let edges = vec![(0u64, 1u64), (0, 2), (3, 4)];
+        CSRIndex::build(&bm, offset_fh.clone(), adj_fh.clone(), &edges, 3, &tx).unwrap();
+
+        let idx = CSRIndex::new(offset_fh, adj_fh);
+        let mut scanned = idx.scan_edges_from_csr(&bm, &tx).unwrap();
+        scanned.sort_unstable();
+        let mut expected = edges.clone();
+        expected.sort_unstable();
+        assert_eq!(scanned, expected);
+    }
+
+    #[test]
+    fn checked_offset_slots_normal_and_boundary() {
+        assert_eq!(checked_offset_slots(0).unwrap(), 2);
+        assert_eq!(checked_offset_slots(10).unwrap(), 12);
+        // Exactly at the ceiling: MAX_CSR_NODES - 2 nodes -> MAX_CSR_NODES slots.
+        assert_eq!(
+            checked_offset_slots(MAX_CSR_NODES - 2).unwrap(),
+            MAX_CSR_NODES as usize
+        );
+    }
+
+    #[test]
+    fn checked_offset_slots_rejects_overflow_and_absurd_counts() {
+        // u64::MAX would overflow `num_nodes + 2`.
+        assert!(checked_offset_slots(u64::MAX).is_err());
+        assert!(checked_offset_slots(u64::MAX - 1).is_err());
+        // One node past the ceiling is refused with a recoverable error.
+        assert!(checked_offset_slots(MAX_CSR_NODES - 1).is_err());
+        assert!(checked_offset_slots(MAX_CSR_NODES).is_err());
+    }
+
+    #[test]
+    fn bounded_value_count_clamps_to_file_size() {
+        // Requested range well past a 4096-byte file: only 4096 bytes are read.
+        assert_eq!(bounded_value_count(0, 1 << 40, 4096), 512);
+        // Non-zero start.
+        assert_eq!(bounded_value_count(16, 1 << 40, 4096), (4096 - 16) / 8);
+        // Requested range fully inside the file is honoured.
+        assert_eq!(bounded_value_count(0, 80, 4096), 10);
+        // Degenerate ranges read nothing.
+        assert_eq!(bounded_value_count(4096, 8192, 4096), 0);
+        assert_eq!(bounded_value_count(100, 50, 4096), 0);
+        assert_eq!(bounded_value_count(0, 0, 4096), 0);
     }
 }
