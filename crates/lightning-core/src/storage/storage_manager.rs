@@ -1186,15 +1186,27 @@ impl StorageManager {
         let mut edges = Vec::with_capacity(num_rows as usize);
         let mut max_node_id = 0;
         let mut dropped_corrupt = 0u64;
+        let mut dropped_tombstone = 0u64;
         for (src, dst) in src_ids.into_iter().zip(dst_ids.into_iter()) {
-            let s = src.as_node();
-            let d = dst.as_node();
+            // A deleted/detached endpoint reads back as `Null` (or another
+            // non-node value); `as_node()` would coerce it to 0 and fabricate a
+            // bogus `0 -> 0` self-edge in the CSR. Require real node endpoints.
+            let (Value::Node(s), Value::Node(d)) = (&src, &dst) else {
+                dropped_tombstone += 1;
+                continue;
+            };
+            let (s, d) = (*s, *d);
             if node_capacity > 0 && (s >= node_capacity || d >= node_capacity) {
                 dropped_corrupt += 1;
                 continue;
             }
             edges.push((s, d));
             max_node_id = std::cmp::max(max_node_id, std::cmp::max(s, d));
+        }
+        if dropped_tombstone > 0 {
+            tracing::debug!(
+                "rebuild_csr: skipped {dropped_tombstone} tombstoned/detached row(s) in {table_name}"
+            );
         }
         if dropped_corrupt > 0 {
             tracing::error!(
