@@ -165,7 +165,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
     let mut where_clause_opt = None;
     let mut clauses = Vec::new();
 
-    for i in p.into_inner() {
+    // Collect first so a MERGE can look ahead: `MERGE ... SET ...` must be
+    // treated as a Merge clause followed by a Set clause, not returned as a
+    // standalone `Statement::Merge` that silently drops the trailing SET.
+    let inner: Vec<_> = p.into_inner().collect();
+    let total = inner.len();
+    for (idx, i) in inner.into_iter().enumerate() {
         match i.as_rule() {
             Rule::transaction_statement => {
                 return Ok(Statement::Transaction(
@@ -595,9 +600,13 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 }
 
                 if let Some(p) = pattern {
+                    // A standalone `MERGE` only when it is the sole clause;
+                    // anything after it (SET, RETURN, …) makes it a clause so the
+                    // following clauses are not dropped.
                     if match_clause_opt.is_some()
                         || !clauses.is_empty()
                         || where_clause_opt.is_some()
+                        || idx + 1 < total
                     {
                         clauses.push(Clause::Merge(MergeClause {
                             pattern: p,
