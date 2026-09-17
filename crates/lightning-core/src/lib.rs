@@ -410,6 +410,10 @@ impl DatabaseMetrics {
 pub struct Database {
     pub(crate) _path: PathBuf,
     pub(crate) _config: SystemConfig,
+    /// Exclusive advisory lock held for the lifetime of the database. Dropping
+    /// it (on close/exit) releases the lock. Prevents two processes from opening
+    /// the same database directory.
+    pub(crate) _db_lock: Option<std::fs::File>,
     pub(crate) storage_manager: Arc<RwLock<crate::storage::storage_manager::StorageManager>>,
     pub(crate) wal: Arc<WAL>,
     pub(crate) transaction_manager: Arc<TransactionManager>,
@@ -471,9 +475,53 @@ impl Drop for Database {
 }
 
 impl Database {
+    /// Acquire the exclusive advisory lock for `path` (a `LOCK` file inside the
+    /// database directory). Returns the held file (dropping it releases the
+    /// lock) or an error when another process already holds it. No-op on
+    /// non-Unix platforms.
+    fn acquire_db_lock(path: &Path) -> Result<Option<std::fs::File>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let lock_path = path.join("LOCK");
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&lock_path)
+                .map_err(|e| {
+                    LightningError::Internal(format!(
+                        "cannot open lock file {}: {e}",
+                        lock_path.display()
+                    ))
+                })?;
+            // SAFETY: `as_raw_fd` returns a valid fd owned by `file`, which
+            // outlives the call and holds the lock.
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc != 0 {
+                return Err(LightningError::Internal(format!(
+                    "database at {} is already open in another process",
+                    path.display()
+                )));
+            }
+            Ok(Some(file))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(None)
+        }
+    }
+
     pub fn new<P: AsRef<Path>>(path: P, config: SystemConfig) -> Result<Arc<Self>> {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
+        std::fs::create_dir_all(&path)?;
+        // Single-writer guard: two processes on one database corrupt state and
+        // surface as spurious internal lock errors. Take an exclusive advisory
+        // lock and fail fast if another process already holds it.
+        let db_lock = Self::acquire_db_lock(&path)?;
         let header_path = path.join("database.header");
         let header = if header_path.exists() {
             crate::storage::DatabaseHeader::load(&header_path)?
@@ -619,6 +667,7 @@ impl Database {
         let db = Arc::new(Self {
             _path: path,
             _config: config,
+            _db_lock: db_lock,
             storage_manager: Arc::new(RwLock::new(storage_manager)),
             wal,
             transaction_manager,
