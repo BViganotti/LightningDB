@@ -252,7 +252,7 @@ impl PhysicalOperator for PhysicalCreate {
                                 }
                             }
                         }
-                        if let Err(e) = fts.commit() {
+                        if let Err(e) = fts.commit_if_pending() {
                             tracing::warn!("FTS commit error for CREATE batch: {e}");
                         }
                     }
@@ -563,7 +563,7 @@ impl PhysicalOperator for PhysicalSet {
                         if let Err(e) = fts.insert_multi_field(*node_id, &refs) {
                             tracing::warn!("FTS insert error during SET: {e}");
                         }
-                        if let Err(e) = fts.commit() {
+                        if let Err(e) = fts.commit_if_pending() {
                             tracing::warn!("FTS commit error during SET: {e}");
                         }
                     }
@@ -738,7 +738,7 @@ impl PhysicalOperator for PhysicalDelete {
                         if let Err(e) = fts.delete(id) {
                             tracing::warn!("FTS delete error for node {}: {e}", id);
                         }
-                        if let Err(e) = fts.commit() {
+                        if let Err(e) = fts.commit_if_pending() {
                             tracing::warn!("FTS commit error after delete: {e}");
                         }
                     }
@@ -1465,7 +1465,7 @@ impl PhysicalOperator for PhysicalMerge {
                     if let Err(e) = fts.insert_multi_field_batch(&batch) {
                         tracing::error!("FTS insert_multi_field_batch error during merge: {}", e);
                     }
-                    if let Err(e) = fts.commit() {
+                    if let Err(e) = fts.commit_if_pending() {
                         tracing::error!("FTS commit error during merge: {}", e);
                     }
                 }

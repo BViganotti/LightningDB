@@ -189,12 +189,33 @@ impl MemoryStore {
                  ttl_seconds INT64, metadata STRING, \
                  valid_from INT64, valid_until INT64, PRIMARY KEY (id))"
             );
-            self.conn.execute(&create_entity, None)?;
+            // Concurrent MemoryStore instances may race to create the schema;
+            // the loser of the race must tolerate "already exists" rather than
+            // fail its first operation.
+            if let Err(e) = self.conn.execute(&create_entity, None) {
+                let created = db
+                    .storage_manager
+                    .read()
+                    .node_tables
+                    .contains_key(ENTITY_TABLE);
+                if !created {
+                    return Err(e);
+                }
+            }
 
             let create_relates = format!(
                 "CREATE REL TABLE {RELATES_TABLE} (FROM {ENTITY_TABLE} TO {ENTITY_TABLE}, type STRING, weight DOUBLE, created_at TIMESTAMP)"
             );
-            self.conn.execute(&create_relates, None)?;
+            if let Err(e) = self.conn.execute(&create_relates, None) {
+                let created = db
+                    .storage_manager
+                    .read()
+                    .rel_tables
+                    .contains_key(RELATES_TABLE);
+                if !created {
+                    return Err(e);
+                }
+            }
         }
 
         // Ensure all indexes exist (they are not persisted across restarts)

@@ -2,6 +2,7 @@ use crate::storage::buffer_manager::BufferManager;
 use crate::Result;
 use parking_lot::RwLock;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
@@ -18,6 +19,11 @@ pub struct InvertedIndex {
     id_field: Field,
     /// Map from column name to tantivy Field for multi-column FTS.
     content_fields: std::collections::HashMap<String, Field>,
+    /// True when writes have been buffered into the Tantivy writer but not yet
+    /// committed. Committing every single insert was the dominant cost of
+    /// `MemoryStore` writes (a Tantivy commit fsyncs, ~0.2s); small batches now
+    /// defer the commit until the next search or checkpoint.
+    pending: AtomicBool,
 }
 
 impl InvertedIndex {
@@ -65,7 +71,17 @@ impl InvertedIndex {
             reader,
             id_field,
             content_fields,
+            pending: AtomicBool::new(false),
         })
+    }
+
+    fn mark_pending(&self) {
+        self.pending.store(true, Ordering::Release);
+    }
+
+    /// True when there are uncommitted FTS writes.
+    pub fn has_pending(&self) -> bool {
+        self.pending.load(Ordering::Acquire)
     }
 
     pub fn insert_batch(
@@ -88,6 +104,7 @@ impl InvertedIndex {
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
+        self.mark_pending();
         Ok(())
     }
 
@@ -109,6 +126,7 @@ impl InvertedIndex {
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
+        self.mark_pending();
         Ok(())
     }
 
@@ -130,6 +148,7 @@ impl InvertedIndex {
         writer
             .add_document(doc)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        self.mark_pending();
         Ok(())
     }
 
@@ -146,13 +165,26 @@ impl InvertedIndex {
         writer
             .commit()
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        self.pending.store(false, Ordering::Release);
         Ok(())
+    }
+
+    /// Commit only if there are buffered writes, so reads/checkpoints flush
+    /// the index without paying a commit when nothing changed.
+    pub fn commit_if_pending(&self) -> Result<()> {
+        if self.has_pending() {
+            self.commit()
+        } else {
+            Ok(())
+        }
     }
 
     pub fn delete(&self, node_id: u64) -> Result<()> {
         let writer = self.writer.write();
         let term = tantivy::Term::from_field_u64(self.id_field, node_id);
         writer.delete_term(term);
+        drop(writer);
+        self.mark_pending();
         Ok(())
     }
 
@@ -162,6 +194,8 @@ impl InvertedIndex {
             let term = tantivy::Term::from_field_u64(self.id_field, node_id);
             writer.delete_term(term);
         }
+        drop(writer);
+        self.mark_pending();
         Ok(())
     }
 
@@ -172,6 +206,9 @@ impl InvertedIndex {
         _bm: &BufferManager,
         _tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Vec<(u64, f32)>> {
+        // Flush buffered writes so a search always sees prior inserts/deletes
+        // (the write path defers commits for throughput).
+        self.commit_if_pending()?;
         self.reader.reload().map_err(|e| {
             crate::LightningError::Internal(format!("inverted_index reload failed: {e}"))
         })?;

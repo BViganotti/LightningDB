@@ -997,6 +997,18 @@ impl Database {
         // Flush all dirty pages to disk and sync data files
         self.buffer_manager.checkpoint()?;
 
+        // Flush any deferred FTS writes so the checkpoint is durable. The
+        // write path defers Tantivy commits for throughput; without this they
+        // would only reach disk on the writer's memory budget.
+        {
+            let storage = self.storage_manager.read();
+            for fts in storage.fts_indexes.values() {
+                if let Err(e) = fts.commit_if_pending() {
+                    tracing::warn!("FTS commit during checkpoint failed: {e}");
+                }
+            }
+        }
+
         // Persist free space map
         {
             let fsm_path = self._path.join("free_space.bin");
@@ -2296,8 +2308,15 @@ impl Connection {
                         );
                     }
                 }
-                if let Err(e) = fts.commit() {
-                    tracing::warn!("FTS commit error: {}", e);
+                // Defer the Tantivy commit for small batches: committing on
+                // every single-row insert fsyncs and dominated write latency.
+                // Buffered writes are flushed before the next FTS search and
+                // at checkpoint (and Tantivy auto-commits at its memory budget).
+                const FTS_COMMIT_BATCH_ROWS: usize = 256;
+                if num_rows >= FTS_COMMIT_BATCH_ROWS {
+                    if let Err(e) = fts.commit() {
+                        tracing::warn!("FTS commit error: {}", e);
+                    }
                 }
             }
         }

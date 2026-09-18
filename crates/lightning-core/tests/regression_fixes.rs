@@ -243,3 +243,99 @@ fn merge_matches_existing_node_by_non_pk_property() {
         .expect("val is Int64");
     assert_eq!(v.value(0), 999, "ON MATCH SET applied");
 }
+
+// --- MemoryStore / FTS -----------------------------------------------------
+
+use lightning_core::memory::{MemoryEntity, MemoryStore};
+
+fn embedding(seed: f32, dim: usize) -> Vec<f32> {
+    (0..dim).map(|i| (seed + i as f32).sin()).collect()
+}
+
+/// Deferred FTS commits must still be visible to a subsequent search.
+#[test]
+fn memory_store_recall_sees_just_stored_entity() {
+    let (_d, db) = new_db();
+    let store = MemoryStore::new(db.connect(), 384);
+    store
+        .store(MemoryEntity {
+            id: "mem_1".into(),
+            entity_type: "note".into(),
+            content: "the quick brown zanzibar fox".into(),
+            embedding: embedding(1.0, 384),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let hits = store.recall("zanzibar", &embedding(1.0, 384), 10).unwrap();
+    assert!(
+        hits.iter().any(|h| h.entity.id == "mem_1"),
+        "search must flush deferred FTS writes"
+    );
+}
+
+/// Deferred FTS writes must be durable across a checkpoint + reopen.
+#[test]
+fn memory_store_fts_survives_checkpoint() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    {
+        let db = Database::new(&path, SystemConfig::default()).unwrap();
+        let store = MemoryStore::new(db.connect(), 384);
+        store
+            .store(MemoryEntity {
+                id: "persist_1".into(),
+                entity_type: "note".into(),
+                content: "durable macadamia content".into(),
+                embedding: embedding(2.0, 384),
+                ..Default::default()
+            })
+            .unwrap();
+        db.checkpoint().unwrap();
+    }
+    let db = Database::new(&path, SystemConfig::default()).unwrap();
+    let store = MemoryStore::new(db.connect(), 384);
+    let hits = store.recall("macadamia", &embedding(2.0, 384), 10).unwrap();
+    assert!(
+        hits.iter().any(|h| h.entity.id == "persist_1"),
+        "FTS writes must survive checkpoint + reopen"
+    );
+}
+
+/// Concurrent MemoryStore setup must not fail the schema-creation race, and
+/// all writes must succeed.
+#[test]
+fn memory_store_concurrent_writes_no_setup_errors() {
+    let dir = tempdir().unwrap();
+    let db = Arc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
+    let errors = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let handles: Vec<_> = (0..4u64)
+        .map(|t| {
+            let db = Arc::clone(&db);
+            let errors = Arc::clone(&errors);
+            std::thread::spawn(move || {
+                let store = MemoryStore::new(db.connect(), 384);
+                for i in 0..10u64 {
+                    let e = MemoryEntity {
+                        id: format!("concurrent_{t}_{i}"),
+                        entity_type: "n".into(),
+                        content: format!("thread {t} entity {i}"),
+                        embedding: embedding((t * 10 + i) as f32, 384),
+                        ..Default::default()
+                    };
+                    if store.store(e).is_err() {
+                        errors.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    assert_eq!(
+        errors.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "concurrent schema setup and writes must all succeed"
+    );
+}
