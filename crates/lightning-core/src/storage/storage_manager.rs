@@ -990,6 +990,17 @@ impl StorageManager {
                 table.flush_pending(bm, tx)?;
             }
         }
+
+        // Flush pending null-bitmap changes as well. `SET` on a column that was
+        // NULL records the cleared bit in an in-memory `pending_nulls` list;
+        // without flushing it, the null page still says "null" and vectorized
+        // scans (which read the null page directly) keep returning null even
+        // though the data bytes were written.
+        for table in self.node_tables.values().chain(self.rel_tables.values()) {
+            for col in &table.columns {
+                col.flush_pending_nulls(bm, tx)?;
+            }
+        }
         Ok(())
     }
 

@@ -35,7 +35,10 @@ pub struct Column {
     atomic_null_count: AtomicU64,
     /// Buffered null bit changes: (byte_offset_in_null_page, 0|1).
     /// Flushed to actual pages before batch ops or checkpoint.
-    pending_nulls: parking_lot::Mutex<Vec<(usize, u8)>>,
+    /// Buffered null bit changes, SHARED across clones (a plan-time column
+    /// clone must record null-bit changes on the same list the canonical column
+    /// flushes, otherwise a `SET` that clears a null bit is lost).
+    pending_nulls: Arc<parking_lot::Mutex<Vec<(usize, u8)>>>,
 }
 
 impl Clone for Column {
@@ -52,7 +55,7 @@ impl Clone for Column {
             dirty: Arc::clone(&self.dirty),
             atomic_num_values: AtomicU64::new(self.atomic_num_values.load(Ordering::Acquire)),
             atomic_null_count: AtomicU64::new(self.atomic_null_count.load(Ordering::Acquire)),
-            pending_nulls: parking_lot::Mutex::new(Vec::new()),
+            pending_nulls: Arc::clone(&self.pending_nulls),
         }
     }
 }
@@ -78,7 +81,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: AtomicU64::new(0),
             atomic_null_count: AtomicU64::new(0),
-            pending_nulls: parking_lot::Mutex::new(Vec::new()),
+            pending_nulls: Arc::new(parking_lot::Mutex::new(Vec::new())),
         }
     }
 
@@ -103,7 +106,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: AtomicU64::new(0),
             atomic_null_count: AtomicU64::new(0),
-            pending_nulls: parking_lot::Mutex::new(Vec::new()),
+            pending_nulls: Arc::new(parking_lot::Mutex::new(Vec::new())),
         }
     }
 
@@ -1333,7 +1336,6 @@ impl Column {
             self.fh.add_new_page()?;
         }
         let frame = bm.create_new_version(Arc::clone(&self.fh), page_idx, tx)?;
-
         let mut stack_buf = [0u8; 64];
         // SAFETY: SAFETY: Same append path, pinned frame.
         unsafe {

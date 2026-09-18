@@ -90,13 +90,10 @@ fn merge_on_create_and_match_set_persists() {
     assert_eq!(cell_i64(&res, 1), 56);
 }
 
-/// Known LightningDB limitation: a bare `SET` applied to a string column that
-/// was NULL at creation does not persist (ints do). The parser now routes a
-/// trailing SET to a real Set clause (it used to be dropped entirely), but the
-/// column write for the null→string transition is still lost. All in-repo
-/// writers use `ON CREATE SET`/`ON MATCH SET`, which avoids it.
+/// Regression: `SET` of a string column that was NULL at creation must persist
+/// (the null bit is cleared and must be flushed to the null page, otherwise
+/// vectorized scans keep returning null).
 #[test]
-#[ignore = "LightningDB bug: SET of a string column that was NULL at creation does not persist"]
 fn set_null_string_column_bug() {
     let (_d, db) = setup();
     let conn = db.connect();
