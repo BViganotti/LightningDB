@@ -453,11 +453,15 @@ impl Table {
     }
 
     pub fn optimize(
-        &mut self,
+        &self,
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        for col in &mut self.columns {
+        // `Column::optimize` takes `&self` (it mutates column state behind the
+        // column's own locks), so the table only needs a shared borrow. Taking
+        // `&mut self` forced callers to hold the storage write lock and then
+        // deadlock in `commit`, which acquires the storage read lock.
+        for col in &self.columns {
             col.optimize(bm, tx, true)?;
         }
         Ok(())

@@ -422,6 +422,7 @@ mod tests {
                 }],
                 primary_key: None,
                 num_rows: 0,
+                next_row_id: 0,
                 stats: crate::storage::stats::TableStats::new(0),
                 constraints: Vec::new(),
                 secondary_indexes: std::collections::HashMap::new(),
@@ -478,6 +479,7 @@ mod tests {
                     type_: lightning_types::LogicalType::Uint64,
                 }],
                 num_rows: 0,
+                next_row_id: 0,
                 stats: crate::storage::stats::TableStats::new(0),
             },
         );
@@ -536,6 +538,7 @@ mod tests {
             }],
             primary_key: None,
             num_rows: 0,
+            next_row_id: 0,
             stats: crate::storage::stats::TableStats::new(0),
             constraints: Vec::new(),
             secondary_indexes: std::collections::HashMap::new(),

@@ -33,7 +33,7 @@ copy_from = { ^"FROM" ~ string_literal ~ ( "(" ~ copy_option ~ ("," ~ copy_optio
 copy_to = { ^"TO" ~ string_literal ~ ( "(" ~ copy_option ~ ("," ~ copy_option)* ~ ")" )? }
 copy_option = { variable ~ "=" ~ literal }
 column_def = { variable ~ data_type }
-data_type = { ^"INT64" | ^"INT32" | ^"DOUBLE" | ^"FLOAT" | ^"STRING" | ^"BOOL" | ^"DATE" | ^"TIMESTAMP" | list_type | struct_type }
+data_type = { ^"INT64" | ^"INT32" | ^"UINT64" | ^"UINT32" | ^"DOUBLE" | ^"FLOAT" | ^"STRING" | ^"BOOL" | ^"DATE" | ^"TIMESTAMP" | list_type | struct_type }
 list_type = { ^"LIST" ~ "(" ~ data_type ~ ")" }
 struct_type = { ^"STRUCT" ~ "(" ~ variable ~ data_type ~ ("," ~ variable ~ data_type)* ~ ")" }
 primary_key_def = { ^"PRIMARY" ~ ^"KEY" ~ "(" ~ variable ~ ")" }
@@ -116,7 +116,10 @@ xor_op = @{ ^"XOR" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 and_op = @{ ^"AND" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 not_op = @{ ^"NOT" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 comparison_expr = { term ~ ( comparison_operator ~ term | string_predicate | is_null_check | in_check )? }
-term = { factor ~ ((add_op | sub_op) ~ factor)* }
+term = { unary ~ ((add_op | sub_op) ~ unary)* }
+// Unary sign(s) bind tighter than add/sub but looser than mul/div, so
+// `-a * b` is `(-a) * b` and `-n.val` is accepted.
+unary = { (add_op | sub_op)* ~ factor }
 factor = { atom ~ ((mul_op | div_op | mod_op) ~ atom)* }
 add_op = { "+" }
 sub_op = { "-" }
@@ -132,7 +135,9 @@ ends_with_op = { ^"ENDS" ~ ^"WITH" ~ term }
 
 comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
 
-atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | list_subscript | all_shortest_paths_pattern | shortest_path_pattern | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | case_expression }
+// Keyword-led constructs (CASE/CAST/EXTRACT) must precede `variable`, otherwise
+// `CASE` is consumed as an identifier and the WHEN clauses fail to parse.
+atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | case_expression | list_subscript | all_shortest_paths_pattern | shortest_path_pattern | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression }
 list_quantifier = { all_q | any_q | none_q | single_q }
 all_q = { ^"ALL" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
 any_q = { ^"ANY" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
@@ -147,7 +152,10 @@ range_operator = { ".." }
 parameter = @{ "$" ~ variable }
 exists_subquery = { ^"EXISTS" ~ "{" ~ (match_clause ~ where_clause?)+ ~ "}" }
 count_subquery = { ^"COUNT" ~ "{" ~ (match_clause ~ where_clause?)+ ~ "}" }
-case_expression = { ^"CASE" ~ expression? ~ when_then_clause+ ~ else_clause? ~ ^"END" }
+// Ordered alternatives: the simple form (`CASE WHEN ...`) is tried first so the
+// optional `expression` of the general form cannot greedily consume the `WHEN`
+// keyword as a variable.
+case_expression = { ^"CASE" ~ when_then_clause+ ~ else_clause? ~ ^"END" | ^"CASE" ~ expression ~ when_then_clause+ ~ else_clause? ~ ^"END" }
 when_then_clause = { ^"WHEN" ~ expression ~ ^"THEN" ~ expression }
 else_clause = { ^"ELSE" ~ expression }
 // Argument group is optional so zero-arg functions (date(), timestamp()) parse.

@@ -30,7 +30,17 @@ impl ScalarFunction {
             | "SECOND" | "MOD" => Ok(LogicalType::Int64),
             "DATE" | "CURRENT_DATE" => Ok(LogicalType::Date),
             "TIMESTAMP" | "CURRENT_TIMESTAMP" => Ok(LogicalType::Timestamp),
-            "COALESCE" | "ID" => {
+            // COALESCE's type is the first argument with a concrete type, not
+            // the first argument: a leading NULL (LogicalType::Any) would
+            // otherwise resolve the whole expression to Any and the planner
+            // would coerce the output to a default (Double), turning string
+            // results into numbers. The executor already mirrors this rule.
+            "COALESCE" => Ok(arg_types
+                .iter()
+                .find(|t| !matches!(t, LogicalType::Any))
+                .cloned()
+                .unwrap_or(LogicalType::Any)),
+            "ID" => {
                 if let Some(first) = arg_types.first() {
                     Ok(first.clone())
                 } else {

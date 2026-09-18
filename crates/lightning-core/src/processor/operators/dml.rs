@@ -262,6 +262,14 @@ impl PhysicalOperator for PhysicalCreate {
                         .fetch_add(num_rows as u64, Ordering::SeqCst);
                 }
             } else {
+                let base_next = self.table.next_row_id.load(Ordering::Acquire);
+                let base_rows = self
+                    .catalog
+                    .read()
+                    .get_node_table(&self.table_name)
+                    .map(|t| t.num_rows)
+                    .unwrap_or(0);
+                tx.note_table_write(&self.table_name, base_next, base_rows);
                 let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
                 let mut row_data = vec![Value::Null; self.table.columns.len()];
                 row_data[0] = Value::Node(next_id);
@@ -1310,6 +1318,14 @@ impl PhysicalOperator for PhysicalMerge {
                             .total_affected
                             .fetch_add(1, Ordering::SeqCst);
                     } else {
+                        let base_next = self.table.next_row_id.load(Ordering::Acquire);
+                        let base_rows = database
+                            .catalog
+                            .read()
+                            .get_rel_table(&self.table_name)
+                            .map(|t| t.num_rows)
+                            .unwrap_or(0);
+                        tx.note_table_write(&self.table_name, base_next, base_rows);
                         let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
                         self.shared_state.affected_ids.write().push(next_id);
                         let mut row_data = vec![Value::Null; self.table.columns.len()];

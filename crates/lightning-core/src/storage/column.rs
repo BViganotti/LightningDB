@@ -545,6 +545,9 @@ impl Column {
             return false;
         };
         let stats = self.stats.read();
+        if !stats.page_bounds_valid {
+            return false;
+        }
         if page_idx as usize >= stats.page_bounds.len() {
             return false;
         }
@@ -2203,6 +2206,7 @@ impl Column {
 
         let mut stats = self.stats.write();
         stats.page_bounds = page_bounds;
+        stats.page_bounds_valid = true;
         Ok(())
     }
 

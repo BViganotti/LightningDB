@@ -527,79 +527,85 @@ impl PhysicalOperator for PhysicalScan {
             let mut batch = RecordBatch::try_new(schema, std::mem::take(arrow_columns))
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
-            // Check has_modifications dynamically - it may change between plan creation and execution
-            let has_modifications_now = self.table.columns[0].version_info.has_modifications();
-            if has_modifications_now {
-                self.scratch_mask.clear();
+            // Row-level visibility + delete filtering.
+            //
+            // Row ids are needed for MVCC visibility and for the "deleted row"
+            // check (`DELETE` nulls `_id`). Under projection pushdown `_id` may
+            // not be in the batch, so when it is absent read the raw `_id`
+            // column for this morsel — never fall back to column 0, which would
+            // be an arbitrary projected property (its nulls must not drop rows).
+            let is_node_table = self
+                .table
+                .columns
+                .first()
+                .map(|c| c.name == "_id")
+                .unwrap_or(false);
+            let has_modifications_now = self
+                .table
+                .columns
+                .first()
+                .map(|c| c.version_info.has_modifications())
+                .unwrap_or(false);
 
-                if self.table.columns[0].name == "_id" {
-                    let col = batch.column(0);
-                    if let Some(arr) = col.as_any().downcast_ref::<UInt64Array>() {
-                        self.table.columns[0].version_info.get_visibility_mask(
-                            arr.values(),
-                            tx.tx_id,
-                            tx.read_ts,
-                            &mut self.scratch_mask,
-                        );
-                    } else if let Some(arr) = col.as_any().downcast_ref::<Int64Array>() {
-                        let row_ids: Vec<u64> = arr.values().iter().map(|&v| v as u64).collect();
-                        self.table.columns[0].version_info.get_visibility_mask(
-                            &row_ids,
-                            tx.tx_id,
-                            tx.read_ts,
-                            &mut self.scratch_mask,
-                        );
-                    }
-                } else {
-                    let row_ids: Vec<u64> = (0..batch.num_rows())
-                        .map(|i| start_row + i as u64)
-                        .collect();
+            let raw_id: Option<ArrayRef> = if is_node_table {
+                match batch.schema().index_of("_id") {
+                    Ok(pos) => Some(batch.column(pos).clone()),
+                    Err(_) => Some(self.table.columns[0].scan_to_array(
+                        &self.bm,
+                        start_row,
+                        num_rows_to_read,
+                        tx,
+                        None,
+                    )?),
+                }
+            } else {
+                None
+            };
+
+            if has_modifications_now || raw_id.is_some() {
+                let n = batch.num_rows();
+                let mut keep = vec![true; n];
+
+                if has_modifications_now {
+                    let row_ids: Vec<u64> = match &raw_id {
+                        Some(arr) => {
+                            if let Some(a) = arr.as_any().downcast_ref::<UInt64Array>() {
+                                a.values().iter().copied().collect()
+                            } else if let Some(a) = arr.as_any().downcast_ref::<Int64Array>() {
+                                a.values().iter().map(|&v| v as u64).collect()
+                            } else {
+                                (0..n).map(|i| start_row + i as u64).collect()
+                            }
+                        }
+                        None => (0..n).map(|i| start_row + i as u64).collect(),
+                    };
+                    self.scratch_mask.clear();
                     self.table.columns[0].version_info.get_visibility_mask(
                         &row_ids,
                         tx.tx_id,
                         tx.read_ts,
                         &mut self.scratch_mask,
                     );
+                    for i in 0..n.min(self.scratch_mask.len()) {
+                        keep[i] &= self.scratch_mask[i];
+                    }
                 }
 
-                let all_visible = self.scratch_mask.iter().all(|&v| v);
-                let any_visible = self.scratch_mask.iter().any(|&v| v);
+                if let Some(arr) = &raw_id {
+                    for i in 0..n.min(arr.len()) {
+                        if !arr.is_valid(i) {
+                            keep[i] = false;
+                        }
+                    }
+                }
 
-                if !all_visible {
-                    if !any_visible {
+                if keep.iter().any(|&v| !v) {
+                    if keep.iter().all(|&v| !v) {
                         continue;
                     }
-                    batch = arrow::compute::filter_record_batch(
-                        &batch,
-                        &BooleanArray::from(std::mem::take(&mut self.scratch_mask)),
-                    )
-                    .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                }
-            }
-
-            // Filter out rows with null _id (deleted via DELETE or soft-delete)
-            if batch.num_rows() > 0 && batch.num_columns() > 0 {
-                let id_col = batch.column(0);
-                if id_col.data_type() == &arrow::datatypes::DataType::UInt64
-                    || id_col.data_type() == &arrow::datatypes::DataType::Int64
-                {
-                    let mut keep = Vec::with_capacity(batch.num_rows());
-                    let mut any_null = false;
-                    for i in 0..batch.num_rows() {
-                        let is_valid = id_col.is_valid(i);
-                        keep.push(is_valid);
-                        if !is_valid {
-                            any_null = true;
-                        }
-                    }
-                    if any_null {
-                        let all_valid = keep.iter().all(|&v| v);
-                        if !all_valid {
-                            let keep_arr = BooleanArray::from(keep);
-                            batch = arrow::compute::filter_record_batch(&batch, &keep_arr)
-                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-                        }
-                    }
+                    let keep_arr = BooleanArray::from(keep);
+                    batch = arrow::compute::filter_record_batch(&batch, &keep_arr)
+                        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                 }
             }
 

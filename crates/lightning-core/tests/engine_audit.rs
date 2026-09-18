@@ -264,12 +264,11 @@ fn audit_delete_then_scan_and_count() {
     assert_eq!(remaining, 9, "scan must see the 9 surviving rows");
 }
 
-/// KNOWN ENGINE BUG (reproducer): after deleting a row, equality predicates on
-/// an INT64 column return no rows for every value except 0, even though scans
-/// and `get_value` return the correct data and range predicates work.
+/// Equality on an INT64 column must stay correct after a delete. Regression
+/// guard for the zone-map bug where a deleted row's null placeholder `0`
+/// fabricated a `{min:0,max:0}` page bound and pruned every other value.
 #[test]
-#[ignore = "known engine bug: int equality filter returns wrong results after DELETE"]
-fn known_bug_int_equality_after_delete() {
+fn audit_int_equality_after_delete() {
     let h = Db::new();
     h.exec("CREATE NODE TABLE U(id INT64, s STRING)");
     for id in 0..6i64 {
@@ -386,7 +385,6 @@ fn audit_reopen_without_checkpoint_replays_wal() {
 }
 
 #[test]
-#[ignore = "known engine bug: ROLLBACK does not revert DML"]
 fn audit_rollback_not_visible() {
     let h = Db::new();
     let c = h.db.connect();
@@ -434,7 +432,6 @@ fn audit_relationship_after_node_delete() {
 }
 
 #[test]
-#[ignore = "known engine bug: checkpoint + reopen after DELETE loses a row"]
 fn audit_reopen_after_delete() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");

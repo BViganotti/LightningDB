@@ -722,9 +722,10 @@ impl Database {
                 false,
                 Some(stats),
             )?;
-            if table_entry.num_rows > 0 {
+            let physical = table_entry.next_row_id.max(table_entry.num_rows);
+            if physical > 0 {
                 if let Some(table) = storage_manager.node_tables.get_mut(&table_entry.name) {
-                    table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                    table.next_row_id.store(physical, std::sync::atomic::Ordering::Release);
                 }
             }
             if table_entry.primary_key.is_some() {
@@ -751,9 +752,10 @@ impl Database {
                 true,
                 Some(stats),
             )?;
-            if table_entry.num_rows > 0 {
+            let physical = table_entry.next_row_id.max(table_entry.num_rows);
+            if physical > 0 {
                 if let Some(table) = storage_manager.rel_tables.get_mut(&table_entry.name) {
-                    table.next_row_id.store(table_entry.num_rows, std::sync::atomic::Ordering::Release);
+                    table.next_row_id.store(physical, std::sync::atomic::Ordering::Release);
                 }
             }
         }
@@ -1013,14 +1015,18 @@ impl Database {
             let mut cat = self.catalog.write();
             for (table_name, table) in &storage.node_tables {
                 table.update_column_stats();
+                let next_row_id = table.next_row_id.load(Ordering::Acquire);
                 if let Some(entry) = cat.node_tables.get_mut(table_name) {
                     entry.stats = table.stats.read().clone();
+                    entry.next_row_id = next_row_id.max(entry.next_row_id);
                 }
             }
             for (table_name, table) in &storage.rel_tables {
                 table.update_column_stats();
+                let next_row_id = table.next_row_id.load(Ordering::Acquire);
                 if let Some(entry) = cat.rel_tables.get_mut(table_name) {
                     entry.stats = table.stats.read().clone();
+                    entry.next_row_id = next_row_id.max(entry.next_row_id);
                 }
             }
             // Save while the write lock is still held, so no concurrent writer

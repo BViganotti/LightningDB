@@ -256,8 +256,20 @@ impl FunctionRegistry {
                             "COALESCE requires at least 1 argument".into(),
                         ));
                     }
-                    let target_type = args.iter()
-                        .find(|a| a.data_type() != &arrow::datatypes::DataType::Null)
+                    // Prefer the first argument that can actually contribute a
+                    // value: an all-null argument (e.g. a leading `NULL`
+                    // literal) must not dictate the result type, or a string
+                    // result gets cast to the null literal's numeric type.
+                    let target_type = args
+                        .iter()
+                        .find(|a| {
+                            a.data_type() != &arrow::datatypes::DataType::Null
+                                && a.null_count() < a.len()
+                        })
+                        .or_else(|| {
+                            args.iter()
+                                .find(|a| a.data_type() != &arrow::datatypes::DataType::Null)
+                        })
                         .map(|a| a.data_type().clone())
                         .unwrap_or_else(|| args[0].data_type().clone());
 

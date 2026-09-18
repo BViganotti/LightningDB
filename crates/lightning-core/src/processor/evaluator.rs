@@ -398,19 +398,28 @@ impl ExpressionEvaluator {
                         }
                     }
                     "LENGTH" => {
-                        // length() on a single argument: returns the argument itself
-                        // if it's a number, or the length if it's a list/string.
-                        // For variable-length paths, the RecursiveJoin outputs depth
-                        // as a column named after the relationship variable. The
-                        // expression `length(r)` resolves to Function("LENGTH", [Variable("r")])
-                        // and we evaluate the argument and return its value.
+                        // For variable-length paths the RecursiveJoin emits the
+                        // path depth as a column named after the relationship
+                        // variable, so `length(r)` evaluates to a numeric array
+                        // that must be returned unchanged. Strings and lists,
+                        // however, must go through the registered LENGTH
+                        // function to compute their length (previously the
+                        // argument was returned as-is, so `length('hello')`
+                        // yielded the string instead of 5).
                         if args.len() == 1 {
                             let val = Self::evaluate(
                                 &args[0], batch, params, num_rows, registry, database,
                             )?;
-                            // Convert to Int64 — the depth from RecursiveJoin is Int64.
-                            // If the argument is already numeric, just return it.
-                            return Ok(val);
+                            let is_text_or_list = matches!(
+                                val.data_type(),
+                                arrow::datatypes::DataType::Utf8
+                                    | arrow::datatypes::DataType::LargeUtf8
+                                    | arrow::datatypes::DataType::List(_)
+                                    | arrow::datatypes::DataType::LargeList(_)
+                            );
+                            if !is_text_or_list {
+                                return Ok(val);
+                            }
                         }
                     }
                     _ => {}

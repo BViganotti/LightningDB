@@ -627,6 +627,13 @@ impl BufferManager {
         frame.pin_count.fetch_sub(1, Ordering::Release);
     }
 
+    /// Release a pin when only the frame is available (e.g. frames pinned by
+    /// `pin_page_by_key` during commit). Dropping the `Arc` alone does NOT
+    /// release the pin, so callers must use this instead of `drop`.
+    pub fn unpin_frame(&self, frame: &Arc<Frame>) {
+        frame.pin_count.fetch_sub(1, Ordering::Release);
+    }
+
     /// Pin a frame in the buffer pool by matching its exact version mark.
     /// Unlike `pin_page`, this does NOT load from disk on miss — it only
     /// finds frames already present in the pool. Used during commit to

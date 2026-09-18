@@ -1923,6 +1923,8 @@ impl<'a> Binder<'a> {
         match data_type {
             crate::parser::ast::DataType::Int64 => LogicalType::Int64,
             crate::parser::ast::DataType::Int32 => LogicalType::Int32,
+            crate::parser::ast::DataType::Uint64 => LogicalType::Uint64,
+            crate::parser::ast::DataType::Uint32 => LogicalType::Uint32,
             crate::parser::ast::DataType::Double => LogicalType::Double,
             crate::parser::ast::DataType::Float => LogicalType::Float,
             crate::parser::ast::DataType::String => LogicalType::String,

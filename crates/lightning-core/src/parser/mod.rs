@@ -1107,15 +1107,39 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
 fn parse_term(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
-        return parse_factor(ps[0].clone());
+        return parse_unary(ps[0].clone());
     }
-    let mut e = parse_factor(ps[0].clone())?;
+    let mut e = parse_unary(ps[0].clone())?;
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Arithmetic(
             Box::new(e),
             parse_arithmetic_operator(ps[i].clone())?,
-            Box::new(parse_factor(ps[i + 1].clone())?),
+            Box::new(parse_unary(ps[i + 1].clone())?),
         );
+    }
+    Ok(e)
+}
+
+/// Parse a `unary` rule: zero or more leading `+`/`-` signs before a factor.
+/// A leading `-` is lowered to `0 - expr`.
+fn parse_unary(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
+    let ps = p.into_inner().collect::<Vec<_>>();
+    let Some(last) = ps.last() else {
+        return Err(ParserError::Internal("empty unary expression".into()));
+    };
+    let mut e = parse_factor(last.clone())?;
+    for op in ps[..ps.len() - 1].iter().rev() {
+        match op.as_str() {
+            "-" => {
+                e = Expression::Arithmetic(
+                    Box::new(Expression::Literal(Literal::Integer(0))),
+                    ArithmeticOperator::Subtract,
+                    Box::new(e),
+                );
+            }
+            // Unary plus is a no-op.
+            _ => {}
+        }
     }
     Ok(e)
 }
@@ -1466,6 +1490,8 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
             match p.as_str().to_uppercase().as_str() {
                 "INT64" => Ok(DataType::Int64),
                 "INT32" => Ok(DataType::Int32),
+                "UINT64" => Ok(DataType::Uint64),
+                "UINT32" => Ok(DataType::Uint32),
                 "DOUBLE" => Ok(DataType::Double),
                 "FLOAT" => Ok(DataType::Float),
                 "STRING" => Ok(DataType::String),
@@ -1480,6 +1506,8 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
                             match inner_str.to_uppercase().as_str() {
                                 "INT64" => Ok(DataType::List(Box::new(DataType::Int64))),
                                 "INT32" => Ok(DataType::List(Box::new(DataType::Int32))),
+                                "UINT64" => Ok(DataType::List(Box::new(DataType::Uint64))),
+                                "UINT32" => Ok(DataType::List(Box::new(DataType::Uint32))),
                                 "DOUBLE" => Ok(DataType::List(Box::new(DataType::Double))),
                                 "FLOAT" => Ok(DataType::List(Box::new(DataType::Float))),
                                 "STRING" => Ok(DataType::List(Box::new(DataType::String))),
@@ -1505,6 +1533,8 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
                             let data_type = match type_str.as_str() {
                                 "INT64" => DataType::Int64,
                                 "INT32" => DataType::Int32,
+                                "UINT64" => DataType::Uint64,
+                                "UINT32" => DataType::Uint32,
                                 "DOUBLE" => DataType::Double,
                                 "FLOAT" => DataType::Float,
                                 "STRING" => DataType::String,
@@ -1555,6 +1585,8 @@ fn parse_data_type(p: pest::iterators::Pair<Rule>) -> Result<DataType, ParserErr
         _ => match p.as_str().to_uppercase().as_str() {
             "INT64" => Ok(DataType::Int64),
             "INT32" => Ok(DataType::Int32),
+            "UINT64" => Ok(DataType::Uint64),
+            "UINT32" => Ok(DataType::Uint32),
             "DOUBLE" => Ok(DataType::Double),
             "FLOAT" => Ok(DataType::Float),
             "STRING" => Ok(DataType::String),

@@ -27,7 +27,7 @@ fn test_arithmetic_functions() {
     let db = setup_db();
     let conn = db.connect();
 
-    let res = conn.query("MATCH (p:Person) RETURN ABS(p.age) AS abs_age, CEIL(p.age) AS ceil_age, FLOOR(p.age) AS floor_age, ROUND(p.age) AS round_age").unwrap();
+    let res = conn.query("MATCH (p:Person) RETURN ABS(p.age) AS abs_age, CEIL(p.age) AS ceil_age, FLOOR(p.age) AS floor_age, ROUND(p.age) AS round_age ORDER BY p.name").unwrap();
     assert!(res.is_success());
     
     let mut total_rows = 0;
@@ -50,7 +50,7 @@ fn test_string_functions() {
     let db = setup_db();
     let conn = db.connect();
 
-    let res = conn.query("MATCH (p:Person) RETURN CONCAT(p.name, ' suffix') AS concatenated, SUBSTRING(p.name, 0, 2) AS sub, REPLACE(p.name, 'A', 'X') AS replaced").unwrap();
+    let res = conn.query("MATCH (p:Person) RETURN CONCAT(p.name, ' suffix') AS concatenated, SUBSTRING(p.name, 0, 2) AS sub, REPLACE(p.name, 'A', 'X') AS replaced ORDER BY p.name").unwrap();
     assert!(res.is_success());
     
     for batch in res.batches {
@@ -72,7 +72,7 @@ fn test_coalesce_function() {
     let db = setup_db();
     let conn = db.connect();
 
-    let res = conn.query("MATCH (p:Person) RETURN COALESCE(NULL, p.name, 'default') AS coal").unwrap();
+    let res = conn.query("MATCH (p:Person) RETURN COALESCE(NULL, p.name, 'default') AS coal ORDER BY p.name").unwrap();
     assert!(res.is_success());
     
     for batch in res.batches {

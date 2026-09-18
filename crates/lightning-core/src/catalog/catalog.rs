@@ -36,6 +36,12 @@ pub struct NodeTableCatalogEntry {
     pub name: String,
     pub properties: Vec<PropertyDefinition>,
     pub num_rows: u64,
+    /// Physical row-id high-water mark. Unlike `num_rows` this is never
+    /// decremented by deletes (deleted rows are retained as null rows), so it
+    /// is the correct upper bound for scans after a reload. Zero on catalogs
+    /// written before this field existed.
+    #[serde(default)]
+    pub next_row_id: u64,
     pub primary_key: Option<String>,
     pub constraints: Vec<NodeConstraint>,
     pub stats: TableStats,
@@ -49,6 +55,9 @@ pub struct RelTableCatalogEntry {
     pub to_table: String,
     pub properties: Vec<PropertyDefinition>,
     pub num_rows: u64,
+    /// Physical row-id high-water mark; see `NodeTableCatalogEntry::next_row_id`.
+    #[serde(default)]
+    pub next_row_id: u64,
     pub stats: TableStats,
 }
 
@@ -259,6 +268,7 @@ impl Catalog {
                 name,
                 properties,
                 num_rows: 0,
+                next_row_id: 0,
                 primary_key,
                 constraints: Vec::new(),
                 stats: TableStats::new(num_props),
@@ -304,6 +314,7 @@ impl Catalog {
                 to_table: to,
                 properties,
                 num_rows: 0,
+                next_row_id: 0,
                 stats: TableStats::new(num_props),
             },
         );

@@ -58,6 +58,13 @@ pub struct ColumnStats {
     pub compression_ratio: Option<f64>,
     #[serde(default)]
     pub page_bounds: Vec<Option<PageBounds>>,
+    /// True only when `page_bounds` was produced by a full `compute_page_bounds`
+    /// pass. Bulk writes invalidate the bounds; without this flag a later single
+    /// append could repopulate just its own page with a spuriously narrow bound
+    /// (e.g. a DELETE writes a null placeholder `0`, yielding `{min:0,max:0}`),
+    /// and the zone map would then prune every other equality value.
+    #[serde(default)]
+    pub page_bounds_valid: bool,
 }
 
 impl Default for ColumnStats {
@@ -77,6 +84,7 @@ impl ColumnStats {
             compression_meta: None,
             compression_ratio: None,
             page_bounds: Vec::new(),
+            page_bounds_valid: false,
         }
     }
 
@@ -106,10 +114,17 @@ impl ColumnStats {
 
     pub fn invalidate_page_bounds(&mut self) {
         self.page_bounds.clear();
+        self.page_bounds_valid = false;
     }
 
     pub fn update_page_bounds(&mut self, page_idx: usize, val: &Value) {
         if val == &Value::Null {
+            return;
+        }
+        // Only extend bounds that came from a full recompute. Otherwise a single
+        // append after an invalidation would fabricate a bound covering only this
+        // value and the zone map would wrongly prune the rest of the page.
+        if !self.page_bounds_valid {
             return;
         }
         // Cap page_bounds growth to prevent unbounded memory from corrupted page_idx

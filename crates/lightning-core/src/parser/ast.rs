@@ -5,6 +5,8 @@ pub fn data_type_to_logical(dt: &DataType) -> LogicalType {
     match dt {
         DataType::Int64 => LogicalType::Int64,
         DataType::Int32 => LogicalType::Int32,
+        DataType::Uint64 => LogicalType::Uint64,
+        DataType::Uint32 => LogicalType::Uint32,
         DataType::Double => LogicalType::Double,
         DataType::Float => LogicalType::Float,
         DataType::String => LogicalType::String,
@@ -177,6 +179,8 @@ pub struct ColumnDefinition {
 pub enum DataType {
     Int64,
     Int32,
+    Uint64,
+    Uint32,
     Double,
     Float,
     String,

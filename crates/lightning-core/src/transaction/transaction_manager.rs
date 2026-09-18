@@ -44,9 +44,25 @@ pub struct Transaction {
     pub uncommitted_cache: RwLock<HashMap<(String, u64), Value>>,
     pub buffered_tables: RwLock<Vec<Arc<()>>>,
     pub modified_page_rows: Mutex<Vec<PageRowMod>>,
+    /// For rollback: per-table `(next_row_id, catalog num_rows)` captured before
+    /// this transaction's first row allocation on that table. Row-id allocation
+    /// and catalog counts are plain atomics/counters, not MVCC-versioned, so a
+    /// rollback must restore them or the discarded rows stay visible to scans.
+    pub rollback_table_bases: Mutex<HashMap<String, (u64, u64)>>,
     pub finalized: AtomicBool,
     tx_mgr: Option<Weak<TransactionManager>>,
     bm: Option<Weak<BufferManager>>,
+}
+
+impl Transaction {
+    /// Record the pre-allocation row-id high-water and catalog row count for a
+    /// table the first time this transaction appends to it. Used by `rollback`.
+    pub fn note_table_write(&self, table_name: &str, next_row_id: u64, num_rows: u64) {
+        self.rollback_table_bases
+            .lock()
+            .entry(table_name.to_string())
+            .or_insert((next_row_id, num_rows));
+    }
 }
 
 pub struct TransactionManager {
@@ -122,6 +138,7 @@ impl TransactionManager {
             uncommitted_cache: RwLock::new(HashMap::new()),
             buffered_tables: RwLock::new(Vec::new()),
             modified_page_rows: Mutex::new(Vec::new()),
+            rollback_table_bases: Mutex::new(HashMap::new()),
             finalized: AtomicBool::new(false),
             tx_mgr,
             bm,
@@ -304,7 +321,6 @@ impl TransactionManager {
                     }
                 }
             }
-
             let bulk_ranges = tx.bulk_row_ranges.lock();
             for (version_info, start, end) in bulk_ranges.iter() {
                 version_info.commit_row_batch(*start..*end, commit_ts);
@@ -328,6 +344,12 @@ impl TransactionManager {
             }
 
             // Release the eviction protection pins — data is now on disk.
+            // `drop` alone only drops the `Arc`; the pin count must be
+            // decremented explicitly or every commit leaks one pin per
+            // modified page until the buffer pool is exhausted.
+            for frame in &pinned_frames {
+                bm.unpin_frame(frame);
+            }
             drop(pinned_frames);
 
             self.wal.log_commit(tx.tx_id)?;
@@ -358,6 +380,33 @@ impl TransactionManager {
             drop(modified_pages);
             drop(modified_rows);
             self.active_tx_ids.write().remove(&tx.tx_id);
+
+            // Row-id allocation and catalog row counts are not MVCC-versioned:
+            // the discarded page versions no longer hold the rows, but
+            // `next_row_id`/`num_rows` still point past them, so scans would
+            // return phantom (default-valued) rows. Restore the pre-write
+            // high-water marks. Skip when another write transaction is active,
+            // to avoid clobbering its concurrently allocated ids.
+            let bases = tx.rollback_table_bases.lock();
+            if !bases.is_empty() && self.active_tx_ids.read().is_empty() {
+                let storage = db.storage_manager.read();
+                let mut cat = db.catalog.write();
+                for (name, &(base_id, base_rows)) in bases.iter() {
+                    if let Some(t) = storage.node_tables.get(name) {
+                        t.next_row_id.store(base_id, Ordering::Release);
+                    }
+                    if let Some(t) = storage.rel_tables.get(name) {
+                        t.next_row_id.store(base_id, Ordering::Release);
+                    }
+                    if let Some(e) = cat.get_node_table_mut(name) {
+                        e.num_rows = base_rows;
+                    }
+                    if let Some(e) = cat.get_rel_table_mut(name) {
+                        e.num_rows = base_rows;
+                    }
+                }
+                // `cat` (DirtyCatalogGuard) marks the catalog dirty on drop.
+            }
         }
         self.remove_read_ts(tx.read_ts);
         tx.finalized.store(true, Ordering::SeqCst);
