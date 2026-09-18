@@ -118,7 +118,18 @@ impl Table {
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(num_cols);
 
         for (col_idx, col) in self.columns.iter().enumerate() {
-            let col_values = &columns[col_idx];
+            // A column added by ALTER TABLE after these rows were buffered has
+            // no buffered values; fill it with nulls so the write-buffer layout
+            // matches the (now wider) table instead of indexing out of bounds.
+            let col_values = match columns.get(col_idx) {
+                Some(v) => v,
+                None => {
+                    let arrow_type =
+                        crate::processor::arrow_utils::logical_type_to_arrow_type(&col.data_type);
+                    arrays.push(arrow::array::new_null_array(&arrow_type, num_rows));
+                    continue;
+                }
+            };
             let arr: ArrayRef = match col.data_type {
                 LogicalType::String => {
                     let mut builder =

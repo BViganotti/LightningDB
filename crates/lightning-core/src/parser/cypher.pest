@@ -41,7 +41,7 @@ table_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 clause = _{ match_clause | optional_match_clause | with_clause | unwind_clause | create_clause | merge_clause | delete_clause | set_clause | call_clause | return_clause }
 
 optional_match_clause = { ^"OPTIONAL" ~ ^"MATCH" ~ pattern ~ ("," ~ pattern)* }
-with_clause = { ^"WITH" ~ projection_items ~ where_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+with_clause = { ^"WITH" ~ projection_items ~ where_clause? ~ order_by_clause? ~ ((skip_clause ~ limit_clause?) | (limit_clause ~ skip_clause?))? }
 
 unwind_clause = { ^"UNWIND" ~ expression ~ AS_OP ~ variable }
 
@@ -86,7 +86,7 @@ property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 where_clause = { ^"WHERE" ~ expression }
 
-return_clause = { ^"RETURN" ~ distinct_literal? ~ projection_items ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+return_clause = { ^"RETURN" ~ distinct_literal? ~ projection_items ~ order_by_clause? ~ ((skip_clause ~ limit_clause?) | (limit_clause ~ skip_clause?))? }
 distinct_literal = @{ ^"DISTINCT" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ sort_item ~ ("," ~ sort_item)* }
 sort_item = { expression ~ (ASC | DESC)? }
@@ -94,7 +94,8 @@ sort_item = { expression ~ (ASC | DESC)? }
 // "ASCENDING", leaving "ENDING" to fail downstream clause parsing.
 ASC = @{ ^"ASCENDING" | (^"ASC" ~ !"_" ~ !ASCII_ALPHANUMERIC) }
 DESC = @{ ^"DESCENDING" | (^"DESC" ~ !"_" ~ !ASCII_ALPHANUMERIC) }
-skip_clause = { ^"SKIP" ~ number_literal }
+// OFFSET is accepted as a synonym for SKIP.
+skip_clause = { (^"SKIP" | ^"OFFSET") ~ number_literal }
 limit_clause = { ^"LIMIT" ~ number_literal }
 star = { "*" }
 projection_items = { star | (projection_item ~ ("," ~ projection_item)*) }

@@ -426,11 +426,13 @@ fn crucible_aggregate_functions() -> TestResult {
     let res = exec(&db, "MATCH (a:Agg) RETURN count(*)");
     assert_val!(res, 0, 0, 100i64, Int64Array);
 
+    // The engine returns aggregates over integers as Float64 (see
+    // aggregate_comprehensive_test::test_agg_sum), so read them as f64.
     let res = exec(&db, "MATCH (a:Agg) RETURN sum(a.val)");
     // sum(1..100 * 2) = 2 * 5050 = 10100
     let sum_val = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-    assert_eq!(sum_val, 10100, "sum should be 10100");
+        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+    assert_eq!(sum_val as i64, 10100, "sum should be 10100");
 
     let res = exec(&db, "MATCH (a:Agg) RETURN avg(a.val)");
     let avg_val = res.batches[0].column(0)
@@ -439,11 +441,11 @@ fn crucible_aggregate_functions() -> TestResult {
 
     let res = exec(&db, "MATCH (a:Agg) RETURN min(a.val), max(a.val)");
     let min_val = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
     let max_val = res.batches[0].column(1)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-    assert_eq!(min_val, 2, "min should be 2");
-    assert_eq!(max_val, 200, "max should be 200");
+        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+    assert_eq!(min_val as i64, 2, "min should be 2");
+    assert_eq!(max_val as i64, 200, "max should be 200");
 
     // GROUP BY with aggregation
     let res = exec(&db,

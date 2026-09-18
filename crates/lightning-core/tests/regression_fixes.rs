@@ -403,3 +403,47 @@ fn vector_index_supports_1536_dimensions() {
     let hits = store.recall("", &embedding(0.0, dim), 10).unwrap();
     assert_eq!(hits.len(), 4, "deleted vector must not be returned");
 }
+
+/// `OFFSET` is accepted as a synonym for `SKIP`, in either clause order.
+#[test]
+fn offset_clause_is_supported() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE T(x INT64)", None).unwrap();
+    for i in 0..5i64 {
+        c.execute(&format!("CREATE (:T {{x: {i}}})"), None).unwrap();
+    }
+    let res = c
+        .execute("MATCH (t:T) RETURN t.x ORDER BY t.x LIMIT 2 OFFSET 1", None)
+        .unwrap();
+    let xs: Vec<i64> = res
+        .batches
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+            (0..a.len()).map(|i| a.value(i)).collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(xs, vec![1, 2], "LIMIT 2 OFFSET 1 should yield rows 1,2");
+}
+
+/// Adding a column after rows were written must not panic on flush (write
+/// buffers created before the ALTER have fewer columns than the table).
+#[test]
+fn alter_add_column_after_writes_then_set() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE E(id INT64, name STRING, PRIMARY KEY (id))", None)
+        .unwrap();
+    for i in 0..100i64 {
+        c.execute(&format!("CREATE (:E {{id: {i}, name: 'base_{i}'}})"), None)
+            .unwrap();
+    }
+    c.execute("ALTER TABLE E ADD COLUMN score DOUBLE", None).unwrap();
+    c.execute("MATCH (e:E) SET e.score = 0.5", None).unwrap();
+    assert_eq!(row_count(&db, "MATCH (e:E) RETURN e.score"), 100);
+
+    c.execute("ALTER TABLE E ADD COLUMN active BOOL", None).unwrap();
+    c.execute("MATCH (e:E) SET e.active = TRUE", None).unwrap();
+    assert_eq!(row_count(&db, "MATCH (e:E {active: TRUE}) RETURN e.id"), 100);
+}
