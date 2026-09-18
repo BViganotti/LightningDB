@@ -377,10 +377,15 @@ impl BufferManager {
                     return Ok(Arc::clone(&pool.slots[idx].frame));
                 }
 
-                // Select the best snapshot-visible version as source data.
-                // Ignore uncommitted versions and versions committed after read_ts.
+                // Copy-on-write source: the newest *committed* version.
+                // Gating this by `read_ts` (as it was before) built the new
+                // version from a blank page whenever a page had been committed
+                // after this transaction's read_ts (e.g. the preceding statement
+                // wrote to an index, null bitmap, or system column), so the
+                // write could clobber every other entry on that page. Only
+                // uncommitted versions are skipped; row-level conflicts are
+                // reconciled at commit.
                 if (version & UNCOMMITTED_BIT) == 0
-                    && version <= tx.read_ts
                     && (version > best_version || (version == 0 && source_data.is_none()))
                 {
                     best_version = version;
