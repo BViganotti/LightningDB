@@ -1107,41 +1107,33 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
 fn parse_term(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
     let ps = p.into_inner().collect::<Vec<_>>();
     if ps.len() == 1 {
-        return parse_unary(ps[0].clone());
+        return parse_factor(ps[0].clone());
     }
-    let mut e = parse_unary(ps[0].clone())?;
+    let mut e = parse_factor(ps[0].clone())?;
     for i in (1..ps.len()).step_by(2) {
         e = Expression::Arithmetic(
             Box::new(e),
             parse_arithmetic_operator(ps[i].clone())?,
-            Box::new(parse_unary(ps[i + 1].clone())?),
+            Box::new(parse_factor(ps[i + 1].clone())?),
         );
     }
     Ok(e)
 }
 
-/// Parse a `unary` rule: zero or more leading `+`/`-` signs before a factor.
-/// A leading `-` is lowered to `0 - expr`.
-fn parse_unary(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError> {
-    let ps = p.into_inner().collect::<Vec<_>>();
-    let Some(last) = ps.last() else {
-        return Err(ParserError::Internal("empty unary expression".into()));
-    };
-    let mut e = parse_factor(last.clone())?;
-    for op in ps[..ps.len() - 1].iter().rev() {
-        match op.as_str() {
-            "-" => {
-                e = Expression::Arithmetic(
-                    Box::new(Expression::Literal(Literal::Integer(0))),
-                    ArithmeticOperator::Subtract,
-                    Box::new(e),
-                );
-            }
-            // Unary plus is a no-op.
-            _ => {}
+/// Lower a unary minus to a negated literal where possible (so i64 values are
+/// preserved), otherwise to `0 - expr`.
+fn negate_expression(e: Expression) -> Expression {
+    match e {
+        Expression::Literal(Literal::Integer(n)) => {
+            Expression::Literal(Literal::Integer(n.wrapping_neg()))
         }
+        Expression::Literal(Literal::Number(n)) => Expression::Literal(Literal::Number(-n)),
+        other => Expression::Arithmetic(
+            Box::new(Expression::Literal(Literal::Integer(0))),
+            ArithmeticOperator::Subtract,
+            Box::new(other),
+        ),
     }
-    Ok(e)
 }
 
 /// Parse a `factor` rule: atoms joined by `*`, `/`, `%` (higher precedence).
@@ -1184,6 +1176,13 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
     let i = required_pair(p.into_inner().next(), "pair")?;
     match i.as_rule() {
         Rule::literal => Ok(Expression::Literal(parse_literal(i)?)),
+        Rule::unary_minus => {
+            // inner: `sub_op`, `atom`
+            let mut it = i.into_inner();
+            let _op = required_pair(it.next(), "pair")?;
+            let operand = required_pair(it.next(), "pair")?;
+            Ok(negate_expression(parse_atom(operand)?))
+        }
         Rule::variable => Ok(Expression::Variable(i.as_str().to_string())),
         Rule::parameter => {
             let s = i.as_str();

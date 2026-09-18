@@ -1188,6 +1188,37 @@ impl PhysicalMerge {
             read_ts,
         }
     }
+
+    /// Match an existing node by scanning the table when the pattern key is not
+    /// the primary key (or the table has no PK). Returns the row id of the
+    /// first visible row whose pattern properties all equal `pattern_values`.
+    /// Without this, `MERGE (m:Label {non_pk: v})` always created a new node.
+    fn scan_match(
+        &self,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        pattern_values: &[(usize, Value)],
+    ) -> Result<Option<u64>> {
+        let num_rows = self.table.next_row_id.load(Ordering::Acquire);
+        'rows: for row in 0..num_rows {
+            // Deleted rows are tombstoned by nulling `_id`; skip them.
+            let id_val = self.table.columns[0].get_value(&self.buffer_manager, row, tx)?;
+            if matches!(id_val, Value::Null) {
+                continue;
+            }
+            for (col_idx, want) in pattern_values {
+                match self
+                    .table
+                    .columns[*col_idx]
+                    .get_value(&self.buffer_manager, row, tx)
+                {
+                    Ok(got) if &got == want => {}
+                    _ => continue 'rows,
+                }
+            }
+            return Ok(Some(row));
+        }
+        Ok(None)
+    }
 }
 impl PhysicalOperator for PhysicalMerge {
     fn is_read_only(&self) -> bool {
@@ -1256,6 +1287,22 @@ impl PhysicalOperator for PhysicalMerge {
                                 }
                             }
                         }
+                    }
+
+                    if existing_id.is_none() {
+                        // Not matched via the PK index: the pattern key is not
+                        // the primary key (or the table has none). Fall back to
+                        // a scan so MERGE does not duplicate an existing node.
+                        let pattern_values: Vec<(usize, Value)> = self
+                            .pattern
+                            .properties
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (idx, _))| {
+                                (*idx, Value::from_arrow(&prop_arrays[i], row_idx))
+                            })
+                            .collect();
+                        existing_id = self.scan_match(tx, &pattern_values)?;
                     }
 
                     if let Some(id) = existing_id {

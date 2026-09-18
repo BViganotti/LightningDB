@@ -222,3 +222,24 @@ fn uint64_ddl_creates_unsigned_column() {
         .expect("UINT64 column must be unsigned");
     assert_eq!(ids.value(0), 7);
 }
+
+/// `MERGE` on a non-PK pattern must match an existing node, not duplicate it.
+#[test]
+fn merge_matches_existing_node_by_non_pk_property() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE Mg(id INT64, val INT64)", None).unwrap();
+    c.execute("CREATE (:Mg {id: 1, val: 10})", None).unwrap();
+
+    c.execute("MERGE (m:Mg {id: 1}) ON MATCH SET m.val = 999", None)
+        .unwrap();
+
+    assert_eq!(row_count(&db, "MATCH (m:Mg) RETURN m.id"), 1, "no duplicate");
+    let res = c.execute("MATCH (m:Mg) RETURN m.val", None).unwrap();
+    let v = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("val is Int64");
+    assert_eq!(v.value(0), 999, "ON MATCH SET applied");
+}

@@ -116,11 +116,12 @@ xor_op = @{ ^"XOR" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 and_op = @{ ^"AND" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 not_op = @{ ^"NOT" ~ !"_" ~ !ASCII_ALPHANUMERIC }
 comparison_expr = { term ~ ( comparison_operator ~ term | string_predicate | is_null_check | in_check )? }
-term = { unary ~ ((add_op | sub_op) ~ unary)* }
-// Unary sign(s) bind tighter than add/sub but looser than mul/div, so
-// `-a * b` is `(-a) * b` and `-n.val` is accepted.
-unary = { (add_op | sub_op)* ~ factor }
+term = { factor ~ ((add_op | sub_op) ~ factor)* }
 factor = { atom ~ ((mul_op | div_op | mod_op) ~ atom)* }
+// Unary minus is an atom so it binds tighter than `*`/`/` (e.g. `-a * b` is
+// `(-a) * b`). Signed numeric literals are still matched by `literal` first,
+// which keeps `-9223372036854775808` (i64::MIN) parseable.
+unary_minus = { sub_op ~ atom }
 add_op = { "+" }
 sub_op = { "-" }
 mul_op = { "*" }
@@ -137,7 +138,7 @@ comparison_operator = { "<=" | ">=" | "<>" | "!=" | "=" | "<" | ">" }
 
 // Keyword-led constructs (CASE/CAST/EXTRACT) must precede `variable`, otherwise
 // `CASE` is consumed as an identifier and the WHEN clauses fail to parse.
-atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | case_expression | list_subscript | all_shortest_paths_pattern | shortest_path_pattern | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression }
+atom = { list_quantifier | map_literal | count_subquery | exists_subquery | cast_expression | extract_expression | case_expression | list_subscript | all_shortest_paths_pattern | shortest_path_pattern | function_call | literal | list_literal | property_lookup | parameter | variable | parenthesized_expression | unary_minus }
 list_quantifier = { all_q | any_q | none_q | single_q }
 all_q = { ^"ALL" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
 any_q = { ^"ANY" ~ "(" ~ variable ~ ^"IN" ~ expression ~ ^"WHERE" ~ expression ~ ")" }
