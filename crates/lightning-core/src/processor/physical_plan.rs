@@ -542,7 +542,25 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
-            LogicalOperator::Set(child, assignments) => {
+            LogicalOperator::Set(child, mut assignments) => {
+                // Remap assignment expressions to the child's (possibly
+                // projection-pushed) batch layout, as Filter/Projection do.
+                // PhysicalSet evaluates assignments against the child batch, so
+                // a binder-relative PropertyLookup index would otherwise be out
+                // of bounds (e.g. `SET e.n = e.n + 1` after pushdown).
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
+                Self::collect_logical_projected_indices(
+                    &child,
+                    &mut self.variable_projected_indices,
+                );
+                for a in &mut assignments {
+                    Self::remap_property_lookup(
+                        &mut a.expression,
+                        &child_positions,
+                        &self.binder_column_offsets,
+                        &self.variable_projected_indices,
+                    );
+                }
                 let planned_child = self.plan(*child)?;
                 let table_name = &assignments[0].table_name;
                 let storage = self.db.storage_manager.read();

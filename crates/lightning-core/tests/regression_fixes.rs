@@ -339,3 +339,34 @@ fn memory_store_concurrent_writes_no_setup_errors() {
         "concurrent schema setup and writes must all succeed"
     );
 }
+
+/// SET assignment expressions must be remapped to the projection-pushed batch
+/// layout, not left as binder indices (which go out of bounds).
+#[test]
+fn set_expression_remapped_under_projection_pushdown() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute(
+        "CREATE NODE TABLE E(id STRING, type STRING, content STRING, a INT64, b INT64, c INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    c.execute("CREATE (:E {id: 'x', type: 't', content: 'c', a: 1, b: 2, c: 3})", None)
+        .unwrap();
+
+    // WHERE touches only id/c; SET reads `a` (not in the WHERE), which forces
+    // projection pushdown to include and remap `a`.
+    c.execute(
+        "MATCH (e:E) WHERE e.id = 'x' AND e.c > 0 SET e.a = e.a + 10",
+        None,
+    )
+    .unwrap();
+
+    let res = c.execute("MATCH (e:E) RETURN e.a", None).unwrap();
+    let v = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("a is Int64");
+    assert_eq!(v.value(0), 11);
+}
