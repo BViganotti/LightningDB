@@ -221,15 +221,25 @@ impl MemoryStore {
                     tracing::warn!("MemoryStore: failed to create CSR: {e}");
                 }
             }
-            // Recover CSR base edge count from existing files after restart
-            if let Some(csr) = storage.fwd_csr.get(RELATES_TABLE) {
-                if let Ok(tx) = db.transaction_manager.begin(true) {
-                    let bm = &db.buffer_manager;
-                    if let Err(e) = csr.recover_from_base(bm, &tx) {
-                        tracing::warn!("MemoryStore: CSR recover failed: {e}");
-                    }
-                    let _ = db.transaction_manager.rollback(&db, &tx);
+        }
+
+        // Recover the CSR base edge count from existing files after a restart.
+        // Done OUTSIDE the storage write lock: `recover_from_base` begins a
+        // transaction and does I/O, and holding `storage_manager.write()` across
+        // it inverted lock order with concurrent inserts (which begin a
+        // transaction then take the storage read lock), deadlocking
+        // `MemoryStore` setup under concurrency.
+        let csr = {
+            let storage = db.storage_manager.read();
+            storage.fwd_csr.get(RELATES_TABLE).cloned()
+        };
+        if let Some(csr) = csr {
+            if let Ok(tx) = db.transaction_manager.begin(true) {
+                let bm = &db.buffer_manager;
+                if let Err(e) = csr.recover_from_base(bm, &tx) {
+                    tracing::warn!("MemoryStore: CSR recover failed: {e}");
                 }
+                let _ = db.transaction_manager.rollback(&db, &tx);
             }
         }
 
