@@ -472,6 +472,9 @@ impl MemoryStore {
 
         let db = self.conn.client_context.database.clone();
         let storage = db.storage_manager.read();
+        // Embeddings live only in the vector index, so attach them to results
+        // from there (the node table does not persist them).
+        let vec_idx_opt = storage.vector_indexes.get(ENTITY_TABLE).cloned();
 
         let mut results: HashMap<String, (MemoryEntity, f64)> = HashMap::new();
         let k = config.hybrid_search_k;
@@ -492,7 +495,16 @@ impl MemoryStore {
             match fts.search(query_text, top_k * 2, &db.buffer_manager, &tx) {
                 Ok(fts_results) => {
                     for (rank, (node_id, _)) in fts_results.iter().enumerate() {
-                        if let Some(entity) = self.lookup_by_internal_id(*node_id) {
+                        if let Some(mut entity) = self.lookup_by_internal_id(*node_id) {
+                            if entity.embedding.is_empty() {
+                                if let Some(v) = &vec_idx_opt {
+                                    if let Ok(Some(emb)) =
+                                        v.get_vector(*node_id, &db.buffer_manager, &tx)
+                                    {
+                                        entity.embedding = emb;
+                                    }
+                                }
+                            }
                             let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
                             results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
                         }
@@ -506,11 +518,18 @@ impl MemoryStore {
         }
 
         if !embedding.is_empty() && embedding.len() == self.embedding_dim {
-            if let Some(vec_idx) = storage.vector_indexes.get(ENTITY_TABLE) {
+            if let Some(vec_idx) = &vec_idx_opt {
                 match vec_idx.search(embedding, top_k * 2, &db.buffer_manager, &tx) {
                     Ok(vec_results) => {
                         for (rank, (node_id, _)) in vec_results.iter().enumerate() {
-                            if let Some(entity) = self.lookup_by_internal_id(*node_id) {
+                            if let Some(mut entity) = self.lookup_by_internal_id(*node_id) {
+                                if entity.embedding.is_empty() {
+                                    if let Ok(Some(emb)) =
+                                        vec_idx.get_vector(*node_id, &db.buffer_manager, &tx)
+                                    {
+                                        entity.embedding = emb;
+                                    }
+                                }
                                 let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
                                 results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
                             }

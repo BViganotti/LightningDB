@@ -370,3 +370,36 @@ fn set_expression_remapped_under_projection_pushdown() {
         .expect("a is Int64");
     assert_eq!(v.value(0), 11);
 }
+
+/// The vector index must support embeddings too large for a single 4096-byte
+/// page (e.g. OpenAI's 1536 dims), which previously stored nothing and made
+/// vector-only recall return zero results.
+#[test]
+fn vector_index_supports_1536_dimensions() {
+    let (_d, db) = new_db();
+    let dim = 1536usize;
+    let store = MemoryStore::new(db.connect(), dim);
+    for i in 0..5u64 {
+        store
+            .store(MemoryEntity {
+                id: format!("hd_{i}"),
+                entity_type: "hd".into(),
+                content: format!("entity {i}"),
+                embedding: embedding(i as f32, dim),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    // Vector-only recall (empty text => FTS contributes nothing).
+    let hits = store.recall("", &embedding(0.0, dim), 5).unwrap();
+    assert_eq!(hits.len(), 5, "high-dim vector recall must return all vectors");
+    for h in &hits {
+        assert_eq!(h.entity.embedding.len(), dim, "returned embedding dimension");
+    }
+
+    // Delete one and confirm it disappears from vector recall.
+    assert!(store.forget("hd_0").unwrap());
+    let hits = store.recall("", &embedding(0.0, dim), 10).unwrap();
+    assert_eq!(hits.len(), 4, "deleted vector must not be returned");
+}

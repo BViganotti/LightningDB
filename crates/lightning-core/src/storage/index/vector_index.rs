@@ -19,11 +19,17 @@ fn vi_entries_per_page(dim: usize) -> usize {
     let bps = 4096usize;
     let entry_bytes = vi_entry_bytes(dim);
     if entry_bytes == 0 || entry_bytes > bps {
-        // A single entry does not fit in a page — dimensions this large cannot
-        // be stored with the current fixed-page layout.
+        // A single entry does not fit in a page — stored with the multi-page
+        // layout instead (`vi_pages_per_entry`), one entry per page group.
         return 0;
     }
     bps / entry_bytes
+}
+
+/// Number of consecutive pages one entry occupies when it does not fit in a
+/// single page (dimension beyond what the packed layout supports).
+fn vi_pages_per_entry(dim: usize) -> u64 {
+    vi_entry_bytes(dim).div_ceil(4096).max(1) as u64
 }
 
 /// Clamp a header-reported entry count to what the data pages can physically
@@ -78,6 +84,294 @@ impl VectorIndex {
         }
     }
 
+    /// Starting page for a multi-page entry slot (one entry per page group).
+    fn large_entry_start_page(&self, slot: usize) -> u64 {
+        VI_DATA_START_PAGE + slot as u64 * vi_pages_per_entry(self.dimension)
+    }
+
+    /// Write `bytes` for a multi-page entry, which spans
+    /// `vi_pages_per_entry` consecutive pages starting at the slot's page.
+    fn write_large_entry(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        slot: usize,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let mut page = self.large_entry_start_page(slot);
+        let mut written = 0usize;
+        while written < bytes.len() {
+            while self.file_handle.get_num_pages() <= page {
+                self.file_handle.add_new_page()?;
+            }
+            let frame = bm.create_new_version(Arc::clone(&self.file_handle), page, tx)?;
+            let take = (bytes.len() - written).min(4096);
+            // SAFETY: `take <= 4096`, destination frame is a pinned CoW page.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes[written..].as_ptr(),
+                    frame.as_ptr(),
+                    take,
+                );
+            }
+            bm.log_page_update(self.file_handle.file_id, page, frame.as_slice())?;
+            bm.unpin_page(&self.file_handle, page, frame);
+            written += take;
+            page += 1;
+        }
+        Ok(())
+    }
+
+    /// Read `len` bytes of a multi-page entry (page group starting at the
+    /// slot's page). Returns `None` if the pages are not present.
+    fn read_large_entry(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        slot: usize,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        let num_pages = self.file_handle.get_num_pages();
+        let mut out = Vec::with_capacity(len);
+        let mut page = self.large_entry_start_page(slot);
+        while out.len() < len {
+            if page >= num_pages {
+                return Ok(None);
+            }
+            let frame = match bm.pin_page(Arc::clone(&self.file_handle), page, tx) {
+                Ok(f) => f,
+                Err(_) => return Ok(None),
+            };
+            let take = (len - out.len()).min(4096);
+            out.extend_from_slice(&frame.as_slice()[..take]);
+            bm.unpin_page(&self.file_handle, page, frame);
+            page += 1;
+        }
+        Ok(Some(out))
+    }
+
+    fn init_header_if_empty(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        if self.file_handle.get_num_pages() == 0 {
+            let header_frame =
+                bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
+            // SAFETY: freshly created CoW page owned by this transaction.
+            unsafe { header_frame.as_ptr().write_bytes(0, 4096) };
+            bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+            bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
+        }
+        Ok(())
+    }
+
+    fn write_header_count(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        count: u64,
+    ) -> Result<()> {
+        let header_frame =
+            bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
+        // SAFETY: CoW header page is owned by this transaction.
+        unsafe {
+            std::ptr::copy_nonoverlapping(count.to_le_bytes().as_ptr(), header_frame.as_ptr(), 8);
+        }
+        bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+        bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
+        Ok(())
+    }
+
+    fn serialize_entry(node_id: u64, inv_norm: f32, vec: &[f32], entry_bytes: usize) -> Vec<u8> {
+        let mut buf = vec![0u8; entry_bytes];
+        buf[0..8].copy_from_slice(&node_id.to_le_bytes());
+        buf[8..12].copy_from_slice(&inv_norm.to_le_bytes());
+        for (j, e) in vec.iter().enumerate() {
+            let off = 12 + j * 4;
+            if off + 4 <= entry_bytes {
+                buf[off..off + 4].copy_from_slice(&e.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    /// Multi-page insert path for dimensions too large for the packed layout.
+    fn insert_batch_large(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        vectors: &[(u64, Vec<f32>)],
+        entry_bytes: usize,
+    ) -> Result<()> {
+        self.init_header_if_empty(bm, tx)?;
+        let current_entries = self.get_num_entries(bm, tx)?;
+        self.ensure_loaded(bm, tx)?;
+        let mut next_entry_idx = current_entries as usize;
+        let mut idx = self.node_index.lock();
+        for (node_id, vec) in vectors {
+            let slot = match idx.get(node_id).copied() {
+                Some(s) => s,
+                None => {
+                    let s = next_entry_idx;
+                    next_entry_idx += 1;
+                    idx.insert(*node_id, s);
+                    s
+                }
+            };
+            let norm_sq: f64 = vec.iter().map(|v| *v as f64 * *v as f64).sum();
+            let inv_norm = 1.0 / (norm_sq.sqrt() as f32 + 1e-10);
+            let buf = Self::serialize_entry(*node_id, inv_norm, vec, entry_bytes);
+            self.write_large_entry(bm, tx, slot, &buf)?;
+        }
+        drop(idx);
+        self.write_header_count(bm, tx, next_entry_idx as u64)
+    }
+
+    /// Multi-page search path (exhaustive, same scoring as `search`).
+    fn search_large(
+        &self,
+        query: &[f32],
+        k: usize,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<Vec<(u64, f32)>> {
+        let dim = self.dimension;
+        let entry_bytes = vi_entry_bytes(dim);
+        self.ensure_loaded(bm, tx)?;
+        let slots: Vec<usize> = { self.node_index.lock().values().copied().collect() };
+        if slots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query_norm = (query.iter().map(|v| v * v).sum::<f32>().sqrt() + 1e-10).recip();
+        let query_normed: Vec<f32> = query.iter().map(|v| v * query_norm).collect();
+
+        let heap: BinaryHeap<ScoredNode> = slots
+            .into_par_iter()
+            .fold(
+                || BinaryHeap::with_capacity(k),
+                |mut heap, slot| {
+                    let bytes = match self.read_large_entry(bm, tx, slot, entry_bytes) {
+                        Ok(Some(b)) if b.len() == entry_bytes => b,
+                        _ => return heap,
+                    };
+                    let node_id = u64::from_le_bytes(bytes[0..8].try_into().expect("8 bytes"));
+                    let inv_norm = f32::from_le_bytes(bytes[8..12].try_into().expect("4 bytes"));
+                    let emb: Vec<f32> = bytes[12..12 + dim * 4]
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .collect();
+                    let dot = Self::dot_product(&emb, &query_normed);
+                    heap.push(ScoredNode {
+                        id: node_id,
+                        score: dot * inv_norm,
+                    });
+                    if heap.len() > k {
+                        heap.pop();
+                    }
+                    heap
+                },
+            )
+            .reduce(
+                || BinaryHeap::with_capacity(k),
+                |mut a, b| {
+                    for item in b {
+                        a.push(item);
+                        if a.len() > k {
+                            a.pop();
+                        }
+                    }
+                    a
+                },
+            );
+        let mut results: Vec<(u64, f32)> =
+            heap.into_iter().map(|n| (n.id, n.score)).collect();
+        results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
+        Ok(results)
+    }
+
+    /// Rebuild `node_index` for the multi-page layout.
+    fn rebuild_index_large(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        num_entries: usize,
+    ) -> Result<std::collections::HashMap<u64, usize>> {
+        let mut index = std::collections::HashMap::with_capacity(num_entries);
+        for entry_idx in 0..num_entries {
+            if let Ok(Some(buf)) = self.read_large_entry(bm, tx, entry_idx, 8) {
+                if buf.len() == 8 {
+                    let id = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes"));
+                    if id != 0 {
+                        index.insert(id, entry_idx);
+                    }
+                }
+            }
+        }
+        Ok(index)
+    }
+
+    /// Multi-page delete: swap the last entry into the removed slot.
+    fn delete_large(
+        &self,
+        node_id: u64,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<bool> {
+        let dim = self.dimension;
+        let entry_bytes = vi_entry_bytes(dim);
+        let num_entries = self.get_num_entries(bm, tx)? as usize;
+        if num_entries == 0 {
+            return Ok(false);
+        }
+        let rebuilt = self.rebuild_index_large(bm, tx, num_entries)?;
+        let found_idx = match rebuilt.get(&node_id) {
+            Some(&i) => i,
+            None => return Ok(false),
+        };
+        self.node_index.lock().clone_from(&rebuilt);
+
+        if found_idx + 1 < num_entries {
+            let last_idx = num_entries - 1;
+            if let Some(entry) = self.read_large_entry(bm, tx, last_idx, entry_bytes)? {
+                self.write_large_entry(bm, tx, found_idx, &entry)?;
+            }
+            let zeros = vec![0u8; entry_bytes];
+            self.write_large_entry(bm, tx, last_idx, &zeros)?;
+        }
+        self.write_header_count(bm, tx, (num_entries - 1) as u64)?;
+        Ok(true)
+    }
+
+    fn update_large(
+        &self,
+        node_id: u64,
+        embedding: &[f32],
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<bool> {
+        let entry_bytes = vi_entry_bytes(self.dimension);
+        let num_entries = self.get_num_entries(bm, tx)? as usize;
+        if num_entries == 0 {
+            return Ok(false);
+        }
+        let inv_norm = 1.0 / (embedding.iter().map(|v| v * v).sum::<f32>().sqrt() + 1e-10);
+        for entry_idx in 0..num_entries {
+            match self.read_large_entry(bm, tx, entry_idx, 12)? {
+                Some(buf) if buf.len() == 12 => {
+                    let stored_id = u64::from_le_bytes(buf[0..8].try_into().expect("8 bytes"));
+                    if stored_id == node_id {
+                        let entry = Self::serialize_entry(node_id, inv_norm, embedding, entry_bytes);
+                        self.write_large_entry(bm, tx, entry_idx, &entry)?;
+                        return Ok(true);
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok(false)
+    }
+
     /// Populate `node_index` (node_id → latest slot) from the on-disk entries.
     /// Without this, `len()` reported 0 for a reopened index and repeated
     /// `insert_batch` calls appended duplicate vectors for the same node.
@@ -96,12 +390,25 @@ impl VectorIndex {
         idx.clear();
         let dim = self.dimension;
         let eps = vi_entries_per_page(dim);
+        let entry_bytes = vi_entry_bytes(dim);
+        let count = self.get_num_entries(bm, tx)? as usize;
         if eps == 0 {
+            // Multi-page entries: read the 8-byte node id at each slot's page.
+            for entry_idx in 0..count {
+                match self.read_large_entry(bm, tx, entry_idx, 8)? {
+                    Some(buf) if buf.len() == 8 => {
+                        let id = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes"));
+                        if id != 0 {
+                            idx.insert(id, entry_idx);
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            drop(idx);
             self.loaded.store(true, Ordering::Release);
             return Ok(());
         }
-        let entry_bytes = vi_entry_bytes(dim);
-        let count = self.get_num_entries(bm, tx)? as usize;
         let num_pages = self.file_handle.get_num_pages();
         for entry_idx in 0..count {
             let page_idx = VI_DATA_START_PAGE + (entry_idx / eps) as u64;
@@ -140,6 +447,48 @@ impl VectorIndex {
 
     pub fn dimension(&self) -> usize {
         self.dimension
+    }
+
+    /// Read the stored embedding for `node_id`, if present. Used to attach
+    /// vectors to recall results (the node table does not store embeddings).
+    pub fn get_vector(
+        &self,
+        node_id: u64,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<Option<Vec<f32>>> {
+        self.ensure_loaded(bm, tx)?;
+        let slot = match self.node_index.lock().get(&node_id).copied() {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let dim = self.dimension;
+        let entry_bytes = vi_entry_bytes(dim);
+        let eps = vi_entries_per_page(dim);
+        let bytes = if eps == 0 {
+            match self.read_large_entry(bm, tx, slot, entry_bytes)? {
+                Some(b) => b,
+                None => return Ok(None),
+            }
+        } else {
+            let page_idx = VI_DATA_START_PAGE + (slot / eps) as u64;
+            let offset = (slot % eps) * entry_bytes;
+            if offset + entry_bytes > 4096 {
+                return Ok(None);
+            }
+            let frame = bm.pin_page(Arc::clone(&self.file_handle), page_idx, tx)?;
+            let b = frame.as_slice()[offset..offset + entry_bytes].to_vec();
+            bm.unpin_page(&self.file_handle, page_idx, frame);
+            b
+        };
+        if bytes.len() < 12 + dim * 4 {
+            return Ok(None);
+        }
+        let emb = bytes[12..12 + dim * 4]
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        Ok(Some(emb))
     }
 
     pub fn len(&self) -> usize {
@@ -285,10 +634,11 @@ impl VectorIndex {
         let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
         if eps == 0 {
-            return Err(crate::LightningError::Internal(format!(
-                "Vector index cannot store embeddings of dimension {dim}: a single entry ({entry_bytes} bytes) exceeds the {bps}-byte page size"
-            )));
+            // Dimension too large for the packed layout: store each entry
+            // across consecutive pages instead.
+            return self.insert_batch_large(bm, tx, vectors, entry_bytes);
         }
+        let _ = bps;
 
         // Ensure header page exists
         if self.file_handle.get_num_pages() == 0 {
@@ -425,7 +775,7 @@ impl VectorIndex {
         let eps = vi_entries_per_page(dim);
         let bps = 4096usize;
         if eps == 0 {
-            return Ok(Vec::new());
+            return self.search_large(query, k, bm, tx);
         }
         // Iterate the unique, latest slot per node so superseded duplicate
         // entries are never returned.
@@ -547,11 +897,17 @@ impl VectorIndex {
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         // Bound the reported count by the data pages actually present.
         let eps = vi_entries_per_page(self.dimension);
-        Ok(clamp_entries_to_file(
-            num_entries,
-            self.file_handle.get_num_pages(),
-            eps,
-        ))
+        let num_pages = self.file_handle.get_num_pages();
+        if eps == 0 {
+            // Multi-page layout: one entry per `vi_pages_per_entry` pages.
+            if num_pages <= VI_DATA_START_PAGE {
+                return Ok(0);
+            }
+            let ppe = vi_pages_per_entry(self.dimension);
+            let max_entries = (num_pages - VI_DATA_START_PAGE) / ppe;
+            return Ok(num_entries.min(max_entries));
+        }
+        Ok(clamp_entries_to_file(num_entries, num_pages, eps))
     }
 
     pub fn delete(
@@ -563,6 +919,10 @@ impl VectorIndex {
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
         let eps = vi_entries_per_page(dim);
+
+        if eps == 0 {
+            return self.delete_large(node_id, bm, tx);
+        }
 
         let num_entries = self.get_num_entries(bm, tx)? as usize;
         if num_entries == 0 {
@@ -669,6 +1029,10 @@ impl VectorIndex {
         let dim = self.dimension;
         let entry_bytes = vi_entry_bytes(dim);
         let eps = vi_entries_per_page(dim);
+
+        if eps == 0 {
+            return self.update_large(node_id, embedding, bm, tx);
+        }
 
         let num_entries = self.get_num_entries(bm, tx)? as usize;
         if num_entries == 0 {
