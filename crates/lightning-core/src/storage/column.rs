@@ -567,7 +567,6 @@ impl Column {
 
         // Check if we can use direct file reads (no uncommitted modifications in range)
         let can_direct_read = !self.version_info.has_modifications() && zone_map.is_none();
-
         if can_direct_read {
             return self.scan_string_direct(offset, num_values);
         }
@@ -625,7 +624,6 @@ impl Column {
                 )))?
                 .1;
             let null_base_offset = (current_offset % 4096) as usize;
-
             if skip_page {
                 for _ in 0..to_read {
                     builder.append_null();
@@ -857,7 +855,6 @@ impl Column {
         zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
         let values_per_page = 4096 / element_size as u64;
-
         if !self.version_info.has_modifications() && zone_map.is_none() {
             return self.scan_primitive_direct(offset, num_values, element_size, target_type, zone_map);
         }
@@ -1452,10 +1449,12 @@ impl Column {
 
         // 1. Write null bitmap in bulk
         let nulls = array.nulls();
+        // Bulk mode writes the null bitmap directly to the file, matching the
+        // direct string-data write and the direct-read scan path. Preserve the
+        // bits of rows already present on the page instead of zero-filling:
+        // successive single-row appends share a page and previously wiped each
+        // other's null bits.
         if skip_modified_rows {
-            // Fast path: direct file writes for bulk mode
-            // No need to read existing pages - each column has its own null file
-            // and we're writing fresh data, so just zero-fill and write
             let mut i = 0;
             let mut null_page_buf = [0u8; 4096];
             while i < num_rows {
@@ -1463,9 +1462,9 @@ impl Column {
                 while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
-                // Zero out the buffer (no need to read existing page)
-                null_page_buf.fill(0);
-
+                if self.null_fh.read_page(page_idx, &mut null_page_buf).is_err() {
+                    null_page_buf.fill(0);
+                }
                 let mut page_i = i;
                 while page_i < num_rows {
                     let current_row = start_row_id + page_i as u64;
@@ -1479,7 +1478,6 @@ impl Column {
                 }
                 bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
                 self.null_fh.write_page(page_idx, &null_page_buf)?;
-                bm.evict_pages_for_file(self.null_fh.file_id, page_idx, 1);
                 i = page_i;
             }
         } else {
@@ -1490,9 +1488,8 @@ impl Column {
                     self.null_fh.add_new_page()?;
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
-
                 let mut page_i = i;
-                // SAFETY: SAFETY: Bulk append path — frame allocated via create_new_version, pinned, written, logged, then unpinned.
+                // SAFETY: frame allocated via create_new_version, pinned, written, logged, unpinned.
                 unsafe {
                     let ptr = frame.as_ptr();
                     while page_i < num_rows {
@@ -1749,18 +1746,23 @@ impl Column {
 
         let values_per_page = 4096 / 64u64; // element_size for String is 64
 
-        // 1. Write null bitmap - direct write for bulk mode
         let nulls = array.nulls();
+        // Bulk mode writes the null bitmap directly to the file, matching the
+        // direct string-data write and the direct-read scan path. Preserve the
+        // bits of rows already present on the page instead of zero-filling:
+        // successive single-row appends share a page and previously wiped each
+        // other's null bits.
         if skip_modified_rows {
-            // Direct file write for null bitmap - no buffer manager involvement
             let mut i = 0;
+            let mut null_page_buf = [0u8; 4096];
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
                 while self.null_fh.get_num_pages() <= page_idx {
                     self.null_fh.add_new_page()?;
                 }
-
-                let mut null_page_buf = [0u8; 4096];
+                if self.null_fh.read_page(page_idx, &mut null_page_buf).is_err() {
+                    null_page_buf.fill(0);
+                }
                 let mut page_i = i;
                 while page_i < num_rows {
                     let current_row = start_row_id + page_i as u64;
@@ -1772,11 +1774,11 @@ impl Column {
                     null_page_buf[offset] = if is_null { 1 } else { 0 };
                     page_i += 1;
                 }
+                bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
                 self.null_fh.write_page(page_idx, &null_page_buf)?;
                 i = page_i;
             }
         } else {
-            // Buffer manager path for transactional mode
             let mut i = 0;
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
@@ -1785,7 +1787,7 @@ impl Column {
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
                 let mut page_i = i;
-                // SAFETY: SAFETY: String fast path — pinned frame for null bitmap write.
+                // SAFETY: frame allocated via create_new_version, pinned, written, logged, unpinned.
                 unsafe {
                     let ptr = frame.as_ptr();
                     while page_i < num_rows {
