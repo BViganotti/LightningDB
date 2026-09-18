@@ -1002,9 +1002,25 @@ impl<'a> Binder<'a> {
                     .variable
                     .clone()
                     .unwrap_or_else(|| format!("_rel_{}", self.variables.len()));
-                let rel_label = self.require_single_label(&rel_pat.labels, "MATCH relationship")?;
-                let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
-                    LightningError::Query(format!("Rel Table {rel_label} not found"))
+                let rel_table_name: String = if let Some(label) = rel_pat.labels.first() {
+                    if rel_pat.labels.len() > 1 {
+                        return Err(LightningError::Query(format!(
+                            "Multiple labels in MATCH relationship are not supported yet. Got: {:?}",
+                            rel_pat.labels
+                        )));
+                    }
+                    label.clone()
+                } else {
+                    // Unlabeled relationship: infer the rel table from the
+                    // endpoint node labels when exactly one connects them.
+                    self.resolve_rel_table(
+                        &current_node_var,
+                        rel_chain.node_pattern.labels.first().map(|s| s.as_str()),
+                        &rel_pat.direction,
+                    )?
+                };
+                let rel_table = self.catalog.get_rel_table(&rel_table_name).ok_or_else(|| {
+                    LightningError::Query(format!("Rel Table {rel_table_name} not found"))
                 })?;
                 self.variables.insert(
                     rel_var.clone(),
@@ -2037,6 +2053,52 @@ impl<'a> Binder<'a> {
                 Ok(BoundExpression::Lambda(params.clone(), Box::new(new_body)))
             }
             _ => Ok(body.clone()),
+        }
+    }
+
+    /// Resolve an unlabeled relationship pattern to a rel table using the
+    /// source node's table and the destination node's label. Errors if zero or
+    /// more than one rel table connects them (ambiguous).
+    fn resolve_rel_table(
+        &self,
+        src_var: &str,
+        dst_label: Option<&str>,
+        direction: &crate::parser::ast::Direction,
+    ) -> Result<String> {
+        let src_table = self
+            .variables
+            .get(src_var)
+            .map(|v| v.table_name.clone())
+            .ok_or_else(|| {
+                LightningError::Query(
+                    "Cannot infer relationship type without a source node label".into(),
+                )
+            })?;
+        let dst_table = dst_label.ok_or_else(|| {
+            LightningError::Query(
+                "MATCH relationship must have a label (or both endpoint node labels to infer it)"
+                    .into(),
+            )
+        })?;
+        let (want_from, want_to) = match direction {
+            crate::parser::ast::Direction::Left => (dst_table.to_string(), src_table),
+            _ => (src_table, dst_table.to_string()),
+        };
+        let candidates: Vec<String> = self
+            .catalog
+            .rel_tables
+            .values()
+            .filter(|r| r.from_table == want_from && r.to_table == want_to)
+            .map(|r| r.name.clone())
+            .collect();
+        match candidates.len() {
+            1 => Ok(candidates.into_iter().next().expect("len == 1")),
+            0 => Err(LightningError::Query(format!(
+                "No relationship table connects {want_from} -> {want_to}"
+            ))),
+            _ => Err(LightningError::Query(format!(
+                "Multiple relationship tables connect {want_from} -> {want_to}: {candidates:?}; specify a relationship label"
+            ))),
         }
     }
 

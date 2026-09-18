@@ -447,3 +447,21 @@ fn alter_add_column_after_writes_then_set() {
     c.execute("MATCH (e:E) SET e.active = TRUE", None).unwrap();
     assert_eq!(row_count(&db, "MATCH (e:E {active: TRUE}) RETURN e.id"), 100);
 }
+
+/// An unlabeled relationship pattern is resolved from the endpoint node labels
+/// when exactly one rel table connects them.
+#[test]
+fn unlabeled_relationship_pattern_resolves_single_table() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
+    c.execute("CREATE (:X {id: 1})", None).unwrap();
+    c.execute("CREATE (:Y {id: 1})", None).unwrap();
+    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
+        .unwrap();
+
+    // No relationship label: inferred from X -> Y (only R1 connects them).
+    assert_eq!(row_count(&db, "MATCH (x:X)-[r]->(y:Y) RETURN r"), 1);
+}
