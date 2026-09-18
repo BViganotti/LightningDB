@@ -378,8 +378,7 @@ impl BufferManager {
                 }
 
                 // Select the best snapshot-visible version as source data.
-                // We ignore uncommitted versions (from other transactions)
-                // and versions committed after our read_ts.
+                // Ignore uncommitted versions and versions committed after read_ts.
                 if (version & UNCOMMITTED_BIT) == 0
                     && version <= tx.read_ts
                     && (version > best_version || (version == 0 && source_data.is_none()))
