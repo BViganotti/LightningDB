@@ -625,6 +625,21 @@ impl LogicalPlanner {
             }
             BoundStatement::Query(bound_match, bound_where, clauses) => {
                 let mut plan = if let Some(m) = bound_match {
+                    if !m.alternatives.is_empty() {
+                        // Ambiguous unlabeled relationship: union the match
+                        // plan for each candidate rel table, so the rest of the
+                        // query runs over all candidates.
+                        let mut it = m.alternatives.into_iter();
+                        let first = it.next().expect("alternatives non-empty");
+                        let mut p =
+                            Self::plan(BoundStatement::Query(Some(first), None, vec![]))?;
+                        for alt in it {
+                            let r =
+                                Self::plan(BoundStatement::Query(Some(alt), None, vec![]))?;
+                            p = LogicalOperator::Union(Box::new(p), Box::new(r), true);
+                        }
+                        p
+                    } else {
                     let mut match_elements_iter = m.elements.into_iter();
                     let first = match_elements_iter
                         .next()
@@ -895,6 +910,7 @@ impl LogicalPlanner {
                         }
                     }
                     plan
+                    }
                 } else {
                     LogicalOperator::SingleRow
                 };

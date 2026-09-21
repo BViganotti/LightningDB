@@ -131,6 +131,10 @@ impl BoundStatement {
 #[derive(Debug, Clone)]
 pub struct BoundMatchClause {
     pub elements: Vec<BoundMatchElement>,
+    /// Non-empty when an unlabeled relationship had more than one candidate
+    /// table: one fully-bound match clause per candidate combination. The
+    /// planner unions them so the rest of the query runs over all candidates.
+    pub alternatives: Vec<BoundMatchClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -868,6 +872,8 @@ impl<'a> Binder<'a> {
     fn bind_match_clause(&mut self, match_clause: &MatchClause) -> Result<BoundMatchClause> {
         let mut elements = Vec::new();
         let mut column_offset: usize = 0;
+        // (element index, candidate rel tables) for ambiguous unlabeled rels.
+        let mut ambiguous: Vec<(usize, Vec<String>)> = Vec::new();
 
         for pattern in &match_clause.patterns {
             // Handle shortest path and all shortest paths patterns
@@ -1040,23 +1046,25 @@ impl<'a> Binder<'a> {
                     .variable
                     .clone()
                     .unwrap_or_else(|| format!("_rel_{}", self.variables.len()));
-                let rel_table_name: String = if let Some(label) = rel_pat.labels.first() {
+                let rel_candidates: Vec<String> = if let Some(label) = rel_pat.labels.first() {
                     if rel_pat.labels.len() > 1 {
                         return Err(LightningError::Query(format!(
                             "Multiple labels in MATCH relationship are not supported yet. Got: {:?}",
                             rel_pat.labels
                         )));
                     }
-                    label.clone()
+                    vec![label.clone()]
                 } else {
-                    // Unlabeled relationship: infer the rel table from the
-                    // endpoint node labels when exactly one connects them.
-                    self.resolve_rel_table(
+                    // Unlabeled relationship: infer candidate rel table(s) from
+                    // the endpoint node labels. Multiple candidates are unioned
+                    // by the planner.
+                    self.resolve_rel_tables(
                         &current_node_var,
                         rel_chain.node_pattern.labels.first().map(|s| s.as_str()),
                         &rel_pat.direction,
                     )?
                 };
+                let rel_table_name = rel_candidates[0].clone();
                 let rel_table = self.catalog.get_rel_table(&rel_table_name).ok_or_else(|| {
                     LightningError::Query(format!("Rel Table {rel_table_name} not found"))
                 })?;
@@ -1123,6 +1131,7 @@ impl<'a> Binder<'a> {
                     (dst_table.name.clone(), props)
                 };
 
+                let rel_elem_idx = elements.len();
                 elements.push(BoundMatchElement::Rel(
                     rel_table.name.clone(),
                     rel_var.clone(),
@@ -1130,6 +1139,9 @@ impl<'a> Binder<'a> {
                     dst_var.clone(),
                     rel_pat.var_len_bounds,
                 ));
+                if rel_candidates.len() > 1 {
+                    ambiguous.push((rel_elem_idx, rel_candidates.clone()));
+                }
                 elements.push(BoundMatchElement::Node(
                     dst_table_name,
                     dst_var.clone(),
@@ -1140,7 +1152,45 @@ impl<'a> Binder<'a> {
             }
         }
 
-        Ok(BoundMatchClause { elements })
+        if ambiguous.is_empty() {
+            return Ok(BoundMatchClause {
+                elements,
+                alternatives: Vec::new(),
+            });
+        }
+
+        // Cartesian product of the candidate sets → one fully-bound match
+        // clause per combination (usually just one ambiguous rel).
+        let mut combos: Vec<Vec<usize>> = vec![Vec::new()];
+        for (_, cands) in &ambiguous {
+            let mut next = Vec::with_capacity(combos.len() * cands.len());
+            for c in &combos {
+                for i in 0..cands.len() {
+                    let mut cc = c.clone();
+                    cc.push(i);
+                    next.push(cc);
+                }
+            }
+            combos = next;
+        }
+        let mut alternatives = Vec::with_capacity(combos.len());
+        for combo in combos {
+            let mut els = elements.clone();
+            for (k, (idx, cands)) in ambiguous.iter().enumerate() {
+                if let BoundMatchElement::Rel(ref mut t, ..) = els[*idx] {
+                    *t = cands[combo[k]].clone();
+                }
+            }
+            alternatives.push(BoundMatchClause {
+                elements: els,
+                alternatives: Vec::new(),
+            });
+        }
+        let first_elements = alternatives[0].elements.clone();
+        Ok(BoundMatchClause {
+            elements: first_elements,
+            alternatives,
+        })
     }
 
     fn bind_clause(&mut self, clause: &Clause) -> Result<BoundClause> {
@@ -2098,12 +2148,15 @@ impl<'a> Binder<'a> {
     /// Resolve an unlabeled relationship pattern to a rel table using the
     /// source node's table and the destination node's label. Errors if zero or
     /// more than one rel table connects them (ambiguous).
-    fn resolve_rel_table(
+    /// Candidate rel tables for an unlabeled relationship pattern. Returns one
+    /// or more; the planner unions multiple candidates. Errs if none connect
+    /// the endpoints.
+    fn resolve_rel_tables(
         &self,
         src_var: &str,
         dst_label: Option<&str>,
         direction: &crate::parser::ast::Direction,
-    ) -> Result<String> {
+    ) -> Result<Vec<String>> {
         let src_table = self
             .variables
             .get(src_var)
@@ -2130,15 +2183,12 @@ impl<'a> Binder<'a> {
             .filter(|r| r.from_table == want_from && r.to_table == want_to)
             .map(|r| r.name.clone())
             .collect();
-        match candidates.len() {
-            1 => Ok(candidates.into_iter().next().expect("len == 1")),
-            0 => Err(LightningError::Query(format!(
+        if candidates.is_empty() {
+            return Err(LightningError::Query(format!(
                 "No relationship table connects {want_from} -> {want_to}"
-            ))),
-            _ => Err(LightningError::Query(format!(
-                "Multiple relationship tables connect {want_from} -> {want_to}: {candidates:?}; specify a relationship label"
-            ))),
+            )));
         }
+        Ok(candidates)
     }
 
     fn require_single_label<'b>(&self, labels: &'b [String], context: &str) -> Result<&'b String> {

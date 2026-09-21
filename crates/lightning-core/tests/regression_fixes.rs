@@ -15,6 +15,16 @@ fn new_db() -> (tempfile::TempDir, Arc<Database>) {
     (dir, db)
 }
 
+fn one_i64(db: &Arc<Database>, cypher: &str) -> i64 {
+    let res = db.connect().execute(cypher, None).unwrap();
+    res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("expected Int64 result")
+        .value(0)
+}
+
 fn row_count(db: &Arc<Database>, cypher: &str) -> usize {
     db.connect()
         .execute(cypher, None)
@@ -475,16 +485,24 @@ fn ddl_invalidates_plan_cache() {
     c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
     c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
     c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
+    c.execute("CREATE (:X {id: 1})", None).unwrap();
+    c.execute("CREATE (:Y {id: 1})", None).unwrap();
+    c.execute("CREATE (:Y {id: 2})", None).unwrap();
+    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
+        .unwrap();
 
-    // Cache a plan for this exact query string (single candidate => works).
-    assert_eq!(row_count(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"), 1);
+    // Cache a plan for this exact query string (single candidate => 1 edge).
+    assert_eq!(one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"), 1);
 
-    // Adding a second rel table changes what this query means; the cached plan
-    // must be dropped so the ambiguity is reported instead of a stale result.
+    // Adding a second rel table changes what this query means. If the cached
+    // plan were reused the new edge would be missed; invalidation makes the
+    // unlabeled pattern union both rel tables => 2 edges.
     c.execute("CREATE REL TABLE R2(FROM X TO Y)", None).unwrap();
-    let after = c.execute("MATCH (x:X)-[r]->(y:Y) RETURN count(*)", None);
-    assert!(
-        after.is_err(),
+    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 2}) CREATE (x)-[:R2]->(y)", None)
+        .unwrap();
+    assert_eq!(
+        one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"),
+        2,
         "plan cache must be invalidated by CREATE REL TABLE"
     );
 }
@@ -575,4 +593,28 @@ fn unwind_then_correlated_match() {
         .execute("UNWIND [1, 2, 3] AS id WHERE id > 1 RETURN id", None)
         .unwrap();
     assert_eq!(res.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+}
+
+/// An unlabeled relationship with multiple candidate rel tables must match
+/// over all of them (planner union), not error or pick one.
+#[test]
+fn unlabeled_relationship_pattern_unions_multiple_tables() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
+    c.execute("CREATE REL TABLE R2(FROM X TO Y)", None).unwrap();
+    c.execute("CREATE (:X {id: 1})", None).unwrap();
+    c.execute("CREATE (:Y {id: 1})", None).unwrap();
+    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
+        .unwrap();
+    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R2]->(y)", None)
+        .unwrap();
+
+    assert_eq!(
+        one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"),
+        2,
+        "unlabeled pattern must union R1 and R2"
+    );
 }
