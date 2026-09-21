@@ -736,7 +736,18 @@ impl StorageManager {
                 stats.page_bounds = cat_stat.page_bounds.clone();
                 if let Some(ref meta) = cat_stat.compression_meta {
                     if meta.compression != CompressionType::Uncompressed {
-                        stats.compression_meta = Some(meta.clone());
+                        // Compression codecs are not yet applied on write
+                        // (pages are never re-encoded), so a persisted
+                        // non-Uncompressed codec would make reads decompress
+                        // ordinary bytes. Warn loudly rather than silently
+                        // misreading; such catalogs must be re-written
+                        // uncompressed.
+                        tracing::warn!(
+                            "Column {}: catalog requests {:?} compression, but pages are stored \
+                             uncompressed; ignoring the codec to avoid misreads",
+                            col.name,
+                            meta.compression
+                        );
                     }
                 }
             }
