@@ -22,6 +22,10 @@ pub struct BoundQuery {
 pub struct BoundUnionQuery {
     pub statement: BoundStatement,
     pub next_union: Option<(Box<BoundUnionQuery>, bool)>,
+    /// SKIP/LIMIT written after the final UNION arm apply to the whole union
+    /// (Cypher), so they are hoisted off the last arm and stored here.
+    pub union_skip: Option<f64>,
+    pub union_limit: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -401,7 +405,15 @@ impl<'a> Binder<'a> {
     pub fn bind_query(&mut self, query: &Query) -> Result<BoundQuery> {
         let mut union_queries = Vec::new();
         for uq in &query.union_queries {
-            union_queries.push(self.bind_union_query(uq)?);
+            let mut bound = self.bind_union_query(uq)?;
+            // For a UNION, a SKIP/LIMIT after the last arm applies to the whole
+            // union; move it off the arm.
+            if bound.next_union.is_some() {
+                let (skip, limit) = Self::take_union_tail(&mut bound);
+                bound.union_skip = skip;
+                bound.union_limit = limit;
+            }
+            union_queries.push(bound);
         }
         Ok(BoundQuery {
             union_queries,
@@ -435,8 +447,14 @@ impl<'a> Binder<'a> {
             }
 
             for (left, right) in left_columns.iter().zip(right_columns.iter()) {
-                // Cypher/SQL allows UNION with different column names —
-                // the first query's column names are used.
+                // Cypher requires UNION sub-queries to have identical column
+                // names and types (position-wise).
+                if left.0 != right.0 {
+                    return Err(LightningError::Query(format!(
+                        "Column name mismatch in UNION for column {}: {:?} vs {:?}",
+                        left.0, left.0, right.0
+                    )));
+                }
                 if left.1 != right.1 {
                     return Err(LightningError::Query(format!(
                         "Column type mismatch in UNION for column {}: {:?} vs {:?}",
@@ -451,7 +469,25 @@ impl<'a> Binder<'a> {
         Ok(BoundUnionQuery {
             statement,
             next_union,
+            union_skip: None,
+            union_limit: None,
         })
+    }
+
+    /// Remove a trailing SKIP/LIMIT from the right-most UNION arm's RETURN so it
+    /// can be applied to the whole union instead of just that arm.
+    fn take_union_tail(uq: &mut BoundUnionQuery) -> (Option<f64>, Option<f64>) {
+        match uq.next_union {
+            Some((ref mut next, _)) => Self::take_union_tail(next),
+            None => {
+                if let BoundStatement::Query(_, _, clauses) = &mut uq.statement {
+                    if let Some(BoundClause::Return(ret)) = clauses.last_mut() {
+                        return (ret.skip.take(), ret.limit.take());
+                    }
+                }
+                (None, None)
+            }
+        }
     }
 
     pub fn bind(&mut self, statement: &Statement) -> Result<BoundStatement> {

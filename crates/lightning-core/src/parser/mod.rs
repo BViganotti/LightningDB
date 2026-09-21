@@ -143,21 +143,34 @@ fn parse_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, ParserError> 
 }
 
 fn parse_union_query(p: pest::iterators::Pair<Rule>) -> Result<UnionQuery, ParserError> {
-    let mut stmt = None;
-    let mut nu = None;
-    let mut ia = false;
+    // Grammar: `union_query = statement ~ (UNION_OP ~ statement)*` — a flat
+    // sequence. Build the linked `next_union` chain from it; the previous
+    // implementation kept only the last statement and dropped the rest.
+    let mut statements: Vec<Statement> = Vec::new();
+    let mut ops: Vec<bool> = Vec::new(); // is_all, between consecutive statements
     for i in p.into_inner() {
         match i.as_rule() {
-            Rule::statement => stmt = Some(parse_statement(i)?),
-            Rule::UNION_OP => ia = i.as_str().to_uppercase().contains("ALL"),
-            Rule::union_query => nu = Some((Box::new(parse_union_query(i)?), ia)),
+            Rule::statement => statements.push(parse_statement(i)?),
+            Rule::UNION_OP => ops.push(i.as_str().to_uppercase().contains("ALL")),
             _ => {}
         }
     }
-    Ok(UnionQuery {
-        statement: stmt.expect("internal invariant violated"),
-        next_union: nu,
-    })
+    if statements.is_empty() {
+        return Err(ParserError::Internal("empty union query".into()));
+    }
+    let mut chain: Option<(Box<UnionQuery>, bool)> = None;
+    for i in (0..statements.len()).rev() {
+        let node = UnionQuery {
+            statement: statements[i].clone(),
+            next_union: chain.take(),
+        };
+        if i == 0 {
+            return Ok(node);
+        }
+        // `ops[i - 1]` connects statement i-1 to statement i.
+        chain = Some((Box::new(node), ops[i - 1]));
+    }
+    unreachable!("loop always returns at i == 0")
 }
 
 fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserError> {

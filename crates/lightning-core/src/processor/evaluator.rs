@@ -756,7 +756,37 @@ impl ExpressionEvaluator {
                         &arrow::datatypes::DataType::Float64,
                         num_rows,
                     )),
-                    Value::List(_) | Value::Map(_) | Value::Node(_) | Value::Relationship(_)
+                    Value::List(items) => {
+                        // Each of `num_rows` rows holds the same list value
+                        // (used by e.g. `UNWIND $ids AS id` and `x IN $ids`).
+                        if items.is_empty() {
+                            let field = Arc::new(Field::new("item", DataType::Null, true));
+                            let offsets =
+                                arrow::buffer::OffsetBuffer::from_lengths(vec![0; num_rows]);
+                            let values = arrow::array::new_empty_array(&DataType::Null);
+                            return Ok(Arc::new(
+                                ListArray::try_new(field, offsets, values, None)
+                                    .map_err(|e| LightningError::Internal(e.to_string()))?,
+                            ));
+                        }
+                        let elem_type = Self::value_scalar_dtype(&items[0]);
+                        let mut arrs: Vec<ArrayRef> = Vec::with_capacity(items.len());
+                        for it in items {
+                            arrs.push(Self::scalar_array_from_value(it, &elem_type)?);
+                        }
+                        let values = arrow::compute::concat(
+                            &arrs.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+                        )
+                        .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let field = Arc::new(Field::new("item", elem_type, true));
+                        let offsets =
+                            arrow::buffer::OffsetBuffer::from_lengths(vec![items.len(); num_rows]);
+                        return Ok(Arc::new(
+                            ListArray::try_new(field, offsets, values, None)
+                                .map_err(|e| LightningError::Internal(e.to_string()))?,
+                        ));
+                    }
+                    Value::Map(_) | Value::Node(_) | Value::Relationship(_)
                     | Value::Path(_) | Value::Date(_) | Value::Timestamp(_) | Value::Struct(_) => {
                         Err(LightningError::Internal(format!(
                             "Parameter type not yet supported for evaluation: {val:?}"
@@ -983,6 +1013,39 @@ impl ExpressionEvaluator {
             }
         };
         Ok(res)
+    }
+
+    /// Arrow element type for a scalar `Value` (used to build list parameters).
+    fn value_scalar_dtype(v: &Value) -> DataType {
+        match v {
+            Value::Number(_) => DataType::Float64,
+            Value::String(_) => DataType::Utf8,
+            Value::Boolean(_) => DataType::Boolean,
+            Value::Date(_) => DataType::Date32,
+            Value::Timestamp(_) => DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                None,
+            ),
+            _ => DataType::Null,
+        }
+    }
+
+    /// Build a length-1 Arrow array holding a single scalar `Value`.
+    fn scalar_array_from_value(v: &Value, dtype: &DataType) -> Result<ArrayRef> {
+        let arr: ArrayRef = match v {
+            Value::Number(n) => Arc::new(Float64Array::from_value(*n, 1)),
+            Value::String(s) => Arc::new(StringArray::from_iter_values(std::iter::once(
+                s.as_str(),
+            ))),
+            Value::Boolean(b) => Arc::new(BooleanArray::from(vec![*b])),
+            Value::Null => arrow::array::new_null_array(dtype, 1),
+            other => {
+                return Err(LightningError::Internal(format!(
+                    "Unsupported list element in parameter: {other:?}"
+                )))
+            }
+        };
+        Ok(arr)
     }
 
     fn compare_column_literal(

@@ -488,3 +488,64 @@ fn ddl_invalidates_plan_cache() {
         "plan cache must be invalidated by CREATE REL TABLE"
     );
 }
+
+/// UNION must execute every arm (the parser previously kept only the last
+/// statement) and UNION (distinct) must deduplicate.
+#[test]
+fn union_executes_all_arms_and_dedups() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE P(name STRING, PRIMARY KEY (name))", None)
+        .unwrap();
+    for n in ["Alice", "Bob", "Charlie"] {
+        c.execute(&format!("CREATE (:P {{name: '{n}'}})"), None).unwrap();
+    }
+
+    // UNION ALL of two different single-row arms => 2 rows.
+    assert_eq!(
+        row_count(
+            &db,
+            "MATCH (p:P) WHERE p.name = 'Alice' RETURN p.name AS name \
+             UNION ALL MATCH (p:P) WHERE p.name = 'Bob' RETURN p.name AS name"
+        ),
+        2
+    );
+    // UNION of the same row twice => 1 (deduplicated).
+    assert_eq!(
+        row_count(
+            &db,
+            "MATCH (p:P) WHERE p.name = 'Alice' RETURN p.name AS name \
+             UNION MATCH (p:P) WHERE p.name = 'Alice' RETURN p.name AS name"
+        ),
+        1
+    );
+    // Trailing LIMIT applies to the whole union.
+    assert_eq!(
+        row_count(
+            &db,
+            "MATCH (p:P) RETURN p.name AS name UNION MATCH (p:P) RETURN p.name AS name LIMIT 2"
+        ),
+        2
+    );
+}
+
+/// `UNWIND $list` must evaluate a list-typed query parameter.
+#[test]
+fn list_parameter_unwinds() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "ids".to_string(),
+        lightning_core::Value::List(vec![
+            lightning_core::Value::Number(1.0),
+            lightning_core::Value::Number(2.0),
+            lightning_core::Value::Number(3.0),
+        ]),
+    );
+    let res = c.execute("UNWIND $ids AS id RETURN id", Some(params)).unwrap();
+    assert_eq!(
+        res.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+        3
+    );
+}

@@ -473,7 +473,17 @@ impl LogicalPlanner {
         let mut plan = if query.union_queries.is_empty() {
             LogicalOperator::SingleRow
         } else {
-            Self::plan_union_query(query.union_queries[0].clone())?
+            let first = &query.union_queries[0];
+            let mut p = Self::plan_union_query(first.clone())?;
+            // A trailing SKIP/LIMIT on the last UNION arm applies to the whole
+            // union (hoisted by the binder).
+            if let Some(skip) = first.union_skip {
+                p = LogicalOperator::Skip(Box::new(p), skip as u64);
+            }
+            if let Some(limit) = first.union_limit {
+                p = LogicalOperator::Limit(Box::new(p), limit as u64);
+            }
+            p
         };
 
         if query.is_profile {

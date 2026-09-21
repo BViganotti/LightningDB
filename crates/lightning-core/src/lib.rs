@@ -1688,48 +1688,61 @@ impl Connection {
             db.storage_manager.read().flush_all_pending(bm, &tx)?;
         }
 
-        // Try bound statement cache
-        let (bound_stmt, binder_column_offsets) = {
-            let plan_cache_key = query_str.to_string();
-            let cache_shard_idx = cache_shard(&plan_cache_key, 4);
-            let mut cache = db.plan_caches[cache_shard_idx].lock();
-            let cached = cache.get(&plan_cache_key).cloned();
-            if let Some(pair) = cached {
-                let (stmt, offsets) = &*pair;
-                (stmt.clone(), offsets.clone())
-            } else {
-                drop(cache);
-                let catalog = db.catalog.read();
-                let mut binder = Binder::new(
-                    &catalog,
-                    &db.function_registry,
-                );
-                let bound_query = binder.bind_query(&query)?;
-                drop(catalog);
-                let binder_offsets = bound_query.column_offsets.clone();
-                let bound_union = bound_query
-                    .union_queries
-                    .first()
-                    .ok_or_else(|| LightningError::Query("No query".into()))?;
-                let stmt = bound_union.statement.clone();
-                // Only cache read-only Query statements. DML statements
-                // (CREATE, DELETE, SET, etc.) contain literal values that
-                // are normalized away by normalize_query, causing different
-                // DML statements to share the same cache key and reuse
-                // stale literal values from the first execution.
-                // Note: Query statements can also contain literal values
-                // (e.g., WHERE col = 'value'), so we use the original
-                // query string (not normalized) as the cache key to avoid
-                // collisions between queries with different literal values.
-                if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
-                    let mut cache = db.plan_caches[cache_shard_idx].lock();
-                    cache.put(plan_cache_key, Arc::new((stmt.clone(), binder_offsets.clone())));
-                }
-                (stmt, binder_offsets)
-            }
-        };
+        // UNION queries span multiple bound statements and must be planned as a
+        // whole via `plan_query`; the bound-statement cache (single statement)
+        // and `plan_and_optimize` would silently drop every arm but the first.
+        let has_union = query.union_queries.len() > 1
+            || query.union_queries.iter().any(|uq| uq.next_union.is_some());
 
-        let logical_plan = self.plan_and_optimize(bound_stmt, binder_column_offsets.clone())?;
+        let (logical_plan, binder_column_offsets) = if has_union {
+            let catalog = db.catalog.read();
+            let mut binder = Binder::new(&catalog, &db.function_registry);
+            let bound_query = binder.bind_query(&query)?;
+            let offsets = bound_query.column_offsets.clone();
+            drop(catalog);
+            let plan = crate::planner::LogicalPlanner::plan_query(bound_query)?;
+            let optimizer = crate::optimizer::Optimizer::with_binder_offsets(
+                db.catalog.inner_catalog(),
+                offsets.clone(),
+            );
+            (optimizer.optimize(plan)?, offsets)
+        } else {
+            // Try bound statement cache
+            let (bound_stmt, offsets) = {
+                let plan_cache_key = query_str.to_string();
+                let cache_shard_idx = cache_shard(&plan_cache_key, 4);
+                let mut cache = db.plan_caches[cache_shard_idx].lock();
+                let cached = cache.get(&plan_cache_key).cloned();
+                if let Some(pair) = cached {
+                    let (stmt, offsets) = &*pair;
+                    (stmt.clone(), offsets.clone())
+                } else {
+                    drop(cache);
+                    let catalog = db.catalog.read();
+                    let mut binder = Binder::new(
+                        &catalog,
+                        &db.function_registry,
+                    );
+                    let bound_query = binder.bind_query(&query)?;
+                    drop(catalog);
+                    let binder_offsets = bound_query.column_offsets.clone();
+                    let bound_union = bound_query
+                        .union_queries
+                        .first()
+                        .ok_or_else(|| LightningError::Query("No query".into()))?;
+                    let stmt = bound_union.statement.clone();
+                    if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
+                        let mut cache = db.plan_caches[cache_shard_idx].lock();
+                        cache.put(plan_cache_key, Arc::new((stmt.clone(), binder_offsets.clone())));
+                    }
+                    (stmt, binder_offsets)
+                }
+            };
+            (
+                self.plan_and_optimize(bound_stmt, offsets.clone())?,
+                offsets,
+            )
+        };
         let mut planner = PhysicalPlanner::new(
             Arc::clone(&self.client_context.database),
             tx.read_ts,

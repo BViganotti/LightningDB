@@ -62,10 +62,15 @@ impl PhysicalUnion {
                 let hash = hasher.finish();
 
                 if seen.insert(hash) {
-                    // Fast path: hash is unique, definitely a new row
+                    // New hash: record the row so a later identical row (same
+                    // hash) can be recognized as a duplicate. Without storing
+                    // it, the second occurrence looked like a hash collision
+                    // with an empty collision list and was treated as distinct.
+                    collisions.entry(hash).or_default().push(row);
                     filtered_indices.push(i as u64);
                 } else {
-                    // Hash collision: check collision rows for this hash
+                    // Hash already seen: it is a duplicate unless a genuinely
+                    // different row collides on the same hash.
                     let entry = collisions.entry(hash).or_default();
                     let is_dup = entry.iter().any(|r| r == &row);
                     if !is_dup {
@@ -111,6 +116,9 @@ impl PhysicalOperator for PhysicalUnion {
         loop {
             if !self.local_left_exhausted {
                 if let Some(chunk) = self.left.get_next(database, tx, params)? {
+                    if std::env::var("UNION_DEBUG").is_ok() {
+                        eprintln!("UNION_DEBUG left rows={}", chunk.num_rows());
+                    }
                     if !self.is_all {
                         if let Some(deduped) = self.deduplicate(chunk)? {
                             return Ok(Some(deduped));
@@ -124,6 +132,9 @@ impl PhysicalOperator for PhysicalUnion {
             }
 
             if let Some(chunk) = self.right.get_next(database, tx, params)? {
+                if std::env::var("UNION_DEBUG").is_ok() {
+                    eprintln!("UNION_DEBUG right rows={}", chunk.num_rows());
+                }
                 if !self.is_all {
                     if let Some(deduped) = self.deduplicate(chunk)? {
                         return Ok(Some(deduped));
