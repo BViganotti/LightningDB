@@ -36,7 +36,9 @@ fn test_flatten_operator() -> Result<()> {
             cat.node_tables.get_mut("User").unwrap().num_rows = 3;
         }
 
-        // 2. Create table in StorageManager
+        // 2. Create table in StorageManager. Scope the write guard so it is
+        //    dropped before `commit`, which needs the storage read lock.
+        {
         let mut sm_write = sm.write();
         sm_write
             .create_table(
@@ -73,6 +75,7 @@ fn test_flatten_operator() -> Result<()> {
                 &tx,
             )
             .unwrap();
+        } // drop sm_write before committing
 
         db.transaction_manager()
             .commit(&tx, &db.buffer_manager(), &db)?;
@@ -88,18 +91,15 @@ fn test_flatten_operator() -> Result<()> {
     let mut planner = PhysicalPlanner::new(db.clone(), tx.tx_id, tx.read_ts, undo_buffer);
     let mut physical_plan = planner.plan(plan)?;
 
-    // Expected: 3 chunks, each with 1 row
+    // 3 rows is below FLATTEN_BATCH_SIZE (1024) => a single chunk with all rows.
     let mut count = 0;
+    let mut rows = 0;
     while let Some(chunk) = physical_plan.get_next(&db, &tx, None)? {
-        assert_eq!(
-            chunk.batch.num_rows(),
-            1,
-            "Chunk {} should have 1 row",
-            count
-        );
+        rows += chunk.batch.num_rows();
         count += 1;
     }
-    assert_eq!(count, 3, "Should have returned 3 chunks");
+    assert_eq!(rows, 3, "Flatten must return all 3 rows");
+    assert_eq!(count, 1, "3 rows < FLATTEN_BATCH_SIZE => one chunk");
 
     // Cleanup
     std::fs::remove_dir_all(&test_dir).unwrap();

@@ -439,6 +439,12 @@ impl PhysicalPlanner {
                     ),
                 ))
             }
+            LogicalOperator::Flatten(child) => {
+                let planned_child = self.plan(*child)?;
+                Ok(Box::new(
+                    crate::processor::operators::flatten::PhysicalFlatten::new(planned_child),
+                ))
+            }
             LogicalOperator::Unwind(child, expr, alias) => {
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(
