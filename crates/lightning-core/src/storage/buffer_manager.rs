@@ -685,62 +685,69 @@ impl BufferManager {
     }
 
     pub fn reclaim_expired_versions(&self, min_active_ts: u64) -> Result<usize> {
+        // Reclaim memory by dropping *superseded* committed versions: a version
+        // may only be discarded when a strictly newer committed version of the
+        // same page is still resident, so removing it can never change what any
+        // reader sees. The previous implementation evicted the newest resident
+        // version whenever `version < min_active_ts`, and could leave a stale
+        // on-disk copy as the only remaining version (resurrecting deleted rows
+        // after a later read missed the pool).
         let mut total_reclaimed = 0;
         for shard in &self.shards {
-            // Bail out early if shutting down to avoid holding shard locks
-            // during Database::drop.
             if self.shutting_down.load(Ordering::Acquire) {
                 return Ok(total_reclaimed);
             }
-            // Phase 1: scan under READ lock to find candidates
-            // Phase 1 & 2 combined under read lock: collect candidates + their keys
-            // Store the expected key alongside each candidate to detect reassignment.
             struct CleanupCandidate {
                 slot_idx: usize,
                 expected_key: Option<(u64, u64)>,
             }
-            let mut to_flush: Vec<(Arc<FileHandle>, u64, Vec<u8>)> = Vec::new();
             let mut to_cleanup: Vec<CleanupCandidate> = Vec::new();
             {
                 let pool = shard.read();
+                // Highest committed version resident per page.
+                let mut max_committed: std::collections::HashMap<(u64, u64), u64> =
+                    std::collections::HashMap::new();
+                for j in 0..pool.slots.len() {
+                    if let Some(k) = pool.slots[j].key {
+                        let v = pool.slots[j].frame.version.load(Ordering::Acquire);
+                        if v != 0 && v & UNCOMMITTED_BIT == 0 {
+                            let e = max_committed.entry(k).or_insert(0);
+                            if v > *e {
+                                *e = v;
+                            }
+                        }
+                    }
+                }
                 for i in 0..pool.slots.len() {
                     let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                     let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                    if pin_count == 0 && version != 0 && version < min_active_ts
-                        && version & UNCOMMITTED_BIT == 0
+                    if pin_count != 0
+                        || version == 0
+                        || version & UNCOMMITTED_BIT != 0
+                        || version >= min_active_ts
                     {
-                        let key = pool.slots[i].key;
-                        if pool.slots[i].dirty {
-                            if let Some((fid, pid)) = key {
-                                if let Some(fh) = pool.file_handles.get(&fid) {
-                                    let data = pool.slots[i].frame.as_slice().to_vec();
-                                    to_flush.push((Arc::clone(fh), pid, data));
-                                }
-                            }
-                        }
-                        to_cleanup.push(CleanupCandidate { slot_idx: i, expected_key: key });
+                        continue;
                     }
+                    let Some(key) = pool.slots[i].key else { continue };
+                    if max_committed.get(&key).copied().unwrap_or(0) <= version {
+                        continue;
+                    }
+                    to_cleanup.push(CleanupCandidate {
+                        slot_idx: i,
+                        expected_key: Some(key),
+                    });
                 }
-            } // release read lock
-
-            // Phase 3: perform I/O outside any shard lock
-            for (fh, pid, data) in &to_flush {
-                fh.write_page(*pid, data)?;
             }
 
-            // Phase 4: acquire WRITE lock to update slot state
-            // Verify that the slot key hasn't changed since Phase 2 to prevent
-            // page_to_slots mapping corruption (TOCTOU race).
             if !to_cleanup.is_empty() {
                 let mut pool = shard.write();
                 for c in &to_cleanup {
                     let i = c.slot_idx;
-                    // Re-check conditions under write lock (slot may have changed)
                     let pin_count = pool.slots[i].frame.pin_count.load(Ordering::Acquire);
                     let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                    if pin_count == 0 && version != 0 && version < min_active_ts
+                    if pin_count == 0
+                        && version != 0
                         && version & UNCOMMITTED_BIT == 0
-                        // Verify key hasn't been reassigned since Phase 2
                         && pool.slots[i].key == c.expected_key
                     {
                         if let Some(key) = pool.slots[i].key {
@@ -1090,30 +1097,57 @@ impl BufferManager {
             let shard_idx = self.get_shard_idx(key);
             by_shard.entry(shard_idx).or_default().insert(key);
         }
+        let mut newest_committed: HashMap<(u64, u64), usize> = HashMap::new();
+        let mut newest_version: HashMap<(u64, u64), u64> = HashMap::new();
         for (shard_idx, target_keys) in &by_shard {
             if target_keys.is_empty() {
                 continue;
             }
             let mut pool = self.shards[*shard_idx].write();
+            newest_committed.clear();
+            newest_version.clear();
+
+            // A page can have several committed versions resident at once. Only
+            // the newest may be written to disk; writing an older one after the
+            // newer corrupts the page (e.g. resurrecting a deleted row). Select
+            // the newest committed dirty version per key and drop the dirty flag
+            // on superseded older versions so they are never flushed.
             for i in 0..pool.slots.len() {
-                if pool.slots[i].dirty {
-                    if let Some(key) = pool.slots[i].key {
-                        if target_keys.contains(&key) {
-                            let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                            if version & UNCOMMITTED_BIT != 0 {
-                                continue;
-                            }
-                            if let Some(fh) = pool.file_handles.get(&key.0) {
-                                if let Err(e) = fh.write_page(key.1, pool.slots[i].frame.as_slice()) {
-                                    tracing::error!("flush_pages: write error on page {} file {}: {}", key.1, key.0, e);
-                                } else {
-                                    if pool.slots[i].dirty {
-                                        Self::decrement_dirty_count(&pool.dirty_count);
-                                    }
-                                    pool.slots[i].dirty = false;
-                                }
-                            }
+                if !pool.slots[i].dirty {
+                    continue;
+                }
+                let Some(key) = pool.slots[i].key else { continue };
+                if !target_keys.contains(&key) {
+                    continue;
+                }
+                let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                if version & UNCOMMITTED_BIT != 0 {
+                    continue;
+                }
+                if newest_version.get(&key).is_some_and(|&best| best >= version) {
+                    // Superseded older version: discard without writing.
+                    pool.slots[i].dirty = false;
+                    Self::decrement_dirty_count(&pool.dirty_count);
+                } else {
+                    // New newest: drop the previously-selected (older) one.
+                    if let Some(prev_i) = newest_committed.insert(key, i) {
+                        pool.slots[prev_i].dirty = false;
+                        Self::decrement_dirty_count(&pool.dirty_count);
+                    }
+                    newest_version.insert(key, version);
+                }
+            }
+
+            for (key, i) in &newest_committed {
+                let fh = pool.file_handles.get(&key.0).cloned();
+                if let Some(fh) = fh {
+                    if let Err(e) = fh.write_page(key.1, pool.slots[*i].frame.as_slice()) {
+                        tracing::error!("flush_pages: write error on page {} file {}: {}", key.1, key.0, e);
+                    } else {
+                        if pool.slots[*i].dirty {
+                            Self::decrement_dirty_count(&pool.dirty_count);
                         }
+                        pool.slots[*i].dirty = false;
                     }
                 }
             }
