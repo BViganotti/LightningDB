@@ -1135,6 +1135,9 @@ impl LogicalPlanner {
                             unwind.expression.clone(),
                             unwind.alias.clone(),
                         ),
+                        BoundClause::Where(expr) => {
+                            LogicalOperator::Filter(Box::new(plan), expr.clone())
+                        }
                         BoundClause::Delete(del) => {
                             LogicalOperator::Delete(Box::new(plan), del.variables.clone(), del.detach)
                         }

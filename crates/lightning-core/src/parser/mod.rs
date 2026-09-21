@@ -361,7 +361,14 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::match_clause => {
                 let pats = parse_match_clause(i)?;
-                match_clause_opt = Some(MatchClause { patterns: pats });
+                // Only the first clause may be the leading MATCH. A MATCH that
+                // appears after other clauses keeps its position so it can
+                // reference earlier variables (e.g. `UNWIND ... MATCH ...`).
+                if match_clause_opt.is_none() && clauses.is_empty() {
+                    match_clause_opt = Some(MatchClause { patterns: pats });
+                } else {
+                    clauses.push(Clause::Match(MatchClause { patterns: pats }));
+                }
             }
             Rule::optional_match_clause => {
                 let pats = parse_match_clause(i)?;
@@ -446,7 +453,17 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::where_clause => {
                 let expr = parse_expression(required_pair(i.into_inner().next(), "pair")?)?;
-                where_clause_opt = Some(WhereClause { expression: expr });
+                // A WHERE directly after the leading MATCH is that match's
+                // predicate; otherwise it is a standalone filter on the
+                // current pipeline (preserving clause order).
+                if match_clause_opt.is_some()
+                    && clauses.is_empty()
+                    && where_clause_opt.is_none()
+                {
+                    where_clause_opt = Some(WhereClause { expression: expr });
+                } else {
+                    clauses.push(Clause::Where(WhereClause { expression: expr }));
+                }
             }
             Rule::return_clause => {
                 let rc = parse_return_clause(i)?;

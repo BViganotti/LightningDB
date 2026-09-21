@@ -205,6 +205,9 @@ pub enum Clause {
     With(ReturnClause, Option<WhereClause>),
     Match(MatchClause),
     OptionalMatch(MatchClause),
+    /// A standalone `WHERE` applied to the current pipeline (e.g. after an
+    /// `UNWIND` or a non-leading `MATCH`).
+    Where(WhereClause),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

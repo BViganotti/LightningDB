@@ -1052,8 +1052,11 @@ impl PhysicalPlanner {
             LogicalOperator::SemiMasker(child, ..) => {
                 self.collect_variable_positions(child, start_col, positions)
             }
-            LogicalOperator::Unwind(child, ..) => {
-                self.collect_variable_positions(child, start_col, positions)
+            LogicalOperator::Unwind(child, _, alias) => {
+                // Unwind appends one column (the unwound value) named `alias`.
+                let child_cols = self.collect_variable_positions(child, start_col, positions)?;
+                positions.insert(alias.clone(), start_col + child_cols);
+                Ok(child_cols + 1)
             }
             LogicalOperator::Subquery(child) => {
                 self.collect_variable_positions(child, start_col, positions)

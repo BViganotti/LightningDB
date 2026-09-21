@@ -166,6 +166,8 @@ pub enum BoundClause {
     Match(BoundMatchClause),
     OptionalMatch(BoundMatchClause),
     With(BoundReturnClause, Option<BoundWhereClause>),
+    /// Standalone filter applied to the current pipeline.
+    Where(BoundExpression),
 }
 
 #[derive(Debug, Clone)]
@@ -1180,6 +1182,7 @@ impl<'a> Binder<'a> {
                     alias: unwind.alias.clone(),
                 }))
             }
+            Clause::Where(w) => Ok(BoundClause::Where(self.bind_expression(&w.expression)?)),
             Clause::Call(call) => {
                 let mut bound_params = Vec::new();
                 for param in &call.parameters {

@@ -549,3 +549,30 @@ fn list_parameter_unwinds() {
         3
     );
 }
+
+/// Clause order must be preserved so a MATCH after UNWIND can reference the
+/// unwound variable (correlated MATCH). The parser used to hoist MATCH to the
+/// front, running it before the UNWIND.
+#[test]
+fn unwind_then_correlated_match() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE T(x INT64)", None).unwrap();
+    c.execute("CREATE (:T {x: 1})", None).unwrap();
+    c.execute("CREATE (:T {x: 2})", None).unwrap();
+
+    let res = c
+        .execute("UNWIND [1, 2] AS id MATCH (t:T) WHERE t.x = id RETURN t.x", None)
+        .unwrap();
+    assert_eq!(
+        res.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+        2,
+        "each unwound id must match exactly its T row"
+    );
+
+    // Standalone WHERE after UNWIND (no MATCH).
+    let res = c
+        .execute("UNWIND [1, 2, 3] AS id WHERE id > 1 RETURN id", None)
+        .unwrap();
+    assert_eq!(res.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+}
