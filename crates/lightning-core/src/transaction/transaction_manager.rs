@@ -49,6 +49,9 @@ pub struct Transaction {
     /// and catalog counts are plain atomics/counters, not MVCC-versioned, so a
     /// rollback must restore them or the discarded rows stay visible to scans.
     pub rollback_table_bases: Mutex<HashMap<String, (u64, u64)>>,
+    /// Exact row ids this transaction allocated per table (for tombstoning
+    /// holes on a concurrent rollback).
+    pub allocated_rows: Mutex<HashMap<String, Vec<u64>>>,
     pub finalized: AtomicBool,
     tx_mgr: Option<Weak<TransactionManager>>,
     bm: Option<Weak<BufferManager>>,
@@ -62,6 +65,15 @@ impl Transaction {
             .lock()
             .entry(table_name.to_string())
             .or_insert((next_row_id, num_rows));
+    }
+
+    /// Record a row id allocated by this transaction (for rollback cleanup).
+    pub fn note_allocated(&self, table_name: &str, row_id: u64) {
+        self.allocated_rows
+            .lock()
+            .entry(table_name.to_string())
+            .or_default()
+            .push(row_id);
     }
 }
 
@@ -139,6 +151,7 @@ impl TransactionManager {
             buffered_tables: RwLock::new(Vec::new()),
             modified_page_rows: Mutex::new(Vec::new()),
             rollback_table_bases: Mutex::new(HashMap::new()),
+            allocated_rows: Mutex::new(HashMap::new()),
             finalized: AtomicBool::new(false),
             tx_mgr,
             bm,
@@ -388,24 +401,61 @@ impl TransactionManager {
             // high-water marks. Skip when another write transaction is active,
             // to avoid clobbering its concurrently allocated ids.
             let bases = tx.rollback_table_bases.lock();
-            if !bases.is_empty() && self.active_tx_ids.read().is_empty() {
-                let storage = db.storage_manager.read();
-                let mut cat = db.catalog.write();
-                for (name, &(base_id, base_rows)) in bases.iter() {
-                    if let Some(t) = storage.node_tables.get(name) {
-                        t.next_row_id.store(base_id, Ordering::Release);
+            if !bases.is_empty() {
+                if self.active_tx_ids.read().is_empty() {
+                    // No other writer: restore the pre-write high-water marks
+                    // (and catalog row counts) so the discarded rows vanish.
+                    let storage = db.storage_manager.read();
+                    let mut cat = db.catalog.write();
+                    for (name, &(base_id, base_rows)) in bases.iter() {
+                        if let Some(t) = storage.node_tables.get(name) {
+                            t.next_row_id.store(base_id, Ordering::Release);
+                        }
+                        if let Some(t) = storage.rel_tables.get(name) {
+                            t.next_row_id.store(base_id, Ordering::Release);
+                        }
+                        if let Some(e) = cat.get_node_table_mut(name) {
+                            e.num_rows = base_rows;
+                        }
+                        if let Some(e) = cat.get_rel_table_mut(name) {
+                            e.num_rows = base_rows;
+                        }
                     }
-                    if let Some(t) = storage.rel_tables.get(name) {
-                        t.next_row_id.store(base_id, Ordering::Release);
-                    }
-                    if let Some(e) = cat.get_node_table_mut(name) {
-                        e.num_rows = base_rows;
-                    }
-                    if let Some(e) = cat.get_rel_table_mut(name) {
-                        e.num_rows = base_rows;
+                    // `cat` (DirtyCatalogGuard) marks the catalog dirty on drop.
+                } else {
+                    // A concurrent writer may commit ids above ours, leaving
+                    // the ids we allocated as holes that scans would read as
+                    // phantom zero-valued rows. Tombstone each allocated id
+                    // (write a committed null `_id`) so scans skip it.
+                    let allocated = tx.allocated_rows.lock();
+                    if !allocated.is_empty() {
+                        if let Ok(cleanup) = self.begin(false) {
+                            let bm = db.buffer_manager.clone();
+                            {
+                                let storage = db.storage_manager.read();
+                                for (name, ids) in allocated.iter() {
+                                    let table = storage
+                                        .node_tables
+                                        .get(name)
+                                        .or_else(|| storage.rel_tables.get(name));
+                                    if let Some(table) = table {
+                                        for id in ids {
+                                            for col in &table.columns {
+                                                let _ = col.append_value(
+                                                    &bm,
+                                                    &Value::Null,
+                                                    *id,
+                                                    &cleanup,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let _ = self.commit(&cleanup, &bm, db);
+                        }
                     }
                 }
-                // `cat` (DirtyCatalogGuard) marks the catalog dirty on drop.
             }
         }
         self.remove_read_ts(tx.read_ts);

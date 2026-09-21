@@ -1418,6 +1418,9 @@ impl Connection {
         let start_id = table
             .next_row_id
             .fetch_add(num_rows as u64, Ordering::SeqCst);
+        for i in 0..num_rows as u64 {
+            tx.note_allocated(table_name, start_id + i);
+        }
 
         // Build Arrow arrays per column (skip _id)
         let columns = &table.columns;
@@ -2143,6 +2146,9 @@ impl Connection {
         let start_id = table
             .next_row_id
             .fetch_add(new_count as u64, Ordering::SeqCst);
+        for i in 0..new_count as u64 {
+            tx.note_allocated(table_name, start_id + i);
+        }
 
         let mut new_id_counter = start_id;
         let row_ids: Vec<u64> = (0..num_rows)

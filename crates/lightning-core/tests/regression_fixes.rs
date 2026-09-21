@@ -618,3 +618,49 @@ fn unlabeled_relationship_pattern_unions_multiple_tables() {
         "unlabeled pattern must union R1 and R2"
     );
 }
+
+/// A transaction that rolls back while another writer is active must not leave
+/// a phantom (zero-valued) row visible to scans.
+#[test]
+fn concurrent_rollback_has_no_phantom_rows() {
+    use std::sync::{mpsc, Arc as StdArc, Barrier};
+
+    let dir = tempdir().unwrap();
+    let db = StdArc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
+    let c0 = db.connect();
+    c0.execute("CREATE NODE TABLE T(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+
+    // A allocates the first row id (0) and keeps its transaction open.
+    let c_a = db.connect();
+    c_a.execute("BEGIN TRANSACTION", None).unwrap();
+    c_a.execute("CREATE (:T {id: 100})", None).unwrap();
+
+    let barrier = StdArc::new(Barrier::new(2));
+    let (commit_tx, commit_rx) = mpsc::channel::<()>();
+    let db_b = StdArc::clone(&db);
+    let b_barrier = StdArc::clone(&barrier);
+    let b = std::thread::spawn(move || {
+        let c_b = db_b.connect();
+        c_b.execute("BEGIN TRANSACTION", None).unwrap();
+        // B allocates a higher row id (1) and stays active.
+        c_b.execute("CREATE (:T {id: 200})", None).unwrap();
+        b_barrier.wait();
+        commit_rx.recv().unwrap();
+        c_b.execute("COMMIT TRANSACTION", None).unwrap();
+    });
+
+    barrier.wait(); // both txs active with their rows allocated
+    // A rolls back while B is still active -> concurrent rollback path.
+    c_a.execute("ROLLBACK TRANSACTION", None).unwrap();
+    commit_tx.send(()).unwrap();
+    b.join().unwrap();
+
+    // Only B's row must be visible; A's abandoned id must not be a phantom.
+    assert_eq!(
+        one_i64(&db, "MATCH (t:T) RETURN count(*)"),
+        1,
+        "rolled-back row leaked as a phantom"
+    );
+    assert_eq!(one_i64(&db, "MATCH (t:T {id: 200}) RETURN count(*)"), 1);
+}

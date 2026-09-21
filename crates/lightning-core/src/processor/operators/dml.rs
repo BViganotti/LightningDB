@@ -271,6 +271,7 @@ impl PhysicalOperator for PhysicalCreate {
                     .unwrap_or(0);
                 tx.note_table_write(&self.table_name, base_next, base_rows);
                 let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                tx.note_allocated(&self.table_name, next_id);
                 let mut row_data = vec![Value::Null; self.table.columns.len()];
                 row_data[0] = Value::Node(next_id);
                 for (idx, expr) in &self.properties {
@@ -1374,6 +1375,7 @@ impl PhysicalOperator for PhysicalMerge {
                             .unwrap_or(0);
                         tx.note_table_write(&self.table_name, base_next, base_rows);
                         let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                        tx.note_allocated(&self.table_name, next_id);
                         self.shared_state.affected_ids.write().push(next_id);
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
                         row_data[0] = Value::Node(next_id);
