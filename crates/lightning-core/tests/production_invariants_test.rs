@@ -287,18 +287,9 @@ fn run_transactions(seed: u64) {
     }
 }
 
-/// KNOWN BUG: a value diverges between the model and the engine after an
-/// explicit transaction (rollback / update tracking) — seed 1 step 6.
 #[test]
-#[ignore = "known bug: explicit transaction value divergence"]
-fn known_bug_explicit_transaction_divergence() {
-    run_transactions(1);
-}
-
-#[test]
-#[ignore = "investigation: explicit-transaction model diverges (engine or model)"]
 fn model_explicit_transactions() {
-    for seed in 1..=3u64 {
+    for seed in 1..=4u64 {
         run_transactions(seed);
     }
 }

@@ -1534,8 +1534,24 @@ impl Column {
                 | LogicalType::Float
         );
 
+        // The primitive/string fast paths write directly to the file and then
+        // evict the page from the buffer pool. If the page currently holds an
+        // uncommitted COW frame (e.g. a `SET` earlier in this transaction),
+        // evicting it would silently discard those changes. Only take the fast
+        // path when no uncommitted frame is resident for the target pages;
+        // otherwise fall through to the copy-on-write path below, which reuses
+        // this transaction's frame.
+        let first_page = start_row_id / values_per_page;
+        let last_page = if num_rows == 0 {
+            first_page
+        } else {
+            (start_row_id + num_rows as u64 - 1) / values_per_page
+        };
+        let num_pages = last_page - first_page + 1;
+        let has_uncommitted = bm.has_uncommitted_in_range(self.fh.file_id, first_page, num_pages);
+
         // Enable fast path for primitives even with nulls - zeros will be written for nulls
-        if is_primitive {
+        if is_primitive && !has_uncommitted {
             return self.bulk_append_primitive_fast_inner(
                 bm,
                 array,
@@ -1545,7 +1561,7 @@ impl Column {
             );
         }
 
-        if self.data_type == LogicalType::String {
+        if self.data_type == LogicalType::String && !has_uncommitted {
             return self.bulk_append_string_fast_inner(
                 bm,
                 array,
@@ -1595,8 +1611,15 @@ impl Column {
                         stats.update_page_bounds(page_idx as usize, &val);
                     }
 
-                    if !skip_modified_rows && !self.name.starts_with('_') {
-                        modified_rows_batch.push((self.version_info.clone(), current_row));
+                    if !self.name.starts_with('_') {
+                        // Row-version marking is skipped in bulk mode (perf),
+                        // but the page-row modification must ALWAYS be recorded:
+                        // the commit merge reconstructs modified pages from the
+                        // last committed page plus these row mods, so omitting
+                        // them silently drops the value written here.
+                        if !skip_modified_rows {
+                            modified_rows_batch.push((self.version_info.clone(), current_row));
+                        }
                         let mut row_data = [0u8; 64];
                         row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
                         modified_page_rows_batch.push(
@@ -1619,15 +1642,15 @@ impl Column {
             i = page_i;
         }
 
-        if !skip_modified_rows {
-            if !modified_rows_batch.is_empty() {
-                tx.modified_rows.lock().extend(modified_rows_batch);
-            }
-            if !modified_page_rows_batch.is_empty() {
-                tx.modified_page_rows
-                    .lock()
-                    .extend(modified_page_rows_batch);
-            }
+        // Page-row mods are always recorded (see above); version marking only
+        // when not in bulk mode.
+        if !modified_page_rows_batch.is_empty() {
+            tx.modified_page_rows
+                .lock()
+                .extend(modified_page_rows_batch);
+        }
+        if !skip_modified_rows && !modified_rows_batch.is_empty() {
+            tx.modified_rows.lock().extend(modified_rows_batch);
         }
 
         Ok(())

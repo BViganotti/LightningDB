@@ -471,7 +471,6 @@ impl BufferManager {
         pool.page_to_slots.entry(key).or_default().push(slot_idx);
 
         new_frame.pin_count.fetch_add(1, Ordering::AcqRel);
-
         // Record access for learned prefetch prediction.
         self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
 
@@ -769,6 +768,26 @@ impl BufferManager {
             }
         }
         Ok(total_reclaimed)
+    }
+
+    /// True if any page in `[first_page, first_page + num_pages)` has an
+    /// uncommitted (transaction-private) frame resident. Used to avoid taking
+    /// direct-file-write fast paths that evict pages and would discard such
+    /// frames.
+    pub fn has_uncommitted_in_range(&self, file_id: u64, first_page: u64, num_pages: u64) -> bool {
+        for page in first_page..first_page.saturating_add(num_pages) {
+            let key = (file_id, page);
+            let shard_idx = self.get_shard_idx(key);
+            let pool = self.shards[shard_idx].read();
+            if let Some(idxs) = pool.page_to_slots.get(&key) {
+                for &i in idxs.iter() {
+                    if pool.slots[i].frame.version.load(Ordering::Acquire) & UNCOMMITTED_BIT != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn evict_pages_for_file(&self, file_id: u64, first_page: u64, num_pages: u64) {
