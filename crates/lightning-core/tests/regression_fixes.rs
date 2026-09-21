@@ -465,3 +465,26 @@ fn unlabeled_relationship_pattern_resolves_single_table() {
     // No relationship label: inferred from X -> Y (only R1 connects them).
     assert_eq!(row_count(&db, "MATCH (x:X)-[r]->(y:Y) RETURN r"), 1);
 }
+
+/// DDL must invalidate cached plans: re-running the same query string after a
+/// schema change must re-bind against the new schema, not reuse the old plan.
+#[test]
+fn ddl_invalidates_plan_cache() {
+    let (_d, db) = new_db();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
+
+    // Cache a plan for this exact query string (single candidate => works).
+    assert_eq!(row_count(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"), 1);
+
+    // Adding a second rel table changes what this query means; the cached plan
+    // must be dropped so the ambiguity is reported instead of a stale result.
+    c.execute("CREATE REL TABLE R2(FROM X TO Y)", None).unwrap();
+    let after = c.execute("MATCH (x:X)-[r]->(y:Y) RETURN count(*)", None);
+    assert!(
+        after.is_err(),
+        "plan cache must be invalidated by CREATE REL TABLE"
+    );
+}

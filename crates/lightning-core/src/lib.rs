@@ -878,6 +878,20 @@ impl Database {
         &self.physical_plan_caches
     }
 
+    /// Drop every cached bound and physical plan. Must be called after any
+    /// schema change (DDL): cached plans embed table/column indices and scan
+    /// bounds, so reusing them against a changed schema yields stale or wrong
+    /// results (e.g. a plan cached before `CREATE REL TABLE` cannot see the
+    /// new table).
+    pub fn invalidate_plan_caches(&self) {
+        for cache in &self.plan_caches {
+            cache.lock().clear();
+        }
+        for cache in &self.physical_plan_caches {
+            cache.lock().clear();
+        }
+    }
+
     pub fn metrics(&self) -> &DatabaseMetrics {
         &self.metrics
     }

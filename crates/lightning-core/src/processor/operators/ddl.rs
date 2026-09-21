@@ -652,6 +652,10 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
             }
         }
 
+        // Any schema change invalidates cached bound/physical plans, which
+        // embed table/column indices and would otherwise return stale results.
+        database.invalidate_plan_caches();
+
         Ok(None)
     }
 
