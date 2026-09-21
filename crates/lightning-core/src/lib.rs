@@ -1188,50 +1188,44 @@ impl Database {
         let mut repairs: Vec<(String, u64, bool)> = Vec::new(); // name, actual_rows, is_rel
         {
             let storage = self.storage_manager.read();
-            for (name, table) in &storage.node_tables {
-                let stats = table.stats.read();
-                let needs_repair = if stats.cardinality == 0 && !table.columns.is_empty() {
-                    true
-                } else if !table.columns.is_empty() {
-                    let file_size = table.columns[0].fh.get_file_size();
-                    let esize = table.columns[0].element_size();
-                    esize > 0 && file_size > 0 && file_size / esize as u64 > 0
-                        && stats.cardinality > file_size / esize as u64 * 2
-                } else {
-                    false
-                };
-                if needs_repair {
-                    let file_size = table.columns[0].fh.get_file_size();
-                    let esize = table.columns[0].element_size();
-                    if esize > 0 && file_size > 0 {
-                        let actual = file_size / esize as u64;
-                        if actual > 0 {
-                            repairs.push((name.clone(), actual, false));
-                        }
+            // The stored `next_row_id` is the authoritative physical row count
+            // (persisted, reloaded). Data files are page-padded, so
+            // `file_size / element_size` is only an upper bound; using it as the
+            // count inflated `num_rows` to a page's capacity (e.g. 512) for a
+            // small table and made scans read zero-padded rows as valid data.
+            // Only repair a clearly-inflated cardinality, and only ever toward
+            // the authoritative count.
+            let authoritative_rows = |table: &crate::storage::storage_manager::Table| -> u64 {
+                let physical = table.next_row_id.load(Ordering::Acquire);
+                if physical > 0 {
+                    return physical;
+                }
+                if let Some(col) = table.columns.first() {
+                    let esize = col.element_size();
+                    if esize > 0 {
+                        return col.fh.get_file_size() / esize as u64;
                     }
+                }
+                0
+            };
+            for (name, table) in &storage.node_tables {
+                if table.columns.is_empty() {
+                    continue;
+                }
+                let actual = authoritative_rows(table);
+                let cardinality = table.stats.read().cardinality;
+                if actual > 0 && cardinality > actual.saturating_mul(2) {
+                    repairs.push((name.clone(), actual, false));
                 }
             }
             for (name, table) in &storage.rel_tables {
-                let stats = table.stats.read();
-                let needs_repair = if stats.cardinality == 0 && !table.columns.is_empty() {
-                    true
-                } else if !table.columns.is_empty() {
-                    let file_size = table.columns[0].fh.get_file_size();
-                    let esize = table.columns[0].element_size();
-                    esize > 0 && file_size > 0 && file_size / esize as u64 > 0
-                        && stats.cardinality > file_size / esize as u64 * 2
-                } else {
-                    false
-                };
-                if needs_repair {
-                    let file_size = table.columns[0].fh.get_file_size();
-                    let esize = table.columns[0].element_size();
-                    if esize > 0 && file_size > 0 {
-                        let actual = file_size / esize as u64;
-                        if actual > 0 {
-                            repairs.push((name.clone(), actual, true));
-                        }
-                    }
+                if table.columns.is_empty() {
+                    continue;
+                }
+                let actual = authoritative_rows(table);
+                let cardinality = table.stats.read().cardinality;
+                if actual > 0 && cardinality > actual.saturating_mul(2) {
+                    repairs.push((name.clone(), actual, true));
                 }
             }
         }

@@ -134,7 +134,7 @@ fn run_autocommit(seed: u64, vacuum_each_step: bool) {
             drop(db);
             db = open(&path);
             if let Err(e) = check(&db, &model, &format!("seed={seed} step={step} reopen")) {
-                panic!("REOPEN: {e}\nlast ops: {:#?}", &log[log.len().saturating_sub(40)..]);
+                panic!("REOPEN: {e}\nops written to /tmp/reopen_ops.txt ({} ops)", log.len());
             }
         }
         let c = db.connect();
@@ -146,11 +146,8 @@ fn run_autocommit(seed: u64, vacuum_each_step: bool) {
                 if !model.contains_key(&id) {
                     let v = rng.below(10_000) as i64;
                     let s = format!("v{v}");
-                    c.execute(
-                        &format!("CREATE (:T {{id: {id}, v: {v}, s: '{s}'}})"),
-                        None,
-                    )
-                    .unwrap();
+                    let sql = format!("CREATE (:T {{id: {id}, v: {v}, s: '{s}'}})");
+                    c.execute(&sql, None).unwrap();
                     model.insert(id, (v, s));
                 }
             }
@@ -161,11 +158,8 @@ fn run_autocommit(seed: u64, vacuum_each_step: bool) {
                 if let Some(e) = model.get_mut(&id) {
                     let v = rng.below(10_000) as i64;
                     let s = format!("u{v}");
-                    c.execute(
-                        &format!("MATCH (t:T {{id: {id}}}) SET t.v = {v}, t.s = '{s}'"),
-                        None,
-                    )
-                    .unwrap();
+                    let sql = format!("MATCH (t:T {{id: {id}}}) SET t.v = {v}, t.s = '{s}'");
+                    c.execute(&sql, None).unwrap();
                     *e = (v, s);
                 }
             }
@@ -174,8 +168,8 @@ fn run_autocommit(seed: u64, vacuum_each_step: bool) {
                 let id = rng.below(64) as i64;
                 log.push(format!("step {step}: delete id={id}"));
                 if model.remove(&id).is_some() {
-                    c.execute(&format!("MATCH (t:T {{id: {id}}}) DELETE t"), None)
-                        .unwrap();
+                    let sql = format!("MATCH (t:T {{id: {id}}}) DELETE t");
+                    c.execute(&sql, None).unwrap();
                 }
             }
             _ => {
@@ -201,18 +195,9 @@ fn run_autocommit(seed: u64, vacuum_each_step: bool) {
 
 #[test]
 fn model_autocommit_random_dml() {
-    for seed in 1..=3u64 {
+    for seed in 1..=8u64 {
         run_autocommit(seed, false);
     }
-}
-
-/// KNOWN BUG: checkpoint + reopen can resurrect a deleted row (the row reads
-/// back as id 0 / non-null). Reproduced deterministically at seed 4 step 249
-/// (a reopen step) with `run_autocommit(4, true)`.
-#[test]
-#[ignore = "known bug: checkpoint+reopen resurrects deleted rows"]
-fn known_bug_checkpoint_reopen_resurrects_deleted_row() {
-    run_autocommit(4, true);
 }
 
 /// Same model, but reclamation is forced after every step so the vacuum
@@ -220,7 +205,7 @@ fn known_bug_checkpoint_reopen_resurrects_deleted_row() {
 /// deterministically (regression for deleted rows resurfacing).
 #[test]
 fn model_autocommit_vacuum_each_step() {
-    for seed in 1..=2u64 {
+    for seed in 1..=4u64 {
         run_autocommit(seed, true);
     }
 }
@@ -257,11 +242,8 @@ fn run_transactions(seed: u64) {
                     if cur.is_none() {
                         let v = rng.below(10_000) as i64;
                         let s = format!("v{v}");
-                        c.execute(
-                            &format!("CREATE (:T {{id: {id}, v: {v}, s: '{s}'}})"),
-                            None,
-                        )
-                        .unwrap();
+                        let sql = format!("CREATE (:T {{id: {id}, v: {v}, s: '{s}'}})");
+                        c.execute(&sql, None).unwrap();
                         overlay.insert(id, Some((v, s)));
                     }
                 }
@@ -269,18 +251,15 @@ fn run_transactions(seed: u64) {
                     if let Some((_, _)) = cur {
                         let v = rng.below(10_000) as i64;
                         let s = format!("u{v}");
-                        c.execute(
-                            &format!("MATCH (t:T {{id: {id}}}) SET t.v = {v}, t.s = '{s}'"),
-                            None,
-                        )
-                        .unwrap();
+                        let sql = format!("MATCH (t:T {{id: {id}}}) SET t.v = {v}, t.s = '{s}'");
+                        c.execute(&sql, None).unwrap();
                         overlay.insert(id, Some((v, s)));
                     }
                 }
                 _ => {
                     if cur.is_some() {
-                        c.execute(&format!("MATCH (t:T {{id: {id}}}) DELETE t"), None)
-                            .unwrap();
+                        let sql = format!("MATCH (t:T {{id: {id}}}) DELETE t");
+                        c.execute(&sql, None).unwrap();
                         overlay.insert(id, None);
                     }
                 }
