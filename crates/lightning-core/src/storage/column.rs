@@ -1819,6 +1819,12 @@ impl Column {
             LogicalType::Timestamp => Ok(Value::Timestamp(i64::from_le_bytes(
                 data[0..8].try_into().expect("infallible: fixed-size array conversion"),
             ))),
+            // List/Struct columns store their child end-offset as a Number.
+            LogicalType::List(_) | LogicalType::Struct(_) => Ok(Value::Number(
+                f64::from_le_bytes(
+                    data[0..8].try_into().expect("infallible: fixed-size array conversion"),
+                ),
+            )),
             _ => Ok(Value::Null),
         }
     }
@@ -1851,6 +1857,10 @@ impl Column {
             }
             (Value::Number(n), LogicalType::Double) => buf[..8].copy_from_slice(&n.to_le_bytes()),
             (Value::Number(n), LogicalType::Float) => buf[..8].copy_from_slice(&n.to_le_bytes()),
+            // List/Struct columns store their child end-offset as a Number.
+            (Value::Number(n), LogicalType::List(_)) | (Value::Number(n), LogicalType::Struct(_)) => {
+                buf[..8].copy_from_slice(&n.to_le_bytes())
+            }
             (Value::Node(id), LogicalType::Double) => {
                 buf[..8].copy_from_slice(&(*id as f64).to_le_bytes())
             }
