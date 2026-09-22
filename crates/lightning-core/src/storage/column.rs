@@ -1304,6 +1304,28 @@ impl Column {
             let offset_in_page = *row_id % 4096;
             by_page.entry(page_idx).or_default().push((offset_in_page, *val));
         }
+
+        // Record null-bit writes as page-row modifications so the commit merge
+        // reconciles concurrent writers to the same null page. Previously the
+        // null page was written as a plain copy-on-write version without merge,
+        // so a concurrently committing transaction that sourced the page before
+        // ours could clobber our null bits (losing deletes / resurrecting rows).
+        // The null page stores one byte per row, so element_size is 1.
+        if !tx.is_read_only {
+            let mut mods = tx.modified_page_rows.lock();
+            for (row_id, val) in &pending {
+                let mut row_data = [0u8; 64];
+                row_data[0] = *val;
+                mods.push(crate::transaction::transaction_manager::PageRowMod {
+                    file_id: self.null_fh.file_id,
+                    page_idx: *row_id as u64 / 4096,
+                    row_id: *row_id as u64,
+                    element_size: 1,
+                    row_data,
+                    overflow_row_data: None,
+                });
+            }
+        }
         for (page_idx, entries) in &by_page {
             while self.null_fh.get_num_pages() <= *page_idx {
                 self.null_fh.add_new_page()?;
