@@ -900,6 +900,13 @@ impl BufferManager {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
+        self.checkpoint_inner(true)
+    }
+
+    /// Flush dirty pages to disk. When `sync` is false the OS buffers are not
+    /// fsynced — used under `SyncMode::Off` where durability is traded for
+    /// speed. The WAL is still truncated (the pages have been written).
+    pub fn checkpoint_inner(&self, sync: bool) -> Result<()> {
         let synced_fids: parking_lot::Mutex<std::collections::HashSet<u64>> =
             parking_lot::Mutex::new(std::collections::HashSet::new());
 
@@ -936,14 +943,16 @@ impl BufferManager {
         }
 
         // Phase 2: Sync each file handle exactly once
-        let fids: Vec<u64> = synced_fids.lock().iter().copied().collect();
-        let mut synced = std::collections::HashSet::new();
-        for shard in &self.shards {
-            let pool = shard.read();
-            for fid in &fids {
-                if synced.insert(*fid) {
-                    if let Some(fh) = pool.file_handles.get(fid) {
-                        fh.sync()?;
+        if sync {
+            let fids: Vec<u64> = synced_fids.lock().iter().copied().collect();
+            let mut synced = std::collections::HashSet::new();
+            for shard in &self.shards {
+                let pool = shard.read();
+                for fid in &fids {
+                    if synced.insert(*fid) {
+                        if let Some(fh) = pool.file_handles.get(fid) {
+                            fh.sync()?;
+                        }
                     }
                 }
             }

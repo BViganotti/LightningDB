@@ -1,5 +1,5 @@
 use arrow::array::Array;
-use lightning_core::{Database, SystemConfig};
+use lightning_core::{Database, SyncMode, SystemConfig};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
 
@@ -19,7 +19,7 @@ fn scan_ids(db: &Arc<Database>) -> BTreeSet<i64> {
 
 fn run_once(mode: u8, threads: u64, per: u64, seed: u64) -> (BTreeSet<i64>, BTreeSet<i64>) {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+    let db = Database::new(dir.path(), SystemConfig { sync_mode: SyncMode::Off, ..Default::default() }).unwrap();
     db.connect()
         .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY (id))", None)
         .unwrap();
@@ -112,7 +112,7 @@ fn concurrent_bulk_inserts_unwind() {
     let per = 500i64;
     for it in 0..5 {
         let dir = tempfile::tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
+        let db = Database::new(dir.path(), SystemConfig { sync_mode: SyncMode::Off, ..Default::default() }).unwrap();
         db.connect()
             .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY (id))", None)
             .unwrap();
@@ -158,7 +158,7 @@ fn concurrent_bulk_inserts_unwind() {
 #[test]
 fn uncommitted_writes_invisible_to_other_transactions() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
+    let db = Arc::new(Database::new(dir.path(), SystemConfig { sync_mode: SyncMode::Off, ..Default::default() }).unwrap());
     db.connect()
         .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY (id))", None)
         .unwrap();

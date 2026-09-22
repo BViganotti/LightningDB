@@ -323,6 +323,10 @@ impl WAL {
         Ok(())
     }
 
+    pub fn sync_mode(&self) -> SyncMode {
+        self.sync_mode
+    }
+
     pub fn log_commit(&self, tx_id: u64) -> Result<()> {
         // Flush all pending page updates from group commit buffer
         let pending_data = {

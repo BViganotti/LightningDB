@@ -468,7 +468,8 @@ impl Drop for Database {
         // because those operations can deadlock with other threads that hold
         // catalog/storage_manager locks. The buffer_manager checkpoint
         // handles the critical dirty-page flush.
-        if let Err(e) = self.buffer_manager.checkpoint() {
+        let durable = matches!(self._config.sync_mode, SyncMode::Normal);
+        if let Err(e) = self.buffer_manager.checkpoint_inner(durable) {
             tracing::warn!("Checkpoint failed during database shutdown: {e}");
         }
 

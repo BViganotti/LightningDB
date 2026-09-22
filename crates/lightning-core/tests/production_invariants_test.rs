@@ -7,7 +7,7 @@
 //! would be tedious to enumerate by hand.
 
 use arrow::array::Array;
-use lightning_core::{Database, SystemConfig};
+use lightning_core::{Database, SyncMode, SystemConfig};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -35,7 +35,10 @@ impl Rng {
 
 fn open(path: &std::path::Path) -> Arc<Database> {
     // Default config: the background vacuum thread runs.
-    Database::new(path, SystemConfig::default()).unwrap()
+    // These are correctness tests, not durability tests: skip per-commit
+    // fsync (SyncMode::Off) so they run in seconds instead of minutes.
+    let config = SystemConfig { sync_mode: SyncMode::Off, ..Default::default() };
+    Database::new(path, config).unwrap()
 }
 
 fn one_i64(db: &Arc<Database>, q: &str) -> i64 {

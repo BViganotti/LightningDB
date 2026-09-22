@@ -179,11 +179,15 @@ impl TransactionManager {
             // Flush any pending write buffers so all data reaches the columns
             db.storage_manager.read().flush_all_pending(bm, tx)?;
 
-            // Sync all data files to disk before committing.
-            // This ensures column data is durable before the WAL commit record
-            // is written, maintaining the invariant that WAL entries only reference
-            // data that has already been persisted to column files.
-            db.storage_manager.read().sync_all_data_files()?;
+            // Sync all data files to disk before committing. This ensures
+            // column data is durable before the WAL commit record is written.
+            // Skipped under `SyncMode::Off`, where durability is explicitly
+            // traded for speed and the WAL commit record is not fsynced either;
+            // fsyncing every column file here would add latency without adding
+            // any guarantee. `SyncMode::Normal` keeps the documented invariant.
+            if self.wal.sync_mode() == crate::SyncMode::Normal {
+                db.storage_manager.read().sync_all_data_files()?;
+            }
 
             // Serialize the commit critical section (merge -> version commit ->
             // flush). Concurrent committers must observe each other's committed
