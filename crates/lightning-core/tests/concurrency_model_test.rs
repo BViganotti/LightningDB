@@ -154,3 +154,27 @@ fn concurrent_bulk_inserts_unwind() {
         assert_eq!(actual, expected, "it={it} bulk insert mismatch");
     }
 }
+
+#[test]
+fn uncommitted_writes_invisible_to_other_transactions() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
+    db.connect()
+        .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+    let count = |db: &Arc<Database>| {
+        let r = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap();
+        r.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
+            .value(0)
+    };
+    let a = db.connect();
+    a.execute("BEGIN TRANSACTION", None).unwrap();
+    a.execute("CREATE (:T {id: 1, v: 1})", None).unwrap();
+    assert_eq!(count(&db), 0, "uncommitted insert visible to another connection");
+    a.execute("COMMIT TRANSACTION", None).unwrap();
+    assert_eq!(count(&db), 1);
+}

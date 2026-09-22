@@ -278,6 +278,21 @@ impl Table {
         self.flush_buffer(bm, tx)
     }
 
+    /// Mark a freshly allocated row range as uncommitted so it stays invisible
+    /// to other transactions until this one commits. `next_row_id` advances at
+    /// allocation time (before the row is buffered and flushed), so without this
+    /// a concurrent scan would read the not-yet-written slot as a default row.
+    /// The range is registered in `bulk_row_ranges` so commit/rollback clean up
+    /// the version entries.
+    pub fn reserve_rows(&self, tx: &Transaction, start: u64, count: u64) {
+        if count == 0 || self.columns.is_empty() {
+            return;
+        }
+        let vi = Arc::clone(&self.columns[0].version_info);
+        vi.mark_row_batch(start..start + count, tx.tx_id);
+        tx.bulk_row_ranges.lock().push((vi, start, start + count));
+    }
+
     pub fn append_row(
         &self,
         bm: &BufferManager,

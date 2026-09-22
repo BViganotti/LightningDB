@@ -404,6 +404,12 @@ impl TransactionManager {
             for (version_info, row_id) in modified_rows.iter() {
                 version_info.rollback_row(*row_id);
             }
+            // Bulk-appended rows are marked uncommitted as a range (not via
+            // mark_row); clear those version entries too or the discarded rows
+            // stay permanently invisible.
+            for (version_info, start, end) in tx.bulk_row_ranges.lock().iter() {
+                version_info.rollback_row_batch(*start..*end);
+            }
             // Clean up page merge locks for rolled-back transactions
             let modified_pages = tx.modified_pages.lock();
             let mut merge_locks = self.page_merge_locks.lock();

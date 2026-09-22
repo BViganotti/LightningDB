@@ -373,16 +373,12 @@ impl Column {
                         stats.update_page_bounds(page_idx as usize, &vals[page_i]);
                     }
 
-                    if !self.name.starts_with('_') {
-                        // Propagate write-write conflicts to the caller so the DML
-                        // statement fails and the transaction is retried/rolled back.
-                        // Swallowing this error allowed concurrent writers to
-                        // overwrite each other's committed changes (lost updates).
-                        self.version_info
-                            .mark_row(current_row, tx.tx_id, tx.read_ts)
-                            .map_err(crate::LightningError::Database)?;
-                        modified_rows_batch.push((self.version_info.clone(), current_row));
-                    }
+                    // Mark the row version for ALL columns (including `_id`,
+                    // which drives scan visibility).
+                    self.version_info
+                        .mark_row(current_row, tx.tx_id, tx.read_ts)
+                        .map_err(crate::LightningError::Database)?;
+                    modified_rows_batch.push((self.version_info.clone(), current_row));
 
                     // Record the row data for merge-on-commit for ALL columns
                     // (including `_id`). Without this, two concurrent batch
@@ -1432,16 +1428,18 @@ impl Column {
             );
         }
 
-        if !self.name.starts_with('_') {
-            // Propagate write-write conflicts to the caller so the DML
-            // statement fails and the transaction is retried/rolled back.
-            self.version_info
-                .mark_row(row_id, tx.tx_id, tx.read_ts)
-                .map_err(crate::LightningError::Database)?;
-            tx.modified_rows
-                .lock()
-                .push((self.version_info.clone(), row_id));
-        }
+        // Propagate write-write conflicts to the caller so the DML statement
+        // fails and the transaction is retried/rolled back. Mark the row
+        // version for ALL columns including `_id`: the scan derives row
+        // visibility from the `_id` column's version info, so leaving `_id`
+        // unmarked made uncommitted rows visible to other transactions (they
+        // read as default values).
+        self.version_info
+            .mark_row(row_id, tx.tx_id, tx.read_ts)
+            .map_err(crate::LightningError::Database)?;
+        tx.modified_rows
+            .lock()
+            .push((self.version_info.clone(), row_id));
 
         // Record the exact row data for merge-on-commit for ALL columns,
         // including the internal `_id` column. The commit merge reconstructs
@@ -1531,6 +1529,13 @@ impl Column {
 
 
         self.dirty.store(true, Ordering::Release);
+
+        // Mark the appended range uncommitted for ALL columns (including
+        // `_id`) so the rows are invisible to other transactions until commit.
+        // Bulk mode previously skipped version marking entirely, leaking
+        // half-written rows (default values) into concurrent scans.
+        self.version_info
+            .mark_row_batch(start_row_id..start_row_id + num_rows as u64, tx.tx_id);
 
         // 1. Write null bitmap in bulk
         let nulls = array.nulls();

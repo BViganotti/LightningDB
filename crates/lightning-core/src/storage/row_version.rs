@@ -99,6 +99,22 @@ impl RowVersion {
         }
     }
 
+    pub fn rollback_row_batch(&self, row_ids: std::ops::Range<u64>) {
+        let mut shard_updates: Vec<Vec<u64>> = vec![Vec::new(); self.num_shards];
+        for row_id in row_ids {
+            shard_updates[self.get_shard_idx(row_id)].push(row_id);
+        }
+        for (shard_idx, ids) in shard_updates.into_iter().enumerate() {
+            if ids.is_empty() {
+                continue;
+            }
+            let mut versions = self.shards[shard_idx].versions.write();
+            for row_id in ids {
+                versions.remove(&row_id);
+            }
+        }
+    }
+
     pub fn commit_row(&self, row_id: u64, commit_ts: u64) {
         let shard_idx = self.get_shard_idx(row_id);
         let mut versions = self.shards[shard_idx].versions.write();

@@ -3,7 +3,7 @@ use crate::processor::{DataChunk, PhysicalOperator};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
 use crate::{LightningError, Result};
-use arrow::array::{Array, ArrayRef, BooleanArray, Int64Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, BooleanArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -567,18 +567,14 @@ impl PhysicalOperator for PhysicalScan {
                 let mut keep = vec![true; n];
 
                 if has_modifications_now {
-                    let row_ids: Vec<u64> = match &raw_id {
-                        Some(arr) => {
-                            if let Some(a) = arr.as_any().downcast_ref::<UInt64Array>() {
-                                a.values().iter().copied().collect()
-                            } else if let Some(a) = arr.as_any().downcast_ref::<Int64Array>() {
-                                a.values().iter().map(|&v| v as u64).collect()
-                            } else {
-                                (0..n).map(|i| start_row + i as u64).collect()
-                            }
-                        }
-                        None => (0..n).map(|i| start_row + i as u64).collect(),
-                    };
+                    // Derive row ids from the morsel's position, NOT from the
+                    // `_id` column's data. For a row another transaction has
+                    // allocated but not yet committed, the `_id` data is not
+                    // written and reads as 0, so using it made the visibility
+                    // mask check row 0 and leak the uncommitted row into this
+                    // scan. The scan reads a contiguous range starting at
+                    // `start_row`, so position `i` is row `start_row + i`.
+                    let row_ids: Vec<u64> = (0..n).map(|i| start_row + i as u64).collect();
                     self.scratch_mask.clear();
                     self.table.columns[0].version_info.get_visibility_mask(
                         &row_ids,

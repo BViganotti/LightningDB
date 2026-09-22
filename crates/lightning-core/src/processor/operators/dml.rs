@@ -179,6 +179,7 @@ impl PhysicalOperator for PhysicalCreate {
                         .table
                         .next_row_id
                         .fetch_add(num_rows as u64, Ordering::SeqCst);
+                    self.table.reserve_rows(tx, start_id, num_rows as u64);
 
                     // FIX #5: Evaluate expressions ONCE per property for entire batch (not per row)
                     let mut col_arrays: Vec<(usize, arrow::array::ArrayRef)> =
@@ -271,6 +272,7 @@ impl PhysicalOperator for PhysicalCreate {
                     .unwrap_or(0);
                 tx.note_table_write(&self.table_name, base_next, base_rows);
                 let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                self.table.reserve_rows(tx, next_id, 1);
                 tx.note_allocated(&self.table_name, next_id);
                 let mut row_data = vec![Value::Null; self.table.columns.len()];
                 row_data[0] = Value::Node(next_id);
@@ -986,6 +988,7 @@ impl PhysicalOperator for PhysicalCreateRel {
                         .table
                         .next_row_id
                         .fetch_add(num_rows as u64, Ordering::SeqCst);
+                    self.table.reserve_rows(tx, start_id, num_rows as u64);
 
                     // FIX #5: Evaluate expressions ONCE per property for entire batch
                     let mut col_arrays: Vec<(usize, arrow::array::ArrayRef)> =
@@ -1398,6 +1401,7 @@ impl PhysicalOperator for PhysicalMerge {
                             .unwrap_or(0);
                         tx.note_table_write(&self.table_name, base_next, base_rows);
                         let next_id = self.table.next_row_id.fetch_add(1, Ordering::SeqCst);
+                        self.table.reserve_rows(tx, next_id, 1);
                         tx.note_allocated(&self.table_name, next_id);
                         self.shared_state.affected_ids.write().push(next_id);
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
