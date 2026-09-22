@@ -471,6 +471,34 @@ impl Drop for Database {
         if let Err(e) = self.buffer_manager.checkpoint() {
             tracing::warn!("Checkpoint failed during database shutdown: {e}");
         }
+
+        // Persist the catalog's physical row counts. The buffer-manager
+        // checkpoint above flushes the data pages, but without this the
+        // catalog on disk keeps a stale (smaller) `next_row_id`, so the next
+        // open bounds scans below the flushed rows and silently loses the tail
+        // of the data. Safe here: no locks are held and the vacuum thread has
+        // been joined.
+        {
+            let storage = self.storage_manager.read();
+            let mut cat = self.catalog.write();
+            for (name, table) in &storage.node_tables {
+                let physical = table.next_row_id.load(Ordering::Acquire);
+                if let Some(e) = cat.node_tables.get_mut(name) {
+                    e.next_row_id = e.next_row_id.max(physical);
+                    e.num_rows = e.num_rows.max(physical);
+                }
+            }
+            for (name, table) in &storage.rel_tables {
+                let physical = table.next_row_id.load(Ordering::Acquire);
+                if let Some(e) = cat.rel_tables.get_mut(name) {
+                    e.next_row_id = e.next_row_id.max(physical);
+                    e.num_rows = e.num_rows.max(physical);
+                }
+            }
+            if let Err(e) = self.catalog.force_save_with_catalog(&cat) {
+                tracing::warn!("Catalog save failed during database shutdown: {e}");
+            }
+        }
     }
 }
 

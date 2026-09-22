@@ -796,20 +796,27 @@ impl BufferManager {
             let key = (file_id, page);
             let shard_idx = self.get_shard_idx(key);
             let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { continue; };
-            if let Some(slot_indices) = pool.page_to_slots.get(&key) {
-                let indices: Vec<usize> = slot_indices.clone();
+            let indices: Vec<usize> =
+                pool.page_to_slots.get(&key).cloned().unwrap_or_default();
+            if !indices.is_empty() {
+                let mut preserved: Vec<usize> = Vec::new();
                 for &idx in &indices {
+                    let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+                    if version & UNCOMMITTED_BIT != 0 {
+                        // Transaction-private frame: never discard it. A
+                        // concurrent transaction (or an earlier statement in
+                        // the same one) may still commit this page.
+                        preserved.push(idx);
+                        continue;
+                    }
                     if pool.slots[idx].dirty {
-                        let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
-                        if version & UNCOMMITTED_BIT == 0 {
-                            if let Some((fid, pid)) = pool.slots[idx].key {
-                                if let Some(fh) = pool.file_handles.get(&fid) {
-                                    if let Err(e) = fh.write_page(pid, pool.slots[idx].frame.as_slice()) {
-                                        tracing::error!(
-                                            "Failed to write page {} on file {} during eviction: {}",
-                                            pid, fid, e
-                                        );
-                                    }
+                        if let Some((fid, pid)) = pool.slots[idx].key {
+                            if let Some(fh) = pool.file_handles.get(&fid) {
+                                if let Err(e) = fh.write_page(pid, pool.slots[idx].frame.as_slice()) {
+                                    tracing::error!(
+                                        "Failed to write page {} on file {} during eviction: {}",
+                                        pid, fid, e
+                                    );
                                 }
                             }
                         }
@@ -823,7 +830,11 @@ impl BufferManager {
                     pool.slots[idx].referenced = false;
                     pool.free_candidates.push_back(idx);
                 }
-                pool.page_to_slots.remove(&key);
+                if preserved.is_empty() {
+                    pool.page_to_slots.remove(&key);
+                } else if let Some(slots) = pool.page_to_slots.get_mut(&key) {
+                    *slots = preserved;
+                }
             }
         }
     }

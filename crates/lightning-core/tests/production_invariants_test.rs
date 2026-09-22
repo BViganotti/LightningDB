@@ -335,3 +335,126 @@ fn repro_vacuum_loses_committed_data() {
     let expected: BTreeSet<i64> = (0..10).filter(|x| *x != 5).collect();
     assert_eq!(ids, expected, "vacuum lost committed data / resurrected a deleted row");
 }
+
+/// Clean shutdown (drop) must persist the physical row count: the tail of the
+/// data must not vanish on the next open. No explicit checkpoint is taken here.
+#[test]
+fn shutdown_recovery_preserves_all_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let before;
+    {
+        let db = open(&path);
+        let c = db.connect();
+        c.execute(
+            "CREATE NODE TABLE T(id INT64, v INT64, s STRING, PRIMARY KEY (id))",
+            None,
+        )
+        .unwrap();
+        for i in 0..100i64 {
+            c.execute(
+                &format!("CREATE (:T {{id: {i}, v: {}, s: 'x{i}'}})", i * 3),
+                None,
+            )
+            .unwrap();
+        }
+        for i in (0..100i64).step_by(7) {
+            c.execute(&format!("MATCH (t:T {{id: {i}}}) DELETE t"), None).unwrap();
+        }
+        for i in (0..100i64).step_by(5) {
+            c.execute(&format!("MATCH (t:T {{id: {i}}}) SET t.v = {}", i + 1000), None)
+                .unwrap();
+        }
+        before = scan_ids(&db);
+        // drop -> clean shutdown, no checkpoint()
+    }
+    let db = open(&path);
+    assert_eq!(scan_ids(&db), before, "shutdown+reopen lost rows");
+}
+
+/// KNOWN BUG: concurrent writers on disjoint key ranges produce a final set
+/// that differs from the expected union (lost deletes / resurrected rows), even
+/// when every write-write conflict is retried. Reproduces reliably with 8
+/// threads x 40 rows.
+#[test]
+#[ignore = "known bug: concurrent writers produce an incorrect final state"]
+fn concurrent_writers_disjoint_ranges() {
+    use std::sync::Barrier;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let db = open(&path);
+    db.connect()
+        .execute(
+            "CREATE NODE TABLE T(id INT64, v INT64, s STRING, PRIMARY KEY (id))",
+            None,
+        )
+        .unwrap();
+
+    let threads = 8u64;
+    let per = 40u64;
+    let barrier = std::sync::Arc::new(Barrier::new(threads as usize));
+    let handles: Vec<_> = (0..threads)
+        .map(|t| {
+            let db = std::sync::Arc::clone(&db);
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let c = db.connect();
+                let base = t * 1000;
+                let mut rng = Rng::new(t + 1);
+                let mut expected = BTreeSet::new();
+                // Concurrent writers may observe write-write conflicts, which are
+                // retryable (a fresh transaction re-reads a newer snapshot).
+                let run = |sql: &str| {
+                    for _ in 0..1000 {
+                        match c.execute(sql, None) {
+                            Ok(_) => return,
+                            Err(e) if e.to_string().contains("Write-Write Conflict") => {
+                                std::thread::yield_now();
+                            }
+                            Err(e) => panic!("unexpected error: {e}"),
+                        }
+                    }
+                    panic!("conflict retries exhausted: {sql}");
+                };
+                barrier.wait();
+                for i in 0..per {
+                    let id = (base + i) as i64;
+                    run(&format!("CREATE (:T {{id: {id}, v: {}, s: 't{t}'}})", id));
+                    expected.insert(id);
+                    // Randomly update or delete earlier rows in this thread's range.
+                    match rng.below(4) {
+                        0 => {
+                            let j = rng.below(i + 1);
+                            let jid = (base + j) as i64;
+                            run(&format!("MATCH (t:T {{id: {jid}}}) SET t.v = {jid}"));
+                        }
+                        1 => {
+                            let j = rng.below(i + 1);
+                            let jid = (base + j) as i64;
+                            run(&format!("MATCH (t:T {{id: {jid}}}) DELETE t"));
+                            expected.remove(&jid);
+                        }
+                        _ => {}
+                    }
+                }
+                expected
+            })
+        })
+        .collect();
+
+    let mut expected = BTreeSet::new();
+    for h in handles {
+        expected.extend(h.join().unwrap());
+    }
+
+    let actual = scan_ids(&db);
+    if actual != expected {
+        let missing: Vec<i64> = expected.difference(&actual).take(20).copied().collect();
+        let extra: Vec<i64> = actual.difference(&expected).take(20).copied().collect();
+        panic!("concurrent writers mismatch: expected={} actual={} missing={:?} extra={:?}", expected.len(), actual.len(), missing, extra);
+    }
+    assert_eq!(
+        one_i64(&db, "MATCH (t:T) RETURN count(*)"),
+        expected.len() as i64
+    );
+}
