@@ -293,6 +293,28 @@ pub fn from_arrow(array: &ArrayRef, i: usize) -> Result<Value> {
             let a = downcast_ref_array!(array, Int32Array);
             Ok(Value::Number(a.value(i) as f64))
         }
+        DataType::List(_) => {
+            let a = downcast_ref_array!(array, arrow::array::ListArray);
+            let offsets = a.value_offsets();
+            let (start, end) = (offsets[i] as usize, offsets[i + 1] as usize);
+            let child = a.values();
+            let mut items = Vec::with_capacity(end.saturating_sub(start));
+            for k in start..end {
+                items.push(from_arrow(child, k)?);
+            }
+            Ok(Value::List(items))
+        }
+        DataType::FixedSizeList(_, _) => {
+            let a = downcast_ref_array!(array, arrow::array::FixedSizeListArray);
+            let len = a.value_length() as usize;
+            let child = a.values();
+            let start = i * len;
+            let mut items = Vec::with_capacity(len);
+            for k in start..start + len {
+                items.push(from_arrow(child, k)?);
+            }
+            Ok(Value::List(items))
+        }
         _ => Ok(Value::Null),
     }
 }
@@ -451,7 +473,17 @@ pub fn values_to_array(values: &[Value], data_type: &DataType) -> ArrayRef {
             Arc::new(builder.finish())
         }
         DataType::List(_) | DataType::Map(_, _) | DataType::Struct(_) => {
-            let arrays: Vec<ArrayRef> = values.iter().map(|v| v.to_arrow(1)).collect();
+            // A `Value::Null` must become a null array of the *declared* type,
+            // not an untyped NullArray: `concat` of untyped nulls yields a
+            // NullArray and the RecordBatch then fails its schema check (e.g. an
+            // absent LIST column).
+            let arrays: Vec<ArrayRef> = values
+                .iter()
+                .map(|v| match v {
+                    Value::Null => arrow::array::new_null_array(data_type, 1),
+                    _ => v.to_arrow(1),
+                })
+                .collect();
             let refs: Vec<&dyn arrow::array::Array> = arrays.iter().map(|a| a.as_ref()).collect();
             arrow::compute::concat(&refs)
                 .map_err(|e| {

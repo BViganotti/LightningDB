@@ -32,6 +32,33 @@ pub struct PageRowMod {
     pub overflow_row_data: Option<Vec<u8>>,
 }
 
+/// A deferred, transactional index mutation. DML records these instead of
+/// mutating the vector / full-text indexes in place, so an aborted transaction
+/// never corrupts them: they are applied only on commit and simply dropped on
+/// rollback. (The vector index keeps an in-memory node->slot map and the FTS
+/// index commits to Tantivy independently of the Lightning WAL, so an in-place
+/// mutation could not be rolled back.)
+pub enum IndexMutation {
+    FtsInsert {
+        index: Arc<crate::storage::index::inverted_index::InvertedIndex>,
+        node_id: u64,
+        fields: Vec<(String, String)>,
+    },
+    FtsDelete {
+        index: Arc<crate::storage::index::inverted_index::InvertedIndex>,
+        node_id: u64,
+    },
+    VectorUpsert {
+        index: Arc<crate::storage::index::vector_index::VectorIndex>,
+        node_id: u64,
+        embedding: Vec<f32>,
+    },
+    VectorDelete {
+        index: Arc<crate::storage::index::vector_index::VectorIndex>,
+        node_id: u64,
+    },
+}
+
 pub struct Transaction {
     pub tx_id: u64,
     pub is_read_only: bool,
@@ -44,6 +71,9 @@ pub struct Transaction {
     pub uncommitted_cache: RwLock<HashMap<(String, u64), Value>>,
     pub buffered_tables: RwLock<Vec<Arc<()>>>,
     pub modified_page_rows: Mutex<Vec<PageRowMod>>,
+    /// Deferred vector / FTS index mutations, applied at commit and discarded on
+    /// rollback. See [`IndexMutation`].
+    pub index_mutations: Mutex<Vec<IndexMutation>>,
     /// For rollback: per-table `(next_row_id, catalog num_rows)` captured before
     /// this transaction's first row allocation on that table. Row-id allocation
     /// and catalog counts are plain atomics/counters, not MVCC-versioned, so a
@@ -161,6 +191,7 @@ impl TransactionManager {
             uncommitted_cache: RwLock::new(HashMap::new()),
             buffered_tables: RwLock::new(Vec::new()),
             modified_page_rows: Mutex::new(Vec::new()),
+            index_mutations: Mutex::new(Vec::new()),
             rollback_table_bases: Mutex::new(HashMap::new()),
             allocated_rows: Mutex::new(HashMap::new()),
             finalized: AtomicBool::new(false),
@@ -176,6 +207,18 @@ impl TransactionManager {
         db: &crate::Database,
     ) -> Result<()> {
         if !tx.is_read_only {
+            // Serialize the whole commit critical section (index apply -> flush
+            // -> merge -> version commit -> flush). Concurrent committers must
+            // observe each other's committed versions when merging shared pages,
+            // otherwise the later flush overwrites the earlier committer's rows.
+            let _commit_guard = self.commit_lock.lock();
+
+            // Apply this transaction's deferred vector / FTS index mutations
+            // now that it is definitely committing. Their pages are written with
+            // this tx and committed by the timestamp/flush phases below; on
+            // rollback the mutations are simply dropped.
+            self.apply_index_mutations(tx, bm);
+
             // Flush any pending write buffers so all data reaches the columns
             db.storage_manager.read().flush_all_pending(bm, tx)?;
 
@@ -188,12 +231,6 @@ impl TransactionManager {
             if self.wal.sync_mode() == crate::SyncMode::Normal {
                 db.storage_manager.read().sync_all_data_files()?;
             }
-
-            // Serialize the commit critical section (merge -> version commit ->
-            // flush). Concurrent committers must observe each other's committed
-            // versions when merging shared pages, otherwise the later flush
-            // overwrites the earlier committer's rows.
-            let _commit_guard = self.commit_lock.lock();
 
             // Sync the catalog's num_rows from the storage stats so that
             // subsequent connections see the correct row count even if the
@@ -410,6 +447,69 @@ impl TransactionManager {
         self.remove_read_ts(tx.read_ts);
         tx.finalized.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Apply the transaction's deferred index mutations under the commit lock.
+    /// Failures are logged but not fatal: the data commit must still succeed and
+    /// the index can be rebuilt from the data.
+    fn apply_index_mutations(
+        &self,
+        tx: &Transaction,
+        bm: &crate::storage::buffer_manager::BufferManager,
+    ) {
+        let mutations = tx.index_mutations.lock();
+        if mutations.is_empty() {
+            return;
+        }
+        let mut fts_touched: Vec<Arc<crate::storage::index::inverted_index::InvertedIndex>> =
+            Vec::new();
+        for m in mutations.iter() {
+            match m {
+                IndexMutation::FtsInsert {
+                    index,
+                    node_id,
+                    fields,
+                } => {
+                    let refs: Vec<(String, &str)> = fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.as_str()))
+                        .collect();
+                    if let Err(e) = index.insert_multi_field(*node_id, &refs) {
+                        tracing::warn!("deferred FTS insert failed for node {node_id}: {e}");
+                    }
+                    if !fts_touched.iter().any(|x| Arc::ptr_eq(x, index)) {
+                        fts_touched.push(Arc::clone(index));
+                    }
+                }
+                IndexMutation::FtsDelete { index, node_id } => {
+                    if let Err(e) = index.delete(*node_id) {
+                        tracing::warn!("deferred FTS delete failed for node {node_id}: {e}");
+                    }
+                    if !fts_touched.iter().any(|x| Arc::ptr_eq(x, index)) {
+                        fts_touched.push(Arc::clone(index));
+                    }
+                }
+                IndexMutation::VectorUpsert {
+                    index,
+                    node_id,
+                    embedding,
+                } => {
+                    if let Err(e) = index.insert(*node_id, embedding, bm, tx) {
+                        tracing::warn!("deferred vector upsert failed for node {node_id}: {e}");
+                    }
+                }
+                IndexMutation::VectorDelete { index, node_id } => {
+                    if let Err(e) = index.delete(*node_id, bm, tx) {
+                        tracing::warn!("deferred vector delete failed for node {node_id}: {e}");
+                    }
+                }
+            }
+        }
+        for fts in fts_touched {
+            if let Err(e) = fts.commit_if_pending() {
+                tracing::warn!("deferred FTS commit failed: {e}");
+            }
+        }
     }
 
     pub fn rollback(&self, db: &crate::Database, tx: &Transaction) -> Result<()> {

@@ -149,11 +149,11 @@ impl Column {
                     for (i, el) in elements.iter().enumerate() {
                         child.append_value(bm, el, num_vals + i as u64, tx)?;
                     }
-                    // Note: atomic_num_values over-counts by elements.len() because
-                    // append_plain_value also increments it per element. This is
-                    // acceptable since the counter is only used for approximate stats
-                    // and test assertions, never for correctness.
-                    let end_offset = child.stats.read().num_values;
+                    // Each child append also incremented `atomic_num_values`; undo
+                    // those so the next row reserves a contiguous child range. The
+                    // list's own end offset is the slot just past its elements.
+                    child.atomic_num_values.fetch_sub(elements.len() as u64, Ordering::AcqRel);
+                    let end_offset = num_vals + elements.len() as u64;
                     self.append_plain_value(bm, &Value::Number(end_offset as f64), row_id, tx)?;
                 }
             }
@@ -327,20 +327,24 @@ impl Column {
         let element_size = self.element_size();
         let values_per_page = 4096 / element_size as u64;
 
+        // List/Struct columns append through `append_value`, which itself locks
+        // `self.stats`. Handle them before taking the stats lock below, or the
+        // nested write lock self-deadlocks.
+        if matches!(
+            self.data_type,
+            LogicalType::List(_) | LogicalType::Struct(_)
+        ) {
+            for i in 0..num_rows {
+                self.append_value(bm, &vals[i], start_row_id + i as u64, tx)?;
+            }
+            return Ok(Vec::new());
+        }
+
         let mut i = 0;
         let mut stats = self.stats.write();
         let mut modified_rows_batch = Vec::with_capacity(num_rows);
 
         while i < num_rows {
-            if matches!(
-                self.data_type,
-                LogicalType::List(_) | LogicalType::Struct(_)
-            ) {
-                self.append_value(bm, &vals[i], start_row_id + i as u64, tx)?;
-                i += 1;
-                continue;
-            }
-
             let page_idx = (start_row_id + i as u64) / values_per_page;
             while self.fh.get_num_pages() <= page_idx {
                 self.fh.add_new_page()?;

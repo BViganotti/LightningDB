@@ -597,9 +597,25 @@ impl StorageManager {
 
     pub fn create_fts_index(&mut self, table_name: &str) -> Result<()> {
         let index_path = self.db_path.join(format!("{table_name}_fts"));
+        // Index the table's string columns by name: the DML write path passes
+        // fields keyed by column name, so a schema built with the generic
+        // "content" field would silently drop every document.
+        let field_names: Vec<String> = self
+            .node_tables
+            .get(table_name)
+            .or_else(|| self.rel_tables.get(table_name))
+            .map(|table| {
+                table
+                    .columns
+                    .iter()
+                    .filter(|c| c.data_type == lightning_types::LogicalType::String)
+                    .map(|c| c.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let index = Arc::new(crate::storage::index::inverted_index::InvertedIndex::new(
             &index_path,
-            &[],
+            &field_names,
         )?);
         self.fts_indexes.insert(table_name.to_string(), index);
         Ok(())

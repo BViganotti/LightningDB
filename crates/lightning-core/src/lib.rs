@@ -2302,12 +2302,15 @@ impl Connection {
                                 let emb = values.values()[start..end].to_vec();
                                 batch_vecs.push((row_ids[i], emb));
                             }
-                            if let Err(e) = vec_idx.insert_batch(&batch_vecs, &bm, &tx) {
-                                tracing::warn!(
-                                    "vector index insert_batch failed for table {}: {}",
-                                    table_name,
-                                    e,
-                                );
+                            {
+                                let mut muts = tx.index_mutations.lock();
+                                for (id, emb) in batch_vecs {
+                                    muts.push(crate::transaction::transaction_manager::IndexMutation::VectorUpsert {
+                                        index: Arc::clone(&vec_idx),
+                                        node_id: id,
+                                        embedding: emb,
+                                    });
+                                }
                             }
                         }
                     }
@@ -2315,11 +2318,8 @@ impl Connection {
             }
         }
 
-        db.storage_manager.read().flush_all_pending(&bm, &tx)?;
-        db.transaction_manager.commit(&tx, &bm, &db)?;
-        // Bulk inserts are a common source of WAL growth (edges/nodes); bound it.
-        let _ = db.maybe_checkpoint_wal();
-
+        // Defer FTS indexing to the transaction commit (transactional index):
+        // on rollback these mutations are discarded and Tantivy is never touched.
         if let Some(fts) = fts_opt {
             let string_cols: Vec<usize> = table
                 .columns
@@ -2336,46 +2336,36 @@ impl Connection {
                 let col_names: Vec<String> = string_cols.iter()
                     .map(|&i| table.columns[i].name.clone())
                     .collect();
-                let mut batch_docs: Vec<(u64, Vec<(String, &str)>)> = Vec::with_capacity(num_rows);
-                let mut fields_vec: Vec<(String, &str)> = Vec::new();
+                let mut muts = tx.index_mutations.lock();
                 for i in 0..num_rows {
                     let node_id = row_ids[i];
-                    fields_vec.clear();
+                    let mut fields_vec: Vec<(String, String)> = Vec::new();
                     for (j, &col_idx) in string_cols.iter().enumerate() {
                         let array = final_batch.column(col_idx);
                         if let Some(str_arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
                         {
                             if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
-                                fields_vec.push((col_names[j].clone(), str_arr.value(i)));
+                                fields_vec.push((col_names[j].clone(), str_arr.value(i).to_string()));
                             }
                         }
                     }
                     if !fields_vec.is_empty() {
-                        batch_docs.push((node_id, std::mem::take(&mut fields_vec)));
-                    }
-                }
-                if !batch_docs.is_empty() {
-                    if let Err(e) = fts.insert_multi_field_batch(&batch_docs) {
-                        tracing::warn!(
-                            "FTS insert_multi_field_batch error for table {}: {}",
-                            table_name,
-                            e,
-                        );
-                    }
-                }
-                // Defer the Tantivy commit for small batches: committing on
-                // every single-row insert fsyncs and dominated write latency.
-                // Buffered writes are flushed before the next FTS search and
-                // at checkpoint (and Tantivy auto-commits at its memory budget).
-                const FTS_COMMIT_BATCH_ROWS: usize = 256;
-                if num_rows >= FTS_COMMIT_BATCH_ROWS {
-                    if let Err(e) = fts.commit() {
-                        tracing::warn!("FTS commit error: {}", e);
+                        muts.push(crate::transaction::transaction_manager::IndexMutation::FtsInsert {
+                            index: Arc::clone(&fts),
+                            node_id,
+                            fields: fields_vec,
+                        });
                     }
                 }
             }
         }
+
+        db.storage_manager.read().flush_all_pending(&bm, &tx)?;
+        db.transaction_manager.commit(&tx, &bm, &db)?;
+        // Bulk inserts are a common source of WAL growth (edges/nodes); bound it.
+        let _ = db.maybe_checkpoint_wal();
+
 
         {
             let mut cat = db.catalog.write();

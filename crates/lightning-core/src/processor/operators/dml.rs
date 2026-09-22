@@ -6,6 +6,7 @@ use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::buffer_manager::BufferManager;
 use crate::storage::storage_manager::Table;
 use crate::storage::undo_buffer::{UndoBuffer, UndoRecord};
+use crate::transaction::transaction_manager::IndexMutation;
 use crate::LightningError;
 use crate::Result;
 use arrow::array::ArrayRef;
@@ -236,25 +237,25 @@ impl PhysicalOperator for PhysicalCreate {
                             .enumerate()
                             .map(|(i, c)| (c.name.as_str(), i))
                             .collect();
+                        let mut muts = tx.index_mutations.lock();
                         for (i, row) in rows.iter().enumerate() {
                             let node_id = start_id + i as u64;
-                            let text_fields: Vec<(String, &str)> = self.table.columns.iter()
+                            let fields: Vec<(String, String)> = self.table.columns.iter()
                                 .filter_map(|col| {
                                     let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row.get(idx).and_then(|v| match v {
-                                        Value::String(s) => Some((col.name.clone(), s.as_str())),
+                                        Value::String(s) => Some((col.name.clone(), s.clone())),
                                         _ => None,
                                     })
                                 })
                                 .collect();
-                            if !text_fields.is_empty() {
-                                if let Err(e) = fts.insert_multi_field(node_id, &text_fields) {
-                                    tracing::warn!("FTS insert error for CREATE batch: {e}");
-                                }
+                            if !fields.is_empty() {
+                                muts.push(IndexMutation::FtsInsert {
+                                    index: Arc::clone(fts),
+                                    node_id,
+                                    fields,
+                                });
                             }
-                        }
-                        if let Err(e) = fts.commit_if_pending() {
-                            tracing::warn!("FTS commit error for CREATE batch: {e}");
                         }
                     }
 
@@ -528,12 +529,6 @@ impl PhysicalOperator for PhysicalSet {
             let vec_opt = storage_guard.vector_indexes.get(table_name);
             let hash_index_opt = storage_guard.get_index(table_name);
 
-            // Build column-name→index map once for FTS lookups, avoiding O(C²) per row
-            let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
-                .enumerate()
-                .map(|(i, c)| (c.name.as_str(), i))
-                .collect();
-
             for (node_id, updated_props) in &modified_nodes {
                 // Update PK hash index if PK column changed
                 if let (Some(pk_idx_val), Some(ref hash_idx)) = (pk_idx, &hash_index_opt) {
@@ -552,36 +547,28 @@ impl PhysicalOperator for PhysicalSet {
                     }
                 }
 
-                // Update FTS index: rebuild document for this node
+                // Defer the FTS update to commit (transactional index). Rebuild
+                // the document from ALL string columns so fields not part of this
+                // SET are preserved.
                 if let Some(fts) = fts_opt {
                     let string_fields: Vec<(String, String)> = self.table.columns.iter()
                         .filter_map(|col| {
-                            let idx = *col_name_to_idx.get(col.name.as_str())?;
-                            if updated_props.contains(&idx) {
-                                let val = col.get_value(&self.buffer_manager, *node_id, tx)
-                                    .unwrap_or(Value::Null);
-                                match val {
-                                    Value::String(s) => Some((col.name.clone(), s)),
-                                    _ => None,
-                                }
-                            } else {
-                                None
+                            let val = col.get_value(&self.buffer_manager, *node_id, tx)
+                                .unwrap_or(Value::Null);
+                            match val {
+                                Value::String(s) => Some((col.name.clone(), s)),
+                                _ => None,
                             }
                         })
                         .collect();
+                    let mut muts = tx.index_mutations.lock();
+                    muts.push(IndexMutation::FtsDelete { index: Arc::clone(fts), node_id: *node_id });
                     if !string_fields.is_empty() {
-                        if let Err(e) = fts.delete(*node_id) {
-                            tracing::warn!("FTS delete error during SET: {e}");
-                        }
-                        let refs: Vec<(String, &str)> = string_fields.iter()
-                            .map(|(name, s)| (name.clone(), s.as_str()))
-                            .collect();
-                        if let Err(e) = fts.insert_multi_field(*node_id, &refs) {
-                            tracing::warn!("FTS insert error during SET: {e}");
-                        }
-                        if let Err(e) = fts.commit_if_pending() {
-                            tracing::warn!("FTS commit error during SET: {e}");
-                        }
+                        muts.push(IndexMutation::FtsInsert {
+                            index: Arc::clone(fts),
+                            node_id: *node_id,
+                            fields: string_fields,
+                        });
                     }
                 }
 
@@ -604,9 +591,11 @@ impl PhysicalOperator for PhysicalSet {
                                         })
                                         .collect();
                                     if emb_f32.len() == vec_idx.dimension() {
-                                        if let Err(e) = vec_idx.update(*node_id, &emb_f32, &self.buffer_manager, tx) {
-                                            tracing::warn!("Vector index update failed for node {node_id}: {e}");
-                                        }
+                                        tx.index_mutations.lock().push(IndexMutation::VectorUpsert {
+                                            index: Arc::clone(vec_idx),
+                                            node_id: *node_id,
+                                            embedding: emb_f32,
+                                        });
                                     }
                                 }
                             }
@@ -761,17 +750,16 @@ impl PhysicalOperator for PhysicalDelete {
                     // Remove from FTS and vector indexes
                     let storage_guard = database.storage_manager.read();
                     if let Some(fts) = storage_guard.fts_indexes.get(&self.table.name) {
-                        if let Err(e) = fts.delete(id) {
-                            tracing::warn!("FTS delete error for node {}: {e}", id);
-                        }
-                        if let Err(e) = fts.commit_if_pending() {
-                            tracing::warn!("FTS commit error after delete: {e}");
-                        }
+                        tx.index_mutations.lock().push(IndexMutation::FtsDelete {
+                            index: Arc::clone(fts),
+                            node_id: id,
+                        });
                     }
                     if let Some(vec_idx) = storage_guard.vector_indexes.get(&self.table.name) {
-                        if let Err(e) = vec_idx.delete(id, &self.buffer_manager, tx) {
-                            tracing::warn!("Vector index delete error for node {}: {e}", id);
-                        }
+                        tx.index_mutations.lock().push(IndexMutation::VectorDelete {
+                            index: Arc::clone(vec_idx),
+                            node_id: id,
+                        });
                     }
                 }
                 self.shared_state
@@ -1485,17 +1473,13 @@ impl PhysicalOperator for PhysicalMerge {
             }
             if !fts_pending.is_empty() {
                 if let Some(ref fts) = fts_opt {
-                    let batch: Vec<(u64, Vec<(String, &str)>)> = fts_pending
-                        .iter()
-                        .map(|(id, fields)| {
-                            (*id, fields.iter().map(|(k, v)| (k.clone(), v.as_str())).collect())
-                        })
-                        .collect();
-                    if let Err(e) = fts.insert_multi_field_batch(&batch) {
-                        tracing::error!("FTS insert_multi_field_batch error during merge: {}", e);
-                    }
-                    if let Err(e) = fts.commit_if_pending() {
-                        tracing::error!("FTS commit error during merge: {}", e);
+                    let mut muts = tx.index_mutations.lock();
+                    for (id, fields) in fts_pending.iter() {
+                        muts.push(IndexMutation::FtsInsert {
+                            index: Arc::clone(fts),
+                            node_id: *id,
+                            fields: fields.clone(),
+                        });
                     }
                 }
             }
