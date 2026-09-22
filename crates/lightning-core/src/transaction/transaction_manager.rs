@@ -249,6 +249,12 @@ impl TransactionManager {
             // Without this merge, if Tx1 modifies row 0 and Tx2 modifies row 1 on
             // the same page, Tx2's commit would overwrite Tx1's changes because
             // Tx2's page version is based on the snapshot BEFORE Tx1 committed.
+            //
+            // Merged frames are kept pinned until after the flush: between the
+            // merge and Phase 2's re-pin the background vacuum thread could evict
+            // an unpinned merged frame, and the flush would then persist a stale
+            // version (losing the rows this commit just wrote).
+            let mut merge_pinned: Vec<Arc<crate::storage::buffer_manager::Frame>> = Vec::new();
             {
                 let page_mods = tx.modified_page_rows.lock();
                 if !page_mods.is_empty() {
@@ -317,7 +323,8 @@ impl TransactionManager {
 
                             // Log the merged page to WAL
                             bm.log_page_update(*file_id, *page_idx, our_frame.as_slice())?;
-                            bm.unpin_page(&fh, *page_idx, our_frame);
+                            // Keep pinned until after the flush (see above).
+                            merge_pinned.push(our_frame);
                         }
                     }
 
@@ -389,6 +396,10 @@ impl TransactionManager {
                 bm.unpin_frame(frame);
             }
             drop(pinned_frames);
+            for frame in &merge_pinned {
+                bm.unpin_frame(frame);
+            }
+            drop(merge_pinned);
 
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);

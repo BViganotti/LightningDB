@@ -103,6 +103,11 @@ pub struct BufferManager {
     /// lock order; taking it while holding a shard lock (and dropping that lock
     /// during backoff) inverted the order and deadlocked writers.
     page_locks: parking_lot::Mutex<HashMap<(u64, u64), Arc<parking_lot::Mutex<()>>>>,
+    /// Highest committed version seen per (file, page). Lets
+    /// `pin_latest_committed` detect that the newest committed version was
+    /// evicted (a stale committed frame may still be resident) and fall back to
+    /// the on-disk page instead of merging on top of a stale version.
+    latest_committed: parking_lot::Mutex<HashMap<(u64, u64), u64>>,
 }
 
 enum EvictResult {
@@ -163,6 +168,7 @@ impl BufferManager {
             prefetch_confidence,
             shutting_down: AtomicBool::new(false),
             page_locks: parking_lot::Mutex::new(HashMap::new()),
+            latest_committed: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 
@@ -562,6 +568,11 @@ impl BufferManager {
         let key = (fh_arc.file_id, page_idx);
         let shard_idx = self.get_shard_idx(key);
 
+        // The highest version ever committed for this page. If the newest
+        // committed frame is still resident we can use it; otherwise the true
+        // newest lives on disk and any resident committed frame is stale.
+        let tracked = self.latest_committed.lock().get(&key).copied().unwrap_or(0);
+
         // Try buffer pool first (read lock)
         {
             let pool = self.shards[shard_idx].read();
@@ -577,8 +588,11 @@ impl BufferManager {
                     }
                 }
                 if let Some(frame) = best_frame {
-                    frame.pin_count.fetch_add(1, Ordering::AcqRel);
-                    return Ok(frame);
+                    if best_version >= tracked {
+                        frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                        return Ok(frame);
+                    }
+                    // else: newest committed version was evicted — read disk.
                 }
             }
         }
@@ -614,7 +628,11 @@ impl BufferManager {
                 }
             }
         }
-        if !found {
+        if found {
+            let mut latest = self.latest_committed.lock();
+            let entry = latest.entry(key).or_insert(0);
+            *entry = (*entry).max(commit_ts);
+        } else {
             tracing::debug!(
                 "update_timestamps: frame NOT found for ({},{}) tx_id={commit_ts:#x} — likely evicted before commit",
                 file_id, page_idx,
