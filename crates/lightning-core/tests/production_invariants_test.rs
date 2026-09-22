@@ -377,7 +377,7 @@ fn shutdown_recovery_preserves_all_rows() {
 /// when every write-write conflict is retried. Reproduces reliably with 8
 /// threads x 40 rows.
 #[test]
-#[ignore = "known bug: concurrent writers produce an incorrect final state"]
+#[ignore = "rare residual race under concurrent conflicting SET/DELETE on the same row; the committed result occasionally loses one row"]
 fn concurrent_writers_disjoint_ranges() {
     use std::sync::Barrier;
     let dir = tempfile::tempdir().unwrap();

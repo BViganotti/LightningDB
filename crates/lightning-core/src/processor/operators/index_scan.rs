@@ -8,6 +8,7 @@ use crate::Result;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -68,7 +69,45 @@ impl PhysicalOperator for PhysicalIndexScan {
             database,
         )?;
         let pk_value = Value::from_arrow(&val_array, 0);
-        if let Some(row_id) = self.index.lookup(&self.buffer_manager, &pk_value, tx)? {
+        let pk_col_idx = database
+            .catalog
+            .read()
+            .get_node_table(&self.table.name)
+            .and_then(|t| t.primary_key.clone())
+            .and_then(|pk| self.table.columns.iter().position(|c| c.name == pk));
+        let mut lookup_row_id = self.index.lookup(&self.buffer_manager, &pk_value, tx)?;
+        // Validate the index entry. Under concurrent writes the PK hash index
+        // (which has no per-row merge-on-commit) can transiently resolve a key
+        // to the wrong row id; acting on it would delete/update the wrong row.
+        // If the resolved row's primary key does not match the key we looked up,
+        // fall back to a linear scan for the correct, visible row.
+        if let (Some(rid), Some(ci)) = (lookup_row_id, pk_col_idx) {
+            let actual = self
+                .table.columns[ci]
+                .get_value(&self.buffer_manager, rid, tx)
+                .unwrap_or(Value::Null);
+            if actual != pk_value {
+                let n = self.table.next_row_id.load(Ordering::Acquire);
+                let mut found = None;
+                for cand in 0..n {
+                    if !self.table.columns[0].version_info.is_visible(
+                        cand, tx.tx_id, tx.read_ts,
+                    ) {
+                        continue;
+                    }
+                    let v = self
+                        .table.columns[ci]
+                        .get_value(&self.buffer_manager, cand, tx)
+                        .unwrap_or(Value::Null);
+                    if v == pk_value {
+                        found = Some(cand);
+                        break;
+                    }
+                }
+                lookup_row_id = found;
+            }
+        }
+        if let Some(row_id) = lookup_row_id {
             // Check MVCC visibility for this row using the transaction's read_ts
             if !self.table.columns[0].version_info.is_visible(
                 row_id, tx.tx_id, tx.read_ts

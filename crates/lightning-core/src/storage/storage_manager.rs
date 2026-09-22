@@ -37,7 +37,7 @@ pub struct Table {
     pub trigram_indexes:
         Arc<PlRwLock<HashMap<String, Arc<crate::storage::index::trigram_index::TrigramIndex>>>>,
     pub trigram_workers: Arc<PlRwLock<HashMap<String, Arc<TrigramIndexWorker>>>>,
-    write_buffer: PlRwLock<Option<WriteBuffer>>,
+    write_buffer: PlRwLock<HashMap<u64, WriteBuffer>>,
 }
 
 impl Clone for Table {
@@ -50,7 +50,7 @@ impl Clone for Table {
             next_row_id: Arc::clone(&self.next_row_id),
             trigram_indexes: Arc::clone(&self.trigram_indexes),
             trigram_workers: Arc::clone(&self.trigram_workers),
-            write_buffer: PlRwLock::new(None),
+            write_buffer: PlRwLock::new(HashMap::new()),
         }
     }
 }
@@ -65,44 +65,40 @@ impl Table {
             next_row_id: Arc::new(AtomicU64::new(0)),
             trigram_indexes: Arc::new(PlRwLock::new(HashMap::new())),
             trigram_workers: Arc::new(PlRwLock::new(HashMap::new())),
-            write_buffer: PlRwLock::new(None),
+            write_buffer: PlRwLock::new(HashMap::new()),
         }
     }
 
-    fn ensure_buffer(&self) {
+    fn ensure_buffer(&self, tx_id: u64) {
         let mut guard = self.write_buffer.write();
-        if guard.is_none() {
+        guard.entry(tx_id).or_insert_with(|| {
             let num_cols = self.columns.len();
             let mut columns = Vec::with_capacity(num_cols);
             for _ in 0..num_cols {
                 columns.push(Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD));
             }
-            *guard = Some(WriteBuffer {
+            WriteBuffer {
                 columns,
                 row_ids: Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD),
                 size_bytes: 0,
-            });
-        }
+            }
+        });
     }
 
     fn flush_buffer(&self, bm: &BufferManager, tx: &Transaction) -> Result<()> {
         let (columns, row_ids) = {
             let mut guard = self.write_buffer.write();
-            if let Some(ref mut wb) = *guard {
-                if wb.columns.is_empty() || wb.columns[0].is_empty() {
-                    return Ok(());
+            match guard.remove(&tx.tx_id) {
+                Some(mut wb) => {
+                    if wb.columns.is_empty() || wb.columns[0].is_empty() {
+                        return Ok(());
+                    }
+                    let row_ids = std::mem::take(&mut wb.row_ids);
+                    let columns = std::mem::take(&mut wb.columns);
+                    wb.size_bytes = 0;
+                    (columns, row_ids)
                 }
-                let row_ids = std::mem::take(&mut wb.row_ids);
-                let columns = std::mem::take(&mut wb.columns);
-                wb.size_bytes = 0;
-                // Re-initialize column vecs for next batch
-                let num_cols = self.columns.len();
-                for _ in 0..num_cols {
-                    wb.columns.push(Vec::with_capacity(DEFAULT_WRITE_BUFFER_THRESHOLD));
-                }
-                (columns, row_ids)
-            } else {
-                return Ok(());
+                None => return Ok(()),
             }
         };
 
@@ -289,11 +285,11 @@ impl Table {
         next_id: u64,
         tx: &Transaction,
     ) -> Result<()> {
-        self.ensure_buffer();
+        self.ensure_buffer(tx.tx_id);
 
         let should_flush = {
             let mut guard = self.write_buffer.write();
-            if let Some(ref mut wb) = *guard {
+            if let Some(wb) = guard.get_mut(&tx.tx_id) {
                 for (col_idx, val) in values.iter().enumerate() {
                     if col_idx < wb.columns.len() {
                         if let Value::String(ref s) = val {
@@ -1008,7 +1004,7 @@ impl StorageManager {
             .chain(self.rel_tables.values())
             .any(|table| {
                 let guard = table.write_buffer.read();
-                matches!(&*guard, Some(ref wb) if wb.columns.first().map(|c| !c.is_empty()).unwrap_or(false))
+                guard.values().any(|wb| wb.columns.first().map(|c| !c.is_empty()).unwrap_or(false))
             });
 
         if any_pending {

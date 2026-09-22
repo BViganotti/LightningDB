@@ -1258,7 +1258,7 @@ mod tests {
     }
 
     fn begin_tx_at(tm: &TransactionManager, ts: u64) -> Arc<crate::transaction::transaction_manager::Transaction> {
-        Arc::new(tm.begin_at(true, ts).unwrap())
+        Arc::new(tm.begin_at(true, Some(ts)).unwrap())
     }
 
     #[test]

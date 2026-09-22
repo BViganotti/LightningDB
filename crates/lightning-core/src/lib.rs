@@ -1679,7 +1679,7 @@ impl Connection {
             let tx = match (snapshot_ts, explicit_tx) {
                 (_, Some(tx)) => tx,
                 (Some(ts), None) => Arc::new(
-                    db.transaction_manager.begin_at(true, ts)?,
+                    db.transaction_manager.begin_at(true, Some(ts))?,
                 ),
                 (None, None) => Arc::new(
                     db.transaction_manager.begin(true)?,
@@ -1702,7 +1702,7 @@ impl Connection {
         let tx = match (snapshot_ts, explicit_tx) {
             (_, Some(tx)) => tx,
             (Some(ts), None) => Arc::new(
-                db.transaction_manager.begin_at(true, ts)?,
+                db.transaction_manager.begin_at(true, Some(ts))?,
             ),
             (None, None) => Arc::new(
                 db.transaction_manager.begin(is_read_only)?,

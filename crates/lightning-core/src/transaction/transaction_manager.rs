@@ -87,6 +87,11 @@ pub struct TransactionManager {
     self_weak: Mutex<Option<Weak<Self>>>,
     bm_weak: Mutex<Option<Weak<BufferManager>>>,
     page_merge_locks: Mutex<HashMap<(u64, u64), Arc<Mutex<()>>>>,
+    /// Serializes the merge -> version-commit -> flush critical section of
+    /// write commits. Without it a concurrent committer could read the latest
+    /// committed page before the previous committer marked its version
+    /// committed, then flush its own stale frame and clobber that row.
+    commit_lock: Mutex<()>,
 }
 
 impl TransactionManager {
@@ -101,6 +106,7 @@ impl TransactionManager {
             self_weak: Mutex::new(None),
             bm_weak: Mutex::new(None),
             page_merge_locks: Mutex::new(HashMap::new()),
+            commit_lock: Mutex::new(()),
         }
     }
 
@@ -113,14 +119,14 @@ impl TransactionManager {
     }
 
     pub fn begin(&self, is_read_only: bool) -> Result<Transaction> {
-        self.begin_at(is_read_only, self.current_ts.load(Ordering::SeqCst))
+        self.begin_at(is_read_only, None)
     }
 
     /// Begin a read-only transaction that sees the database as it was
     /// at `snapshot_ts`. This enables time-travel queries — any read
     /// will show only data committed at or before `snapshot_ts`, as if
     /// the clock was frozen at that moment.
-    pub fn begin_at(&self, is_read_only: bool, snapshot_ts: u64) -> Result<Transaction> {
+    pub fn begin_at(&self, is_read_only: bool, snapshot_ts: Option<u64>) -> Result<Transaction> {
         let tx_id = self.next_tx_id.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
             if id == u64::MAX {
                 None
@@ -128,7 +134,12 @@ impl TransactionManager {
                 Some(id + 1)
             }
         }).map_err(|_| LightningError::Internal("transaction ID overflow".into()))?;
-        let read_ts = snapshot_ts;
+
+        // Capture the snapshot timestamp here (not in `begin`, before this
+        // point). Loading it before could race with a committing writer, giving
+        // this transaction a stale read_ts and a spurious write-write conflict
+        // against a row committed in the meantime.
+        let read_ts = snapshot_ts.unwrap_or_else(|| self.current_ts.load(Ordering::SeqCst));
 
         if !is_read_only {
             self.active_tx_ids.write().insert(tx_id);
@@ -173,6 +184,12 @@ impl TransactionManager {
             // is written, maintaining the invariant that WAL entries only reference
             // data that has already been persisted to column files.
             db.storage_manager.read().sync_all_data_files()?;
+
+            // Serialize the commit critical section (merge -> version commit ->
+            // flush). Concurrent committers must observe each other's committed
+            // versions when merging shared pages, otherwise the later flush
+            // overwrites the earlier committer's rows.
+            let _commit_guard = self.commit_lock.lock();
 
             // Sync the catalog's num_rows from the storage stats so that
             // subsequent connections see the correct row count even if the
@@ -279,9 +296,13 @@ impl TransactionManager {
                                 }
                             }
 
-                            // Pin our own uncommitted version (created during execution)
-                            // and write the merged data through the buffer manager API.
-                            let our_frame = bm.pin_page(
+                            // Write the merged data through a private COW version.
+                            // Using pin_page here was unsafe: if this transaction's
+                            // uncommitted frame had been evicted, pin_page returned
+                            // the latest committed frame and the merge mutated shared
+                            // state. create_new_version reuses this transaction's
+                            // frame when present, otherwise creates a fresh one.
+                            let our_frame = bm.create_new_version(
                                 std::sync::Arc::clone(&fh),
                                 *page_idx,
                                 tx,

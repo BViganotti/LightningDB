@@ -472,6 +472,19 @@ impl PhysicalOperator for PhysicalSet {
                     assignment_snapshots.push((prop_idx, eval_res, row_originals));
                 }
 
+                // Detect write-write conflicts for every assignment *before*
+                // applying any of them, so a conflicting SET aborts without
+                // leaving a partially-updated row (the discarded CoW version did
+                // not reliably restore columns written before the conflict).
+                for (prop_idx, _eval_res, row_originals) in &assignment_snapshots {
+                    let col = &self.table.columns[*prop_idx];
+                    for (id, _old) in row_originals {
+                        col.version_info
+                            .mark_row(*id, tx.tx_id, tx.read_ts)
+                            .map_err(crate::LightningError::Database)?;
+                    }
+                }
+
                 // Phase 2: Push undo records (using original snapshots) and apply writes
                 for (prop_idx, eval_res, row_originals) in &assignment_snapshots {
                     let col = &self.table.columns[*prop_idx];
@@ -719,6 +732,16 @@ impl PhysicalOperator for PhysicalDelete {
                     self.undo_buffer
                         .push(UndoRecord::DeleteNode(self.table.name.clone(), id));
 
+                    // Detect write-write conflicts for the whole row *before*
+                    // writing any column. Writing as we went meant a conflict on
+                    // a later column aborted the delete half-applied (e.g. `_id`
+                    // already nulled), and the discarded CoW version did not
+                    // always restore the null bitmap -> phantom deletes.
+                    for col in self.table.columns.iter().filter(|c| !c.name.starts_with('_')) {
+                        col.version_info
+                            .mark_row(id, tx.tx_id, tx.read_ts)
+                            .map_err(crate::LightningError::Database)?;
+                    }
                     for col in &self.table.columns {
                         col.append_value(&self.buffer_manager, &Value::Null, id, tx)?;
                     }

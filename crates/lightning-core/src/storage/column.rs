@@ -1,4 +1,4 @@
-use crate::storage::buffer_manager::{BufferManager, PAGE_SIZE};
+use crate::storage::buffer_manager::BufferManager;
 use crate::storage::compression::{CompressionAlg, CompressionMetadata, CompressionType};
 use crate::storage::file_handle::FileHandle;
 use crate::storage::row_version::RowVersion;
@@ -38,7 +38,7 @@ pub struct Column {
     /// Buffered null bit changes, SHARED across clones (a plan-time column
     /// clone must record null-bit changes on the same list the canonical column
     /// flushes, otherwise a `SET` that clears a null bit is lost).
-    pending_nulls: Arc<parking_lot::Mutex<Vec<(usize, u8)>>>,
+    pending_nulls: Arc<parking_lot::Mutex<std::collections::HashMap<u64, Vec<(usize, u8)>>>>,
 }
 
 impl Clone for Column {
@@ -81,7 +81,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: AtomicU64::new(0),
             atomic_null_count: AtomicU64::new(0),
-            pending_nulls: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -106,7 +106,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: AtomicU64::new(0),
             atomic_null_count: AtomicU64::new(0),
-            pending_nulls: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -249,8 +249,12 @@ impl Column {
         let row_id_usize = row_id as usize;
         {
             let pending = self.pending_nulls.lock();
-            if let Some(&(_rid, val)) = pending.iter().rev().find(|(rid, _)| *rid == row_id_usize) {
-                return Ok(val != 0);
+            if let Some(entries) = pending.get(&tx.tx_id) {
+                if let Some(&(_rid, val)) =
+                    entries.iter().rev().find(|(rid, _)| *rid == row_id_usize)
+                {
+                    return Ok(val != 0);
+                }
             }
         }
         let page_idx = row_id / 4096;
@@ -292,11 +296,26 @@ impl Column {
                         break;
                     }
                     let offset = (current_row % 4096) as usize;
-                    *ptr.add(offset) = if matches!(vals[page_i], Value::Null) {
-                        1
+                    let bit = if matches!(vals[page_i], Value::Null) {
+                        1u8
                     } else {
-                        0
+                        0u8
                     };
+                    *ptr.add(offset) = bit;
+                    // Record the null-bit write for merge-on-commit: without it a
+                    // concurrent transaction's stale null page can overwrite ours.
+                    let mut rd = [0u8; 64];
+                    rd[0] = bit;
+                    tx.modified_page_rows.lock().push(
+                        crate::transaction::transaction_manager::PageRowMod {
+                            file_id: self.null_fh.file_id,
+                            page_idx,
+                            row_id: current_row,
+                            element_size: 1,
+                            row_data: rd,
+                            overflow_row_data: None,
+                        },
+                    );
                     page_i += 1;
                 }
             }
@@ -340,7 +359,8 @@ impl Column {
                         break;
                     }
 
-                    if !matches!(vals[page_i], Value::Null) {
+                    let is_null = matches!(vals[page_i], Value::Null);
+                    if !is_null {
                         let offset_in_page =
                             (current_row % values_per_page) as usize * element_size;
                         self.serialize_value_into(&vals[page_i], bm, tx, &mut stack_buf)?;
@@ -362,6 +382,44 @@ impl Column {
                             .mark_row(current_row, tx.tx_id, tx.read_ts)
                             .map_err(crate::LightningError::Database)?;
                         modified_rows_batch.push((self.version_info.clone(), current_row));
+                    }
+
+                    // Record the row data for merge-on-commit for ALL columns
+                    // (including `_id`). Without this, two concurrent batch
+                    // inserts into the same page each flush their own frame and
+                    // the later commit clobbers the earlier one's rows.
+                    {
+                        let mut row_data = [0u8; 64];
+                        if !is_null {
+                            row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+                        }
+                        let overflow_row_data = if !is_null && stack_buf[0] == 255 {
+                            self.overflow_fh.as_ref().and_then(|ofh| {
+                                let of_page_idx =
+                                    u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
+                                let of_len =
+                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?)
+                                        as usize;
+                                let of_frame =
+                                    bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
+                                let content =
+                                    of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
+                                bm.unpin_page(ofh, of_page_idx, of_frame);
+                                Some(content)
+                            })
+                        } else {
+                            None
+                        };
+                        tx.modified_page_rows.lock().push(
+                            crate::transaction::transaction_manager::PageRowMod {
+                                file_id: self.fh.file_id,
+                                page_idx,
+                                row_id: current_row,
+                                element_size,
+                                row_data,
+                                overflow_row_data,
+                            },
+                        );
                     }
 
                     page_i += 1;
@@ -1264,9 +1322,10 @@ impl Column {
         self.dirty.store(true, Ordering::Release);
         let entries_to_flush = {
             let mut pending = self.pending_nulls.lock();
-            pending.push((row_id as usize, if is_null { 1 } else { 0 }));
-            if pending.len() >= Self::PENDING_NULLS_FLUSH_THRESHOLD {
-                std::mem::take(&mut *pending)
+            let entry = pending.entry(tx.tx_id).or_default();
+            entry.push((row_id as usize, if is_null { 1 } else { 0 }));
+            if entry.len() >= Self::PENDING_NULLS_FLUSH_THRESHOLD {
+                std::mem::take(entry)
             } else {
                 Vec::new()
             }
@@ -1284,7 +1343,10 @@ impl Column {
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let pending = std::mem::take(&mut *self.pending_nulls.lock());
+        let pending = {
+            let mut guard = self.pending_nulls.lock();
+            guard.remove(&tx.tx_id).unwrap_or_default()
+        };
         if pending.is_empty() {
             return Ok(());
         }
@@ -1373,31 +1435,30 @@ impl Column {
         if !self.name.starts_with('_') {
             // Propagate write-write conflicts to the caller so the DML
             // statement fails and the transaction is retried/rolled back.
-            // Swallowing this error allowed concurrent writers to overwrite
-            // each other's committed changes (lost updates).
             self.version_info
                 .mark_row(row_id, tx.tx_id, tx.read_ts)
                 .map_err(crate::LightningError::Database)?;
             tx.modified_rows
                 .lock()
                 .push((self.version_info.clone(), row_id));
-            // Record the exact row data for merge-on-commit.
-            // This allows concurrent transactions modifying different rows
-            // on the same page to merge their changes without conflict.
+        }
+
+        // Record the exact row data for merge-on-commit for ALL columns,
+        // including the internal `_id` column. The commit merge reconstructs
+        // modified pages from the last committed page plus these row mods;
+        // omitting `_id` let a concurrent transaction's stale `_id` page
+        // overwrite ours, losing rows.
+        {
             let mut row_data = [0u8; 64];
             row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
-
-            // For overflow strings, capture the full overflow page content
-            // so that the merge-on-commit path is not dependent on the
-            // external overflow file for the merging transaction's data.
+            // For overflow strings, capture the full overflow page content so
+            // the merge-on-commit path does not depend on the external overflow
+            // file for the merging transaction's data.
             let overflow_row_data = if stack_buf[0] == 255 {
                 self.overflow_fh.as_ref().and_then(|ofh| {
-                    let of_page_idx = u64::from_le_bytes(
-                        stack_buf[1..9].try_into().ok()?
-                    );
-                    let of_len = u32::from_le_bytes(
-                        stack_buf[17..21].try_into().ok()?
-                    ) as usize;
+                    let of_page_idx = u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
+                    let of_len =
+                        u32::from_le_bytes(stack_buf[17..21].try_into().ok()?) as usize;
                     let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
                     let content = of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
                     bm.unpin_page(ofh, of_page_idx, of_frame);
@@ -1406,7 +1467,6 @@ impl Column {
             } else {
                 None
             };
-
             tx.modified_page_rows.lock().push(
                 crate::transaction::transaction_manager::PageRowMod {
                     file_id: self.fh.file_id,
@@ -1415,7 +1475,7 @@ impl Column {
                     element_size,
                     row_data,
                     overflow_row_data,
-                }
+                },
             );
         }
 
@@ -1479,33 +1539,11 @@ impl Column {
         // bits of rows already present on the page instead of zero-filling:
         // successive single-row appends share a page and previously wiped each
         // other's null bits.
-        if skip_modified_rows {
-            let mut i = 0;
-            let mut null_page_buf = [0u8; 4096];
-            while i < num_rows {
-                let page_idx = (start_row_id + i as u64) / 4096;
-                while self.null_fh.get_num_pages() <= page_idx {
-                    self.null_fh.add_new_page()?;
-                }
-                if self.null_fh.read_page(page_idx, &mut null_page_buf).is_err() {
-                    null_page_buf.fill(0);
-                }
-                let mut page_i = i;
-                while page_i < num_rows {
-                    let current_row = start_row_id + page_i as u64;
-                    if current_row / 4096 != page_idx {
-                        break;
-                    }
-                    let offset = (current_row % 4096) as usize;
-                    let is_null = nulls.as_ref().map(|n| n.is_null(page_i)).unwrap_or(false);
-                    null_page_buf[offset] = if is_null { 1 } else { 0 };
-                    page_i += 1;
-                }
-                bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
-                self.null_fh.write_page(page_idx, &null_page_buf)?;
-                i = page_i;
-            }
-        } else {
+        {
+            // Always copy-on-write the null page and record each null-bit write
+            // as a PageRowMod so the commit merge reconciles concurrent writers.
+            // Writing the page directly to the file (the old bulk-mode fast
+            // path) raced with concurrent commits and lost null bits.
             let mut i = 0;
             while i < num_rows {
                 let page_idx = (start_row_id + i as u64) / 4096;
@@ -1514,6 +1552,8 @@ impl Column {
                 }
                 let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
                 let mut page_i = i;
+                let mut null_mods: Vec<crate::transaction::transaction_manager::PageRowMod> =
+                    Vec::new();
                 // SAFETY: frame allocated via create_new_version, pinned, written, logged, unpinned.
                 unsafe {
                     let ptr = frame.as_ptr();
@@ -1524,12 +1564,26 @@ impl Column {
                         }
                         let offset = (current_row % 4096) as usize;
                         let is_null = nulls.as_ref().map(|n| n.is_null(page_i)).unwrap_or(false);
-                        *ptr.add(offset) = if is_null { 1 } else { 0 };
+                        let bit = if is_null { 1u8 } else { 0u8 };
+                        *ptr.add(offset) = bit;
+                        let mut rd = [0u8; 64];
+                        rd[0] = bit;
+                        null_mods.push(crate::transaction::transaction_manager::PageRowMod {
+                            file_id: self.null_fh.file_id,
+                            page_idx,
+                            row_id: current_row,
+                            element_size: 1,
+                            row_data: rd,
+                            overflow_row_data: None,
+                        });
                         page_i += 1;
                     }
                 }
                 bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
                 bm.unpin_page(&self.null_fh, page_idx, frame);
+                if !null_mods.is_empty() {
+                    tx.modified_page_rows.lock().extend(null_mods);
+                }
                 i = page_i;
             }
         }
@@ -1546,52 +1600,13 @@ impl Column {
             return Ok(());
         }
 
-        let is_primitive = matches!(
-            self.data_type,
-            LogicalType::Int64
-                | LogicalType::Int32
-                | LogicalType::Uint64
-                | LogicalType::Node(_)
-                | LogicalType::Double
-                | LogicalType::Float
-        );
-
-        // The primitive/string fast paths write directly to the file and then
-        // evict the page from the buffer pool. If the page currently holds an
-        // uncommitted COW frame (e.g. a `SET` earlier in this transaction),
-        // evicting it would silently discard those changes. Only take the fast
-        // path when no uncommitted frame is resident for the target pages;
-        // otherwise fall through to the copy-on-write path below, which reuses
-        // this transaction's frame.
-        let first_page = start_row_id / values_per_page;
-        let last_page = if num_rows == 0 {
-            first_page
-        } else {
-            (start_row_id + num_rows as u64 - 1) / values_per_page
-        };
-        let num_pages = last_page - first_page + 1;
-        let has_uncommitted = bm.has_uncommitted_in_range(self.fh.file_id, first_page, num_pages);
-
-        // Enable fast path for primitives even with nulls - zeros will be written for nulls
-        if is_primitive && !has_uncommitted {
-            return self.bulk_append_primitive_fast_inner(
-                bm,
-                array,
-                start_row_id,
-                tx,
-                skip_modified_rows,
-            );
-        }
-
-        if self.data_type == LogicalType::String && !has_uncommitted {
-            return self.bulk_append_string_fast_inner(
-                bm,
-                array,
-                start_row_id,
-                tx,
-                skip_modified_rows,
-            );
-        }
+        // NOTE: the former "direct write + evict" fast paths for primitive and
+        // string columns were removed. They wrote straight to the file and then
+        // evicted the page, but eviction is best-effort: a page pinned by a
+        // concurrent reader survives, leaving a stale committed frame that later
+        // scans read — dropping rows that were in fact written. All writes now
+        // go through the copy-on-write + merge-on-commit path below, which is
+        // safe under concurrent readers and writers.
 
         let mut i = 0;
         let mut stats = self.stats.write();
@@ -1633,17 +1648,36 @@ impl Column {
                         stats.update_page_bounds(page_idx as usize, &val);
                     }
 
-                    if !self.name.starts_with('_') {
-                        // Row-version marking is skipped in bulk mode (perf),
-                        // but the page-row modification must ALWAYS be recorded:
-                        // the commit merge reconstructs modified pages from the
-                        // last committed page plus these row mods, so omitting
-                        // them silently drops the value written here.
-                        if !skip_modified_rows {
-                            modified_rows_batch.push((self.version_info.clone(), current_row));
-                        }
+                    if !self.name.starts_with('_') && !skip_modified_rows {
+                        modified_rows_batch.push((self.version_info.clone(), current_row));
+                    }
+
+                    // Record the page-row modification for ALL columns (including
+                    // `_id`). The commit merge reconstructs modified pages from
+                    // the last committed page plus these row mods; omitting any
+                    // column (e.g. `_id`) lets a concurrent transaction's stale
+                    // page overwrite ours.
+                    {
                         let mut row_data = [0u8; 64];
-                        row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+                        if !is_null {
+                            row_data[..element_size].copy_from_slice(&stack_buf[..element_size]);
+                        }
+                        let overflow_row_data = if !is_null && stack_buf[0] == 255 {
+                            self.overflow_fh.as_ref().and_then(|ofh| {
+                                let of_page_idx =
+                                    u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
+                                let of_len =
+                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?)
+                                        as usize;
+                                let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
+                                let content =
+                                    of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
+                                bm.unpin_page(ofh, of_page_idx, of_frame);
+                                Some(content)
+                            })
+                        } else {
+                            None
+                        };
                         modified_page_rows_batch.push(
                             crate::transaction::transaction_manager::PageRowMod {
                                 file_id: self.fh.file_id,
@@ -1651,7 +1685,7 @@ impl Column {
                                 row_id: current_row,
                                 element_size,
                                 row_data,
-                                overflow_row_data: None,
+                                overflow_row_data,
                             }
                         );
                     }
@@ -1675,287 +1709,6 @@ impl Column {
             tx.modified_rows.lock().extend(modified_rows_batch);
         }
 
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn bulk_append_primitive_fast(
-        &self,
-        bm: &BufferManager,
-        array: &ArrayRef,
-        start_row_id: u64,
-        tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<()> {
-        self.bulk_append_primitive_fast_inner(bm, array, start_row_id, tx, false)
-    }
-
-    fn bulk_append_primitive_fast_inner(
-        &self,
-        bm: &BufferManager,
-        array: &ArrayRef,
-        start_row_id: u64,
-        tx: &crate::transaction::transaction_manager::Transaction,
-        skip_modified_rows: bool,
-    ) -> Result<()> {
-        let element_size = self.element_size();
-        let values_per_page = 4096 / element_size as u64;
-        let num_rows = array.len();
-
-        // Get raw bytes from Arrow array
-        let data = array.to_data();
-        let buffers = data.buffers();
-        if buffers.is_empty() {
-            return Ok(());
-        }
-        // For nullable arrays, the first buffer is the null bitmap and the second
-        // is the data. For non-nullable arrays, the first buffer is the data.
-        let buffer_idx = if data.nulls().is_some() && buffers.len() > 1 { 1 } else { 0 };
-        let raw_bytes = buffers[buffer_idx].as_slice();
-
-        // Ensure file is large enough
-        let num_pages_needed = (num_rows as u64).div_ceil(values_per_page);
-        let first_page = start_row_id / values_per_page;
-        while self.fh.get_num_pages() <= first_page + num_pages_needed {
-            self.fh.add_new_page()?;
-        }
-
-        // Write the entire buffer in one syscall!
-        let write_offset = start_row_id * element_size as u64;
-        let bytes_to_write = num_rows * element_size;
-
-        // WAL-log each affected page before the direct write
-        let data_first_page = write_offset / PAGE_SIZE as u64;
-        let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
-        for page_offset in 0..data_num_pages {
-            let page_idx = data_first_page + page_offset;
-            let page_start = (page_offset * PAGE_SIZE as u64) as usize;
-            let page_end = std::cmp::min(page_start + PAGE_SIZE, bytes_to_write);
-            bm.log_page_update(self.fh.file_id, page_idx, &raw_bytes[page_start..page_end])?;
-        }
-
-        self.fh
-            .write_bytes_at(write_offset, &raw_bytes[..bytes_to_write])?;
-
-        // Invalidate buffer manager cache for affected pages
-        let data_first_page = write_offset / PAGE_SIZE as u64;
-        let data_num_pages = (bytes_to_write as u64).div_ceil(PAGE_SIZE as u64);
-        bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
-
-        if !skip_modified_rows && !self.name.starts_with('_') {
-            self.version_info
-                .mark_row_batch(start_row_id..start_row_id + num_rows as u64, tx.tx_id);
-            tx.modified_rows.lock().extend(
-                (0..num_rows).map(|i| (self.version_info.clone(), start_row_id + i as u64)),
-            );
-        }
-
-        // Update null count in stats so the scan path knows to read null bitmaps.
-        // Without this, scan_primitive_direct skips null bitmap reading and all
-        // values are treated as non-null, returning 0/false/"" for null entries.
-        let null_count = data.nulls().map(|n| n.null_count()).unwrap_or(0);
-        {
-            let mut stats = self.stats.write();
-            stats.num_values += num_rows as u64;
-            stats.null_count += null_count as u64;
-            stats.invalidate_page_bounds();
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn bulk_append_string_fast(
-        &self,
-        bm: &BufferManager,
-        array: &ArrayRef,
-        start_row_id: u64,
-        tx: &crate::transaction::transaction_manager::Transaction,
-    ) -> Result<()> {
-        self.bulk_append_string_fast_inner(bm, array, start_row_id, tx, false)
-    }
-
-    fn bulk_append_string_fast_inner(
-        &self,
-        bm: &BufferManager,
-        array: &ArrayRef,
-        start_row_id: u64,
-        tx: &crate::transaction::transaction_manager::Transaction,
-        skip_modified_rows: bool,
-    ) -> Result<()> {
-        use arrow::array::StringArray;
-        let string_array = array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| crate::LightningError::Internal("Expected StringArray".into()))?;
-
-        let num_rows = array.len();
-        if num_rows == 0 {
-            return Ok(());
-        }
-
-        let values_per_page = 4096 / 64u64; // element_size for String is 64
-
-        let nulls = array.nulls();
-        // Bulk mode writes the null bitmap directly to the file, matching the
-        // direct string-data write and the direct-read scan path. Preserve the
-        // bits of rows already present on the page instead of zero-filling:
-        // successive single-row appends share a page and previously wiped each
-        // other's null bits.
-        if skip_modified_rows {
-            let mut i = 0;
-            let mut null_page_buf = [0u8; 4096];
-            while i < num_rows {
-                let page_idx = (start_row_id + i as u64) / 4096;
-                while self.null_fh.get_num_pages() <= page_idx {
-                    self.null_fh.add_new_page()?;
-                }
-                if self.null_fh.read_page(page_idx, &mut null_page_buf).is_err() {
-                    null_page_buf.fill(0);
-                }
-                let mut page_i = i;
-                while page_i < num_rows {
-                    let current_row = start_row_id + page_i as u64;
-                    if current_row / 4096 != page_idx {
-                        break;
-                    }
-                    let offset = (current_row % 4096) as usize;
-                    let is_null = nulls.as_ref().map(|n| n.is_null(page_i)).unwrap_or(false);
-                    null_page_buf[offset] = if is_null { 1 } else { 0 };
-                    page_i += 1;
-                }
-                bm.log_page_update(self.null_fh.file_id, page_idx, &null_page_buf)?;
-                self.null_fh.write_page(page_idx, &null_page_buf)?;
-                i = page_i;
-            }
-        } else {
-            let mut i = 0;
-            while i < num_rows {
-                let page_idx = (start_row_id + i as u64) / 4096;
-                while self.null_fh.get_num_pages() <= page_idx {
-                    self.null_fh.add_new_page()?;
-                }
-                let frame = bm.create_new_version(Arc::clone(&self.null_fh), page_idx, tx)?;
-                let mut page_i = i;
-                // SAFETY: frame allocated via create_new_version, pinned, written, logged, unpinned.
-                unsafe {
-                    let ptr = frame.as_ptr();
-                    while page_i < num_rows {
-                        let current_row = start_row_id + page_i as u64;
-                        if current_row / 4096 != page_idx {
-                            break;
-                        }
-                        let offset = (current_row % 4096) as usize;
-                        let is_null = nulls.as_ref().map(|n| n.is_null(page_i)).unwrap_or(false);
-                        *ptr.add(offset) = if is_null { 1 } else { 0 };
-                        page_i += 1;
-                    }
-                }
-                bm.log_page_update(self.null_fh.file_id, page_idx, frame.as_slice())?;
-                bm.unpin_page(&self.null_fh, page_idx, frame);
-                i = page_i;
-            }
-        }
-
-        // 2. Write string data directly to file, bypassing buffer manager
-        let mut data_vec = vec![0; num_rows * 64];
-
-        // Fill buffer with strings, using overflow for strings > 63 chars.
-        // We need the buffer manager for overflow writes only (buffer pool pages).
-        for i in 0..num_rows {
-            let is_null = nulls.as_ref().map(|n| n.is_null(i)).unwrap_or(false);
-            if !is_null {
-                let s = string_array.value(i);
-                let s_bytes = s.as_bytes();
-                let local_offset = i * 64;
-
-                if s_bytes.len() <= 63 {
-                    data_vec[local_offset] = s_bytes.len() as u8;
-                    data_vec[local_offset + 1..local_offset + 1 + s_bytes.len()]
-                        .copy_from_slice(s_bytes);
-                } else if let Some(ref ofh) = self.overflow_fh {
-                    // Overflow path: strings longer than one page span consecutive
-                    // overflow pages. Writing only the first page (or clamping the
-                    // stored length to 4096) silently truncated long strings.
-                    let first_page = ofh.add_new_page()?;
-                    let num_pages = s_bytes.len().div_ceil(4096).max(1);
-                    for _ in 1..num_pages {
-                        ofh.add_new_page()?;
-                    }
-                    for page_off in 0..num_pages {
-                        let page_idx = first_page + page_off as u64;
-                        let frame = bm.create_new_version(ofh.clone(), page_idx, tx)?;
-                        let start = page_off * 4096;
-                        let end = std::cmp::min(start + 4096, s_bytes.len());
-                        if end > start {
-                            // SAFETY: SAFETY: Overflow string write — pinned frame for overflow page.
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    s_bytes.as_ptr().add(start),
-                                    frame.as_ptr(),
-                                    end - start,
-                                );
-                            }
-                        }
-                        bm.log_page_update(ofh.file_id, page_idx, frame.as_slice())?;
-                        bm.unpin_page(ofh, page_idx, frame);
-                    }
-
-                    data_vec[local_offset] = 255u8;
-                    data_vec[local_offset + 1..local_offset + 9]
-                        .copy_from_slice(&first_page.to_le_bytes());
-                    data_vec[local_offset + 9..local_offset + 17]
-                        .copy_from_slice(&0u64.to_le_bytes());
-                    data_vec[local_offset + 17..local_offset + 21]
-                        .copy_from_slice(&(s_bytes.len() as u32).to_le_bytes());
-                }
-            }
-        }
-
-        // Ensure file has enough pages
-        let num_pages_needed =
-            (start_row_id + num_rows as u64).div_ceil(values_per_page);
-        while self.fh.get_num_pages() <= num_pages_needed {
-            self.fh.add_new_page()?;
-        }
-
-        // Write the entire buffer in one syscall!
-        let write_offset = start_row_id * 64;
-
-        // WAL-log each affected page before the direct write
-        let str_first_page = write_offset / PAGE_SIZE as u64;
-        let str_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
-        for page_offset in 0..str_num_pages {
-            let page_idx = str_first_page + page_offset;
-            let page_start = (page_offset * PAGE_SIZE as u64) as usize;
-            let page_end = std::cmp::min(page_start + PAGE_SIZE, data_vec.len());
-            bm.log_page_update(self.fh.file_id, page_idx, &data_vec[page_start..page_end])?;
-        }
-
-        self.fh.write_bytes_at(write_offset, &data_vec)?;
-
-        // Invalidate buffer manager cache for affected pages
-        let data_first_page = write_offset / PAGE_SIZE as u64;
-        let data_num_pages = (data_vec.len() as u64).div_ceil(PAGE_SIZE as u64);
-        bm.evict_pages_for_file(self.fh.file_id, data_first_page, data_num_pages);
-        let null_first_page = start_row_id / 4096;
-        let null_num_pages = (num_rows as u64).div_ceil(4096);
-        bm.evict_pages_for_file(self.null_fh.file_id, null_first_page, null_num_pages);
-
-        // 3. Batch version tracking (skip if bulk mode - handled by transaction)
-        if !skip_modified_rows && !self.name.starts_with('_') {
-            self.version_info
-                .mark_row_batch(start_row_id..start_row_id + num_rows as u64, tx.tx_id);
-            tx.modified_rows.lock().extend(
-                (0..num_rows).map(|i| (self.version_info.clone(), start_row_id + i as u64)),
-            );
-        }
-
-        let null_count = string_array.nulls().map(|n| n.null_count()).unwrap_or(0);
-        {
-            let mut stats = self.stats.write();
-            stats.num_values += num_rows as u64;
-            stats.null_count += null_count as u64;
-            stats.invalidate_page_bounds();
-        }
         Ok(())
     }
 
