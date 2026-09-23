@@ -62,6 +62,15 @@ pub enum IndexMutation {
     },
 }
 
+impl Transaction {
+    /// The owning transaction manager, if still alive. Used by maintenance
+    /// operations (e.g. compression) that must run only when no other
+    /// transaction is active.
+    pub fn manager(&self) -> Option<Arc<TransactionManager>> {
+        self.tx_mgr.as_ref().and_then(|w| w.upgrade())
+    }
+}
+
 pub struct Transaction {
     pub tx_id: u64,
     pub is_read_only: bool,
@@ -149,6 +158,21 @@ impl TransactionManager {
 
     pub fn set_bm_weak(&self, weak: Weak<BufferManager>) {
         *self.bm_weak.lock() = Some(weak);
+    }
+
+    /// True if any transaction other than `except_tx_id` is active (reader or
+    /// writer). Maintenance operations that rewrite or truncate shared column
+    /// files (compression) must only run when this is false.
+    pub fn has_other_active(&self, except_tx_id: u64) -> bool {
+        if self
+            .active_tx_ids
+            .read()
+            .iter()
+            .any(|&id| id != except_tx_id)
+        {
+            return true;
+        }
+        self.active_read_ts.read().values().sum::<usize>() > 1
     }
 
     pub fn begin(&self, is_read_only: bool) -> Result<Transaction> {

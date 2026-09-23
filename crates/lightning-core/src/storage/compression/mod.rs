@@ -207,6 +207,32 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn rle_value_offset() {
+        // Runs of 16. Start decoding at value index 20 and read 10 values.
+        let values: Vec<[u8; 8]> = (0..64).map(|i| enc8(i / 16)).collect();
+        let mut src = Vec::new();
+        for v in &values {
+            src.extend_from_slice(v);
+        }
+        let meta = CompressionMetadata::new(Value::Null, Value::Null, CompressionType::Rle, 0);
+        let mut dst = vec![0u8; 4096];
+        let (size, _) = RleCompression
+            .compress_next_page(&src, 64, &mut dst, &meta)
+            .unwrap();
+        let mut out = vec![0u8; 32 * 8];
+        RleCompression
+            .decompress_from_page(&dst[..size as usize], 20, &mut out, 0, 10, &meta)
+            .unwrap();
+        for i in 0..10usize {
+            assert_eq!(
+                &out[i * 8..i * 8 + 8],
+                &values[20 + i][..],
+                "RLE value-index offset wrong at {i}"
+            );
+        }
+    }
+
+    #[test]
     fn codec_roundtrips() {
         // runs
         let runs: Vec<[u8; 8]> = (0..64).map(|i| enc8(i / 16)).collect();

@@ -64,28 +64,34 @@ impl CompressionAlg for RleCompression {
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
         let element_size = 8;
-        let mut src_ptr = src_offset as usize;
+        // `src_offset` is the *value index* within the page to start from
+        // (matching how the scan path reads compressed blocks), not a byte
+        // offset. Walk the runs, skipping whole runs until the requested start.
+        let mut src_ptr = 0usize;
         let mut dst_ptr = dst_offset as usize;
-        let mut values_emitted = 0;
+        let mut values_emitted = 0u64;
+        let mut skip = src_offset;
 
         while values_emitted < num_values && src_ptr + element_size + 4 <= src.len() {
             let val = &src[src_ptr..src_ptr + element_size];
             let mut count_bytes = [0u8; 4];
             count_bytes.copy_from_slice(&src[src_ptr + element_size..src_ptr + element_size + 4]);
-            let count = u32::from_le_bytes(count_bytes);
+            let count = u32::from_le_bytes(count_bytes) as u64;
+            src_ptr += element_size + 4;
 
-            let to_emit = std::cmp::min(count as u64, num_values - values_emitted);
+            if skip >= count {
+                skip -= count;
+                continue;
+            }
+
+            let to_emit = std::cmp::min(count - skip, num_values - values_emitted);
             for _ in 0..to_emit {
                 let start = dst_ptr * element_size;
                 dst[start..start + element_size].copy_from_slice(val);
                 dst_ptr += 1;
             }
-
             values_emitted += to_emit;
-            src_ptr += element_size + 4;
-
-            // If the run didn't finish emitting everything (shouldn't happen in single page case),
-            // or we reached the end of src, we stop.
+            skip = 0;
         }
         Ok(())
     }

@@ -36,6 +36,10 @@ pub struct Column {
     /// successive statements collide (the counter resets to the clone's copy).
     atomic_num_values: Arc<AtomicU64>,
     atomic_null_count: Arc<AtomicU64>,
+    /// True once `optimize` has re-encoded this column into the compressed
+    /// layout. Compressed columns are an immutable generation: writes are
+    /// rejected until the column is decompressed. Shared across clones.
+    compressed: Arc<AtomicBool>,
     /// Buffered null bit changes: (byte_offset_in_null_page, 0|1).
     /// Flushed to actual pages before batch ops or checkpoint.
     /// Buffered null bit changes, SHARED across clones (a plan-time column
@@ -58,6 +62,7 @@ impl Clone for Column {
             dirty: Arc::clone(&self.dirty),
             atomic_num_values: Arc::clone(&self.atomic_num_values),
             atomic_null_count: Arc::clone(&self.atomic_null_count),
+            compressed: Arc::clone(&self.compressed),
             pending_nulls: Arc::clone(&self.pending_nulls),
         }
     }
@@ -118,6 +123,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: Arc::new(AtomicU64::new(0)),
             atomic_null_count: Arc::new(AtomicU64::new(0)),
+            compressed: Arc::new(AtomicBool::new(false)),
             pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -143,6 +149,7 @@ impl Column {
             dirty: Arc::new(AtomicBool::new(false)),
             atomic_num_values: Arc::new(AtomicU64::new(0)),
             atomic_null_count: Arc::new(AtomicU64::new(0)),
+            compressed: Arc::new(AtomicBool::new(false)),
             pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -167,6 +174,7 @@ impl Column {
         row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
+        self.ensure_writable()?;
         self.dirty.store(true, Ordering::Release);
         let is_val_null = matches!(val, Value::Null);
         self.set_null(bm, row_id, is_val_null, tx)?;
@@ -309,6 +317,7 @@ impl Column {
         start_row_id: u64,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Vec<(Arc<RowVersion>, u64)>> {
+        self.ensure_writable()?;
         let num_rows = vals.len();
         if num_rows == 0 {
             return Ok(Vec::new());
@@ -557,7 +566,14 @@ impl Column {
             let current_offset = offset + values_read;
             let page_idx = current_offset / values_per_page;
             let offset_in_page = (current_offset % values_per_page) as usize;
-            let to_read = std::cmp::min(num_values - values_read, 32);
+            // Cap the read at the page boundary: a compressed page holds only
+            // `values_per_page` (32) values, so a morsel must not cross into the
+            // next page. (Uncompressed pages hold far more, so this is a no-op
+            // there, but it keeps `temp_block` (32 values) within bounds.)
+            let to_read = std::cmp::min(
+                std::cmp::min(num_values - values_read, 32),
+                values_per_page - offset_in_page as u64,
+            );
 
             let skip_page = self.zone_map_should_skip(page_idx, zone_map);
 
@@ -1565,6 +1581,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
         skip_modified_rows: bool,
     ) -> Result<()> {
+        self.ensure_writable()?;
         let element_size = self.element_size();
         let values_per_page = self.layout().values_per_page;
         let num_rows = array.len();
@@ -1998,6 +2015,171 @@ impl Column {
         ColumnLayout::uncompressed(self.element_size())
     }
 
+    /// True once `optimize` re-encoded this column into the compressed,
+    /// immutable layout.
+    pub fn is_compressed(&self) -> bool {
+        self.compressed.load(Ordering::Acquire)
+    }
+
+    /// Mark this column compressed (used when restoring the state from the
+    /// catalog on reopen).
+    pub fn set_compressed(&self, value: bool) {
+        self.compressed.store(value, Ordering::Release);
+    }
+
+    /// Reject in-place writes to a compressed (immutable) column.
+    fn ensure_writable(&self) -> Result<()> {
+        if self.is_compressed() {
+            return Err(crate::LightningError::Internal(format!(
+                "column '{}' is compressed (immutable generation); decompress it before writing",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Re-encode an uncompressed column into the compressed layout and mark it
+    /// read-only. Only metadata-free codecs (RLE, Dict) are supported. Runs only
+    /// when no other transaction is active, because it truncates the file.
+    fn reencode_compressed(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+        meta: CompressionMetadata,
+    ) -> Result<()> {
+        if let Some(mgr) = tx.manager() {
+            if mgr.has_other_active(tx.tx_id) {
+                tracing::info!(
+                    "Column {}: skipping compression (other transactions active)",
+                    self.name
+                );
+                return Ok(());
+            }
+        }
+        let num_values = self.stats.read().num_values;
+        if num_values < 32 {
+            return Ok(());
+        }
+        let element_size = self.element_size();
+        let mut values = Vec::with_capacity(num_values as usize);
+        self.scan(bm, 0, num_values, tx, &mut values)?;
+
+        let alg = Self::get_alg(meta.compression, element_size);
+        let mut src = vec![0u8; 32 * element_size];
+        let mut stack_buf = [0u8; 64];
+        let mut written = 0u64;
+        let mut page = 0u64;
+        while written < num_values {
+            let blk = std::cmp::min(32, num_values - written);
+            for i in 0..blk {
+                self.serialize_value_into(
+                    &values[(written + i) as usize],
+                    bm,
+                    tx,
+                    &mut stack_buf,
+                )?;
+                let o = i as usize * element_size;
+                src[o..o + element_size].copy_from_slice(&stack_buf[..element_size]);
+            }
+            let mut dst = [0u8; 4096];
+            let (size, processed) = alg.compress_next_page(&src, blk, &mut dst, &meta)?;
+            if processed == 0 {
+                break;
+            }
+            while self.fh.get_num_pages() <= page {
+                self.fh.add_new_page()?;
+            }
+            let frame = bm.create_new_version(Arc::clone(&self.fh), page, tx)?;
+            // SAFETY: pinned frame, exclusive within this tx.
+            unsafe {
+                let ptr = frame.as_ptr();
+                std::ptr::write_bytes(ptr, 0, 4096);
+                std::ptr::copy_nonoverlapping(dst.as_ptr(), ptr, size as usize);
+            }
+            bm.log_page_update(self.fh.file_id, page, frame.as_slice())?;
+            bm.unpin_page(&self.fh, page, frame);
+            written += processed;
+            page += 1;
+        }
+        // The compressed layout uses fewer pages; drop the trailing
+        // uncompressed ones (safe: we are the only active transaction).
+        self.fh.truncate_last_pages(page)?;
+        self.dirty.store(true, Ordering::Release);
+        {
+            let mut stats = self.stats.write();
+            stats.compression_meta = Some(meta);
+        }
+        self.compressed.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// Rewrite a compressed column back into the uncompressed layout and make it
+    /// writable again. Runs only when no other transaction is active.
+    pub fn decompress_all(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
+        if !self.is_compressed() {
+            return Ok(());
+        }
+        if let Some(mgr) = tx.manager() {
+            if mgr.has_other_active(tx.tx_id) {
+                return Err(crate::LightningError::Internal(format!(
+                    "cannot decompress column '{}' while other transactions are active",
+                    self.name
+                )));
+            }
+        }
+        let num_values = self.stats.read().num_values;
+        let element_size = self.element_size();
+        let vpp = (4096 / element_size) as u64;
+        if num_values > 0 {
+            // Read all values through the compressed-aware scan.
+            let mut values = Vec::with_capacity(num_values as usize);
+            self.scan(bm, 0, num_values, tx, &mut values)?;
+            let mut stack_buf = [0u8; 64];
+            let mut written = 0u64;
+            while written < num_values {
+                let page = written / vpp;
+                while self.fh.get_num_pages() <= page {
+                    self.fh.add_new_page()?;
+                }
+                let frame = bm.create_new_version(Arc::clone(&self.fh), page, tx)?;
+                let n_here = std::cmp::min(vpp, num_values - written);
+                // SAFETY: pinned frame, exclusive within this tx.
+                unsafe {
+                    let ptr = frame.as_ptr();
+                    std::ptr::write_bytes(ptr, 0, 4096);
+                    for i in 0..n_here {
+                        self.serialize_value_into(
+                            &values[(written + i) as usize],
+                            bm,
+                            tx,
+                            &mut stack_buf,
+                        )?;
+                        let o = i as usize * element_size;
+                        std::ptr::copy_nonoverlapping(
+                            stack_buf.as_ptr(),
+                            ptr.add(o),
+                            element_size,
+                        );
+                    }
+                }
+                bm.log_page_update(self.fh.file_id, page, frame.as_slice())?;
+                bm.unpin_page(&self.fh, page, frame);
+                written += n_here;
+            }
+        }
+        self.dirty.store(true, Ordering::Release);
+        {
+            let mut stats = self.stats.write();
+            stats.compression_meta = None;
+        }
+        self.compressed.store(false, Ordering::Release);
+        Ok(())
+    }
+
     pub fn compute_page_bounds(
         &self,
         bm: &BufferManager,
@@ -2109,6 +2291,9 @@ impl Column {
             return Ok(());
         }
         let total_values = stats.num_values;
+        // Drop the stats read guard before the compression analysis / re-encode,
+        // which takes the stats write lock (self-deadlock otherwise).
+        drop(stats);
         let pages_needed = if total_values == 0 {
             0
         } else {
@@ -2143,17 +2328,20 @@ impl Column {
         };
 
         if meta.compression != CompressionType::Uncompressed {
-            // Compression algorithms are defined but pages are never actually
-            // compressed during writes. Setting compression_meta without re-encoding
-            // would cause the decompression path to misinterpret uncompressed data.
-            // For safety, only set compression_meta when pages are re-encoded.
-            // TODO: wire compress_next_page into the bulk write path and re-encode
-            // existing pages here.
-            tracing::info!(
-                "Column {}: compression analysis selected {:?} but pages are not re-encoded \
-                 (compression will apply to newly written pages only when the write path is updated)",
-                self.name, meta.compression
-            );
+            // Only the metadata-free codecs are enabled (the read/merge paths do
+            // not thread per-column metadata, and RLE/Dict decode without it).
+            if !matches!(
+                meta.compression,
+                CompressionType::Rle | CompressionType::Dict
+            ) {
+                tracing::info!(
+                    "Column {}: codec {:?} not enabled for re-encoding; leaving uncompressed",
+                    self.name,
+                    meta.compression
+                );
+                return Ok(());
+            }
+            self.reencode_compressed(bm, tx, meta)?;
         }
         Ok(())
     }

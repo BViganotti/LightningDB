@@ -761,22 +761,17 @@ impl StorageManager {
                 stats.max = cat_stat.max.clone();
                 stats.distinct_count = cat_stat.distinct_count;
                 stats.page_bounds = cat_stat.page_bounds.clone();
-                if let Some(ref meta) = cat_stat.compression_meta {
-                    if meta.compression != CompressionType::Uncompressed {
-                        // Compression codecs are not yet applied on write
-                        // (pages are never re-encoded), so a persisted
-                        // non-Uncompressed codec would make reads decompress
-                        // ordinary bytes. Warn loudly rather than silently
-                        // misreading; such catalogs must be re-written
-                        // uncompressed.
-                        tracing::warn!(
-                            "Column {}: catalog requests {:?} compression, but pages are stored \
-                             uncompressed; ignoring the codec to avoid misreads",
-                            col.name,
-                            meta.compression
-                        );
-                    }
-                }
+                // Restore the compression state: without it, pages that were
+                // re-encoded compressed (by `optimize`) would be read as
+                // uncompressed and silently misread.
+                stats.compression_meta = cat_stat.compression_meta.clone();
+                let compressed = stats
+                    .compression_meta
+                    .as_ref()
+                    .map(|m| m.compression != CompressionType::Uncompressed)
+                    .unwrap_or(false);
+                drop(stats);
+                col.set_compressed(compressed);
             }
         }
 

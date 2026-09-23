@@ -1154,6 +1154,45 @@ impl Database {
         Ok(())
     }
 
+    /// Decompress every column that `vacuum` re-encoded, restoring the columns
+    /// to the writable uncompressed layout. Runs only when no other transaction
+    /// is active.
+    pub fn decompress(&self) -> Result<()> {
+        let tables: Vec<String> = {
+            let cat = self.catalog.read();
+            let mut names: Vec<String> = cat.node_tables.keys().cloned().collect();
+            names.extend(cat.rel_tables.keys().cloned());
+            names
+        };
+        let bm = &self.buffer_manager;
+        let tx = self.transaction_manager.begin(false)?;
+        let mut result = Ok(());
+        for name in &tables {
+            let table = {
+                let storage = self.storage_manager.read();
+                storage.get_table(name).cloned()
+            };
+            if let Some(ref table) = table {
+                for col in &table.columns {
+                    if let Err(e) = col.decompress_all(bm, &tx) {
+                        result = Err(e);
+                        break;
+                    }
+                }
+            }
+            if result.is_err() {
+                break;
+            }
+        }
+        match result {
+            Ok(()) => self.transaction_manager.commit(&tx, bm, self),
+            Err(e) => {
+                let _ = self.transaction_manager.rollback(self, &tx);
+                Err(e)
+            }
+        }
+    }
+
     pub fn is_column_indexed(&self, table_name: &str, col_name: &str) -> bool {
         let cat = self.catalog.read();
         if let Some(entry) = cat.node_tables.get(table_name) {
@@ -1179,7 +1218,10 @@ impl Database {
         };
 
         let bm = &self.buffer_manager;
-        let tx = self.transaction_manager.begin(true)?;
+        // A write transaction (not read-only): column optimization now re-encodes
+        // committed pages (compression) through the normal COW/commit pipeline,
+        // so the changes must be committed, not rolled back.
+        let tx = self.transaction_manager.begin(false)?;
 
         for table_name in &tables {
             let table = {
@@ -1196,10 +1238,14 @@ impl Database {
             self.storage_manager.write().ensure_csr_fresh(table_name, bm, &tx)?;
         }
 
-        // Rollback the read transaction used for optimization.
-        // If rollback fails, the database state is inconsistent — do NOT proceed
-        // to checkpoint as that would persist the inconsistency.
-        self.transaction_manager.rollback(self, &tx)?;
+        // Commit the optimization transaction so re-encoded (compressed) pages
+        // and the column metadata are persisted. If it fails, do NOT proceed to
+        // checkpoint.
+        self.transaction_manager
+            .commit(&tx, bm, self)
+            .map_err(|e| {
+                LightningError::Internal(format!("optimization commit failed: {e}"))
+            })?;
 
         // Force a checkpoint to persist the optimized state
         self.checkpoint()?;
