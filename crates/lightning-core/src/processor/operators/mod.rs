@@ -56,6 +56,7 @@ pub use partitioner::PhysicalPartitioner;
 pub mod profile;
 pub use profile::PhysicalProfile;
 pub mod checkpoint;
+pub mod explain;
 pub use checkpoint::{PhysicalCheckpoint, PhysicalVacuum};
 pub mod count;
 pub use count::PhysicalCount;

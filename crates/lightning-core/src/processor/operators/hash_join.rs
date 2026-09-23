@@ -263,7 +263,7 @@ impl HashJoin {
             base_offset += num_rows;
         }
 
-        // Batch-merge local staging into shared tables under a single write lock acquisition
+                // Batch-merge local staging into shared tables under a single write lock acquisition
         {
             let mut shared = self.shared_build.write();
 
@@ -399,7 +399,7 @@ impl PhysicalOperator for HashJoin {
 
             let left_key_col = left_batch.column(self.left_key_idx);
 
-            // Vectorized Probe Phase
+                        // Vectorized Probe Phase
             while self.left_row_idx < left_num_rows && left_indices.len() < 1024 {
                 if self.is_cross_join {
                     // Cross join: pair each left row with ALL build rows across ALL chunks.
@@ -491,7 +491,7 @@ impl PhysicalOperator for HashJoin {
                 }
             }
 
-            if !left_indices.is_empty() {
+                        if !left_indices.is_empty() {
                 tracing::debug!(
                     "HashJoin::get_next: found {} matches from {} left rows",
                     left_indices.len(),

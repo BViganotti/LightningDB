@@ -368,22 +368,29 @@ impl PhysicalPlanner {
                 let mut comparisons = Vec::new();
                 self.collect_eq_comparisons(&cond, &mut comparisons);
 
-                // Find the first cross-boundary comparison for the hash key.
-                let mut l_key = 0usize;
-                let mut r_key = 0usize;
-                for (l_expr, r_expr) in &comparisons {
-                    let l_in_left = self.expr_belongs_to_side(l_expr, &left_positions);
-                    let r_in_right = self.expr_belongs_to_side(r_expr, &right_positions);
-                    if l_in_left && r_in_right {
-                        if let BoundExpression::PropertyLookup(_, idx, _) = l_expr {
-                            l_key = *idx;
-                        }
-                        if let BoundExpression::PropertyLookup(_, idx, _) = r_expr {
-                            r_key = *idx;
-                        }
-                        break;
+                // Resolve the hash key to physical column indices, accounting
+                // for each variable's position: the raw property index is NOT
+                // the column index once joins reorder columns. (The previous
+                // code used the raw index, so a correlated semi-join compared
+                // unrelated columns and returned no rows.)
+                let key_pair = comparisons.iter().find_map(|(l_expr, r_expr)| {
+                    if self.expr_belongs_to_side(l_expr, &left_positions)
+                        && self.expr_belongs_to_side(r_expr, &right_positions)
+                    {
+                        Some((l_expr.clone(), r_expr.clone()))
+                    } else {
+                        None
                     }
-                }
+                });
+                let (l_key, r_key) = match key_pair {
+                    Some((l_expr, r_expr)) => self.resolve_join_key_pair(
+                        &l_expr,
+                        &r_expr,
+                        &left_positions,
+                        &right_positions,
+                    )?,
+                    None => (0, 0),
+                };
 
                 let planned_left = self.plan(*left)?;
                 let planned_right = self.plan(*right)?;
@@ -797,13 +804,9 @@ impl PhysicalPlanner {
                     crate::processor::operators::profile::PhysicalProfile::new(planned_child),
                 ))
             }
-            LogicalOperator::Explain(child) => {
-                let planned_child = self.plan(*child)?;
-                Ok(Box::new(
-                    crate::processor::operators::profile::PhysicalProfile::new(planned_child)
-                        .with_explain_analyze(),
-                ))
-            }
+            LogicalOperator::Explain(child) => Ok(Box::new(
+                crate::processor::operators::explain::PhysicalExplain::new(child.format_plan()),
+            )),
             LogicalOperator::Checkpoint => Ok(Box::new(
                 crate::processor::operators::checkpoint::PhysicalCheckpoint::new(self.db.clone()),
             )),

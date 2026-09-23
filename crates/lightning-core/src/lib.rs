@@ -1810,10 +1810,18 @@ impl Connection {
                     (stmt, binder_offsets)
                 }
             };
-            (
-                self.plan_and_optimize(bound_stmt, offsets.clone())?,
-                offsets,
-            )
+            {
+                let mut plan = self.plan_and_optimize(bound_stmt, offsets.clone())?;
+                // `plan_and_optimize` handles a single statement and does not
+                // apply the EXPLAIN/PROFILE wrapper (only `plan_query` does, for
+                // UNION queries), so apply it here for the common case.
+                if query.is_profile {
+                    plan = crate::planner::logical_plan::LogicalOperator::Profile(Box::new(plan));
+                } else if query.is_explain {
+                    plan = crate::planner::logical_plan::LogicalOperator::Explain(Box::new(plan));
+                }
+                (plan, offsets)
+            }
         };
         let mut planner = PhysicalPlanner::new(
             Arc::clone(&self.client_context.database),

@@ -160,7 +160,116 @@ pub enum LogicalOperator {
     },
 }
 
+fn expr_summary(e: &BoundExpression) -> String {
+    let s = format!("{e:?}");
+    if s.chars().count() > 70 {
+        format!("{}…", s.chars().take(70).collect::<String>())
+    } else {
+        s
+    }
+}
+
 impl LogicalOperator {
+    /// Render the plan as an indented operator tree (used by EXPLAIN).
+    pub fn format_plan(&self) -> String {
+        let mut out = String::new();
+        self.fmt_plan(0, &mut out);
+        out
+    }
+
+    fn fmt_plan(&self, indent: usize, out: &mut String) {
+        out.push_str(&"  ".repeat(indent));
+        out.push_str(&self.explain_label());
+        out.push('\n');
+        for c in self.explain_children() {
+            c.fmt_plan(indent + 1, out);
+        }
+    }
+
+    fn explain_label(&self) -> String {
+        use LogicalOperator::*;
+        match self {
+            Scan(t, v, ..) => format!("Scan {t} AS {v}"),
+            IndexScan(t, v, k, ..) => format!("IndexScan {t} AS {v} ON {k}"),
+            SingleRow => "SingleRow".to_string(),
+            Filter(_, e) => format!("Filter {}", expr_summary(e)),
+            Projection(_, items) => format!("Projection [{} items]", items.len()),
+            SemiMasker(_, v, m) => format!("SemiMasker {v} mask={m}"),
+            Unwind(_, _, a) => format!("Unwind {a}"),
+            Join(_, _, c) => match c {
+                BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)) =>
+                    "CrossJoin (cartesian product)".to_string(),
+                _ => format!("Join {}", expr_summary(c)),
+            },
+            Aggregate { group_by_cols, aggregates, .. } =>
+                format!("Aggregate group_by={} aggs={}", group_by_cols.len(), aggregates.len()),
+            CreateNode(..) => "CreateNode".to_string(),
+            CreateRel(..) => "CreateRel".to_string(),
+            Delete(_, _, d) => format!("Delete detach={d}"),
+            Set(..) => "Set".to_string(),
+            Sort(..) => "Sort".to_string(),
+            Limit(_, n) => format!("Limit {n}"),
+            TopK(_, _, n) => format!("TopK {n}"),
+            Skip(_, n) => format!("Skip {n}"),
+            Call(_) => "Call".to_string(),
+            Subquery(_) => "Subquery".to_string(),
+            RecursiveJoin { rel_table, .. } => format!("RecursiveJoin {rel_table}"),
+            Intersect { .. } => "Intersect".to_string(),
+            AllShortestPaths { .. } => "AllShortestPaths".to_string(),
+            Flatten(_) => "Flatten".to_string(),
+            UnwindDedup(..) => "UnwindDedup".to_string(),
+            Merge { .. } => "Merge".to_string(),
+            Union(_, _, all) => format!("Union all={all}"),
+            OptionalMatch(..) => "OptionalMatch".to_string(),
+            With(..) => "With".to_string(),
+            Accumulate(_) => "Accumulate".to_string(),
+            Distinct(..) => "Distinct".to_string(),
+            SemiJoin(_, _, c, anti) => format!("SemiJoin anti={anti} {}", expr_summary(c)),
+            Profile(_) => "Profile".to_string(),
+            Explain(_) => "Explain".to_string(),
+            CreateTableNode { name, .. } => format!("CreateTableNode {name}"),
+            CreateTableRel { name, .. } => format!("CreateTableRel {name}"),
+            DropTable(n, _) => format!("DropTable {n}"),
+            CopyFrom { table_name, .. } => format!("CopyFrom {table_name}"),
+            CopyTo { table_name, .. } => format!("CopyTo {table_name}"),
+            Transaction(_) => "Transaction".to_string(),
+            Checkpoint => "Checkpoint".to_string(),
+            Vacuum => "Vacuum".to_string(),
+            AlterTable { name, .. } => format!("AlterTable {name}"),
+            CreateConstraint { name, .. } => format!("CreateConstraint {name}"),
+            DropConstraint(n) => format!("DropConstraint {n}"),
+            CreateIndex { name, .. } => format!("CreateIndex {name}"),
+            CreateVectorIndex { table_name, .. } => format!("CreateVectorIndex {table_name}"),
+            CreateFtsIndex { table_name, .. } => format!("CreateFtsIndex {table_name}"),
+            DropIndex(n) => format!("DropIndex {n}"),
+            CountRelTable { rel_table, .. } => format!("CountRelTable {rel_table}"),
+            CreateSequence { name, .. } => format!("CreateSequence {name}"),
+            CreateMacro { name, .. } => format!("CreateMacro {name}"),
+        }
+    }
+
+    fn explain_children(&self) -> Vec<&LogicalOperator> {
+        use LogicalOperator::*;
+        match self {
+            Filter(c, _) | Projection(c, _) | SemiMasker(c, _, _) | Unwind(c, _, _)
+            | Flatten(c) | UnwindDedup(c, _) | Delete(c, _, _) | Set(c, _) | Sort(c, _)
+            | Limit(c, _) | TopK(c, _, _) | Skip(c, _) | Subquery(c) | Accumulate(c)
+            | Distinct(c, _) | Profile(c) | Explain(c)
+            | Aggregate { child: c, .. } | RecursiveJoin { child: c, .. }
+            | AllShortestPaths { child: c, .. } | Merge { child: c, .. } => vec![c],
+            Join(l, r, _) | Union(l, r, _) | OptionalMatch(l, r) | SemiJoin(l, r, _, _) => {
+                vec![l, r]
+            }
+            Intersect { probe_child, build_children, .. } => {
+                let mut v: Vec<&LogicalOperator> = vec![probe_child];
+                v.extend(build_children.iter());
+                v
+            }
+            CreateNode(c, _) | CreateRel(c, _) => c.as_deref().into_iter().collect(),
+            _ => vec![],
+        }
+    }
+
     pub fn get_child(&self) -> Option<&LogicalOperator> {
         match self {
             LogicalOperator::Filter(c, _)
@@ -646,8 +755,15 @@ impl LogicalPlanner {
                         .ok_or_else(|| crate::LightningError::Query("Empty MATCH clause".into()))?;
 
                     let mut rel_vars: Vec<(String, String)> = Vec::new();
+                    // Variables already produced by earlier match elements. A
+                    // node re-referenced by a later pattern must join on the
+                    // existing binding, NOT be re-scanned (which would form a
+                    // cartesian product).
+                    let mut bound_vars: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
                     let mut plan = match first {
                         crate::planner::binder::BoundMatchElement::Node(table, var, properties) => {
+                            bound_vars.insert(var.clone());
                             let mut op =
                                 LogicalOperator::Scan(table, var.clone(), None, None, None);
                             for (idx, expr) in properties {
@@ -685,6 +801,9 @@ impl LogicalPlanner {
                                 path_var,
                                 max_depth,
                             } => {
+                                bound_vars.insert(src_var.clone());
+                                bound_vars.insert(dst_var.clone());
+                                bound_vars.insert(path_var.clone());
                                 plan = LogicalOperator::AllShortestPaths {
                                     child: Box::new(plan),
                                     rel_table_name,
@@ -699,27 +818,47 @@ impl LogicalPlanner {
                                 var,
                                 properties,
                             ) => {
-                                let mut node_op =
-                                    LogicalOperator::Scan(table, var.clone(), None, None, None);
-                                for (idx, expr) in properties {
-                                    let condition = BoundExpression::Comparison(
-                                        Box::new(BoundExpression::PropertyLookup(
-                                            var.clone(),
-                                            idx,
-                                            expr.get_type(),
-                                        )),
-                                        crate::parser::ast::ComparisonOperator::Equal,
-                                        Box::new(expr),
+                                if bound_vars.contains(&var) {
+                                    // Already bound by an earlier pattern: this is
+                                    // the same node re-referenced, so constrain the
+                                    // existing binding instead of re-scanning.
+                                    for (idx, expr) in properties {
+                                        let condition = BoundExpression::Comparison(
+                                            Box::new(BoundExpression::PropertyLookup(
+                                                var.clone(),
+                                                idx,
+                                                expr.get_type(),
+                                            )),
+                                            crate::parser::ast::ComparisonOperator::Equal,
+                                            Box::new(expr),
+                                        );
+                                        plan = LogicalOperator::Filter(Box::new(plan), condition);
+                                    }
+                                } else {
+                                    let mut node_op =
+                                        LogicalOperator::Scan(table, var.clone(), None, None, None);
+                                    for (idx, expr) in properties {
+                                        let condition = BoundExpression::Comparison(
+                                            Box::new(BoundExpression::PropertyLookup(
+                                                var.clone(),
+                                                idx,
+                                                expr.get_type(),
+                                            )),
+                                            crate::parser::ast::ComparisonOperator::Equal,
+                                            Box::new(expr),
+                                        );
+                                        node_op =
+                                            LogicalOperator::Filter(Box::new(node_op), condition);
+                                    }
+                                    plan = LogicalOperator::Join(
+                                        Box::new(plan),
+                                        Box::new(node_op),
+                                        BoundExpression::Literal(
+                                            crate::parser::ast::Literal::Boolean(true),
+                                        ),
                                     );
-                                    node_op = LogicalOperator::Filter(Box::new(node_op), condition);
+                                    bound_vars.insert(var.clone());
                                 }
-                                plan = LogicalOperator::Join(
-                                    Box::new(plan),
-                                    Box::new(node_op),
-                                    BoundExpression::Literal(crate::parser::ast::Literal::Boolean(
-                                        true,
-                                    )),
-                                );
                             }
                             crate::planner::binder::BoundMatchElement::Rel(
                                 rel_table,
@@ -742,6 +881,9 @@ impl LogicalPlanner {
                                         properties,
                                     ) = next
                                     {
+                                        bound_vars.insert(src_var.clone());
+                                        bound_vars.insert(dst_var.clone());
+                                        bound_vars.insert(rel_var.clone());
                                         plan = LogicalOperator::RecursiveJoin {
                                             child: Box::new(plan),
                                             rel_table,
@@ -771,6 +913,7 @@ impl LogicalPlanner {
                                         ));
                                     }
                                 } else {
+                                    bound_vars.insert(src_var.clone());
                                     // Save rel table name before it's consumed by Scan
                                     let rel_table_for_uniqueness = rel_table.clone();
                                     let rel_scan = LogicalOperator::Scan(
@@ -783,6 +926,7 @@ impl LogicalPlanner {
                                     // Save rel var name before join conditions consume it
                                     let cur_rel_var = rel_var;
                                     let rel_var_for_uniqueness = cur_rel_var.clone();
+                                    bound_vars.insert(rel_var_for_uniqueness.clone());
                                     let join_cond = BoundExpression::Comparison(
                                         Box::new(BoundExpression::PropertyLookup(
                                             src_var,
@@ -813,6 +957,7 @@ impl LogicalPlanner {
                                         properties,
                                     ) = next
                                     {
+                                        bound_vars.insert(d_var.clone());
                                         let mut dst_op = LogicalOperator::Scan(
                                             dst_table,
                                             d_var.clone(),

@@ -184,7 +184,16 @@ impl SubqueryUnnesting {
         let mut right_vars = HashSet::new();
         sub_plan.get_variables(&mut right_vars);
 
-        let common: Vec<_> = left_vars.intersection(&right_vars).collect();
+        // The subquery's correlated variables were renamed to `__sub_<v>`, so
+        // the intersection must be taken against those renamed names — otherwise
+        // it is always empty and the correlation degrades to a constant `true`
+        // (which then produces wrong semi-join results).
+        let mut common: Vec<String> = left_vars
+            .iter()
+            .filter(|v| right_vars.contains(&format!("__sub_{v}")))
+            .cloned()
+            .collect();
+        common.sort();
         let cond = if common.is_empty() {
             BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
         } else {
