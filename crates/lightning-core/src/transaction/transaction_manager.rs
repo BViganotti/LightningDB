@@ -465,6 +465,15 @@ impl TransactionManager {
             }
             drop(merge_pinned);
 
+            // Keep at most one committed version of each written page resident,
+            // so `pin_latest_committed` never picks a stale committed frame.
+            {
+                let modified = tx.modified_pages.lock();
+                for &(file_id, page_idx) in modified.iter() {
+                    bm.evict_superseded_committed_versions(file_id, page_idx, commit_ts);
+                }
+            }
+
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
 

@@ -103,11 +103,6 @@ pub struct BufferManager {
     /// lock order; taking it while holding a shard lock (and dropping that lock
     /// during backoff) inverted the order and deadlocked writers.
     page_locks: parking_lot::Mutex<HashMap<(u64, u64), Arc<parking_lot::Mutex<()>>>>,
-    /// Highest committed version seen per (file, page). Lets
-    /// `pin_latest_committed` detect that the newest committed version was
-    /// evicted (a stale committed frame may still be resident) and fall back to
-    /// the on-disk page instead of merging on top of a stale version.
-    latest_committed: parking_lot::Mutex<HashMap<(u64, u64), u64>>,
 }
 
 enum EvictResult {
@@ -168,7 +163,6 @@ impl BufferManager {
             prefetch_confidence,
             shutting_down: AtomicBool::new(false),
             page_locks: parking_lot::Mutex::new(HashMap::new()),
-            latest_committed: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 
@@ -568,12 +562,11 @@ impl BufferManager {
         let key = (fh_arc.file_id, page_idx);
         let shard_idx = self.get_shard_idx(key);
 
-        // The highest version ever committed for this page. If the newest
-        // committed frame is still resident we can use it; otherwise the true
-        // newest lives on disk and any resident committed frame is stale.
-        let tracked = self.latest_committed.lock().get(&key).copied().unwrap_or(0);
-
-        // Try buffer pool first (read lock)
+        // Try buffer pool first (read lock). Only the newest committed version
+        // of a page is kept resident (superseded committed frames are evicted at
+        // commit, see `evict_superseded_committed_versions`), so the highest
+        // committed frame here is the true newest; otherwise it was evicted and
+        // the disk copy is authoritative.
         {
             let pool = self.shards[shard_idx].read();
             if let Some(slot_indices) = pool.page_to_slots.get(&key) {
@@ -581,18 +574,14 @@ impl BufferManager {
                 let mut best_frame: Option<Arc<Frame>> = None;
                 for &idx in slot_indices {
                     let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
-                    // Find the highest committed version
                     if (version & UNCOMMITTED_BIT) == 0 && version >= best_version {
                         best_version = version;
                         best_frame = Some(Arc::clone(&pool.slots[idx].frame));
                     }
                 }
                 if let Some(frame) = best_frame {
-                    if best_version >= tracked {
-                        frame.pin_count.fetch_add(1, Ordering::AcqRel);
-                        return Ok(frame);
-                    }
-                    // else: newest committed version was evicted — read disk.
+                    frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    return Ok(frame);
                 }
             }
         }
@@ -605,6 +594,55 @@ impl BufferManager {
         let frame = Arc::new(Frame::new(data, 0));
         frame.pin_count.fetch_add(1, Ordering::AcqRel);
         Ok(frame)
+    }
+
+    /// Evict resident committed frames of `(file_id, page_idx)` older than
+    /// `keep_version`. Called at commit for every page the transaction wrote, so
+    /// at most one committed version per page stays resident. Without this a
+    /// stale committed frame could outlive the newest one and be picked by
+    /// `pin_latest_committed` (a lost-update / stale-merge bug), and tracking
+    /// the newest version per page would need an unbounded map.
+    pub fn evict_superseded_committed_versions(
+        &self,
+        file_id: u64,
+        page_idx: u64,
+        keep_version: u64,
+    ) {
+        let key = (file_id, page_idx);
+        let shard_idx = self.get_shard_idx(key);
+        let mut pool = self.shards[shard_idx].write();
+
+        let slots = match pool.page_to_slots.get(&key) {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        for idx in slots.iter().copied() {
+            let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
+            let evictable = (version & UNCOMMITTED_BIT) == 0
+                && version < keep_version
+                && pool.slots[idx].frame.pin_count.load(Ordering::Acquire) == 0;
+            if evictable {
+                if pool.slots[idx].dirty {
+                    Self::decrement_dirty_count(&pool.dirty_count);
+                }
+                pool.slots[idx].key = None;
+                pool.slots[idx].frame = Arc::new(Frame::new([0u8; PAGE_SIZE], 0));
+                pool.slots[idx].dirty = false;
+                pool.slots[idx].referenced = false;
+                pool.free_candidates.push_back(idx);
+            }
+        }
+
+        let remaining: Vec<usize> = slots
+            .into_iter()
+            .filter(|&idx| pool.slots[idx].key.is_some())
+            .collect();
+        if remaining.is_empty() {
+            pool.page_to_slots.remove(&key);
+        } else if let Some(list) = pool.page_to_slots.get_mut(&key) {
+            *list = remaining;
+        }
     }
 
     pub fn update_timestamps(&self, file_id: u64, page_idx: u64, tx_id: u64, commit_ts: u64) {
@@ -628,11 +666,7 @@ impl BufferManager {
                 }
             }
         }
-        if found {
-            let mut latest = self.latest_committed.lock();
-            let entry = latest.entry(key).or_insert(0);
-            *entry = (*entry).max(commit_ts);
-        } else {
+        if !found {
             tracing::debug!(
                 "update_timestamps: frame NOT found for ({},{}) tx_id={commit_ts:#x} — likely evicted before commit",
                 file_id, page_idx,
