@@ -63,6 +63,40 @@ impl Clone for Column {
     }
 }
 
+/// How a column's values map to pages. `values_per_page` and the derived
+/// offsets are the single source of truth for the write and commit-merge paths.
+#[derive(Clone, Copy, Debug)]
+pub struct ColumnLayout {
+    pub element_size: usize,
+    pub values_per_page: u64,
+}
+
+impl ColumnLayout {
+    /// The current (uncompressed) layout: `4096 / element_size` values per page.
+    pub fn uncompressed(element_size: usize) -> Self {
+        let es = element_size.max(1);
+        Self {
+            element_size,
+            values_per_page: (4096 / es) as u64,
+        }
+    }
+
+    /// Page index holding `row_id`.
+    pub fn page_index(&self, row_id: u64) -> u64 {
+        row_id / self.values_per_page.max(1)
+    }
+
+    /// Byte offset of `row_id` within its page.
+    pub fn byte_offset(&self, row_id: u64) -> usize {
+        (row_id % self.values_per_page.max(1)) as usize * self.element_size
+    }
+
+    /// Value index of `row_id` within its page.
+    pub fn value_index(&self, row_id: u64) -> usize {
+        (row_id % self.values_per_page.max(1)) as usize
+    }
+}
+
 impl Column {
     pub fn new(
         name: String,
@@ -315,6 +349,7 @@ impl Column {
                             page_idx,
                             row_id: current_row,
                             element_size: 1,
+                            values_per_page: 4096,
                             row_data: rd,
                             overflow_row_data: None,
                         },
@@ -328,7 +363,7 @@ impl Column {
         }
 
         let element_size = self.element_size();
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
 
         // List/Struct columns append through `append_value`, which itself locks
         // `self.stats`. Handle them before taking the stats lock below, or the
@@ -419,6 +454,7 @@ impl Column {
                                 page_idx,
                                 row_id: current_row,
                                 element_size,
+                                values_per_page: self.layout().values_per_page,
                                 row_data,
                                 overflow_row_data,
                             },
@@ -445,7 +481,7 @@ impl Column {
         result: &mut Vec<crate::processor::Value>,
     ) -> Result<()> {
         let element_size = self.element_size();
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
         let mut values_read = 0;
         while values_read < num_values {
             let current_offset = offset + values_read;
@@ -918,7 +954,7 @@ impl Column {
         target_type: &DataType,
         zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
         if !self.version_info.has_modifications() && zone_map.is_none() {
             return self.scan_primitive_direct(offset, num_values, element_size, target_type, zone_map);
         }
@@ -1055,7 +1091,7 @@ impl Column {
         target_type: &DataType,
         _zone_map: Option<&ZoneMapEq>,
     ) -> Result<ArrayRef> {
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
         let total_bytes = num_values as usize * element_size;
         let mut has_any_nulls = false;
         let mut output_offset = 0usize;
@@ -1386,6 +1422,7 @@ impl Column {
                     page_idx: *row_id as u64 / 4096,
                     row_id: *row_id as u64,
                     element_size: 1,
+                    values_per_page: 4096,
                     row_data,
                     overflow_row_data: None,
                 });
@@ -1416,7 +1453,7 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
         let element_size = self.element_size();
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
         let page_idx = row_id / values_per_page;
         let offset_in_page = (row_id % values_per_page) as usize * element_size;
         while self.fh.get_num_pages() <= page_idx {
@@ -1478,6 +1515,7 @@ impl Column {
                     page_idx,
                     row_id,
                     element_size,
+                    values_per_page: self.layout().values_per_page,
                     row_data,
                     overflow_row_data,
                 },
@@ -1528,7 +1566,7 @@ impl Column {
         skip_modified_rows: bool,
     ) -> Result<()> {
         let element_size = self.element_size();
-        let values_per_page = 4096 / element_size as u64;
+        let values_per_page = self.layout().values_per_page;
         let num_rows = array.len();
         if num_rows == 0 {
             return Ok(());
@@ -1585,6 +1623,7 @@ impl Column {
                             page_idx,
                             row_id: current_row,
                             element_size: 1,
+                            values_per_page: 4096,
                             row_data: rd,
                             overflow_row_data: None,
                         });
@@ -1696,6 +1735,7 @@ impl Column {
                                 page_idx,
                                 row_id: current_row,
                                 element_size,
+                                values_per_page: self.layout().values_per_page,
                                 row_data,
                                 overflow_row_data,
                             }
@@ -1949,6 +1989,13 @@ impl Column {
                 8
             }
         }
+    }
+
+    /// The page geometry for this column. Centralizes the uncompressed
+    /// `4096 / element_size` layout so the write/merge paths do not hard-code
+    /// it, making room for a compressed layout.
+    pub fn layout(&self) -> ColumnLayout {
+        ColumnLayout::uncompressed(self.element_size())
     }
 
     pub fn compute_page_bounds(

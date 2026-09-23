@@ -22,6 +22,9 @@ pub struct PageRowMod {
     pub page_idx: u64,
     pub row_id: u64,
     pub element_size: usize,
+    /// Values per page for this column's layout. The merge uses this instead of
+    /// assuming the uncompressed `4096 / element_size` geometry.
+    pub values_per_page: u64,
     pub row_data: [u8; 64],
     /// For overflow strings (>63 chars), the full overflow page content
     /// is captured here during write. This ensures the merge-on-commit
@@ -335,7 +338,7 @@ impl TransactionManager {
                             // Apply all our row modifications to the local buffer
                             for row_mod in mods {
                                 let es = row_mod.element_size;
-                                let vpp = 4096 / es as u64;
+                                let vpp = row_mod.values_per_page.max(1);
                                 let offset_in_page = (row_mod.row_id % vpp) as usize * es;
                                 if offset_in_page + es <= 4096 {
                                     merged_data[offset_in_page..offset_in_page + es]
