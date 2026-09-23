@@ -117,7 +117,6 @@ fn multi_hop_returns_correct_rows() {
 /// correlation (`p.0 = __sub_p.0`). The semi-join probe does not match the
 /// build key under projection pushdown. Tracked separately.
 #[test]
-#[ignore = "known pre-existing bug: correlated EXISTS semi-join execution returns no rows"]
 fn exists_semi_join_returns_rows() {
     let db = setup();
     let c = db.connect();

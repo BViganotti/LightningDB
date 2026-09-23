@@ -339,6 +339,39 @@ impl ProjectionPushDown {
                     combined,
                 ))
             }
+            LogicalOperator::SemiJoin(left, right, cond, is_anti) => {
+                // The correlation key columns must survive projection pushdown on
+                // BOTH sides, or the semi-join's hash key resolves to the wrong
+                // (or a dropped) column and the probe finds no matches.
+                let mut my_indices = required_indices;
+                Self::extract_property_indices(&cond, &mut my_indices);
+                let (new_left, left_indices) = self.push_down(*left, my_indices.clone())?;
+                let (new_right, right_indices) = self.push_down(*right, my_indices)?;
+
+                let left_col_count = if left_indices.projected_cols > 0 {
+                    left_indices.projected_cols
+                } else {
+                    left_indices
+                        .indices
+                        .values()
+                        .flat_map(|s| s.iter().cloned())
+                        .collect::<HashSet<usize>>()
+                        .len()
+                };
+                let right_vars: HashSet<String> = right_indices.indices.keys().cloned().collect();
+                // A semi-join emits only the left columns; the right side is
+                // probed, never output.
+                let combined = ColumnUsage {
+                    projected_cols: left_col_count,
+                    left_col_count,
+                    right_vars,
+                    indices: left_indices.indices,
+                };
+                Ok((
+                    LogicalOperator::SemiJoin(Box::new(new_left), Box::new(new_right), cond, is_anti),
+                    combined,
+                ))
+            }
             LogicalOperator::Scan(table, var, mask, existing, filter) => {
                 // If projected_idxs was already set by a previous optimization
                 // pass, don't overwrite it (same rationale as IndexScan).

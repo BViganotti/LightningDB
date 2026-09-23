@@ -189,7 +189,10 @@ impl LogicalOperator {
     fn explain_label(&self) -> String {
         use LogicalOperator::*;
         match self {
-            Scan(t, v, ..) => format!("Scan {t} AS {v}"),
+            Scan(t, v, _, projected, _) => match projected {
+                Some(idxs) => format!("Scan {t} AS {v} project={idxs:?}"),
+                None => format!("Scan {t} AS {v}"),
+            },
             IndexScan(t, v, k, ..) => format!("IndexScan {t} AS {v} ON {k}"),
             SingleRow => "SingleRow".to_string(),
             Filter(_, e) => format!("Filter {}", expr_summary(e)),
