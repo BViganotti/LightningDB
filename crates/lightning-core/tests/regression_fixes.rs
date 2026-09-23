@@ -665,12 +665,11 @@ fn concurrent_rollback_has_no_phantom_rows() {
     assert_eq!(one_i64(&db, "MATCH (t:T {id: 200}) RETURN count(*)"), 1);
 }
 
-/// `optimize` must not claim compression on pages that are stored
-/// uncompressed: the codecs are not yet applied on write, so a non-Uncompressed
-/// `compression_meta` would make reads decompress ordinary bytes and corrupt
-/// data. Data must round-trip intact.
+/// `optimize` may re-encode pages with a codec (compression), but whatever it
+/// chooses the data must round-trip intact — including a constant column
+/// (Constant codec) read back through a scan and a point lookup.
 #[test]
-fn optimize_keeps_pages_uncompressed_and_data_intact() {
+fn optimize_compresses_and_data_roundtrips() {
     let (_d, db) = new_db();
     let c = db.connect();
     c.execute("CREATE NODE TABLE T(id INT64, x INT64, PRIMARY KEY (id))", None)
@@ -685,14 +684,11 @@ fn optimize_keeps_pages_uncompressed_and_data_intact() {
         let storage = db.storage_manager().read();
         let table = storage.node_tables.get("T").unwrap();
         table.optimize(&bm, &tx).unwrap();
-        let xcol = table.columns.iter().find(|col| col.name == "x").unwrap();
-        assert!(
-            xcol.stats.read().compression_meta.is_none(),
-            "optimize must not mark uncompressed pages as compressed"
-        );
     }
     db.transaction_manager().commit(&tx, &bm, &db).unwrap();
 
     assert_eq!(one_i64(&db, "MATCH (t:T) RETURN count(*)"), 200);
     assert_eq!(one_i64(&db, "MATCH (t:T {id: 7}) RETURN t.x"), 42);
+    // Full scan of the (possibly compressed) column.
+    assert_eq!(one_i64(&db, "MATCH (t:T) WHERE t.x = 42 RETURN count(*)"), 200);
 }

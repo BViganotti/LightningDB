@@ -207,6 +207,58 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn bitpacking_delta_value_offset() {
+        // Integer bitpacking packs the raw values, so bit_width must cover the
+        // maximum value; use 0..31 (5 bits).
+        let bp_vals: Vec<[u8; 8]> = (0..32u64).map(enc8).collect();
+        let mut bp_src = Vec::new();
+        for v in &bp_vals {
+            bp_src.extend_from_slice(v);
+        }
+        let meta_bp = CompressionMetadata::new(
+            Value::Number(0.0),
+            Value::Number(31.0),
+            CompressionType::IntegerBitpacking,
+            5,
+        );
+        let mut dst = vec![0u8; 4096];
+        let (size, _) = IntegerBitpacking
+            .compress_next_page(&bp_src, 32, &mut dst, &meta_bp)
+            .unwrap();
+        let mut out = vec![0u8; 32 * 8];
+        IntegerBitpacking
+            .decompress_from_page(&dst[..size as usize], 17, &mut out, 0, 10, &meta_bp)
+            .unwrap();
+        for i in 0..10usize {
+            assert_eq!(&out[i * 8..i * 8 + 8], &bp_vals[17 + i][..], "bitpacking offset wrong at {i}");
+        }
+
+        // Delta packs (value - min), so bit_width covers (max - min).
+        let d_vals: Vec<[u8; 8]> = (0..32u64).map(|i| enc8(1000 + i)).collect();
+        let mut d_src = Vec::new();
+        for v in &d_vals {
+            d_src.extend_from_slice(v);
+        }
+        let meta_d = CompressionMetadata::new(
+            Value::Number(1000.0),
+            Value::Number(1031.0),
+            CompressionType::FixedFrameOfReference,
+            5,
+        );
+        let mut dst2 = vec![0u8; 4096];
+        let (size2, _) = crate::storage::compression::delta::FixedFrameOfReferenceAlg
+            .compress_next_page(&d_src, 32, &mut dst2, &meta_d)
+            .unwrap();
+        let mut out2 = vec![0u8; 32 * 8];
+        crate::storage::compression::delta::FixedFrameOfReferenceAlg
+            .decompress_from_page(&dst2[..size2 as usize], 17, &mut out2, 0, 10, &meta_d)
+            .unwrap();
+        for i in 0..10usize {
+            assert_eq!(&out2[i * 8..i * 8 + 8], &d_vals[17 + i][..], "delta offset wrong at {i}");
+        }
+    }
+
+    #[test]
     fn rle_value_offset() {
         // Runs of 16. Start decoding at value index 20 and read 10 values.
         let values: Vec<[u8; 8]> = (0..64).map(|i| enc8(i / 16)).collect();

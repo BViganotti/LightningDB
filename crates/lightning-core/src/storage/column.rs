@@ -255,34 +255,51 @@ impl Column {
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<Value> {
         let stats = self.stats.read();
-        if let Some(ref meta) = stats.compression_meta {
-            if meta.compression == CompressionType::Constant {
+        let element_size = self.element_size();
+        let compression = stats
+            .compression_meta
+            .as_ref()
+            .map(|m| m.compression)
+            .unwrap_or(CompressionType::Uncompressed);
+
+        if compression == CompressionType::Constant {
+            if let Some(ref meta) = stats.compression_meta {
                 return Ok(meta.min.clone());
             }
         }
 
-        let element_size = self.element_size();
-        let values_per_page = if stats
+        if compression == CompressionType::Uncompressed {
+            let values_per_page = 4096 / element_size as u64;
+            let page_idx = row_id / values_per_page;
+            let offset_in_page = (row_id % values_per_page) as usize * element_size;
+            let frame = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
+            let res = self.parse_value(
+                &frame.as_slice()[offset_in_page..offset_in_page + element_size],
+                bm,
+                tx,
+            );
+            bm.unpin_page(&self.fh, page_idx, frame);
+            return res;
+        }
+
+        // Compressed (non-Constant): decompress the 32-value block that holds
+        // `row_id` and pick the value out of it. The on-disk bytes are the codec
+        // output, not the raw value, so a direct read would be garbage.
+        let meta = stats
             .compression_meta
-            .as_ref()
-            .map(|m| m.compression)
-            .unwrap_or(CompressionType::Uncompressed)
-            == CompressionType::Uncompressed
-        {
-            4096 / element_size as u64
-        } else {
-            32
-        };
+            .clone()
+            .expect("compressed column has compression_meta");
+        let alg = Self::get_alg(compression, element_size);
+        let values_per_page = 32u64;
         let page_idx = row_id / values_per_page;
-        let offset_in_page = (row_id % values_per_page) as usize * element_size;
+        let value_idx = row_id % values_per_page;
         let frame = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
-        let res = self.parse_value(
-            &frame.as_slice()[offset_in_page..offset_in_page + element_size],
-            bm,
-            tx,
-        );
+        let mut temp = vec![0u8; 32 * element_size];
+        let decompressed =
+            alg.decompress_from_page(frame.as_slice(), value_idx, &mut temp, 0, 1, &meta);
         bm.unpin_page(&self.fh, page_idx, frame);
-        res
+        decompressed?;
+        self.parse_value(&temp[..element_size], bm, tx)
     }
 
     pub fn is_null(
@@ -490,20 +507,67 @@ impl Column {
         result: &mut Vec<crate::processor::Value>,
     ) -> Result<()> {
         let element_size = self.element_size();
-        let values_per_page = self.layout().values_per_page;
+        let analyzer_meta = self.stats.read().compression_meta.clone();
+        let compression = analyzer_meta
+            .as_ref()
+            .map(|m| m.compression)
+            .unwrap_or(CompressionType::Uncompressed);
+
+        if compression == CompressionType::Constant {
+            if let Some(m) = analyzer_meta {
+                for _ in 0..num_values {
+                    result.push(m.min.clone());
+                }
+                return Ok(());
+            }
+        }
+
+        let values_per_page = if compression == CompressionType::Uncompressed {
+            4096 / element_size as u64
+        } else {
+            32
+        };
+        let alg = Self::get_alg(compression, element_size);
+        let meta = analyzer_meta.unwrap_or_else(|| {
+            CompressionMetadata::new(Value::Null, Value::Null, CompressionType::Uncompressed, 0)
+        });
+        let mut temp_block = vec![0u8; 32 * element_size];
         let mut values_read = 0;
         while values_read < num_values {
             let current_offset = offset + values_read;
             let page_idx = current_offset / values_per_page;
-            let offset_in_page = (current_offset % values_per_page) as usize * element_size;
-            let frame = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
+            let value_idx_in_page = (current_offset % values_per_page) as usize;
             let to_read = std::cmp::min(
-                values_per_page - (current_offset % values_per_page),
-                num_values - values_read,
+                std::cmp::min(num_values - values_read, 32),
+                values_per_page - value_idx_in_page as u64,
             );
-            for k in 0..to_read {
-                let start = offset_in_page + k as usize * element_size;
-                result.push(self.parse_value(&frame.as_slice()[start..start + element_size], bm, tx)?);
+            let frame = bm.pin_page(Arc::clone(&self.fh), page_idx, tx)?;
+            if compression == CompressionType::Uncompressed {
+                for k in 0..to_read {
+                    let start = (value_idx_in_page + k as usize) * element_size;
+                    result.push(self.parse_value(
+                        &frame.as_slice()[start..start + element_size],
+                        bm,
+                        tx,
+                    )?);
+                }
+            } else {
+                alg.decompress_from_page(
+                    frame.as_slice(),
+                    value_idx_in_page as u64,
+                    &mut temp_block,
+                    0,
+                    to_read,
+                    &meta,
+                )?;
+                for k in 0..to_read as usize {
+                    let start = k * element_size;
+                    result.push(self.parse_value(
+                        &temp_block[start..start + element_size],
+                        bm,
+                        tx,
+                    )?);
+                }
             }
             bm.unpin_page(&self.fh, page_idx, frame);
             values_read += to_read;
@@ -543,6 +607,16 @@ impl Column {
                 &target_type,
                 zone_map,
             );
+        }
+
+        // Constant: every value equals `metadata.min`. Emit it converted to the
+        // column's type (the codec itself has no knowledge of the logical type,
+        // so encoding its bytes directly would misread, e.g. f64 bits as i64).
+        if compression == CompressionType::Constant {
+            if let Some(ref m) = analyzer_meta {
+                let vals = vec![m.min.clone(); num_values as usize];
+                return Ok(crate::processor::arrow_utils::values_to_array(&vals, &target_type));
+            }
         }
 
         let mut builder = arrow::array::make_builder(&target_type, num_values as usize);
@@ -2328,19 +2402,11 @@ impl Column {
         };
 
         if meta.compression != CompressionType::Uncompressed {
-            // Only the metadata-free codecs are enabled (the read/merge paths do
-            // not thread per-column metadata, and RLE/Dict decode without it).
-            if !matches!(
-                meta.compression,
-                CompressionType::Rle | CompressionType::Dict
-            ) {
-                tracing::info!(
-                    "Column {}: codec {:?} not enabled for re-encoding; leaving uncompressed",
-                    self.name,
-                    meta.compression
-                );
-                return Ok(());
-            }
+            // All codecs are enabled. Compressed columns are an immutable
+            // generation (writes are rejected until decompressed), so the commit
+            // merge never sees a compressed page — the decode metadata
+            // (bit_width/min) is only needed by the read path, which reads it
+            // from the persisted `compression_meta`.
             self.reencode_compressed(bm, tx, meta)?;
         }
         Ok(())

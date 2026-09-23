@@ -92,3 +92,102 @@ fn compressed_column_rejects_write_until_decompressed() {
     assert_eq!(vals.len(), 401);
     assert!(vals.contains(&1));
 }
+
+fn scan_v(db: &Arc<Database>) -> Vec<i64> {
+    let r = db.connect().execute("MATCH (n:N) RETURN n.v", None).unwrap();
+    let mut v = Vec::new();
+    for b in &r.batches {
+        let a = b.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        for i in 0..a.len() {
+            if a.is_valid(i) { v.push(a.value(i)); }
+        }
+    }
+    v.sort();
+    v
+}
+
+/// A narrow/sequential integer column (delta/bitpacking-friendly) must
+/// round-trip through compression and reopen.
+#[test]
+fn compression_bitpacked_integers_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = || SystemConfig { sync_mode: SyncMode::Off, ..Default::default() };
+    let db = Database::new(dir.path(), cfg()).unwrap();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE N(id INT64, v INT64, PRIMARY KEY(id))", None).unwrap();
+    for i in 0..500i64 {
+        c.execute(&format!("CREATE (:N {{id: {i}, v: {}}})", i * 3), None).unwrap();
+    }
+    let before = scan_v(&db);
+    assert_eq!(before.len(), 500);
+
+    db.vacuum().unwrap();
+    let compressed = db.storage_manager().read().get_table("N")
+        .map(|t| t.columns.iter().filter(|col| col.is_compressed()).count()).unwrap_or(0);
+    println!("compressed columns = {compressed}");
+    assert_eq!(scan_v(&db), before, "read mismatch on compressed integer column");
+
+    // Point reads (index lookup) across the compressed column.
+    for id in [0i64, 1, 100, 250, 499] {
+        let pr = db.connect().execute(&format!("MATCH (n:N {{id: {id}}}) RETURN n.v"), None).unwrap();
+        let got = pr.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+        assert_eq!(got, id * 3, "point read on compressed column wrong for id {id}");
+    }
+
+    db.checkpoint().unwrap();
+    drop(c);
+    drop(db);
+    let db2 = Database::new(dir.path(), cfg()).unwrap();
+    assert_eq!(scan_v(&db2), before, "read mismatch after reopen");
+    assert!(compressed > 0, "expected the v column to be compressed");
+}
+
+fn read_cols(db: &Arc<Database>) -> Vec<Vec<i64>> {
+    let r = db.connect().execute("MATCH (d:D) RETURN d.seq, d.narrow, d.noisy, d.rep", None).unwrap();
+    let mut rows = Vec::new();
+    for b in &r.batches {
+        for i in 0..b.num_rows() {
+            let mut row = Vec::new();
+            for c in b.columns() {
+                let a = c.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                row.push(if a.is_valid(i) { a.value(i) } else { -1 });
+            }
+            rows.push(row);
+        }
+    }
+    rows.sort();
+    rows
+}
+
+#[test]
+fn compression_various_distributions_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = || SystemConfig { sync_mode: SyncMode::Off, ..Default::default() };
+    let db = Database::new(dir.path(), cfg()).unwrap();
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE D(id INT64, seq INT64, narrow INT64, noisy INT64, rep INT64, PRIMARY KEY(id))", None).unwrap();
+    for i in 0..800i64 {
+        c.execute(&format!(
+            "CREATE (:D {{id: {i}, seq: {}, narrow: {}, noisy: {}, rep: {}}})",
+            i * 1000,
+            1000 + (i % 64),
+            (i.wrapping_mul(2_654_435_761)) % 100_000,
+            i / 100,
+        ), None).unwrap();
+    }
+    let before = read_cols(&db);
+    assert_eq!(before.len(), 800);
+
+    db.vacuum().unwrap();
+    let compressed = db.storage_manager().read().get_table("D")
+        .map(|t| t.columns.iter().filter(|col| col.is_compressed()).count()).unwrap_or(0);
+    println!("compressed columns = {compressed}");
+    assert_eq!(read_cols(&db), before, "read mismatch after compression");
+
+    db.checkpoint().unwrap();
+    drop(c);
+    drop(db);
+    let db2 = Database::new(dir.path(), cfg()).unwrap();
+    assert_eq!(read_cols(&db2), before, "read mismatch after reopen");
+    assert!(compressed >= 3, "expected several columns compressed, got {compressed}");
+}
