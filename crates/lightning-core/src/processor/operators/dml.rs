@@ -770,10 +770,29 @@ impl PhysicalOperator for PhysicalDelete {
             if self.detach && !deleted_ids.is_empty() {
                 let deleted_set: std::collections::HashSet<u64> =
                     deleted_ids.into_iter().collect();
-                let cat = database.catalog.read();
-                let rel_tables: Vec<String> = cat.rel_tables.keys().cloned().collect();
-                drop(cat);
-                for rel_name in &rel_tables {
+                // Node row ids are PER-TABLE, so only compare the endpoint of a
+                // rel that belongs to the deleted node's table. Comparing both
+                // endpoints against one table's ids wrongly detaches edges whose
+                // *other* endpoint happens to share the row id (e.g. deleting
+                // A(row 0) removed edges pointing to B(row 0)).
+                let node_table = self.table.name.clone();
+                let rel_info: Vec<(String, bool, bool)> = {
+                    let cat = database.catalog.read();
+                    cat.rel_tables
+                        .values()
+                        .map(|t| {
+                            (
+                                t.name.clone(),
+                                t.from_table == node_table,
+                                t.to_table == node_table,
+                            )
+                        })
+                        .collect()
+                };
+                for (rel_name, check_src, check_dst) in &rel_info {
+                    if !check_src && !check_dst {
+                        continue;
+                    }
                     let storage = database.storage_manager.read();
                     let Some(rel_table) = storage.get_table(rel_name) else { continue };
                     let bm = &self.buffer_manager;
@@ -802,7 +821,9 @@ impl PhysicalOperator for PhysicalDelete {
                             Value::Node(id) => id,
                             _ => continue,
                         };
-                        if deleted_set.contains(&from_val) || deleted_set.contains(&to_val) {
+                        if (*check_src && deleted_set.contains(&from_val))
+                            || (*check_dst && deleted_set.contains(&to_val))
+                        {
                             for col in &rel_table.columns {
                                 let old_val = col.get_value(bm, row_idx as u64, tx)?;
                                 self.undo_buffer.push(UndoRecord::UpdateColumn(
@@ -1138,8 +1159,12 @@ impl PhysicalCreateRel {
                 };
                 // The primary key column is at index 1 in the node table
                 // (index 0 is _id). Scan it for the matching value.
+                // Bound by the physical row count (next_row_id), NOT the live
+                // `cardinality`: deletes leave holes, so a row whose internal id
+                // is >= cardinality would be missed (edge creation then silently
+                // skipped the edge).
                 let pk_col = &tbl.columns[1];
-                let total = tbl.stats.read().cardinality;
+                let total = tbl.next_row_id.load(Ordering::Acquire);
                 for row in 0..total {
                     let Ok(cell) = pk_col.get_value(buffer_manager, row, tx) else {
                         continue;
