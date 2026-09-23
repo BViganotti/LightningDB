@@ -68,3 +68,29 @@ fn fts_mutations_are_transactional() {
     assert!(!search("gamma").is_empty(), "later commit should be indexed");
 }
 
+#[test]
+fn vector_mutations_are_transactional() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let c = db.connect();
+    c.execute("CREATE NODE TABLE V(id INT64, emb LIST(FLOAT), PRIMARY KEY(id))", None).unwrap();
+    db.storage_manager().write().create_vector_index("V", 2).unwrap();
+    let vec = db.storage_manager().read().vector_indexes.get("V").cloned().unwrap();
+    let bm = db.buffer_manager().clone();
+    let nearest = |q: [f32; 2]| -> Option<u64> {
+        let tx = db.transaction_manager().begin(true).unwrap();
+        let r = vec.search(&q, 5, &bm, &tx).unwrap();
+        db.transaction_manager().rollback(&db, &tx).unwrap();
+        r.into_iter().next().map(|(id, _)| id)
+    };
+    c.execute("UNWIND [1, 2] AS x CREATE (:V {id: x})", None).unwrap();
+    c.execute("MATCH (v:V {id: 1}) SET v.emb = [1.0, 0.0]", None).unwrap_or_else(|e| panic!("SET1: {e}"));
+    c.execute("MATCH (v:V {id: 2}) SET v.emb = [0.0, 1.0]", None).unwrap_or_else(|e| panic!("SET2: {e}"));
+    eprintln!("nearest[1,0]={:?} (expect Some(0))", nearest([1.0, 0.0]));
+    assert_eq!(nearest([1.0, 0.0]), Some(0));
+    c.execute("BEGIN TRANSACTION", None).unwrap();
+    c.execute("MATCH (v:V {id: 1}) SET v.emb = [0.0, 1.0]", None).unwrap();
+    c.execute("ROLLBACK TRANSACTION", None).unwrap();
+    eprintln!("after rollback nearest[1,0]={:?} (expect Some(0))", nearest([1.0, 0.0]));
+    assert_eq!(nearest([1.0, 0.0]), Some(0), "rolled-back vector mutation took effect");
+}

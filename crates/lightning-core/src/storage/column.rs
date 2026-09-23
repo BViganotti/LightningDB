@@ -30,9 +30,12 @@ pub struct Column {
     pub version_info: Arc<RowVersion>,
     pub child_columns: Vec<Column>,
     pub dirty: Arc<AtomicBool>,
-    /// Atomic counters for stats, avoiding write lock on append path.
-    atomic_num_values: AtomicU64,
-    atomic_null_count: AtomicU64,
+    /// Atomic counters for stats, avoiding write lock on append path. SHARED
+    /// across clones: a plan-time column clone must observe the same counters
+    /// as the canonical column, otherwise LIST child-slot offsets computed by
+    /// successive statements collide (the counter resets to the clone's copy).
+    atomic_num_values: Arc<AtomicU64>,
+    atomic_null_count: Arc<AtomicU64>,
     /// Buffered null bit changes: (byte_offset_in_null_page, 0|1).
     /// Flushed to actual pages before batch ops or checkpoint.
     /// Buffered null bit changes, SHARED across clones (a plan-time column
@@ -53,8 +56,8 @@ impl Clone for Column {
             version_info: Arc::clone(&self.version_info),
             child_columns: self.child_columns.clone(),
             dirty: Arc::clone(&self.dirty),
-            atomic_num_values: AtomicU64::new(self.atomic_num_values.load(Ordering::Acquire)),
-            atomic_null_count: AtomicU64::new(self.atomic_null_count.load(Ordering::Acquire)),
+            atomic_num_values: Arc::clone(&self.atomic_num_values),
+            atomic_null_count: Arc::clone(&self.atomic_null_count),
             pending_nulls: Arc::clone(&self.pending_nulls),
         }
     }
@@ -79,8 +82,8 @@ impl Column {
             version_info,
             child_columns: Vec::new(),
             dirty: Arc::new(AtomicBool::new(false)),
-            atomic_num_values: AtomicU64::new(0),
-            atomic_null_count: AtomicU64::new(0),
+            atomic_num_values: Arc::new(AtomicU64::new(0)),
+            atomic_null_count: Arc::new(AtomicU64::new(0)),
             pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -104,8 +107,8 @@ impl Column {
             version_info,
             child_columns,
             dirty: Arc::new(AtomicBool::new(false)),
-            atomic_num_values: AtomicU64::new(0),
-            atomic_null_count: AtomicU64::new(0),
+            atomic_num_values: Arc::new(AtomicU64::new(0)),
+            atomic_null_count: Arc::new(AtomicU64::new(0)),
             pending_nulls: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
