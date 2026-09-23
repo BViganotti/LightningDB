@@ -65,7 +65,7 @@ fn compression_end_to_end() {
 }
 
 #[test]
-fn compressed_column_rejects_write_until_decompressed() {
+fn compressed_column_write_auto_decompresses() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = || SystemConfig { sync_mode: SyncMode::Off, ..Default::default() };
     let db = Database::new(dir.path(), cfg()).unwrap();
@@ -80,17 +80,18 @@ fn compressed_column_rejects_write_until_decompressed() {
         "expected compression after vacuum"
     );
 
-    // The compressed column is an immutable generation: writes are refused.
-    let w = c.execute("CREATE (:T {id: 9999, grp: 1})", None);
-    assert!(w.is_err(), "write to a compressed column must be rejected");
-
-    // Decompressing restores writability.
-    db.decompress().unwrap();
+    // A write on the idle database transparently decompresses the column and
+    // succeeds (compressed columns are an immutable generation, migrated on the
+    // next write).
     c.execute("CREATE (:T {id: 9999, grp: 1})", None)
-        .unwrap_or_else(|e| panic!("write after decompress failed: {e}"));
+        .unwrap_or_else(|e| panic!("write on compressed db failed: {e}"));
     let vals = scan_grp(&db);
     assert_eq!(vals.len(), 401);
     assert!(vals.contains(&1));
+    assert!(
+        !db.has_compressed_columns(),
+        "writing should have decompressed the columns"
+    );
 }
 
 fn scan_v(db: &Arc<Database>) -> Vec<i64> {

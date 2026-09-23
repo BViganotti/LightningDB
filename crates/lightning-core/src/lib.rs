@@ -1193,6 +1193,28 @@ impl Database {
         }
     }
 
+    /// True if any column in any table is currently compressed.
+    pub fn has_compressed_columns(&self) -> bool {
+        let storage = self.storage_manager.read();
+        storage
+            .node_tables
+            .values()
+            .chain(storage.rel_tables.values())
+            .any(|t| t.columns.iter().any(|c| c.is_compressed()))
+    }
+
+    /// Transparently decompress any compressed columns before a write, so writes
+    /// "just work" on an otherwise-idle database. Compressed columns are an
+    /// immutable generation (see `Column::reencode_compressed`); decompression
+    /// requires no other transaction to be active, so under concurrent writers
+    /// this returns a retryable error instead.
+    pub fn ensure_writable_columns(&self) -> Result<()> {
+        if !self.has_compressed_columns() {
+            return Ok(());
+        }
+        self.decompress()
+    }
+
     pub fn is_column_indexed(&self, table_name: &str, col_name: &str) -> bool {
         let cat = self.catalog.read();
         if let Some(entry) = cat.node_tables.get(table_name) {
@@ -1745,6 +1767,14 @@ impl Connection {
             validate_no_auth_table_access(&query)?;
         }
         let is_read_only = query.is_read_only();
+
+        // A write on an idle database transparently decompresses any compressed
+        // (immutable-generation) columns first, as a separate committed
+        // transaction. Explicit transactions decompress on demand via
+        // `decompress` instead (their own tx would block the migration).
+        if !is_read_only && explicit_tx.is_none() {
+            db.ensure_writable_columns()?;
+        }
 
         let tx = match (snapshot_ts, explicit_tx) {
             (_, Some(tx)) => tx,
