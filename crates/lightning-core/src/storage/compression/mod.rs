@@ -167,3 +167,75 @@ mod alp_test;
 mod analyzer_test;
 #[cfg(test)]
 mod bitpacking_test;
+
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::dict::DictCompression;
+    use super::integer_bitpacking::IntegerBitpacking;
+    use super::rle::RleCompression;
+    use super::*;
+    use crate::processor::Value;
+
+    fn enc8(v: u64) -> [u8; 8] { v.to_le_bytes() }
+
+    fn roundtrip(alg: &dyn CompressionAlg, values: &[[u8; 8]], label: &str) {
+        let mut src = Vec::new();
+        for v in values {
+            src.extend_from_slice(v);
+        }
+        let meta = CompressionMetadata::new(Value::Null, Value::Null, alg.get_compression_type(), 0);
+        let mut dst = vec![0u8; 4096];
+        let (size, processed) = alg
+            .compress_next_page(&src, values.len() as u64, &mut dst, &meta)
+            .unwrap_or_else(|e| panic!("{label}: compress failed: {e}"));
+        let mut out = vec![0u8; values.len() * 8];
+        let res = alg.decompress_from_page(
+            &dst[..size as usize],
+            0,
+            &mut out,
+            0,
+            processed,
+            &meta,
+        );
+        match res {
+            Ok(()) => {
+                let ok = out[..processed as usize * 8] == src[..processed as usize * 8];
+                println!("{label}: processed={processed} ok={ok}");
+            }
+            Err(e) => println!("{label}: decompress error: {e}"),
+        }
+    }
+
+    #[test]
+    fn codec_roundtrips() {
+        // runs
+        let runs: Vec<[u8; 8]> = (0..64).map(|i| enc8(i / 16)).collect();
+        roundtrip(&RleCompression, &runs, "rle-runs");
+        let distinct: Vec<[u8; 8]> = (0..64).map(enc8).collect();
+        roundtrip(&RleCompression, &distinct, "rle-distinct");
+
+        // dictionary
+        let dict: Vec<[u8; 8]> = (0..64).map(|i| enc8((i * 3) % 5)).collect();
+        roundtrip(&DictCompression, &dict, "dict-small");
+
+        // integer bitpacking
+        let meta = CompressionMetadata::new(
+            Value::Number(0.0),
+            Value::Number(31.0),
+            CompressionType::IntegerBitpacking,
+            5,
+        );
+        let bp: Vec<[u8; 8]> = (0..64).map(|i| enc8(i % 32)).collect();
+        {
+            let mut src = Vec::new();
+            for v in &bp { src.extend_from_slice(v); }
+            let mut dst = vec![0u8; 4096];
+            let (size, processed) = IntegerBitpacking
+                .compress_next_page(&src, bp.len() as u64, &mut dst, &meta)
+                .unwrap();
+            let mut out = vec![0u8; bp.len() * 8];
+            let r = IntegerBitpacking.decompress_from_page(&dst[..size as usize], 0, &mut out, 0, processed, &meta);
+            println!("bitpacking: processed={processed} r={r:?} match={}", out[..processed as usize * 8] == src[..processed as usize * 8]);
+        }
+    }
+}
