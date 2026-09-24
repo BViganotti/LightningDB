@@ -49,11 +49,32 @@ impl InvertedIndex {
 
         let schema = schema_builder.build();
 
-        let dir = tantivy::directory::MmapDirectory::open(p)
-            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
-
-        let index = Index::open_or_create(dir, schema.clone())
-            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        // Open the existing Tantivy index, or create it. If an index already
+        // exists with a *different* schema (a column was added/removed, or an
+        // index left by an older generation is being reused), Tantivy returns
+        // "An index exists but the schema does not match". FTS is a derived
+        // index that can always be rebuilt from the column store, so a schema
+        // mismatch must never make the whole database unopenable — that turned
+        // one stale index into a total workspace/session loss. On any open
+        // failure, drop the index directory and recreate it from scratch.
+        let index = match Self::open_or_create_dir(p, &schema) {
+            Ok(idx) => idx,
+            Err(e) => {
+                tracing::warn!(
+                    "FTS index at {} is unusable ({}); rebuilding it from scratch",
+                    p.display(),
+                    e
+                );
+                if let Err(re) = std::fs::remove_dir_all(p) {
+                    return Err(crate::LightningError::Internal(format!(
+                        "failed to remove incompatible FTS index {}: {re}",
+                        p.display()
+                    )));
+                }
+                std::fs::create_dir_all(p)?;
+                Self::open_or_create_dir(p, &schema)?
+            }
+        };
 
         let writer = index
             .writer(DEFAULT_WRITER_MEMORY_BYTES)
@@ -75,10 +96,17 @@ impl InvertedIndex {
         })
     }
 
+    /// Open a Tantivy index at `p` with `schema`, creating it when absent.
+    fn open_or_create_dir(p: &Path, schema: &Schema) -> Result<Index> {
+        let dir = tantivy::directory::MmapDirectory::open(p)
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        Index::open_or_create(dir, schema.clone())
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))
+    }
+
     fn mark_pending(&self) {
         self.pending.store(true, Ordering::Release);
     }
-
     /// True when there are uncommitted FTS writes.
     pub fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
@@ -244,5 +272,33 @@ impl InvertedIndex {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InvertedIndex;
+
+    /// A persisted FTS index whose schema no longer matches the current model
+    /// must not make the database unopenable. Opening with a different set of
+    /// text fields has to self-heal (drop + rebuild) instead of surfacing
+    /// Tantivy's "schema does not match" error.
+    #[test]
+    fn schema_mismatch_self_heals() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("CodeNode_fts");
+
+        {
+            let first = InvertedIndex::new(&path, &["name".to_string()]);
+            assert!(first.is_ok(), "initial FTS index creation must succeed");
+        } // drop releases the writer lock
+
+        // Reopen with a different schema (an extra string column was added).
+        let second = InvertedIndex::new(&path, &["name".to_string(), "signature".to_string()]);
+        assert!(
+            second.is_ok(),
+            "reopening with a changed schema must rebuild the index, not fail: {:?}",
+            second.err()
+        );
     }
 }
