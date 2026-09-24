@@ -1183,138 +1183,71 @@ impl Column {
     ) -> Result<ArrayRef> {
         let values_per_page = self.layout().values_per_page;
         let total_bytes = num_values as usize * element_size;
-        let mut has_any_nulls = false;
-        let mut output_offset = 0usize;
-        let mut values_read = 0u64;
 
-        // Always read null bitmap — not relying on null_count stats which
-        // can be stale for CREATE→flush_buffer path.
+        // Null bitmap: the null file stores ONE BYTE per row (4096 rows/page).
+        // Arrow wants bit-packed validity. Pack exactly the range
+        // [offset, offset + num_values): the source byte for output index `k` is
+        // always `null_page_bytes[(offset % 4096) + k]`.
+        //
+        // The previous implementation packed 8 *source* bytes into one output
+        // byte starting at output index 0 (page-aligned branch) and/or assumed
+        // the morsel start was 8-aligned (non-aligned branch). A morsel can
+        // start at any row (e.g. 490, which is 512-boundary aligned but not
+        // 8-aligned), so every null bit after the first byte was shifted: rows
+        // silently became null (and were dropped) or non-null. This surfaced
+        // only after reopen because the live scan reads the whole table in one
+        // morsel from row 0, while a reopened table is scanned in page-aligned
+        // morsels that can start mid-byte.
         let mut null_bits = vec![0xFFu8; (num_values as usize).div_ceil(8)];
+        let mut has_any_nulls = false;
+        if num_values > 0 {
+            let null_first_page = offset / 4096;
+            let null_last_page = (offset + num_values - 1) / 4096;
+            let num_null_pages = null_last_page - null_first_page + 1;
+            let mut null_data = vec![0u8; (num_null_pages as usize) * 4096];
+            self.null_fh
+                .read_pages(null_first_page, num_null_pages, &mut null_data)?;
 
-        // Optimization: When offset is page-aligned, we can use fast bulk-reads
-        let is_page_aligned = offset % values_per_page == 0;
-
-        let data_buf = if is_page_aligned {
-            // Read all data pages in one syscall
-            let first_page = offset / values_per_page;
-            let last_page = (offset + num_values - 1) / values_per_page;
-            let num_pages = last_page - first_page + 1;
-            let expected_bytes = (num_pages as usize) * 4096;
-
-            let mut data_vec = vec![0u8; expected_bytes];
-            self.fh.read_pages(first_page, num_pages, &mut data_vec)?;
-            // Truncate down to the exact requested data size
-            data_vec.truncate(total_bytes);
-
-            {
-                // Read null pages in one syscall — always, since null_count
-                // stats may be stale for recently-written data.
-                let null_first_page = offset / 4096;
-                let null_last_page = (offset + num_values - 1) / 4096;
-                let num_null_pages = null_last_page - null_first_page + 1;
-                let mut null_data = vec![0u8; (num_null_pages as usize) * 4096];
-                self.null_fh
-                    .read_pages(null_first_page, num_null_pages, &mut null_data)?;
-
-                // Efficient branchless null bit extraction (8 bytes at a time)
-                let null_src = &null_data[..(num_values as usize)];
-                let mut chunk_iter = null_src.chunks_exact(8);
-                let mut out_idx = 0;
-                let mut any_nulls_int = 0u8;
-
-                for chunk in chunk_iter.by_ref() {
-                    let mut bitmask = 0u8;
-                    bitmask |= chunk[0];
-                    bitmask |= chunk[1] << 1;
-                    bitmask |= chunk[2] << 2;
-                    bitmask |= chunk[3] << 3;
-                    bitmask |= chunk[4] << 4;
-                    bitmask |= chunk[5] << 5;
-                    bitmask |= chunk[6] << 6;
-                    bitmask |= chunk[7] << 7;
-
-                    null_bits[out_idx] &= !bitmask;
-                    any_nulls_int |= bitmask;
-                    out_idx += 1;
-                }
-
-                // Remainder
-                let remainder = chunk_iter.remainder();
-                if !remainder.is_empty() {
-                    let mut bitmask = 0u8;
-                    for (i, &b) in remainder.iter().enumerate() {
-                        bitmask |= b << i;
+            let base = (offset % 4096) as usize;
+            let n = num_values as usize;
+            let full_bytes = n / 8;
+            for b in 0..full_bytes {
+                let s = base + b * 8;
+                let mut word = 0u8;
+                for j in 0..8 {
+                    if null_data[s + j] != 0 {
+                        word |= 1u8 << j;
                     }
-                    null_bits[out_idx] &= !bitmask;
-                    any_nulls_int |= bitmask;
                 }
-
-                has_any_nulls = any_nulls_int != 0;
+                null_bits[b] &= !word;
             }
+            let rem = n % 8;
+            if rem > 0 {
+                let s = base + full_bytes * 8;
+                let mut word = 0u8;
+                for j in 0..rem {
+                    if null_data[s + j] != 0 {
+                        word |= 1u8 << j;
+                    }
+                }
+                null_bits[full_bytes] &= !word;
+            }
+            has_any_nulls = null_bits.iter().any(|&b| b != 0xFF);
+        }
 
-            Buffer::from(data_vec)
-        } else {
+        // Data: rows are contiguous, so the range is one byte slice
+        // [offset*es, (offset+n)*es) — read the covering pages and slice it out.
+        let mut data_buffer = MutableBuffer::with_capacity(total_bytes);
+        if num_values > 0 {
             let first_page = offset / values_per_page;
             let last_page = (offset + num_values - 1) / values_per_page;
             let num_pages = last_page - first_page + 1;
             let mut pages_buf = vec![0u8; (num_pages as usize) * 4096];
             self.fh.read_pages(first_page, num_pages, &mut pages_buf)?;
-
-            let null_first_page = offset / 4096;
-            let null_last_page = (offset + num_values - 1) / 4096;
-            let num_null_pages = null_last_page - null_first_page + 1;
-            let mut null_pages = vec![0u8; (num_null_pages as usize) * 4096];
-            self.null_fh
-                .read_pages(null_first_page, num_null_pages, &mut null_pages)?;
-
-            let mut data_buffer = MutableBuffer::with_capacity(total_bytes);
-
-            while values_read < num_values {
-                let current_offset = offset + values_read;
-                let page_idx = current_offset / values_per_page;
-                let offset_in_page = (current_offset % values_per_page) as usize;
-                let to_read = std::cmp::min(
-                    num_values - values_read,
-                    values_per_page - offset_in_page as u64,
-                ) as usize;
-
-                let page_offset = ((page_idx - first_page) as usize) * 4096;
-                let src_start = page_offset + offset_in_page * element_size;
-                let src_end = src_start + to_read * element_size;
-                data_buffer.extend_from_slice(&pages_buf[src_start..src_end]);
-
-                let null_page_idx = current_offset / 4096;
-                let null_page_offset = ((null_page_idx - null_first_page) as usize) * 4096;
-                let null_base_offset = (current_offset % 4096) as usize;
-                let null_src = &null_pages
-                    [null_page_offset + null_base_offset..null_page_offset + null_base_offset + to_read];
-
-                let mut i = 0;
-                while i + 8 <= to_read {
-                    let bytes = &null_src[i..i + 8];
-                    let mut word: u8 = 0;
-                    for (j, byte) in bytes.iter().enumerate() {
-                        if *byte != 0 {
-                            word |= 1 << j;
-                            has_any_nulls = true;
-                        }
-                    }
-                    null_bits[(output_offset + i) / 8] &= !word;
-                    i += 8;
-                }
-                for j in i..to_read {
-                    if null_src[j] != 0 {
-                        null_bits[(output_offset + j) / 8] &=
-                            !(1u8 << ((output_offset + j) % 8));
-                        has_any_nulls = true;
-                    }
-                }
-
-                values_read += to_read as u64;
-                output_offset += to_read;
-            }
-            Buffer::from(data_buffer)
-        };
+            let start_in_page = (offset % values_per_page) as usize * element_size;
+            data_buffer
+                .extend_from_slice(&pages_buf[start_in_page..start_in_page + total_bytes]);
+        }
 
         let null_buf = if has_any_nulls {
             Some(NullBuffer::new(BooleanBuffer::new(
@@ -1326,7 +1259,12 @@ impl Column {
             None
         };
 
-        self.build_array(target_type, data_buf, null_buf, num_values as usize)
+        self.build_array(
+            target_type,
+            Buffer::from(data_buffer),
+            null_buf,
+            num_values as usize,
+        )
     }
 
     fn build_array(

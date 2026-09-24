@@ -127,3 +127,166 @@ fn concurrent_soak_readers_and_writers() {
     .unwrap();
     assert_eq!(scan_ids(&db2), expected, "soak reopen mismatch");
 }
+
+/// Wall-clock soak: continuous concurrent writers + readers for `SOAK_SECS`
+/// (default 10s; set higher locally / in a nightly job). Verifies the final
+/// state matches the model and survives reopen.
+#[test]
+fn concurrent_soak_timed() {
+    use std::time::{Duration, Instant};
+    let secs: u64 = std::env::var("SOAK_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(
+        dir.path(),
+        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+    )
+    .unwrap();
+    db.connect()
+        .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+        .unwrap();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let model = Arc::new(Mutex::new(BTreeSet::<i64>::new()));
+    let threads = 6u64;
+    let deadline = Instant::now() + Duration::from_secs(secs);
+
+    let writers: Vec<_> = (0..threads)
+        .map(|t| {
+            let db = Arc::clone(&db);
+            let model = Arc::clone(&model);
+            std::thread::spawn(move || {
+                let c = db.connect();
+                let base = (t * 1_000_000) as i64;
+                let mut n = 0i64;
+                let mut x = t.wrapping_mul(2654435761).wrapping_add(7);
+                let run = |sql: &str| {
+                    for _ in 0..100000 {
+                        match c.execute(sql, None) {
+                            Ok(_) => return true,
+                            Err(e) if e.to_string().contains("Write-Write Conflict") => {
+                                std::thread::yield_now()
+                            }
+                            Err(e) => panic!("{e}"),
+                        }
+                    }
+                    false
+                };
+                while Instant::now() < deadline {
+                    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                    let id = base + n;
+                    n += 1;
+                    if run(&format!("CREATE (:T {{id: {id}, v: {id}}})")) {
+                        model.lock().unwrap().insert(id);
+                    }
+                    // occasionally delete an earlier row in this writer's range
+                    if n > 4 && x % 4 == 0 {
+                        let j = base + (x % n as u64) as i64;
+                        if run(&format!("MATCH (t:T {{id: {j}}}) DELETE t")) {
+                            model.lock().unwrap().remove(&j);
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+
+    let readers: Vec<_> = (0..4)
+        .map(|_| {
+            let db = Arc::clone(&db);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+                    let _ = scan_ids(&db);
+                    let _ = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap();
+                }
+            })
+        })
+        .collect();
+
+    for w in writers {
+        w.join().unwrap();
+    }
+    stop.store(true, Ordering::Relaxed);
+    for r in readers {
+        r.join().unwrap();
+    }
+
+    let expected = model.lock().unwrap().clone();
+    let actual = scan_ids(&db);
+    assert_eq!(actual, expected, "timed soak final state mismatch");
+    let live_count = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap().batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    eprintln!("SOAK live scan={} count(*)={} model={}", actual.len(), live_count, expected.len());
+    db.checkpoint().unwrap();
+    drop(db);
+    let db2 = Database::new(
+        dir.path(),
+        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+    )
+    .unwrap();
+    let reopened = scan_ids(&db2);
+    let rc = db2.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap().batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    eprintln!("SOAK reopen scan={} count(*)={}", reopened.len(), rc);
+    if reopened != expected {
+        let missing: Vec<i64> = expected.difference(&reopened).take(10).copied().collect();
+        let extra: Vec<i64> = reopened.difference(&expected).take(10).copied().collect();
+        let probe = missing.first().map(|&m| {
+            let r = db2.connect().execute(&format!("MATCH (t:T {{id: {m}}}) RETURN t.v"), None).unwrap();
+            r.batches.iter().map(|b| b.num_rows()).sum::<usize>()
+        });
+        panic!("timed soak reopen mismatch: expected={} reopened={} missing={missing:?} extra={extra:?} idx_lookup_first_missing={probe:?}", expected.len(), reopened.len());
+    }
+}
+
+/// Regression: interleaved inserts + deletes then checkpoint + reopen must keep
+/// every committed row. This used to lose rows because the reopen path scans
+/// the table in morsels that start on a 512-row page boundary, not row 0; the
+/// direct (no-modifications) scan packed the one-byte-per-row null bitmap into
+/// Arrow's bit-packed validity assuming the morsel start was 8-aligned, so a
+/// morsel starting at e.g. row 490 shifted every null bit — valid rows read as
+/// null and were dropped. Deterministic: a single writer with this exact op
+/// sequence reproduced it (missing rows 518, 547 at 700 steps).
+#[test]
+fn reopen_after_interleaved_insert_delete_keeps_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::new(
+        dir.path(),
+        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+    )
+    .unwrap();
+    db.connect()
+        .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+        .unwrap();
+
+    let mut model: BTreeSet<i64> = BTreeSet::new();
+    let mut x: u64 = 7;
+    let mut n: i64 = 0;
+    {
+        let c = db.connect();
+        for _ in 0..700 {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            let id = n; n += 1;
+            c.execute(&format!("CREATE (:T {{id: {id}, v: {id}}})"), None).unwrap();
+            model.insert(id);
+            if n > 4 && x % 4 == 0 {
+                let j = (x % n as u64) as i64;
+                c.execute(&format!("MATCH (t:T {{id: {j}}}) DELETE t"), None).unwrap();
+                model.remove(&j);
+            }
+        }
+    }
+    assert_eq!(scan_ids(&db), model, "live state mismatch");
+
+    db.checkpoint().unwrap();
+    drop(db);
+    let db2 = Database::new(
+        dir.path(),
+        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+    )
+    .unwrap();
+    let reopened = scan_ids(&db2);
+    let missing: Vec<i64> = model.difference(&reopened).take(20).copied().collect();
+    assert!(missing.is_empty(), "rows lost after reopen: {missing:?}");
+}
