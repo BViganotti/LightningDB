@@ -529,10 +529,29 @@ impl Database {
             // outlives the call and holds the lock.
             let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
             if rc != 0 {
+                // Record the holder's pid in the LOCK file so a contender can
+                // identify which process to stop. Absent for older binaries.
+                let holder = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let holder_msg = match holder {
+                    Some(pid) => format!(" (held by pid {pid})"),
+                    None => String::new(),
+                };
                 return Err(LightningError::Internal(format!(
-                    "database at {} is already open in another process",
+                    "database at {} is already open in another process{holder_msg}; stop that process, or open the workspace with a separate database",
                     path.display()
                 )));
+            }
+            // We hold the lock: record our pid so contenders can identify us.
+            {
+                use std::io::{Seek, SeekFrom, Write};
+                let _ = file.set_len(0);
+                let mut f = &file;
+                let _ = f.seek(SeekFrom::Start(0));
+                let _ = write!(&mut f, "{}", std::process::id());
+                let _ = f.flush();
             }
             Ok(Some(file))
         }
