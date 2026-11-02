@@ -515,8 +515,11 @@ impl VectorIndex {
             return unsafe { Self::neon_dot(a, b) };
         }
         #[cfg(target_arch = "x86_64")]
-        if a.len() >= 8 && std::arch::is_x86_feature_detected!("avx2") {
-            // SAFETY: AVX2 dot product with bounds guard `a.len() >= 8`.
+        if a.len() >= 8
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+        {
+            // SAFETY: AVX2 + FMA dot product with bounds guard `a.len() >= 8`.
             return unsafe { Self::avx2_dot(a, b) };
         }
         #[cfg(target_arch = "x86_64")]
@@ -530,7 +533,8 @@ impl VectorIndex {
 
     /// ARM64 NEON SIMD dot product: processes 4 f32 values per iteration
     /// using FMA (fused multiply-add) for maximum throughput.
-    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
     unsafe fn neon_dot(a: &[f32], b: &[f32]) -> f32 {
         use std::arch::aarch64::*;
         let n = a.len();
@@ -552,7 +556,8 @@ impl VectorIndex {
         result
     }
 
-    #[cfg(target_feature = "avx2")]
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2,fma")]
     unsafe fn avx2_dot(a: &[f32], b: &[f32]) -> f32 {
         use std::arch::x86_64::*;
         let n = a.len();
@@ -574,7 +579,8 @@ impl VectorIndex {
         total
     }
 
-    #[cfg(target_feature = "sse")]
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "sse")]
     unsafe fn sse_dot(a: &[f32], b: &[f32]) -> f32 {
         use std::arch::x86_64::*;
         let n = a.len();
