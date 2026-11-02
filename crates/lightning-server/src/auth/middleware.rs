@@ -1,24 +1,20 @@
 use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
+use axum::extract::Request;
 use axum::extract::State;
 use axum::http::{header, request::Parts, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use axum::middleware::Next;
-use axum::extract::Request;
 
 use crate::auth::jwt;
-use crate::auth::models::{AuthMethod, AuthenticatedUser, AuthMode, Role};
+use crate::auth::models::{AuthMethod, AuthMode, AuthenticatedUser, Role};
 use crate::auth::store::AuthStore;
 use crate::models::response::ErrorResponse;
 use crate::server::AppState;
 
-const PUBLIC_PATHS: &[&str] = &[
-    "/health",
-    "/metrics",
-    "/v1/auth/login",
-];
+const PUBLIC_PATHS: &[&str] = &["/health", "/metrics", "/v1/auth/login"];
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUserExtractor(pub AuthenticatedUser);
@@ -29,10 +25,7 @@ where
 {
     type Rejection = Response;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         parts
             .extensions
             .get::<AuthenticatedUser>()
@@ -60,7 +53,10 @@ pub async fn auth_middleware(
 ) -> Result<Response, Response> {
     let path = req.uri().path();
 
-    if PUBLIC_PATHS.iter().any(|p| path == *p || path.starts_with(&format!("{p}/"))) {
+    if PUBLIC_PATHS
+        .iter()
+        .any(|p| path == *p || path.starts_with(&format!("{p}/")))
+    {
         return Ok(next.run(req).await);
     }
 
@@ -121,8 +117,7 @@ pub async fn auth_middleware(
                             Ok(next.run(req).await)
                         }
                         Err(_) => {
-                            let api_key_result =
-                                state.auth_store.authenticate_api_key(&token);
+                            let api_key_result = state.auth_store.authenticate_api_key(&token);
                             match api_key_result {
                                 Ok(user) => {
                                     req.extensions_mut().insert(user);
@@ -133,7 +128,9 @@ pub async fn auth_middleware(
                         }
                     }
                 }
-                None => Err(unauthorized_response("authorization header required (Bearer token)")),
+                None => Err(unauthorized_response(
+                    "authorization header required (Bearer token)",
+                )),
             }
         }
     }
@@ -169,21 +166,18 @@ fn unauthorized_response(message: &str) -> Response {
 }
 
 async fn check_role(req: Request, next: Next, required: Role) -> Result<Response, Response> {
-    let user = req
-        .extensions()
-        .get::<AuthenticatedUser>()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Authentication required".to_string(),
-                    code: Some("AUTH_REQUIRED".to_string()),
-                    details: None,
-                    request_id: None,
-                }),
-            )
-                .into_response()
-        })?;
+    let user = req.extensions().get::<AuthenticatedUser>().ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "Authentication required".to_string(),
+                code: Some("AUTH_REQUIRED".to_string()),
+                details: None,
+                request_id: None,
+            }),
+        )
+            .into_response()
+    })?;
 
     if user.role.has_at_least(&required) {
         Ok(next.run(req).await)

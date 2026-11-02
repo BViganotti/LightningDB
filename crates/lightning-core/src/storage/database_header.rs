@@ -89,11 +89,10 @@ impl DatabaseHeader {
         // V2: bincode payload followed by a 4-byte crc32 over the payload.
         if buf.len() > 4 {
             let (payload, crc_bytes) = buf.split_at(buf.len() - 4);
-            let expected = u32::from_le_bytes(
-                crc_bytes
-                    .try_into()
-                    .map_err(|_| crate::LightningError::Database("bad header crc length".into()))?,
-            );
+            let expected =
+                u32::from_le_bytes(crc_bytes.try_into().map_err(|_| {
+                    crate::LightningError::Database("bad header crc length".into())
+                })?);
             let mut hasher = Hasher::new();
             hasher.update(payload);
             if hasher.finalize() == expected {

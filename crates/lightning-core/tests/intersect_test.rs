@@ -21,11 +21,10 @@ fn test_intersect_operator() {
         conn.execute(
             "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
             None,
-        ).unwrap();
-        conn.execute(
-            "CREATE REL TABLE Follows(FROM User TO User)",
-            None,
-        ).unwrap();
+        )
+        .unwrap();
+        conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+            .unwrap();
 
         // Manual catalog update for tests
         let mut catalog = db.catalog().write();
@@ -43,16 +42,36 @@ fn test_intersect_operator() {
 
         // Users: storage has [_id, name] columns
         user_table
-            .append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx)
+            .append_row(
+                bm,
+                &[Value::Node(0), Value::String("Alice".to_string())],
+                0,
+                &tx,
+            )
             .unwrap();
         user_table
-            .append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx)
+            .append_row(
+                bm,
+                &[Value::Node(1), Value::String("Bob".to_string())],
+                1,
+                &tx,
+            )
             .unwrap();
         user_table
-            .append_row(bm, &[Value::Node(2), Value::String("Charlie".to_string())], 2, &tx)
+            .append_row(
+                bm,
+                &[Value::Node(2), Value::String("Charlie".to_string())],
+                2,
+                &tx,
+            )
             .unwrap();
         user_table
-            .append_row(bm, &[Value::Node(3), Value::String("David".to_string())], 3, &tx)
+            .append_row(
+                bm,
+                &[Value::Node(3), Value::String("David".to_string())],
+                3,
+                &tx,
+            )
             .unwrap();
 
         // Follows: (src, dst)
@@ -85,19 +104,25 @@ fn test_intersect_operator() {
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     // Build 1: Scan Follows
-    let scan1 = Box::new(PhysicalScan::new(
-        follows_table.clone(),
-        "e1".to_string(),
-        db.buffer_manager().clone(),
-        5,
-    ).unwrap());
+    let scan1 = Box::new(
+        PhysicalScan::new(
+            follows_table.clone(),
+            "e1".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
     // Build 2: Scan Follows
-    let scan2 = Box::new(PhysicalScan::new(
-        follows_table,
-        "e2".to_string(),
-        db.buffer_manager().clone(),
-        5,
-    ).unwrap());
+    let scan2 = Box::new(
+        PhysicalScan::new(
+            follows_table,
+            "e2".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
 
     // Probe side: provides [(0, 1)] (one row, two columns: a=0, b=1)
     #[derive(Clone)]
@@ -181,11 +206,10 @@ fn test_intersect_no_match() {
         conn.execute(
             "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
             None,
-        ).unwrap();
-        conn.execute(
-            "CREATE REL TABLE Follows(FROM User TO User)",
-            None,
-        ).unwrap();
+        )
+        .unwrap();
+        conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+            .unwrap();
         let mut catalog = db.catalog().write();
         catalog.get_node_table_mut("User").unwrap().num_rows = 4;
         catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
@@ -197,15 +221,53 @@ fn test_intersect_no_match() {
         let storage = db.storage_manager().read();
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
-        user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
-        user_table.append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx).unwrap();
-        user_table.append_row(bm, &[Value::Node(2), Value::String("Charlie".to_string())], 2, &tx).unwrap();
-        user_table.append_row(bm, &[Value::Node(3), Value::String("David".to_string())], 3, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(0), Value::Node(3)], 1, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(1), Value::Node(2)], 2, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 3, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(1), Value::Node(4)], 4, &tx).unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(0), Value::String("Alice".to_string())],
+                0,
+                &tx,
+            )
+            .unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(1), Value::String("Bob".to_string())],
+                1,
+                &tx,
+            )
+            .unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(2), Value::String("Charlie".to_string())],
+                2,
+                &tx,
+            )
+            .unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(3), Value::String("David".to_string())],
+                3,
+                &tx,
+            )
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx)
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(0), Value::Node(3)], 1, &tx)
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(1), Value::Node(2)], 2, &tx)
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(1), Value::Node(3)], 3, &tx)
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(1), Value::Node(4)], 4, &tx)
+            .unwrap();
         db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
@@ -216,7 +278,9 @@ fn test_intersect_no_match() {
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     #[derive(Clone)]
-    struct NoMatchProbe { done: bool }
+    struct NoMatchProbe {
+        done: bool,
+    }
     impl PhysicalOperator for NoMatchProbe {
         fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
             Box::new((*self).clone())
@@ -227,7 +291,9 @@ fn test_intersect_no_match() {
             _tx: &lightning_core::transaction::transaction_manager::Transaction,
             _params: Option<&std::collections::HashMap<String, lightning_core::processor::Value>>,
         ) -> lightning_core::Result<Option<DataChunk>> {
-            if self.done { return Ok(None); }
+            if self.done {
+                return Ok(None);
+            }
             self.done = true;
             let a = Arc::new(UInt64Array::from(vec![999]));
             let b = Arc::new(UInt64Array::from(vec![888]));
@@ -241,11 +307,32 @@ fn test_intersect_no_match() {
     }
 
     let probe = Box::new(NoMatchProbe { done: false });
-    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager().clone(), 5).unwrap());
-    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager().clone(), 5).unwrap());
+    let scan1 = Box::new(
+        PhysicalScan::new(
+            follows_table.clone(),
+            "e1".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
+    let scan2 = Box::new(
+        PhysicalScan::new(
+            follows_table,
+            "e2".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
 
     let mut intersect = PhysicalIntersect::new(
-        probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
+        probe,
+        vec![0, 1],
+        vec![scan1, scan2],
+        vec![0, 0],
+        vec![1, 1],
+        "c".to_string(),
     );
 
     let tx = db.transaction_manager().begin(false).unwrap();
@@ -263,8 +350,13 @@ fn test_intersect_empty_probe() {
     .unwrap();
     {
         let conn = db.connect();
-        conn.execute("CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))", None).unwrap();
-        conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+        conn.execute(
+            "CREATE NODE TABLE User(name STRING, PRIMARY KEY(name))",
+            None,
+        )
+        .unwrap();
+        conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+            .unwrap();
         let mut catalog = db.catalog().write();
         catalog.get_node_table_mut("User").unwrap().num_rows = 4;
         catalog.get_rel_table_mut("Follows").unwrap().num_rows = 5;
@@ -275,10 +367,28 @@ fn test_intersect_empty_probe() {
         let storage = db.storage_manager().read();
         let user_table = storage.get_table("User").unwrap();
         let follows_table = storage.get_table("Follows").unwrap();
-        user_table.append_row(bm, &[Value::Node(0), Value::String("Alice".to_string())], 0, &tx).unwrap();
-        user_table.append_row(bm, &[Value::Node(1), Value::String("Bob".to_string())], 1, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx).unwrap();
-        follows_table.append_row(bm, &[Value::Node(1), Value::Node(3)], 1, &tx).unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(0), Value::String("Alice".to_string())],
+                0,
+                &tx,
+            )
+            .unwrap();
+        user_table
+            .append_row(
+                bm,
+                &[Value::Node(1), Value::String("Bob".to_string())],
+                1,
+                &tx,
+            )
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(0), Value::Node(2)], 0, &tx)
+            .unwrap();
+        follows_table
+            .append_row(bm, &[Value::Node(1), Value::Node(3)], 1, &tx)
+            .unwrap();
         db.transaction_manager().commit(&tx, bm, &db).unwrap();
     }
 
@@ -289,7 +399,9 @@ fn test_intersect_empty_probe() {
     let follows_table = storage.get_table("Follows").unwrap().clone();
 
     #[derive(Clone)]
-    struct EmptyProbe { done: bool }
+    struct EmptyProbe {
+        done: bool,
+    }
     impl PhysicalOperator for EmptyProbe {
         fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {
             Box::new((*self).clone())
@@ -300,18 +412,41 @@ fn test_intersect_empty_probe() {
             _tx: &lightning_core::transaction::transaction_manager::Transaction,
             _params: Option<&std::collections::HashMap<String, lightning_core::processor::Value>>,
         ) -> lightning_core::Result<Option<DataChunk>> {
-            if self.done { return Ok(None); }
+            if self.done {
+                return Ok(None);
+            }
             self.done = true;
             Ok(None)
         }
     }
 
     let probe = Box::new(EmptyProbe { done: false });
-    let scan1 = Box::new(PhysicalScan::new(follows_table.clone(), "e1".to_string(), db.buffer_manager().clone(), 5).unwrap());
-    let scan2 = Box::new(PhysicalScan::new(follows_table, "e2".to_string(), db.buffer_manager().clone(), 5).unwrap());
+    let scan1 = Box::new(
+        PhysicalScan::new(
+            follows_table.clone(),
+            "e1".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
+    let scan2 = Box::new(
+        PhysicalScan::new(
+            follows_table,
+            "e2".to_string(),
+            db.buffer_manager().clone(),
+            5,
+        )
+        .unwrap(),
+    );
 
     let mut intersect = PhysicalIntersect::new(
-        probe, vec![0, 1], vec![scan1, scan2], vec![0, 0], vec![1, 1], "c".to_string(),
+        probe,
+        vec![0, 1],
+        vec![scan1, scan2],
+        vec![0, 0],
+        vec![1, 1],
+        "c".to_string(),
     );
 
     let tx = db.transaction_manager().begin(false).unwrap();

@@ -15,7 +15,10 @@ fn count_rows(res: &lightning_core::QueryResult) -> usize {
 }
 
 fn setup_data(conn: &lightning_core::Connection) -> TestResult {
-    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING, age INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Person(id INT64, name STRING, age INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:Person {id: 1, name: 'Alice', age: 30})", None)?;
     conn.execute("CREATE (:Person {id: 2, name: 'Bob', age: 25})", None)?;
     conn.execute("CREATE (:Person {id: 3, name: 'Charlie', age: 35})", None)?;
@@ -65,7 +68,10 @@ fn test_union_dedup() -> TestResult {
 fn test_union_empty() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     let res = conn.execute(
         "MATCH (t:T) RETURN t.val AS val UNION MATCH (t:T) RETURN t.val AS val",
         None,
@@ -117,8 +123,14 @@ fn test_union_all_with_limit() -> TestResult {
 fn test_union_different_labels() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))", None)?;
-    conn.execute("CREATE NODE TABLE Employee(id INT64, name STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )?;
+    conn.execute(
+        "CREATE NODE TABLE Employee(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:Person {id: 1, name: 'Alice'})", None)?;
     conn.execute("CREATE (:Employee {id: 1, name: 'Alice'})", None)?;
     let res = conn.execute(

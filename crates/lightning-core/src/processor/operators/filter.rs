@@ -38,7 +38,10 @@ impl PhysicalOperator for PhysicalFilter {
                 database,
             )?;
             // Debug: check if filter actually filters
-            if let Some(ba) = eval_res.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+            if let Some(ba) = eval_res
+                .as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+            {
                 let true_count = ba.iter().filter(|v| v.unwrap_or(false)).count();
                 if true_count > 0 && true_count < num_rows {
                     tracing::info!("Filter: kept {} of {} rows", true_count, num_rows);
@@ -53,7 +56,10 @@ impl PhysicalOperator for PhysicalFilter {
             // rows with null comparisons to pass the filter incorrectly.
             // Replace nulls with false to ensure correct filtering.
             let mask: &BooleanArray = if mask_raw.null_count() > 0 {
-                &mask_raw.iter().map(|v| v.unwrap_or(false)).collect::<BooleanArray>()
+                &mask_raw
+                    .iter()
+                    .map(|v| v.unwrap_or(false))
+                    .collect::<BooleanArray>()
             } else {
                 mask_raw
             };

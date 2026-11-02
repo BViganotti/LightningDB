@@ -44,7 +44,11 @@ fn csr_rebuild_preserves_traversal_and_edge_less_nodes() -> TestResult {
         "MATCH (a:N {id: 1})-[r:E]->(b:N) RETURN b.id ORDER BY b.id",
         None,
     )?;
-    assert_eq!(row_count(&res), 3, "all three edges must survive a CSR rebuild");
+    assert_eq!(
+        row_count(&res),
+        3,
+        "all three edges must survive a CSR rebuild"
+    );
 
     // A node with no outgoing edges must yield an empty result: offsets cover
     // every valid node id, so no stale edges can leak in from a prior build.

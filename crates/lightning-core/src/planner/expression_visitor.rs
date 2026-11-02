@@ -61,7 +61,9 @@ pub trait ExpressionVisitor {
             BoundExpression::Exists(steps) | BoundExpression::CountSubquery(steps) => {
                 for (match_clause, where_clause) in steps {
                     for element in &match_clause.elements {
-                        if let crate::planner::binder::BoundMatchElement::Node(_, _, props) = element {
+                        if let crate::planner::binder::BoundMatchElement::Node(_, _, props) =
+                            element
+                        {
                             for (_, expr) in props {
                                 self.visit(expr);
                             }
@@ -138,9 +140,7 @@ pub trait ExpressionRewriter {
             BoundExpression::Lambda(var, body) => {
                 BoundExpression::Lambda(var, Box::new(self.rewrite(*body)))
             }
-            BoundExpression::Not(expr) => {
-                BoundExpression::Not(Box::new(self.rewrite(*expr)))
-            }
+            BoundExpression::Not(expr) => BoundExpression::Not(Box::new(self.rewrite(*expr))),
             BoundExpression::Map(entries, ty) => {
                 let mut rewritten = Vec::new();
                 for (key, expr) in entries {
@@ -151,9 +151,7 @@ pub trait ExpressionRewriter {
             BoundExpression::Exists(steps) => {
                 BoundExpression::Exists(steps) // subqueries handled at planner level
             }
-            BoundExpression::CountSubquery(steps) => {
-                BoundExpression::CountSubquery(steps)
-            }
+            BoundExpression::CountSubquery(steps) => BoundExpression::CountSubquery(steps),
             _ => self.rewrite_leaf(expr),
         }
     }

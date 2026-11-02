@@ -55,8 +55,7 @@ impl LazyCatalog {
     }
 
     pub fn from_disk(path: &std::path::Path) -> std::io::Result<Self> {
-        let catalog = Catalog::load_from_disk(path)
-            .map_err(std::io::Error::other)?;
+        let catalog = Catalog::load_from_disk(path).map_err(std::io::Error::other)?;
         Ok(Self::new(catalog, Some(path.to_path_buf())))
     }
 
@@ -140,7 +139,8 @@ impl LazyCatalog {
         let _save_guard = self.save_mutex.lock();
         catalog.save_to_disk(&path)?;
         self.dirty.store(false, Ordering::Release);
-        self.last_saved_tx_count.store(current + 1, Ordering::Release);
+        self.last_saved_tx_count
+            .store(current + 1, Ordering::Release);
         Ok(())
     }
 
@@ -164,7 +164,8 @@ impl LazyCatalog {
         catalog_guard.save_to_disk(&path)?;
 
         self.dirty.store(false, Ordering::Release);
-        self.last_saved_tx_count.store(current_tx_count, Ordering::Release);
+        self.last_saved_tx_count
+            .store(current_tx_count, Ordering::Release);
 
         debug!(
             "Catalog saved successfully, dirty=false, last_saved_tx_count={}",

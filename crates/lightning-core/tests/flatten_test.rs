@@ -32,49 +32,50 @@ fn test_flatten_operator() -> Result<()> {
                     type_: lightning_types::LogicalType::String,
                 }],
                 Some("name".to_string()),
-            ).unwrap();
+            )
+            .unwrap();
             cat.node_tables.get_mut("User").unwrap().num_rows = 3;
         }
 
         // 2. Create table in StorageManager. Scope the write guard so it is
         //    dropped before `commit`, which needs the storage read lock.
         {
-        let mut sm_write = sm.write();
-        sm_write
-            .create_table(
-                "User".to_string(),
-                vec![("name".to_string(), lightning_types::LogicalType::String)],
-                false,
-                None,
-            )
-            .unwrap();
+            let mut sm_write = sm.write();
+            sm_write
+                .create_table(
+                    "User".to_string(),
+                    vec![("name".to_string(), lightning_types::LogicalType::String)],
+                    false,
+                    None,
+                )
+                .unwrap();
 
-        // 3. Append rows
-        let table = sm_write.node_tables.get("User").unwrap();
-        table
-            .append_row(
-                &db.buffer_manager(),
-                &[Value::Node(1), Value::String("Alice".to_string())],
-                0,
-                &tx,
-            )
-            .unwrap();
-        table
-            .append_row(
-                &db.buffer_manager(),
-                &[Value::Node(2), Value::String("Bob".to_string())],
-                1,
-                &tx,
-            )
-            .unwrap();
-        table
-            .append_row(
-                &db.buffer_manager(),
-                &[Value::Node(3), Value::String("Charlie".to_string())],
-                2,
-                &tx,
-            )
-            .unwrap();
+            // 3. Append rows
+            let table = sm_write.node_tables.get("User").unwrap();
+            table
+                .append_row(
+                    &db.buffer_manager(),
+                    &[Value::Node(1), Value::String("Alice".to_string())],
+                    0,
+                    &tx,
+                )
+                .unwrap();
+            table
+                .append_row(
+                    &db.buffer_manager(),
+                    &[Value::Node(2), Value::String("Bob".to_string())],
+                    1,
+                    &tx,
+                )
+                .unwrap();
+            table
+                .append_row(
+                    &db.buffer_manager(),
+                    &[Value::Node(3), Value::String("Charlie".to_string())],
+                    2,
+                    &tx,
+                )
+                .unwrap();
         } // drop sm_write before committing
 
         db.transaction_manager()

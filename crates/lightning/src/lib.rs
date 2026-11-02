@@ -6,19 +6,21 @@ pub mod types;
 pub mod prelude {
     pub use crate::connection::Connection;
     pub use crate::database::Database;
-    pub use crate::memory::{MemoryStore, DataChunk, DEFAULT_EMBEDDING_DIM};
+    pub use crate::memory::{DataChunk, MemoryStore, DEFAULT_EMBEDDING_DIM};
     pub use crate::types::{Result, TypedQueryResult, Value};
 
     pub use lightning_core::memory::{
         ChangeEvent, ConsolidationReport, MemoryEntity, MemoryRelation, RagConfig, RagResult,
         SearchResult,
     };
-    pub use lightning_core::{DatabaseMetrics, LightningError, QueryResult, SyncMode, SystemConfig};
+    pub use lightning_core::{
+        DatabaseMetrics, LightningError, QueryResult, SyncMode, SystemConfig,
+    };
 }
 
 pub use connection::Connection;
 pub use database::Database;
-pub use memory::{MemoryStore, DataChunk};
+pub use memory::{DataChunk, MemoryStore};
 
 pub use lightning_core::memory::{
     ChangeEvent, ConsolidationReport, MemoryEntity, MemoryRelation, RagConfig, RagResult,

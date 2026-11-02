@@ -60,7 +60,11 @@ impl PhysicalRecursiveJoin {
         self
     }
 
-    fn get_output_field_type(&self, chunk_schema: &arrow::datatypes::Schema, idx: usize) -> arrow::datatypes::DataType {
+    fn get_output_field_type(
+        &self,
+        chunk_schema: &arrow::datatypes::Schema,
+        idx: usize,
+    ) -> arrow::datatypes::DataType {
         let num_chunk_cols = chunk_schema.fields().len();
         let num_dst_cols = self.dst_table.columns.len();
         let num_rel_cols = self.rel_table.columns.len();
@@ -68,10 +72,14 @@ impl PhysicalRecursiveJoin {
             chunk_schema.field(idx).data_type().clone()
         } else if idx < num_chunk_cols + num_dst_cols {
             let prop_idx = idx - num_chunk_cols;
-            crate::processor::arrow_utils::logical_type_to_arrow_type(&self.dst_table.columns[prop_idx].data_type)
+            crate::processor::arrow_utils::logical_type_to_arrow_type(
+                &self.dst_table.columns[prop_idx].data_type,
+            )
         } else if idx < num_chunk_cols + num_dst_cols + num_rel_cols {
             let prop_idx = idx - num_chunk_cols - num_dst_cols;
-            crate::processor::arrow_utils::logical_type_to_arrow_type(&self.rel_table.columns[prop_idx].data_type)
+            crate::processor::arrow_utils::logical_type_to_arrow_type(
+                &self.rel_table.columns[prop_idx].data_type,
+            )
         } else if idx == num_chunk_cols + num_dst_cols + num_rel_cols {
             arrow::datatypes::DataType::Int64
         } else {
@@ -139,7 +147,9 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                         continue;
                     }
                     if depth >= self.bounds.0 && depth > 0 {
-                        for (col_idx, fc) in final_columns.iter_mut().enumerate().take(num_chunk_cols) {
+                        for (col_idx, fc) in
+                            final_columns.iter_mut().enumerate().take(num_chunk_cols)
+                        {
                             fc.push(Value::from_arrow(chunk.batch.column(col_idx), i));
                         }
                         let dst_base = num_chunk_cols;
@@ -195,17 +205,23 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
                                         total_rels, MAX_FALLBACK_RELS, MAX_FALLBACK_RELS
                                     );
                                 }
-                                let mut map: std::collections::HashMap<u64, Vec<(u64, u64)>> = std::collections::HashMap::new();
+                                let mut map: std::collections::HashMap<u64, Vec<(u64, u64)>> =
+                                    std::collections::HashMap::new();
                                 for r_idx in 0..scan_limit {
-                                    let Ok(s_val) = src_col.get_value(&self.bm, r_idx, tx) else { continue };
-                                    let Ok(d_val) = dst_col.get_value(&self.bm, r_idx, tx) else { continue };
+                                    let Ok(s_val) = src_col.get_value(&self.bm, r_idx, tx) else {
+                                        continue;
+                                    };
+                                    let Ok(d_val) = dst_col.get_value(&self.bm, r_idx, tx) else {
+                                        continue;
+                                    };
                                     if let (Value::Node(s_id), Value::Node(d_id)) = (s_val, d_val) {
                                         map.entry(s_id).or_default().push((d_id, r_idx));
                                     }
                                 }
                                 fallback_adj = Some(map);
                             }
-                            let adj = fallback_adj.as_ref()
+                            let adj = fallback_adj
+                                .as_ref()
                                 .expect("recursive_join: fallback_adj was just set to Some");
                             if let Some(neighbors) = adj.get(&node_id) {
                                 for &(neighbor_id, _row_id) in neighbors {

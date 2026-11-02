@@ -31,26 +31,20 @@ impl LimitPushDown {
                     _ => Ok(LogicalOperator::Limit(Box::new(pushed_child), limit)),
                 }
             }
-            LogicalOperator::Sort(child, order_by) => {
-                Ok(LogicalOperator::Sort(
-                    Box::new(self.push_down(*child)?),
-                    order_by,
-                ))
-            }
-            LogicalOperator::Join(left, right, cond) => {
-                Ok(LogicalOperator::Join(
-                    Box::new(self.push_down(*left)?),
-                    Box::new(self.push_down(*right)?),
-                    cond,
-                ))
-            }
-            LogicalOperator::Union(left, right, is_all) => {
-                Ok(LogicalOperator::Union(
-                    Box::new(self.push_down(*left)?),
-                    Box::new(self.push_down(*right)?),
-                    is_all,
-                ))
-            }
+            LogicalOperator::Sort(child, order_by) => Ok(LogicalOperator::Sort(
+                Box::new(self.push_down(*child)?),
+                order_by,
+            )),
+            LogicalOperator::Join(left, right, cond) => Ok(LogicalOperator::Join(
+                Box::new(self.push_down(*left)?),
+                Box::new(self.push_down(*right)?),
+                cond,
+            )),
+            LogicalOperator::Union(left, right, is_all) => Ok(LogicalOperator::Union(
+                Box::new(self.push_down(*left)?),
+                Box::new(self.push_down(*right)?),
+                is_all,
+            )),
             _ => {
                 if let Some(child) = op.get_child() {
                     let mut op_with_child = op.clone();

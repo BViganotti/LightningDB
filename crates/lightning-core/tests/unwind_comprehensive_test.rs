@@ -37,12 +37,19 @@ fn test_unwind_single_value() -> TestResult {
 fn test_unwind_bind_to_create() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(id INT64, label STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, label STRING, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:T {id: 1, label: 'a'})", None)?;
     conn.execute("CREATE (:T {id: 2, label: 'b'})", None)?;
     conn.execute("CREATE (:T {id: 3, label: 'c'})", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.id)", None)?;
-    let c = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+    let c = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
     assert_eq!(c.value(0), 3);
     Ok(())
 }
@@ -53,7 +60,11 @@ fn test_unwind_strings() -> TestResult {
     let conn = db.connect();
     let res = conn.execute("UNWIND ['Alice', 'Bob'] AS name RETURN name", None)?;
     assert_eq!(count_rows(&res), 2);
-    let name = res.batches[0].column(0).as_any().downcast_ref::<StringArray>().unwrap();
+    let name = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
     assert_eq!(name.value(0), "Alice");
     assert_eq!(name.value(1), "Bob");
     Ok(())

@@ -2,10 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::record_batch::RecordBatch;
-use lightning_core::{
-    Connection as CoreConnection, Database as CoreDatabase,
-    Value,
-};
+use lightning_core::{Connection as CoreConnection, Database as CoreDatabase, Value};
 
 use crate::types::*;
 
@@ -71,7 +68,11 @@ impl Connection {
     /// params.insert("name".to_string(), Value::String("Alice".to_string()));
     /// let result = conn.execute("MATCH (n) WHERE n.name = $name RETURN n", Some(params));
     /// ```
-    pub fn execute(&self, query: &str, params: Option<HashMap<String, Value>>) -> Result<QueryResult> {
+    pub fn execute(
+        &self,
+        query: &str,
+        params: Option<HashMap<String, Value>>,
+    ) -> Result<QueryResult> {
         self.inner.execute(query, params)
     }
 
@@ -176,7 +177,10 @@ impl Connection {
         let pk_clause = primary_key
             .map(|pk| format!(", PRIMARY KEY ({})", Self::quote_ident(pk)))
             .unwrap_or_default();
-        let stmt = format!("CREATE NODE TABLE {quoted_table} ({}{pk_clause})", cols.join(", "));
+        let stmt = format!(
+            "CREATE NODE TABLE {quoted_table} ({}{pk_clause})",
+            cols.join(", ")
+        );
         self.execute_ddl(&stmt)
     }
 
@@ -200,7 +204,8 @@ impl Connection {
         } else {
             format!(", {}", cols.join(", "))
         };
-        let stmt = format!("CREATE REL TABLE {quoted_table} (FROM {quoted_from} TO {quoted_to}{extra})");
+        let stmt =
+            format!("CREATE REL TABLE {quoted_table} (FROM {quoted_from} TO {quoted_to}{extra})");
         self.execute_ddl(&stmt)
     }
 
@@ -232,11 +237,7 @@ impl Connection {
     /// ];
     /// conn.fast_insert("Person", rows).unwrap();
     /// ```
-    pub fn fast_insert(
-        &self,
-        table_name: &str,
-        rows: Vec<Vec<(String, Value)>>,
-    ) -> Result<usize> {
+    pub fn fast_insert(&self, table_name: &str, rows: Vec<Vec<(String, Value)>>) -> Result<usize> {
         self.inner.fast_insert(table_name, rows)
     }
 

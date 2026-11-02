@@ -3,8 +3,8 @@ use crate::processor::arrow_utils::logical_type_to_arrow_type;
 use crate::processor::{DataChunk, PhysicalOperator, Value};
 use crate::storage::storage_manager::Table;
 use crate::storage::undo_buffer::UndoRecord;
-use crate::LightningError;
 use crate::Database;
+use crate::LightningError;
 use crate::Result;
 use arrow::array::{ArrayRef, Float64Array, UInt64Array};
 use arrow::csv;
@@ -16,12 +16,17 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
+fn validate_copy_path(
+    database_path: &Path,
+    file_path: &str,
+    base_dir: Option<&Path>,
+) -> Result<PathBuf> {
     let path = Path::new(file_path);
 
     if path.is_absolute() && base_dir.is_none() {
         return Err(LightningError::Config(
-            "Absolute paths in COPY are disabled. Set copy_base_dir in SystemConfig to enable.".into()
+            "Absolute paths in COPY are disabled. Set copy_base_dir in SystemConfig to enable."
+                .into(),
         ));
     }
 
@@ -37,7 +42,11 @@ fn validate_copy_path(database_path: &Path, file_path: &str, base_dir: Option<&P
     let resolved = base.join(path);
 
     let canonical_base = base.canonicalize().map_err(|e| {
-        LightningError::Config(format!("Cannot resolve base directory '{}': {}", base.display(), e))
+        LightningError::Config(format!(
+            "Cannot resolve base directory '{}': {}",
+            base.display(),
+            e
+        ))
     })?;
 
     let parent = resolved.parent().ok_or_else(|| {
@@ -156,8 +165,9 @@ impl PhysicalOperator for PhysicalCopy {
         let count_array =
             Arc::new(Float64Array::from(vec![affected as f64])) as arrow::array::ArrayRef;
         Ok(Some(DataChunk {
-            batch: RecordBatch::try_new(output_schema, vec![count_array])
-                .map_err(|e| crate::LightningError::Internal(format!("Failed to create COPY output batch: {e}")))?,
+            batch: RecordBatch::try_new(output_schema, vec![count_array]).map_err(|e| {
+                crate::LightningError::Internal(format!("Failed to create COPY output batch: {e}"))
+            })?,
         }))
     }
 
@@ -264,10 +274,8 @@ impl PhysicalCopy {
             // Batch all node IDs into a single undo buffer acquisition.
             let table_name = self.table_name.clone();
             for i in 0..num_rows as u64 {
-                tx.undo_buffer.push(UndoRecord::DeleteNode(
-                    table_name.clone(),
-                    next_id + i,
-                ));
+                tx.undo_buffer
+                    .push(UndoRecord::DeleteNode(table_name.clone(), next_id + i));
             }
 
             next_id += num_rows as u64;
@@ -276,7 +284,11 @@ impl PhysicalCopy {
 
         // Use a temporary read lock scope so the lock is released before rebuild_csr
         let has_table = {
-            database.storage_manager.read().get_table(&self.table_name).is_some()
+            database
+                .storage_manager
+                .read()
+                .get_table(&self.table_name)
+                .is_some()
         };
         if has_table {
             database.storage_manager.read().rebuild_csr(
@@ -309,9 +321,7 @@ impl PhysicalCopy {
             let cat = database.catalog.read();
             cat.get_node_table(&self.table_name)
                 .map(|t| t.num_rows)
-                .or_else(|| {
-                    cat.get_rel_table(&self.table_name).map(|t| t.num_rows)
-                })
+                .or_else(|| cat.get_rel_table(&self.table_name).map(|t| t.num_rows))
                 .unwrap_or(0)
         };
 
@@ -361,7 +371,8 @@ impl PhysicalCopy {
                 let mut first_row = true;
                 while position < num_rows {
                     let to_read = std::cmp::min(morsel, num_rows - position);
-                    let batch = self.read_batch(table, &col_idxs, &schema, position, to_read, bm, tx)?;
+                    let batch =
+                        self.read_batch(table, &col_idxs, &schema, position, to_read, bm, tx)?;
                     for row_idx in 0..batch.num_rows() {
                         if !first_row {
                             file.write_all(b",\n")?;
@@ -377,14 +388,23 @@ impl PhysicalCopy {
                             let col = batch.column(j);
                             if col.is_null(row_idx) {
                                 write!(file, "\"{}\": null", col_name.name())?;
-                            } else if let Some(s) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
-                                let escaped = s.value(row_idx).replace('\\', "\\\\").replace('"', "\\\"");
+                            } else if let Some(s) =
+                                col.as_any().downcast_ref::<arrow::array::StringArray>()
+                            {
+                                let escaped =
+                                    s.value(row_idx).replace('\\', "\\\\").replace('"', "\\\"");
                                 write!(file, "\"{}\": \"{}\"", col_name.name(), escaped)?;
-                            } else if let Some(f) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                            } else if let Some(f) =
+                                col.as_any().downcast_ref::<arrow::array::Float64Array>()
+                            {
                                 write!(file, "\"{}\": {}", col_name.name(), f.value(row_idx))?;
-                            } else if let Some(i) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                            } else if let Some(i) =
+                                col.as_any().downcast_ref::<arrow::array::Int64Array>()
+                            {
                                 write!(file, "\"{}\": {}", col_name.name(), i.value(row_idx))?;
-                            } else if let Some(b) = col.as_any().downcast_ref::<arrow::array::BooleanArray>() {
+                            } else if let Some(b) =
+                                col.as_any().downcast_ref::<arrow::array::BooleanArray>()
+                            {
                                 write!(file, "\"{}\": {}", col_name.name(), b.value(row_idx))?;
                             } else {
                                 let val = Value::from_arrow(col, row_idx);
@@ -435,7 +455,8 @@ impl PhysicalCopy {
 
                 while position < num_rows {
                     let to_read = std::cmp::min(morsel, num_rows - position);
-                    let batch = self.read_batch(table, &col_idxs, &schema, position, to_read, bm, tx)?;
+                    let batch =
+                        self.read_batch(table, &col_idxs, &schema, position, to_read, bm, tx)?;
                     writer
                         .write(&batch)
                         .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -469,5 +490,4 @@ impl PhysicalCopy {
         RecordBatch::try_new(Arc::new(schema.clone()), columns)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))
     }
-
 }

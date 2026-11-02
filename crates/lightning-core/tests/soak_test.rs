@@ -10,10 +10,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
 fn scan_ids(db: &Arc<Database>) -> BTreeSet<i64> {
-    let r = db.connect().execute("MATCH (t:T) RETURN t.id", None).unwrap();
+    let r = db
+        .connect()
+        .execute("MATCH (t:T) RETURN t.id", None)
+        .unwrap();
     let mut out = BTreeSet::new();
     for b in &r.batches {
-        let a = b.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let a = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
         for i in 0..a.len() {
             if a.is_valid(i) {
                 out.insert(a.value(i));
@@ -28,11 +35,17 @@ fn concurrent_soak_readers_and_writers() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     db.connect()
-        .execute("CREATE NODE TABLE T(id INT64, v INT64, s STRING, PRIMARY KEY(id))", None)
+        .execute(
+            "CREATE NODE TABLE T(id INT64, v INT64, s STRING, PRIMARY KEY(id))",
+            None,
+        )
         .unwrap();
 
     let threads = 4u64;
@@ -71,7 +84,9 @@ fn concurrent_soak_readers_and_writers() {
                 // deterministic pseudo-random update/delete
                 let mut x = t.wrapping_mul(2654435761).wrapping_add(1);
                 for i in 0..per {
-                    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
                     let j = x % (i + 1);
                     let id = (base + j) as i64;
                     if x % 3 == 0 {
@@ -96,7 +111,10 @@ fn concurrent_soak_readers_and_writers() {
                 let mut scans = 0u64;
                 while !stop.load(Ordering::Relaxed) {
                     let _ = scan_ids(&db);
-                    let _ = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap();
+                    let _ = db
+                        .connect()
+                        .execute("MATCH (t:T) RETURN count(*)", None)
+                        .unwrap();
                     scans += 1;
                     if scans > 5_000_000 {
                         break;
@@ -122,7 +140,10 @@ fn concurrent_soak_readers_and_writers() {
     drop(db);
     let db2 = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     assert_eq!(scan_ids(&db2), expected, "soak reopen mismatch");
@@ -141,11 +162,17 @@ fn concurrent_soak_timed() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     db.connect()
-        .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+        .execute(
+            "CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))",
+            None,
+        )
         .unwrap();
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -175,7 +202,9 @@ fn concurrent_soak_timed() {
                     false
                 };
                 while Instant::now() < deadline {
-                    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
                     let id = base + n;
                     n += 1;
                     if run(&format!("CREATE (:T {{id: {id}, v: {id}}})")) {
@@ -200,7 +229,10 @@ fn concurrent_soak_timed() {
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
                     let _ = scan_ids(&db);
-                    let _ = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap();
+                    let _ = db
+                        .connect()
+                        .execute("MATCH (t:T) RETURN count(*)", None)
+                        .unwrap();
                 }
             })
         })
@@ -217,23 +249,52 @@ fn concurrent_soak_timed() {
     let expected = model.lock().unwrap().clone();
     let actual = scan_ids(&db);
     assert_eq!(actual, expected, "timed soak final state mismatch");
-    let live_count = db.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap().batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
-    eprintln!("SOAK live scan={} count(*)={} model={}", actual.len(), live_count, expected.len());
+    let live_count = db
+        .connect()
+        .execute("MATCH (t:T) RETURN count(*)", None)
+        .unwrap()
+        .batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap()
+        .value(0);
+    eprintln!(
+        "SOAK live scan={} count(*)={} model={}",
+        actual.len(),
+        live_count,
+        expected.len()
+    );
     db.checkpoint().unwrap();
     drop(db);
     let db2 = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     let reopened = scan_ids(&db2);
-    let rc = db2.connect().execute("MATCH (t:T) RETURN count(*)", None).unwrap().batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
+    let rc = db2
+        .connect()
+        .execute("MATCH (t:T) RETURN count(*)", None)
+        .unwrap()
+        .batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap()
+        .value(0);
     eprintln!("SOAK reopen scan={} count(*)={}", reopened.len(), rc);
     if reopened != expected {
         let missing: Vec<i64> = expected.difference(&reopened).take(10).copied().collect();
         let extra: Vec<i64> = reopened.difference(&expected).take(10).copied().collect();
         let probe = missing.first().map(|&m| {
-            let r = db2.connect().execute(&format!("MATCH (t:T {{id: {m}}}) RETURN t.v"), None).unwrap();
+            let r = db2
+                .connect()
+                .execute(&format!("MATCH (t:T {{id: {m}}}) RETURN t.v"), None)
+                .unwrap();
             r.batches.iter().map(|b| b.num_rows()).sum::<usize>()
         });
         panic!("timed soak reopen mismatch: expected={} reopened={} missing={missing:?} extra={extra:?} idx_lookup_first_missing={probe:?}", expected.len(), reopened.len());
@@ -253,11 +314,17 @@ fn reopen_after_interleaved_insert_delete_keeps_rows() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     db.connect()
-        .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+        .execute(
+            "CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))",
+            None,
+        )
         .unwrap();
 
     let mut model: BTreeSet<i64> = BTreeSet::new();
@@ -266,13 +333,18 @@ fn reopen_after_interleaved_insert_delete_keeps_rows() {
     {
         let c = db.connect();
         for _ in 0..700 {
-            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
-            let id = n; n += 1;
-            c.execute(&format!("CREATE (:T {{id: {id}, v: {id}}})"), None).unwrap();
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let id = n;
+            n += 1;
+            c.execute(&format!("CREATE (:T {{id: {id}, v: {id}}})"), None)
+                .unwrap();
             model.insert(id);
             if n > 4 && x % 4 == 0 {
                 let j = (x % n as u64) as i64;
-                c.execute(&format!("MATCH (t:T {{id: {j}}}) DELETE t"), None).unwrap();
+                c.execute(&format!("MATCH (t:T {{id: {j}}}) DELETE t"), None)
+                    .unwrap();
                 model.remove(&j);
             }
         }
@@ -283,7 +355,10 @@ fn reopen_after_interleaved_insert_delete_keeps_rows() {
     drop(db);
     let db2 = Database::new(
         dir.path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     let reopened = scan_ids(&db2);

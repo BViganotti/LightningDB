@@ -59,7 +59,9 @@ impl Default for ProjectionPushDown {
 
 impl ProjectionPushDown {
     pub fn new(binder_column_offsets: std::collections::HashMap<String, usize>) -> Self {
-        Self { binder_column_offsets }
+        Self {
+            binder_column_offsets,
+        }
     }
 
     fn extract_property_indices(
@@ -234,7 +236,9 @@ impl ProjectionPushDown {
             BoundExpression::Lambda(_, body) => {
                 Self::remap_expression_indices(body, column_usage, binder_offsets);
             }
-            BoundExpression::Not(inner) => Self::remap_expression_indices(inner, column_usage, binder_offsets),
+            BoundExpression::Not(inner) => {
+                Self::remap_expression_indices(inner, column_usage, binder_offsets)
+            }
             BoundExpression::Exists(_steps) | BoundExpression::CountSubquery(_steps) => {
                 // Exists/CountSubquery expressions reference outer-scope variables
                 // but their internal expressions are evaluated in a subquery scope
@@ -368,7 +372,12 @@ impl ProjectionPushDown {
                     indices: left_indices.indices,
                 };
                 Ok((
-                    LogicalOperator::SemiJoin(Box::new(new_left), Box::new(new_right), cond, is_anti),
+                    LogicalOperator::SemiJoin(
+                        Box::new(new_left),
+                        Box::new(new_right),
+                        cond,
+                        is_anti,
+                    ),
                     combined,
                 ))
             }
@@ -408,7 +417,8 @@ impl ProjectionPushDown {
                     // and must be preserved as-is.
                     let base = self.binder_column_offsets.get(&var).copied().unwrap_or(0);
                     if base > 0 {
-                        v = v.into_iter()
+                        v = v
+                            .into_iter()
                             .map(|i| if i >= base { i - base } else { i })
                             .collect();
                     }
@@ -436,10 +446,7 @@ impl ProjectionPushDown {
                 single_var_req.insert(var.clone(), clean_indices);
                 let mut cu = ColumnUsage::from_single(single_var_req);
                 cu.projected_cols = projected_cols;
-                Ok((
-                    LogicalOperator::Scan(table, var, mask, p, filter),
-                    cu,
-                ))
+                Ok((LogicalOperator::Scan(table, var, mask, p, filter), cu))
             }
             LogicalOperator::IndexScan(table, var, pk_name, pk_val, existing) => {
                 // If projected_idxs was already set by a previous optimization

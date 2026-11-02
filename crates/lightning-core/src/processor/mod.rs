@@ -201,11 +201,9 @@ impl Value {
                 std::iter::repeat_n(Some(*b), num_elements),
             )),
             Value::Null => Arc::new(arrow::array::NullArray::new(num_elements)),
-            Value::Node(id) | Value::Relationship(id) => {
-                Arc::new(arrow::array::UInt64Array::from_iter_values(
-                    std::iter::repeat_n(*id, num_elements),
-                ))
-            }
+            Value::Node(id) | Value::Relationship(id) => Arc::new(
+                arrow::array::UInt64Array::from_iter_values(std::iter::repeat_n(*id, num_elements)),
+            ),
             Value::Path(p) => {
                 // Convert Path to List for Arrow projection for now
                 let v = Value::List(p.clone());
@@ -225,12 +223,15 @@ impl Value {
                 }
                 let first_arr = l[0].to_arrow(1);
                 let elem_data_type = first_arr.data_type().clone();
-                let elem_arrays: Vec<ArrayRef> = l.iter()
+                let elem_arrays: Vec<ArrayRef> = l
+                    .iter()
                     .map(|v| {
                         let arr = v.to_arrow(1);
                         if arr.data_type() != &elem_data_type {
                             arrow::compute::kernels::cast::cast(&arr, &elem_data_type)
-                                .unwrap_or_else(|_| arrow::array::new_null_array(&elem_data_type, 1))
+                                .unwrap_or_else(|_| {
+                                    arrow::array::new_null_array(&elem_data_type, 1)
+                                })
                         } else {
                             arr
                         }
@@ -244,8 +245,9 @@ impl Value {
                 let raw_offsets: Vec<i32> = (0..=num_elements as i64)
                     .map(|i| (i * list_len) as i32)
                     .collect();
-                let offset_buf =
-                    arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(raw_offsets));
+                let offset_buf = arrow::buffer::OffsetBuffer::new(
+                    arrow::buffer::ScalarBuffer::from(raw_offsets),
+                );
                 let field = Arc::new(arrow::datatypes::Field::new("item", elem_data_type, true));
                 Arc::new(arrow::array::ListArray::new(field, offset_buf, flat, None))
             }
@@ -310,7 +312,8 @@ impl std::hash::Hash for Value {
             Value::Map(m) => {
                 // Sort by deterministic key hash to ensure equal maps
                 // always produce the same hash regardless of insertion order.
-                let mut entries: Vec<(u64, &Value, &Value)> = m.iter()
+                let mut entries: Vec<(u64, &Value, &Value)> = m
+                    .iter()
                     .map(|(k, v)| {
                         let mut kh = std::collections::hash_map::DefaultHasher::new();
                         k.hash(&mut kh);
@@ -481,8 +484,7 @@ impl Value {
                     serde_json::Value::Null
                 } else {
                     serde_json::Value::Number(
-                        serde_json::Number::from_f64(*n)
-                            .unwrap_or(serde_json::Number::from(0)),
+                        serde_json::Number::from_f64(*n).unwrap_or(serde_json::Number::from(0)),
                     )
                 }
             }

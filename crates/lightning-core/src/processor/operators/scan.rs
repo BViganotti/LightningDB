@@ -87,12 +87,16 @@ impl PhysicalScan {
             return Err(LightningError::Internal(format!(
                 "PhysicalScan::new: table '{}' first column is '{}', expected '_id' or '_src'. \
                  Schema mismatch or unsupported table layout.",
-                table.name,
-                table.columns[0].name
+                table.name, table.columns[0].name
             )));
         }
         let has_modifications = table.columns[0].version_info.has_modifications();
-        let avg_element_size = table.columns.iter().map(|c| c.element_size()).max().unwrap_or(8);
+        let avg_element_size = table
+            .columns
+            .iter()
+            .map(|c| c.element_size())
+            .max()
+            .unwrap_or(8);
         let num_columns = table.columns.len() as u64;
         let target_bytes: u64 = 8 * 1024 * 1024;
         let per_row = avg_element_size as u64 * num_columns;
@@ -169,7 +173,10 @@ impl PhysicalScan {
         self
     }
 
-    fn extract_zone_maps(&self, expr: &BoundExpression) -> std::collections::HashMap<usize, crate::storage::column::ZoneMapEq> {
+    fn extract_zone_maps(
+        &self,
+        expr: &BoundExpression,
+    ) -> std::collections::HashMap<usize, crate::storage::column::ZoneMapEq> {
         let mut maps = std::collections::HashMap::new();
         self.collect_zone_maps(expr, &mut maps);
         maps
@@ -181,31 +188,55 @@ impl PhysicalScan {
         maps: &mut std::collections::HashMap<usize, crate::storage::column::ZoneMapEq>,
     ) {
         match expr {
-            BoundExpression::Comparison(left, crate::parser::ast::ComparisonOperator::Equal, right) => {
-                match (left.as_ref(), right.as_ref()) {
-                    (BoundExpression::PropertyLookup(_, prop_idx, _), BoundExpression::Literal(lit)) => {
-                        let val = match lit {
-                            crate::parser::ast::Literal::String(s) => crate::processor::Value::String(s.clone()),
-                            crate::parser::ast::Literal::Integer(n) => crate::processor::Value::Number(*n as f64),
-                            crate::parser::ast::Literal::Number(n) => crate::processor::Value::Number(*n),
-                            crate::parser::ast::Literal::Boolean(b) => crate::processor::Value::Boolean(*b),
-                            crate::parser::ast::Literal::Null => crate::processor::Value::Null,
-                        };
-                        maps.insert(*prop_idx, crate::storage::column::ZoneMapEq { value: val });
-                    }
-                    (BoundExpression::Literal(lit), BoundExpression::PropertyLookup(_, prop_idx, _)) => {
-                        let val = match lit {
-                            crate::parser::ast::Literal::String(s) => crate::processor::Value::String(s.clone()),
-                            crate::parser::ast::Literal::Integer(n) => crate::processor::Value::Number(*n as f64),
-                            crate::parser::ast::Literal::Number(n) => crate::processor::Value::Number(*n),
-                            crate::parser::ast::Literal::Boolean(b) => crate::processor::Value::Boolean(*b),
-                            crate::parser::ast::Literal::Null => crate::processor::Value::Null,
-                        };
-                        maps.insert(*prop_idx, crate::storage::column::ZoneMapEq { value: val });
-                    }
-                    _ => {}
+            BoundExpression::Comparison(
+                left,
+                crate::parser::ast::ComparisonOperator::Equal,
+                right,
+            ) => match (left.as_ref(), right.as_ref()) {
+                (
+                    BoundExpression::PropertyLookup(_, prop_idx, _),
+                    BoundExpression::Literal(lit),
+                ) => {
+                    let val = match lit {
+                        crate::parser::ast::Literal::String(s) => {
+                            crate::processor::Value::String(s.clone())
+                        }
+                        crate::parser::ast::Literal::Integer(n) => {
+                            crate::processor::Value::Number(*n as f64)
+                        }
+                        crate::parser::ast::Literal::Number(n) => {
+                            crate::processor::Value::Number(*n)
+                        }
+                        crate::parser::ast::Literal::Boolean(b) => {
+                            crate::processor::Value::Boolean(*b)
+                        }
+                        crate::parser::ast::Literal::Null => crate::processor::Value::Null,
+                    };
+                    maps.insert(*prop_idx, crate::storage::column::ZoneMapEq { value: val });
                 }
-            }
+                (
+                    BoundExpression::Literal(lit),
+                    BoundExpression::PropertyLookup(_, prop_idx, _),
+                ) => {
+                    let val = match lit {
+                        crate::parser::ast::Literal::String(s) => {
+                            crate::processor::Value::String(s.clone())
+                        }
+                        crate::parser::ast::Literal::Integer(n) => {
+                            crate::processor::Value::Number(*n as f64)
+                        }
+                        crate::parser::ast::Literal::Number(n) => {
+                            crate::processor::Value::Number(*n)
+                        }
+                        crate::parser::ast::Literal::Boolean(b) => {
+                            crate::processor::Value::Boolean(*b)
+                        }
+                        crate::parser::ast::Literal::Null => crate::processor::Value::Null,
+                    };
+                    maps.insert(*prop_idx, crate::storage::column::ZoneMapEq { value: val });
+                }
+                _ => {}
+            },
             BoundExpression::Logical(left, crate::parser::ast::LogicalOperator::And, right) => {
                 self.collect_zone_maps(left, maps);
                 self.collect_zone_maps(right, maps);
@@ -365,9 +396,7 @@ impl PhysicalOperator for PhysicalScan {
         let morsel = self.morsel_size;
         let end_bound = self.partition_end_row;
         loop {
-            let start_row = self
-                .partition_position
-                .fetch_add(morsel, Ordering::Relaxed);
+            let start_row = self.partition_position.fetch_add(morsel, Ordering::Relaxed);
             if start_row >= end_bound {
                 return Ok(None);
             }
@@ -379,7 +408,9 @@ impl PhysicalOperator for PhysicalScan {
             // Track if the early filter path already confirmed all rows pass.
             let mut filter_all_pass = false;
 
-            let zone_maps = self.pushdown_filter.as_ref()
+            let zone_maps = self
+                .pushdown_filter
+                .as_ref()
                 .map(|expr| self.extract_zone_maps(expr))
                 .unwrap_or_default();
 
@@ -393,7 +424,13 @@ impl PhysicalOperator for PhysicalScan {
                     .iter()
                     .map(|&idx| {
                         let column = &self.table.columns[idx];
-                        column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx, zone_maps.get(&idx))
+                        column.scan_to_array(
+                            &self.bm,
+                            start_row,
+                            num_rows_to_read,
+                            tx,
+                            zone_maps.get(&idx),
+                        )
                     })
                     .collect();
 
@@ -428,10 +465,14 @@ impl PhysicalOperator for PhysicalScan {
                         &database.function_registry,
                         database,
                     )?;
-                    let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
-                        .ok_or_else(|| crate::LightningError::Internal(
-                            "filter expression must evaluate to BooleanArray".into(),
-                        ))?;
+                    let mask = mask_arr
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal(
+                                "filter expression must evaluate to BooleanArray".into(),
+                            )
+                        })?;
 
                     // If all rows in this morsel are filtered out, skip to next morsel
                     if mask.false_count() == mask.len() {
@@ -457,7 +498,13 @@ impl PhysicalOperator for PhysicalScan {
                     idxs.par_iter()
                         .map(|&idx| {
                             let column = &self.table.columns[idx];
-                            column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx, zone_maps.get(&idx))
+                            column.scan_to_array(
+                                &self.bm,
+                                start_row,
+                                num_rows_to_read,
+                                tx,
+                                zone_maps.get(&idx),
+                            )
                         })
                         .collect()
                 } else {
@@ -466,7 +513,13 @@ impl PhysicalOperator for PhysicalScan {
                         .par_iter()
                         .enumerate()
                         .map(|(idx, column)| {
-                            column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx, zone_maps.get(&idx))
+                            column.scan_to_array(
+                                &self.bm,
+                                start_row,
+                                num_rows_to_read,
+                                tx,
+                                zone_maps.get(&idx),
+                            )
                         })
                         .collect()
                 }
@@ -474,7 +527,13 @@ impl PhysicalOperator for PhysicalScan {
                 idxs.iter()
                     .map(|&idx| {
                         let column = &self.table.columns[idx];
-                        column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx, zone_maps.get(&idx))
+                        column.scan_to_array(
+                            &self.bm,
+                            start_row,
+                            num_rows_to_read,
+                            tx,
+                            zone_maps.get(&idx),
+                        )
                     })
                     .collect()
             } else {
@@ -483,7 +542,13 @@ impl PhysicalOperator for PhysicalScan {
                     .iter()
                     .enumerate()
                     .map(|(idx, column)| {
-                        column.scan_to_array(&self.bm, start_row, num_rows_to_read, tx, zone_maps.get(&idx))
+                        column.scan_to_array(
+                            &self.bm,
+                            start_row,
+                            num_rows_to_read,
+                            tx,
+                            zone_maps.get(&idx),
+                        )
                     })
                     .collect()
             };
@@ -520,7 +585,10 @@ impl PhysicalOperator for PhysicalScan {
                         }
                         *cache = Some(Arc::new(arrow::datatypes::Schema::new(fields)));
                     }
-                    cache.as_ref().expect("schema cache was just populated").clone()
+                    cache
+                        .as_ref()
+                        .expect("schema cache was just populated")
+                        .clone()
                 }
             };
 
@@ -619,9 +687,11 @@ impl PhysicalOperator for PhysicalScan {
                         .column(col_idx)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal(
-                            "mask column must be UInt64Array".into(),
-                        ))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal(
+                                "mask column must be UInt64Array".into(),
+                            )
+                        })?;
                     for i in 0..batch.num_rows() {
                         let m = mask.contains(col.value(i));
                         filter_mask.push(m);
@@ -675,10 +745,14 @@ impl PhysicalOperator for PhysicalScan {
                     );
                     match mask_result {
                         Ok(mask_arr) => {
-                            let mask = mask_arr.as_any().downcast_ref::<BooleanArray>()
-                                .ok_or_else(|| crate::LightningError::Internal(
-                                    "filter expression must evaluate to BooleanArray".into(),
-                                ))?;
+                            let mask = mask_arr
+                                .as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "filter expression must evaluate to BooleanArray".into(),
+                                    )
+                                })?;
                             let set_bits = mask.values().count_set_bits();
                             if set_bits == 0 {
                                 continue;

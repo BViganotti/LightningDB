@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightning_core::{
-    Database as CoreDatabase, DatabaseMetrics, SystemConfig,
-};
+use lightning_core::{Database as CoreDatabase, DatabaseMetrics, SystemConfig};
 
 use crate::connection::Connection;
 use crate::types::Result;

@@ -40,13 +40,11 @@ impl SubqueryUnnesting {
                             cond,
                         ))
                     }
-                    other => {
-                        Ok(LogicalOperator::Join(
-                            Box::new(left_rewritten),
-                            Box::new(other),
-                            cond,
-                        ))
-                    }
+                    other => Ok(LogicalOperator::Join(
+                        Box::new(left_rewritten),
+                        Box::new(other),
+                        cond,
+                    )),
                 }
             }
             LogicalOperator::SemiJoin(left, right, cond, is_anti) => {
@@ -145,11 +143,17 @@ impl SubqueryUnnesting {
         // matches the actual variable names in the subquery plan.
         for element in &mut sub_match.elements {
             match element {
-                crate::planner::binder::BoundMatchElement::Node(ref table_name, ref var_name, ref props) => {
+                crate::planner::binder::BoundMatchElement::Node(
+                    ref table_name,
+                    ref var_name,
+                    ref props,
+                ) => {
                     if left_vars.contains(var_name) {
                         let new_name = format!("__sub_{var_name}");
                         *element = crate::planner::binder::BoundMatchElement::Node(
-                            table_name.clone(), new_name, props.clone(),
+                            table_name.clone(),
+                            new_name,
+                            props.clone(),
                         );
                     }
                 }
@@ -172,7 +176,8 @@ impl SubqueryUnnesting {
         }
         if let Some(ref mut where_clause) = sub_where {
             for var in &left_vars {
-                where_clause.expression = rename_var_in_expr(&where_clause.expression, var, &format!("__sub_{var}"));
+                where_clause.expression =
+                    rename_var_in_expr(&where_clause.expression, var, &format!("__sub_{var}"));
             }
         }
 
@@ -215,13 +220,18 @@ impl SubqueryUnnesting {
                 ));
             }
             // Conjoin all conditions
-            conditions.into_iter().reduce(|acc, cond| {
-                BoundExpression::Logical(
-                    Box::new(acc),
-                    crate::parser::ast::LogicalOperator::And,
-                    Box::new(cond),
-                )
-            }).unwrap_or(BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)))
+            conditions
+                .into_iter()
+                .reduce(|acc, cond| {
+                    BoundExpression::Logical(
+                        Box::new(acc),
+                        crate::parser::ast::LogicalOperator::And,
+                        Box::new(cond),
+                    )
+                })
+                .unwrap_or(BoundExpression::Literal(
+                    crate::parser::ast::Literal::Boolean(true),
+                ))
         };
         Ok(LogicalOperator::SemiJoin(
             Box::new(child),
@@ -244,7 +254,9 @@ fn rename_var_in_expr(expr: &BoundExpression, old_name: &str, new_name: &str) ->
             BoundExpression::UnwindProperty(new_name.to_string(), *idx, typ.clone())
         }
         BoundExpression::Literal(lit) => BoundExpression::Literal(lit.clone()),
-        BoundExpression::Variable(name, typ) => BoundExpression::Variable(name.clone(), typ.clone()),
+        BoundExpression::Variable(name, typ) => {
+            BoundExpression::Variable(name.clone(), typ.clone())
+        }
         BoundExpression::PropertyLookup(name, idx, typ) => {
             BoundExpression::PropertyLookup(name.clone(), *idx, typ.clone())
         }
@@ -268,7 +280,9 @@ fn rename_var_in_expr(expr: &BoundExpression, old_name: &str, new_name: &str) ->
         ),
         BoundExpression::Function(name, args, typ) => BoundExpression::Function(
             name.clone(),
-            args.iter().map(|a| rename_var_in_expr(a, old_name, new_name)).collect(),
+            args.iter()
+                .map(|a| rename_var_in_expr(a, old_name, new_name))
+                .collect(),
             typ.clone(),
         ),
         BoundExpression::Not(inner) => {
@@ -278,30 +292,52 @@ fn rename_var_in_expr(expr: &BoundExpression, old_name: &str, new_name: &str) ->
         BoundExpression::CountSubquery(steps) => BoundExpression::CountSubquery(steps.clone()),
         BoundExpression::Aggregate(name, args, typ) => BoundExpression::Aggregate(
             name.clone(),
-            args.iter().map(|a| rename_var_in_expr(a, old_name, new_name)).collect(),
+            args.iter()
+                .map(|a| rename_var_in_expr(a, old_name, new_name))
+                .collect(),
             typ.clone(),
         ),
-        BoundExpression::Case { expression, when_then, else_expression, return_type } => {
-            BoundExpression::Case {
-                expression: expression.as_ref().map(|e| Box::new(rename_var_in_expr(e, old_name, new_name))),
-                when_then: when_then.iter().map(|(w, t)| {
-                    (rename_var_in_expr(w, old_name, new_name), rename_var_in_expr(t, old_name, new_name))
-                }).collect(),
-                else_expression: else_expression.as_ref().map(|e| Box::new(rename_var_in_expr(e, old_name, new_name))),
-                return_type: return_type.clone(),
-            }
-        }
+        BoundExpression::Case {
+            expression,
+            when_then,
+            else_expression,
+            return_type,
+        } => BoundExpression::Case {
+            expression: expression
+                .as_ref()
+                .map(|e| Box::new(rename_var_in_expr(e, old_name, new_name))),
+            when_then: when_then
+                .iter()
+                .map(|(w, t)| {
+                    (
+                        rename_var_in_expr(w, old_name, new_name),
+                        rename_var_in_expr(t, old_name, new_name),
+                    )
+                })
+                .collect(),
+            else_expression: else_expression
+                .as_ref()
+                .map(|e| Box::new(rename_var_in_expr(e, old_name, new_name))),
+            return_type: return_type.clone(),
+        },
         BoundExpression::List(items, typ) => BoundExpression::List(
-            items.iter().map(|i| rename_var_in_expr(i, old_name, new_name)).collect(),
+            items
+                .iter()
+                .map(|i| rename_var_in_expr(i, old_name, new_name))
+                .collect(),
             typ.clone(),
         ),
         BoundExpression::Map(entries, typ) => BoundExpression::Map(
-            entries.iter().map(|(k, v)| (k.clone(), rename_var_in_expr(v, old_name, new_name))).collect(),
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), rename_var_in_expr(v, old_name, new_name)))
+                .collect(),
             typ.clone(),
         ),
-        BoundExpression::Lambda(params, body) => {
-            BoundExpression::Lambda(params.clone(), Box::new(rename_var_in_expr(body, old_name, new_name)))
-        }
+        BoundExpression::Lambda(params, body) => BoundExpression::Lambda(
+            params.clone(),
+            Box::new(rename_var_in_expr(body, old_name, new_name)),
+        ),
         _ => expr.clone(),
     }
 }

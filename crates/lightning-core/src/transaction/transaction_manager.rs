@@ -184,13 +184,16 @@ impl TransactionManager {
     /// will show only data committed at or before `snapshot_ts`, as if
     /// the clock was frozen at that moment.
     pub fn begin_at(&self, is_read_only: bool, snapshot_ts: Option<u64>) -> Result<Transaction> {
-        let tx_id = self.next_tx_id.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
-            if id == u64::MAX {
-                None
-            } else {
-                Some(id + 1)
-            }
-        }).map_err(|_| LightningError::Internal("transaction ID overflow".into()))?;
+        let tx_id = self
+            .next_tx_id
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| {
+                if id == u64::MAX {
+                    None
+                } else {
+                    Some(id + 1)
+                }
+            })
+            .map_err(|_| LightningError::Internal("transaction ID overflow".into()))?;
 
         // Capture the snapshot timestamp here (not in `begin`, before this
         // point). Loading it before could race with a committing writer, giving
@@ -281,7 +284,9 @@ impl TransactionManager {
                             continue;
                         }
                         if let Some(entry) = cat.get_node_table_mut(name) {
-                            entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                            entry.num_rows = entry
+                                .num_rows
+                                .max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
                         }
                     }
                     for (name, table) in storage.rel_tables.iter() {
@@ -289,20 +294,26 @@ impl TransactionManager {
                             continue;
                         }
                         if let Some(entry) = cat.get_rel_table_mut(name) {
-                            entry.num_rows = entry.num_rows.max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
+                            entry.num_rows = entry
+                                .num_rows
+                                .max(table.next_row_id.load(std::sync::atomic::Ordering::Acquire));
                         }
                     }
                     db.catalog.mark_dirty();
                 }
             }
 
-            let commit_ts = self.current_ts.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ts| {
-                if ts == u64::MAX {
-                    None
-                } else {
-                    Some(ts + 1)
-                }
-            }).map_err(|_| LightningError::Internal("MVCC timestamp overflow".into()))? + 1;
+            let commit_ts = self
+                .current_ts
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ts| {
+                    if ts == u64::MAX {
+                        None
+                    } else {
+                        Some(ts + 1)
+                    }
+                })
+                .map_err(|_| LightningError::Internal("MVCC timestamp overflow".into()))?
+                + 1;
             tx.commit_ts.store(commit_ts, Ordering::SeqCst);
 
             // Phase 1: Row-level merge — re-read the latest committed page for each
@@ -342,15 +353,15 @@ impl TransactionManager {
                             let merge_lock = self.get_page_merge_lock(*file_id, *page_idx);
                             let _merge_guard = merge_lock
                                 .try_lock_for(std::time::Duration::from_secs(5))
-                                .ok_or_else(|| crate::LightningError::Internal(
-                                    "deadlock detected while acquiring page merge lock".into()
-                                ))?;
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "deadlock detected while acquiring page merge lock".into(),
+                                    )
+                                })?;
 
                             // Pin the latest committed version INSIDE the lock to get source data
-                            let latest_frame = bm.pin_latest_committed(
-                                std::sync::Arc::clone(&fh),
-                                *page_idx,
-                            )?;
+                            let latest_frame =
+                                bm.pin_latest_committed(std::sync::Arc::clone(&fh), *page_idx)?;
 
                             // Copy-on-write: clone frame data into local buffer
                             let mut merged_data = [0u8; 4096];
@@ -376,11 +387,8 @@ impl TransactionManager {
                             // the latest committed frame and the merge mutated shared
                             // state. create_new_version reuses this transaction's
                             // frame when present, otherwise creates a fresh one.
-                            let our_frame = bm.create_new_version(
-                                std::sync::Arc::clone(&fh),
-                                *page_idx,
-                                tx,
-                            )?;
+                            let our_frame =
+                                bm.create_new_version(std::sync::Arc::clone(&fh), *page_idx, tx)?;
                             // SAFETY: We hold the page lock and have exclusive
                             // access to this frame after merging concurrent changes.
                             unsafe { our_frame.as_mut_slice() }.copy_from_slice(&merged_data);
@@ -477,8 +485,11 @@ impl TransactionManager {
             self.wal.log_commit(tx.tx_id)?;
             self.active_tx_ids.write().remove(&tx.tx_id);
 
-            let _ = self.committed_tx_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c + 1));
-            db.catalog.save_if_needed(self.committed_tx_count.load(Ordering::Acquire))?;
+            let _ = self
+                .committed_tx_count
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| Some(c + 1));
+            db.catalog
+                .save_if_needed(self.committed_tx_count.load(Ordering::Acquire))?;
         }
         self.remove_read_ts(tx.read_ts);
         tx.finalized.store(true, Ordering::SeqCst);
@@ -677,8 +688,10 @@ impl TransactionManager {
     /// Without this, `next_tx_id` resets to 1 while the WAL is keyed by tx id,
     /// causing replay to discard committed transactions from prior runs.
     pub fn restore_counters(&self, next_tx_id: u64, current_ts: u64) {
-        self.next_tx_id.fetch_max(next_tx_id.max(1), Ordering::AcqRel);
-        self.current_ts.fetch_max(current_ts.max(1), Ordering::AcqRel);
+        self.next_tx_id
+            .fetch_max(next_tx_id.max(1), Ordering::AcqRel);
+        self.current_ts
+            .fetch_max(current_ts.max(1), Ordering::AcqRel);
     }
 
     /// Largest transaction id below the next-to-allocate that is resolved (not

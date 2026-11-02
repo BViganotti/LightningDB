@@ -24,8 +24,11 @@ fn test_transaction_basic() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 3);
     Ok(())
 }
@@ -36,8 +39,11 @@ fn test_transaction_insert() -> TestResult {
     let conn = db.connect();
     conn.execute("CREATE (:T {x: 4})", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 4);
     Ok(())
 }
@@ -48,8 +54,11 @@ fn test_transaction_update() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 SET t.x = 10", None)?;
     let res = conn.execute("MATCH (t:T) WHERE t.x = 10 RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 1);
     Ok(())
 }
@@ -60,8 +69,11 @@ fn test_transaction_delete() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 DELETE t", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 2);
     Ok(())
 }
@@ -74,8 +86,11 @@ fn test_transaction_multiple_operations() -> TestResult {
     conn.execute("CREATE (:T {x: 4})", None)?;
     conn.execute("CREATE (:T {x: 5})", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 5);
     Ok(())
 }

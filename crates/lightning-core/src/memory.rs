@@ -1,8 +1,11 @@
 use crate::processor::{DataChunk, Value};
-use crate::Result;
 use crate::Connection;
 use crate::QueryResult;
-use arrow::array::{Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, StringArray, UInt64Array};
+use crate::Result;
+use arrow::array::{
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, StringArray,
+    UInt64Array,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crossbeam::channel::Receiver;
@@ -152,7 +155,11 @@ fn minhash_similarity(a: &[u64], b: &[u64]) -> f64 {
     // Jaccard similarity: |intersection| / |union|
     // For sorted MinHash signatures: union = a.len() + b.len() - intersection
     let union = a.len() + b.len() - intersection;
-    if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
 }
 
 impl MemoryStore {
@@ -168,12 +175,18 @@ impl MemoryStore {
     }
 
     pub fn ensure_schema(&self) -> Result<()> {
-        if self.schema_initialized.load(std::sync::atomic::Ordering::Acquire) {
+        if self
+            .schema_initialized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             return Ok(());
         }
         let _guard = self.schema_lock.lock();
         // Double-check after acquiring the lock
-        if self.schema_initialized.load(std::sync::atomic::Ordering::Acquire) {
+        if self
+            .schema_initialized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             return Ok(());
         }
 
@@ -226,7 +239,12 @@ impl MemoryStore {
                     tracing::warn!("MemoryStore: failed to create FTS index: {e}");
                 }
             }
-            if storage.vector_indexes.get(ENTITY_TABLE).map(|v| v.dimension() != self.embedding_dim).unwrap_or(true) {
+            if storage
+                .vector_indexes
+                .get(ENTITY_TABLE)
+                .map(|v| v.dimension() != self.embedding_dim)
+                .unwrap_or(true)
+            {
                 storage.vector_indexes.remove(ENTITY_TABLE);
                 if let Err(e) = storage.create_vector_index(ENTITY_TABLE, self.embedding_dim) {
                     tracing::warn!("MemoryStore: failed to create vector index: {e}");
@@ -264,7 +282,8 @@ impl MemoryStore {
             }
         }
 
-        self.schema_initialized.store(true, std::sync::atomic::Ordering::Release);
+        self.schema_initialized
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -310,11 +329,17 @@ impl MemoryStore {
         );
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(entity.id.clone()));
-        params.insert("type".to_string(), Value::String(entity.entity_type.clone()));
+        params.insert(
+            "type".to_string(),
+            Value::String(entity.entity_type.clone()),
+        );
         params.insert("content".to_string(), Value::String(entity.content.clone()));
         params.insert("last_accessed".to_string(), Value::Number(now as f64));
         params.insert("ttl".to_string(), Value::Number(entity.ttl_seconds as f64));
-        params.insert("metadata".to_string(), Value::String(entity.metadata.clone()));
+        params.insert(
+            "metadata".to_string(),
+            Value::String(entity.metadata.clone()),
+        );
         params.insert("now".to_string(), Value::Number(now as f64));
 
         self.conn.execute(&query, Some(params))?;
@@ -390,7 +415,11 @@ impl MemoryStore {
             ttl_seconds.push(e.ttl_seconds);
             metadatas.push(e.metadata.clone());
             valid_from.push(e.valid_from.max(now));
-            valid_until.push(if e.valid_until == 0 { i64::MAX } else { e.valid_until });
+            valid_until.push(if e.valid_until == 0 {
+                i64::MAX
+            } else {
+                e.valid_until
+            });
         }
 
         let emb_dim = self.embedding_dim;
@@ -438,10 +467,14 @@ impl MemoryStore {
                 Arc::new(emb_values_array),
                 None,
             );
-            fields.push(Field::new("embedding", DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, true)),
-                emb_dim as i32,
-            ), true));
+            fields.push(Field::new(
+                "embedding",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    emb_dim as i32,
+                ),
+                true,
+            ));
             columns.push(Arc::new(emb_list));
         }
 
@@ -506,7 +539,8 @@ impl MemoryStore {
                                 }
                             }
                             let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
-                            results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
+                            results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 +=
+                                rrf_score;
                         }
                     }
                 }
@@ -531,7 +565,8 @@ impl MemoryStore {
                                     }
                                 }
                                 let rrf_score = 1.0 / (k + (rank as f64) + 1.0);
-                                results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 += rrf_score;
+                                results.entry(entity.id.clone()).or_insert((entity, 0.0)).1 +=
+                                    rrf_score;
                             }
                         }
                     }
@@ -554,7 +589,8 @@ impl MemoryStore {
 
         if !errors.is_empty() && results.is_empty() {
             return Err(crate::LightningError::Internal(format!(
-                "Hybrid search returned no results (errors: {})", errors.join("; ")
+                "Hybrid search returned no results (errors: {})",
+                errors.join("; ")
             )));
         }
 
@@ -562,7 +598,11 @@ impl MemoryStore {
             .into_iter()
             .map(|(_, (entity, score))| SearchResult { entity, score })
             .collect();
-        sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         sorted.truncate(top_k);
         Ok(sorted)
     }
@@ -600,7 +640,9 @@ impl MemoryStore {
                     Ok(r) => r,
                     Err(e) => {
                         if tx.send(Err(e)).is_err() {
-                            tracing::warn!("MemoryStore: recall_stream channel closed, dropping error");
+                            tracing::warn!(
+                                "MemoryStore: recall_stream channel closed, dropping error"
+                            );
                         }
                         return;
                     }
@@ -611,9 +653,11 @@ impl MemoryStore {
                     }
                 }
             })
-            .map_err(|e| crate::LightningError::Internal(format!(
-                "Failed to spawn recall_stream thread: {e}"
-            )))?;
+            .map_err(|e| {
+                crate::LightningError::Internal(format!(
+                    "Failed to spawn recall_stream thread: {e}"
+                ))
+            })?;
 
         Ok(rx)
     }
@@ -628,7 +672,12 @@ impl MemoryStore {
     ///   4. Assembly into LLM-ready context string
     ///
     /// Uses the default RagConfig. For custom settings, use rag_query_with_config.
-    pub fn rag_query(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<RagResult> {
+    pub fn rag_query(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> Result<RagResult> {
         self.rag_query_with_config(query_text, embedding, top_k, &RagConfig::default())
     }
 
@@ -678,9 +727,8 @@ impl MemoryStore {
             if let Some(fwd_csr) = storage.fwd_csr.get(RELATES_TABLE) {
                 let bm = &db.buffer_manager;
                 for eid in all_entities.keys() {
-                    let lookup = format!(
-                        "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
-                    );
+                    let lookup =
+                        format!("MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1");
                     let mut params = HashMap::new();
                     params.insert("id".to_string(), Value::String(eid.clone()));
                     if let Ok(res) = self.conn.execute(&lookup, Some(params)) {
@@ -688,17 +736,18 @@ impl MemoryStore {
                             if let Some(arr) = b.column(0).as_any().downcast_ref::<UInt64Array>() {
                                 let internal_id = arr.value(0);
                                 let mut count = 0u64;
-                                let _ = fwd_csr.for_each_neighbor(bm, internal_id, &tx, |_| count += 1);
+                                let _ =
+                                    fwd_csr.for_each_neighbor(bm, internal_id, &tx, |_| count += 1);
                                 *degree.get_mut(eid).unwrap_or(&mut 0) = count as usize;
                             }
                         }
                     }
                 }
             }
-                    if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
-                        tracing::warn!("MemoryStore: recovery rollback failed: {e}");
-                    }
-                }
+            if let Err(e) = db.transaction_manager.rollback(&db, &tx) {
+                tracing::warn!("MemoryStore: recovery rollback failed: {e}");
+            }
+        }
 
         // Phase 4: Rerank by configurable composite score
         let now_secs = Self::now_micros() / 1_000_000;
@@ -722,7 +771,10 @@ impl MemoryStore {
             let db = self.conn.client_context.database.clone();
             for (i, (entity, _)) in ranked.iter().enumerate().take(top_n) {
                 // Try to call the WASM cross-encoder function via the registry
-                if let Some(func) = db.function_registry.get_scalar_function(&config.cross_encoder_wasm) {
+                if let Some(func) = db
+                    .function_registry
+                    .get_scalar_function(&config.cross_encoder_wasm)
+                {
                     let query_arr = arrow::array::StringArray::from(vec![query_text.to_string()]);
                     let content_arr = arrow::array::StringArray::from(vec![entity.content.clone()]);
                     let args = vec![
@@ -773,13 +825,18 @@ impl MemoryStore {
 
             let entry = format!(
                 "[{}] (score={:.3}, type={}) {}\n",
-                sources.len() + 1, score, entity.entity_type, entity.content
+                sources.len() + 1,
+                score,
+                entity.entity_type,
+                entity.content
             );
 
             if available > 0 && char_count + entry.len() > available {
                 warnings.push(format!(
                     "Context truncated at {}/{} sources (token budget: {})",
-                    sources.len(), top_n, config.max_context_tokens
+                    sources.len(),
+                    top_n,
+                    config.max_context_tokens
                 ));
                 break;
             }
@@ -800,9 +857,7 @@ impl MemoryStore {
         }
 
         let total_sources = sources.len();
-        context.push_str(&format!(
-            "\n---\nTotal sources: {total_sources}",
-        ));
+        context.push_str(&format!("\n---\nTotal sources: {total_sources}",));
 
         Ok(RagResult {
             context,
@@ -880,7 +935,10 @@ impl MemoryStore {
              e.valid_from, e.valid_until"
         );
         let mut params = HashMap::new();
-        params.insert("entity_id".to_string(), Value::String(entity_id.to_string()));
+        params.insert(
+            "entity_id".to_string(),
+            Value::String(entity_id.to_string()),
+        );
         let res = self.conn.execute(&query, Some(params))?;
         let mut entities = self.batches_to_entities(&res.batches);
         // Sort by valid_from descending (most recent first)
@@ -906,11 +964,14 @@ impl MemoryStore {
 
         // Step 0: Load all active entities, filter to new ones since last consolidation
         let all: Vec<MemoryEntity> = self.recall_recent(usize::MAX)?;
-        let last_ts = self.last_consolidation_ts.load(std::sync::atomic::Ordering::Relaxed);
+        let last_ts = self
+            .last_consolidation_ts
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // Only process entities created after the last consolidation timestamp.
         // New entities are compared against ALL existing entities (including old ones).
-        let new_entities: Vec<&MemoryEntity> = all.iter().filter(|e| e.created_at > last_ts).collect();
+        let new_entities: Vec<&MemoryEntity> =
+            all.iter().filter(|e| e.created_at > last_ts).collect();
         let n = all.len();
 
         if new_entities.is_empty() {
@@ -950,49 +1011,57 @@ impl MemoryStore {
             };
 
             for &j in &compare_indices {
-                    let jaccard = minhash_similarity(&signatures[i], &signatures[j]);
+                let jaccard = minhash_similarity(&signatures[i], &signatures[j]);
 
-                    if jaccard > cfg.similarity_threshold {
-                        if let Err(e) = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard) {
-                            let msg = format!("MemoryStore: failed to associate RelatedTo link: {e}");
+                if jaccard > cfg.similarity_threshold {
+                    if let Err(e) = self.associate(&all[i].id, &all[j].id, "RelatedTo", jaccard) {
+                        let msg = format!("MemoryStore: failed to associate RelatedTo link: {e}");
+                        tracing::warn!("{msg}");
+                        warnings.push(msg);
+                    } else if cfg.collect_details {
+                        link_details.push(LinkDetail {
+                            source_id: all[i].id.clone(),
+                            target_id: all[j].id.clone(),
+                            rel_type: "similar_to".to_string(),
+                            score: jaccard,
+                            reason: format!(
+                                "jaccard_similarity > threshold ({})",
+                                cfg.similarity_threshold
+                            ),
+                        });
+                    }
+                    adjacency[i].push((j, jaccard));
+                    adjacency[j].push((i, jaccard));
+                    links_created += 1;
+                }
+
+                // Contradiction detection: embeddings are similar but word sets are different.
+                // This catches cases like "User likes Python" vs "User dislikes Python"
+                // where embeddings are similar (same topic) but words differ (opposite sentiment).
+                if jaccard < cfg.contradiction_jaccard_max
+                    && all[i].embedding.len() >= cfg.contradiction_length_sim_min as usize
+                    && all[j].embedding.len() >= cfg.contradiction_length_sim_min as usize
+                {
+                    let dot: f32 = all[i]
+                        .embedding
+                        .iter()
+                        .zip(all[j].embedding.iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    let norm_i: f32 = all[i].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    let norm_j: f32 = all[j].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    let cosine = (dot / (norm_i * norm_j.max(f32::EPSILON))) as f64;
+
+                    if cosine > cfg.contradiction_cosine_min {
+                        if let Err(e) =
+                            self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard)
+                        {
+                            let msg =
+                                format!("MemoryStore: failed to associate Contradicts link: {e}");
                             tracing::warn!("{msg}");
                             warnings.push(msg);
                         } else if cfg.collect_details {
-                            link_details.push(LinkDetail {
-                                source_id: all[i].id.clone(),
-                                target_id: all[j].id.clone(),
-                                rel_type: "similar_to".to_string(),
-                                score: jaccard,
-                                reason: format!("jaccard_similarity > threshold ({})", cfg.similarity_threshold),
-                            });
-                        }
-                        adjacency[i].push((j, jaccard));
-                        adjacency[j].push((i, jaccard));
-                        links_created += 1;
-                    }
-
-                    // Contradiction detection: embeddings are similar but word sets are different.
-                    // This catches cases like "User likes Python" vs "User dislikes Python"
-                    // where embeddings are similar (same topic) but words differ (opposite sentiment).
-                    if jaccard < cfg.contradiction_jaccard_max
-                        && all[i].embedding.len() >= cfg.contradiction_length_sim_min as usize
-                        && all[j].embedding.len() >= cfg.contradiction_length_sim_min as usize
-                    {
-                        let dot: f32 = all[i].embedding.iter()
-                            .zip(all[j].embedding.iter())
-                            .map(|(a, b)| a * b)
-                            .sum();
-                        let norm_i: f32 = all[i].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
-                        let norm_j: f32 = all[j].embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
-                        let cosine = (dot / (norm_i * norm_j.max(f32::EPSILON))) as f64;
-
-                        if cosine > cfg.contradiction_cosine_min {
-                            if let Err(e) = self.associate(&all[i].id, &all[j].id, "Contradicts", 1.0 - jaccard) {
-                                let msg = format!("MemoryStore: failed to associate Contradicts link: {e}");
-                                tracing::warn!("{msg}");
-                                warnings.push(msg);
-                            } else if cfg.collect_details {
-                                contradiction_details.push(ContradictionDetail {
+                            contradiction_details.push(ContradictionDetail {
                                     entity_id: all[i].id.clone(),
                                     source_id: all[i].id.clone(),
                                     target_id: all[j].id.clone(),
@@ -1003,9 +1072,9 @@ impl MemoryStore {
                                         "high cosine similarity ({cosine:.4}) but low Jaccard content overlap ({jaccard:.4})"
                                     ),
                                 });
-                            }
-                            contradictions_found += 1;
                         }
+                        contradictions_found += 1;
+                    }
                 }
             }
         }
@@ -1026,12 +1095,15 @@ impl MemoryStore {
                         }
                     }
                 }
-                let dangling: f64 = rank.iter().enumerate()
+                let dangling: f64 = rank
+                    .iter()
+                    .enumerate()
                     .filter(|(i, _)| adjacency[*i].is_empty())
-                    .map(|(_, r)| r).sum();
+                    .map(|(_, r)| r)
+                    .sum();
                 for rank_val in new_rank.iter_mut() {
-                    *rank_val = (1.0 - damping) / n as f64
-                        + damping * (*rank_val + dangling / n as f64);
+                    *rank_val =
+                        (1.0 - damping) / n as f64 + damping * (*rank_val + dangling / n as f64);
                 }
                 rank = new_rank;
             }
@@ -1049,24 +1121,27 @@ impl MemoryStore {
                     unwind_parts.push(format!("{{id: ${pid}, meta: ${pmid}}}"));
                     id_params.push(pid);
                     meta_params.push(pmid);
-                    let _new_meta = format!(
-                        r#"{{"pagerank":{:.6},"id":"{}"}}"#,
-                        score, all[*idx].id
-                    );
+                    let _new_meta =
+                        format!(r#"{{"pagerank":{:.6},"id":"{}"}}"#, score, all[*idx].id);
                 }
                 let unwind_expr = unwind_parts.join(", ");
                 let batch_query = format!(
                     "UNWIND [{unwind_expr}] AS row MATCH (e:{ENTITY_TABLE} {{id: row.id}}) SET e.metadata = row.meta"
                 );
                 let mut params = HashMap::new();
-                for ((idx, score), (pid, pmid)) in ranked.iter().take(top_n).zip(
-                    id_params.iter().zip(meta_params.iter())
-                ) {
+                for ((idx, score), (pid, pmid)) in ranked
+                    .iter()
+                    .take(top_n)
+                    .zip(id_params.iter().zip(meta_params.iter()))
+                {
                     params.insert(pid.clone(), Value::String(all[*idx].id.clone()));
-                    params.insert(pmid.clone(), Value::String(format!(
-                        r#"{{"pagerank":{:.6},"id":"{}"}}"#,
-                        score, all[*idx].id
-                    )));
+                    params.insert(
+                        pmid.clone(),
+                        Value::String(format!(
+                            r#"{{"pagerank":{:.6},"id":"{}"}}"#,
+                            score, all[*idx].id
+                        )),
+                    );
                 }
                 if let Err(e) = self.conn.execute(&batch_query, Some(params)) {
                     let msg = format!("MemoryStore: failed to batch update PageRank metadata: {e}");
@@ -1078,7 +1153,8 @@ impl MemoryStore {
 
         // Update last consolidation timestamp for incremental processing
         let now = Self::now_micros();
-        self.last_consolidation_ts.store(now, std::sync::atomic::Ordering::Relaxed);
+        self.last_consolidation_ts
+            .store(now, std::sync::atomic::Ordering::Relaxed);
 
         let details = if cfg.collect_details {
             Some(ConsolidationDetail {
@@ -1162,9 +1238,17 @@ impl MemoryStore {
         Ok(self.batches_to_entities(&res.batches))
     }
 
-    pub fn expand(&self, entity_id: &str, hops: u32, edge_types: &[&str]) -> Result<Vec<MemoryEntity>> {
+    pub fn expand(
+        &self,
+        entity_id: &str,
+        hops: u32,
+        edge_types: &[&str],
+    ) -> Result<Vec<MemoryEntity>> {
         if !edge_types.is_empty() {
-            tracing::warn!("expand: edge_types filtering not yet implemented, ignoring {:?}", edge_types);
+            tracing::warn!(
+                "expand: edge_types filtering not yet implemented, ignoring {:?}",
+                edge_types
+            );
         }
         self.ensure_schema()?;
 
@@ -1202,7 +1286,9 @@ impl MemoryStore {
         queue.push_back((start_id, 0u32));
 
         while let Some((cur, depth)) = queue.pop_front() {
-            if depth >= hops { continue; }
+            if depth >= hops {
+                continue;
+            }
 
             // Iterate forward neighbors
             if let Some(ref csr) = fwd_csr {
@@ -1226,7 +1312,9 @@ impl MemoryStore {
         let _ = db.transaction_manager.rollback(&db, &tx);
 
         visited.remove(&start_id);
-        if visited.is_empty() { return Ok(Vec::new()); }
+        if visited.is_empty() {
+            return Ok(Vec::new());
+        }
 
         // Look up entities by _id, filtering for active (non-expired) entities.
         let id_list: Vec<String> = visited.iter().map(|id| id.to_string()).collect();
@@ -1258,7 +1346,11 @@ impl MemoryStore {
             params.insert("id".to_string(), Value::String(entity_id.to_string()));
             if let Ok(r) = self.conn.execute(&cypher_fwd, Some(params)) {
                 for batch in &r.batches {
-                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
+                    if let Some(arr) = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow::array::StringArray>()
+                    {
                         for i in 0..batch.num_rows() {
                             if !arr.is_null(i) {
                                 connected_ids.push(arr.value(i).to_string());
@@ -1275,7 +1367,11 @@ impl MemoryStore {
             params.insert("id".to_string(), Value::String(entity_id.to_string()));
             if let Ok(r) = self.conn.execute(&cypher_rev, Some(params)) {
                 for batch in &r.batches {
-                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>() {
+                    if let Some(arr) = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow::array::StringArray>()
+                    {
                         for i in 0..batch.num_rows() {
                             if !arr.is_null(i) {
                                 connected_ids.push(arr.value(i).to_string());
@@ -1313,10 +1409,8 @@ impl MemoryStore {
                 Ok(Some(id)) => {
                     return Some(id);
                 }
-                Ok(None) => {
-                }
-                Err(_e) => {
-                }
+                Ok(None) => {}
+                Err(_e) => {}
             }
         } else {
             drop(storage);
@@ -1334,8 +1428,14 @@ impl MemoryStore {
         match self.conn.execute(&query, Some(params)) {
             Ok(res) => {
                 for batch in &res.batches {
-                    if batch.num_rows() == 0 { continue; }
-                    if let Some(arr) = batch.column(0).as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+                    if let Some(arr) = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<arrow::array::UInt64Array>()
+                    {
                         if !arr.is_null(0) {
                             let id = arr.value(0);
                             // Re-insert into hash index for future lookups
@@ -1344,10 +1444,14 @@ impl MemoryStore {
                                     let bm = &db.buffer_manager;
                                     let pk_value = Value::String(entity_id.to_string());
                                     if let Err(e) = idx.insert(bm, &pk_value, id, &tx) {
-                                        tracing::warn!("MemoryStore: hash index insert failed: {e}");
+                                        tracing::warn!(
+                                            "MemoryStore: hash index insert failed: {e}"
+                                        );
                                     }
                                     if let Err(e) = db.transaction_manager.commit(&tx, bm, &db) {
-                                        tracing::warn!("MemoryStore: hash index insert commit failed: {e}");
+                                        tracing::warn!(
+                                            "MemoryStore: hash index insert commit failed: {e}"
+                                        );
                                     }
                                 }
                             }
@@ -1357,9 +1461,7 @@ impl MemoryStore {
                 }
                 None
             }
-            Err(_e) => {
-                None
-            }
+            Err(_e) => None,
         }
     }
 
@@ -1384,9 +1486,10 @@ impl MemoryStore {
 
         // Update the CSR index so graph traversal (expand) can find this edge.
         let db = self.conn.client_context.database.clone();
-        if let (Some(src_node_id), Some(dst_node_id)) =
-            (self.resolve_to_internal_id(src_id), self.resolve_to_internal_id(dst_id))
-        {
+        if let (Some(src_node_id), Some(dst_node_id)) = (
+            self.resolve_to_internal_id(src_id),
+            self.resolve_to_internal_id(dst_id),
+        ) {
             let bm = &db.buffer_manager;
             if let Ok(tx) = db.transaction_manager.begin(false) {
                 let storage = db.storage_manager.read();
@@ -1431,12 +1534,16 @@ impl MemoryStore {
         match conn.execute(&query, Some(params)) {
             Ok(res) => {
                 for batch in &res.batches {
-                    if batch.num_rows() == 0 { continue; }
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
                     let ids = batch.column(0).as_any().downcast_ref::<StringArray>();
                     let types = batch.column(1).as_any().downcast_ref::<StringArray>();
                     let contents = batch.column(2).as_any().downcast_ref::<StringArray>();
                     let metadatas = batch.column(3).as_any().downcast_ref::<StringArray>();
-                    if let (Some(ids), Some(types), Some(contents), Some(metadatas)) = (ids, types, contents, metadatas) {
+                    if let (Some(ids), Some(types), Some(contents), Some(metadatas)) =
+                        (ids, types, contents, metadatas)
+                    {
                         if !ids.is_null(0) {
                             return Ok(Some(MemoryEntity {
                                 id: ids.value(0).to_string(),
@@ -1452,7 +1559,10 @@ impl MemoryStore {
             }
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("not found") || msg.contains("exist") || msg.contains("no such table") {
+                if msg.contains("not found")
+                    || msg.contains("exist")
+                    || msg.contains("no such table")
+                {
                     Ok(None)
                 } else {
                     Err(e)
@@ -1482,25 +1592,33 @@ impl MemoryStore {
                 let _ = db.transaction_manager.rollback(&db, &tx);
                 match row_id {
                     Ok(Some(id)) => Some(id),
-                    _ => None
+                    _ => None,
                 }
             } else {
                 // Hash index not loaded (e.g. after restart). Resolve via Cypher.
                 drop(storage);
-                let query = format!(
-                    "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1"
-                );
+                let query =
+                    format!("MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id RETURN e._id LIMIT 1");
                 let mut params = std::collections::HashMap::new();
                 params.insert("id".to_string(), Value::String(entity_id.to_string()));
                 match self.conn.execute(&query, Some(params)) {
-                    Ok(res) => {
-                        res.batches.first().and_then(|batch| {
-                            if batch.num_rows() == 0 { return None; }
-                            batch.column(0).as_any().downcast_ref::<arrow::array::UInt64Array>()
-                                .and_then(|arr| if arr.is_null(0) { None } else { Some(arr.value(0)) })
-                        })
-                    }
-                    Err(_) => None
+                    Ok(res) => res.batches.first().and_then(|batch| {
+                        if batch.num_rows() == 0 {
+                            return None;
+                        }
+                        batch
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<arrow::array::UInt64Array>()
+                            .and_then(|arr| {
+                                if arr.is_null(0) {
+                                    None
+                                } else {
+                                    Some(arr.value(0))
+                                }
+                            })
+                    }),
+                    Err(_) => None,
                 }
             }
         };
@@ -1545,7 +1663,11 @@ impl MemoryStore {
             params.insert("id".to_string(), Value::String(entity_id.to_string()));
             params.insert("now".to_string(), Value::Number(now as f64));
             if let Err(e) = conn.execute(&soft_delete, Some(params)) {
-                tracing::warn!("MemoryStore: failed to soft-delete entity {}: {}", entity_id, e);
+                tracing::warn!(
+                    "MemoryStore: failed to soft-delete entity {}: {}",
+                    entity_id,
+                    e
+                );
             }
         }
 
@@ -1557,7 +1679,11 @@ impl MemoryStore {
             let mut params = std::collections::HashMap::new();
             params.insert("id".to_string(), Value::String(entity_id.to_string()));
             if let Err(e) = conn.execute(&del_rels, Some(params)) {
-                tracing::warn!("MemoryStore: failed to delete relations for entity {}: {}", entity_id, e);
+                tracing::warn!(
+                    "MemoryStore: failed to delete relations for entity {}: {}",
+                    entity_id,
+                    e
+                );
             }
         }
 
@@ -1582,23 +1708,38 @@ impl MemoryStore {
         let mut params = HashMap::new();
         params.insert("now".to_string(), Value::Number(now_secs as f64));
         let find_res = conn.execute(&find, Some(params))?;
-        let expired_ids: Vec<String> = find_res.batches.iter().flat_map(|b| {
-            let arr = b.column(0).as_any().downcast_ref::<arrow::array::StringArray>()?;
-            Some((0..b.num_rows()).map(|i| arr.value(i).to_string()).collect::<Vec<_>>())
-        }).flatten().collect();
+        let expired_ids: Vec<String> = find_res
+            .batches
+            .iter()
+            .flat_map(|b| {
+                let arr = b
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()?;
+                Some(
+                    (0..b.num_rows())
+                        .map(|i| arr.value(i).to_string())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect();
 
         let count = expired_ids.len();
 
         // Set valid_until for each expired entity
         for id in &expired_ids {
-            let soft_delete = format!(
-                "MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id SET e.valid_until = $now"
-            );
+            let soft_delete =
+                format!("MATCH (e:{ENTITY_TABLE}) WHERE e.id = $id SET e.valid_until = $now");
             let mut params = HashMap::new();
             params.insert("id".to_string(), Value::String(id.to_string()));
             params.insert("now".to_string(), Value::Number(now as f64));
             if let Err(e) = conn.execute(&soft_delete, Some(params)) {
-                tracing::warn!("MemoryStore: failed to soft-delete expired entity {}: {}", id, e);
+                tracing::warn!(
+                    "MemoryStore: failed to soft-delete expired entity {}: {}",
+                    id,
+                    e
+                );
             }
         }
 
@@ -1606,7 +1747,9 @@ impl MemoryStore {
     }
 
     fn lookup_by_internal_id(&self, internal_id: u64) -> Option<MemoryEntity> {
-        self.lookup_by_internal_ids(&[internal_id]).into_iter().next()
+        self.lookup_by_internal_ids(&[internal_id])
+            .into_iter()
+            .next()
     }
 
     /// Batch version: look up multiple internal IDs in a single Cypher query.
@@ -1645,7 +1788,10 @@ impl MemoryStore {
             let valid_from = batch.column(8).as_any().downcast_ref::<Int64Array>();
             let valid_until = batch.column(9).as_any().downcast_ref::<Int64Array>();
             let embeddings: Option<&FixedSizeListArray> = if batch.num_columns() > 10 {
-                batch.column(10).as_any().downcast_ref::<FixedSizeListArray>()
+                batch
+                    .column(10)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
             } else {
                 None
             };
@@ -1675,7 +1821,9 @@ impl MemoryStore {
                     last_accessed: last_accessed.map(|a| a.value(i)).unwrap_or(0),
                     access_count: access_counts.map(|a| a.value(i)).unwrap_or(0),
                     ttl_seconds: ttl_seconds.map(|a| a.value(i)).unwrap_or(0),
-                    metadata: metadatas.map(|a| a.value(i).to_string()).unwrap_or_default(),
+                    metadata: metadatas
+                        .map(|a| a.value(i).to_string())
+                        .unwrap_or_default(),
                     valid_from: valid_from.map(|a| a.value(i)).unwrap_or(0),
                     valid_until: valid_until.map(|a| a.value(i)).unwrap_or(0),
                     embedding,

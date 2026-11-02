@@ -3,7 +3,6 @@
 /// Advanced test scenarios: Fusion code analysis module, WASM UDFs,
 /// schema evolution under load, complex Cypher queries, optimizer rules,
 /// buffer pool pressure, correlated subqueries, and cross-table joins at scale.
-
 use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
 use lightning_core::{Database, SystemConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,7 +23,11 @@ fn exec(db: &Arc<Database>, query: &str) -> lightning_core::QueryResult {
     conn.execute(query, None).unwrap()
 }
 
-fn exec_with(db: &Arc<Database>, query: &str, params: Option<std::collections::HashMap<String, lightning_core::Value>>) -> lightning_core::QueryResult {
+fn exec_with(
+    db: &Arc<Database>,
+    query: &str,
+    params: Option<std::collections::HashMap<String, lightning_core::Value>>,
+) -> lightning_core::QueryResult {
     let conn = db.connect();
     conn.execute(query, params).unwrap()
 }
@@ -32,7 +35,11 @@ fn exec_with(db: &Arc<Database>, query: &str, params: Option<std::collections::H
 macro_rules! assert_count {
     ($res:expr, $expected:expr) => {
         let total: usize = $res.batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total, $expected, "Expected {} rows, got {}", $expected, total);
+        assert_eq!(
+            total, $expected,
+            "Expected {} rows, got {}",
+            $expected, total
+        );
     };
 }
 
@@ -61,22 +68,50 @@ fn crucible_complex_cypher_queries() -> TestResult {
     let conn = db.connect();
 
     // Multi-table schema: Users, Orders, Products
-    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, age INT64, city STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, age INT64, city STRING, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE NODE TABLE Product(id INT64, name STRING, price DOUBLE, category STRING, PRIMARY KEY (id))", None)?;
     conn.execute("CREATE NODE TABLE Order(id INT64, user_id INT64, product_id INT64, quantity INT64, total DOUBLE, PRIMARY KEY (id))", None)?;
 
     // Insert data
     for i in 0..50 {
-        conn.execute(&format!("CREATE (:User {{id: {}, name: 'User_{}', age: {}, city: '{}'}})",
-            i, i, 20 + (i % 30), ["NYC", "SF", "LA", "CHI", "SEA"][i as usize % 5]), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:User {{id: {}, name: 'User_{}', age: {}, city: '{}'}})",
+                i,
+                i,
+                20 + (i % 30),
+                ["NYC", "SF", "LA", "CHI", "SEA"][i as usize % 5]
+            ),
+            None,
+        )?;
     }
     for i in 0..100 {
-        conn.execute(&format!("CREATE (:Product {{id: {}, name: 'Product_{}', price: {}, category: '{}'}})",
-            i, i, (i as f64 + 0.99) * 10.0, ["Electronics", "Books", "Clothing", "Food", "Tools"][i as usize % 5]), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Product {{id: {}, name: 'Product_{}', price: {}, category: '{}'}})",
+                i,
+                i,
+                (i as f64 + 0.99) * 10.0,
+                ["Electronics", "Books", "Clothing", "Food", "Tools"][i as usize % 5]
+            ),
+            None,
+        )?;
     }
     for i in 0..200 {
-        conn.execute(&format!("CREATE (:Order {{id: {}, user_id: {}, product_id: {}, quantity: {}, total: {}}})",
-            i, i % 50, i % 100, (i % 5) + 1, ((i % 5) + 1) as f64 * ((i as f64 + 0.99) * 10.0)), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Order {{id: {}, user_id: {}, product_id: {}, quantity: {}, total: {}}})",
+                i,
+                i % 50,
+                i % 100,
+                (i % 5) + 1,
+                ((i % 5) + 1) as f64 * ((i as f64 + 0.99) * 10.0)
+            ),
+            None,
+        )?;
     }
 
     // COUNT aggregate
@@ -85,7 +120,10 @@ fn crucible_complex_cypher_queries() -> TestResult {
     println!("  Total orders: OK");
 
     // GROUP BY + aggregation
-    let res = exec(&db, "MATCH (o:Order) RETURN o.user_id, count(*), sum(o.total) ORDER BY o.user_id LIMIT 5");
+    let res = exec(
+        &db,
+        "MATCH (o:Order) RETURN o.user_id, count(*), sum(o.total) ORDER BY o.user_id LIMIT 5",
+    );
     assert!(res.batches[0].num_rows() > 0);
     println!("  GROUP BY city aggregation: OK");
 
@@ -97,10 +135,11 @@ fn crucible_complex_cypher_queries() -> TestResult {
     println!("  Cross-table join (User -> Order): OK");
 
     // Triple join
-    let res = exec(&db,
+    let res = exec(
+        &db,
         "MATCH (u:User), (o:Order), (p:Product) \
          WHERE u.id = o.user_id AND o.product_id = p.id \
-         RETURN u.name, p.name, o.quantity ORDER BY u.name LIMIT 10"
+         RETURN u.name, p.name, o.quantity ORDER BY u.name LIMIT 10",
     );
     assert_count!(res, 10);
     println!("  Triple join (User -> Order -> Product): OK");
@@ -113,15 +152,17 @@ fn crucible_complex_cypher_queries() -> TestResult {
     println!("  Filter + aggregate: OK");
 
     // ORDER BY + LIMIT + SKIP (OFFSET)
-    let res = exec(&db,
-        "MATCH (u:User) RETURN u.name ORDER BY u.name ASC LIMIT 5 OFFSET 10"
+    let res = exec(
+        &db,
+        "MATCH (u:User) RETURN u.name ORDER BY u.name ASC LIMIT 5 OFFSET 10",
     );
     assert_count!(res, 5);
     println!("  ORDER BY + LIMIT + OFFSET: OK");
 
     // WHERE with IN
-    let res = exec(&db,
-        "MATCH (u:User) WHERE u.age IN [25, 30, 35] RETURN count(*)"
+    let res = exec(
+        &db,
+        "MATCH (u:User) WHERE u.age IN [25, 30, 35] RETURN count(*)",
     );
     println!("  WHERE IN clause: OK");
 
@@ -132,9 +173,7 @@ fn crucible_complex_cypher_queries() -> TestResult {
     println!("  Complex WHERE (AND/OR): OK");
 
     // NOT EQUAL filter
-    let res = exec(&db,
-        "MATCH (u:User) WHERE u.city <> 'NYC' RETURN count(*)"
-    );
+    let res = exec(&db, "MATCH (u:User) WHERE u.city <> 'NYC' RETURN count(*)");
     println!("  NOT EQUAL filter: OK");
 
     Ok(())
@@ -149,17 +188,26 @@ fn crucible_schema_evolution() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Evolving(id INT64, name STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Evolving(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Insert base data
     for i in 0..100 {
-        conn.execute(&format!("CREATE (:Evolving {{id: {}, name: 'base_{}'}})", i, i), None)?;
+        conn.execute(
+            &format!("CREATE (:Evolving {{id: {}, name: 'base_{}'}})", i, i),
+            None,
+        )?;
     }
 
     // ADD COLUMN
     conn.execute("ALTER TABLE Evolving ADD COLUMN score DOUBLE", None)?;
     conn.execute("MATCH (e:Evolving) SET e.score = 0.5", None)?;
-    let res = exec(&db, "MATCH (e:Evolving) RETURN count(e.score), sum(e.score)");
+    let res = exec(
+        &db,
+        "MATCH (e:Evolving) RETURN count(e.score), sum(e.score)",
+    );
     assert_count!(res, 1);
     println!("  ALTER ADD COLUMN + SET: OK");
 
@@ -178,16 +226,32 @@ fn crucible_schema_evolution() -> TestResult {
 
     // DROP COLUMN
     conn.execute("ALTER TABLE Evolving DROP COLUMN name", None)?;
-    let res = exec(&db, "MATCH (e:Evolving) RETURN e.id, e.priority, e.active LIMIT 1");
+    let res = exec(
+        &db,
+        "MATCH (e:Evolving) RETURN e.id, e.priority, e.active LIMIT 1",
+    );
     assert_count!(res, 1);
     println!("  ALTER DROP COLUMN: OK");
 
     // Add data after schema evolution
     for i in 100..110 {
-        conn.execute(&format!("CREATE (:Evolving {{id: {}, priority: {}, active: {}}})", i, i as f64 * 0.1, if i % 2 == 0 { "TRUE" } else { "FALSE" }), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Evolving {{id: {}, priority: {}, active: {}}})",
+                i,
+                i as f64 * 0.1,
+                if i % 2 == 0 { "TRUE" } else { "FALSE" }
+            ),
+            None,
+        )?;
     }
     let res = exec(&db, "MATCH (e:Evolving) RETURN count(*)");
-    let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count, 110, "should have 110 rows after schema evolution");
     println!("  INSERT after schema evolution: {} rows OK", count);
 
@@ -215,31 +279,56 @@ fn crucible_buffer_pool_pressure() -> TestResult {
     let db = Arc::new(Database::new(dir.path(), config)?);
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Pressure(id INT64, val INT64, data STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Pressure(id INT64, val INT64, data STRING, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Write rows that force buffer pool eviction
     let n = 2000u64;
     for i in 0..n {
-        conn.execute(&format!(
-            "CREATE (:Pressure {{id: {}, val: {}, data: 'row_{}'}})",
-            i, (i * 7) % 1000, i
-        ), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Pressure {{id: {}, val: {}, data: 'row_{}'}})",
+                i,
+                (i * 7) % 1000,
+                i
+            ),
+            None,
+        )?;
 
         // Periodically verify while under pressure
         if i > 0 && i % 500 == 0 {
-            let res = exec(&db, &format!("MATCH (p:Pressure {{id: {}}}) RETURN p.val", i));
-            assert!(res.batches[0].num_rows() > 0,
-                "Row {} lost under buffer pool pressure", i);
+            let res = exec(
+                &db,
+                &format!("MATCH (p:Pressure {{id: {}}}) RETURN p.val", i),
+            );
+            assert!(
+                res.batches[0].num_rows() > 0,
+                "Row {} lost under buffer pool pressure",
+                i
+            );
         }
     }
 
     // Final count
     let res = exec(&db, "MATCH (p:Pressure) RETURN count(*)");
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0) as u64;
-    assert_eq!(count, n, "Expected {} rows under pressure, got {}", n, count);
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0) as u64;
+    assert_eq!(
+        count, n,
+        "Expected {} rows under pressure, got {}",
+        n, count
+    );
 
-    println!("  Buffer pool pressure: {} rows with tiny pool, all intact", n);
+    println!(
+        "  Buffer pool pressure: {} rows with tiny pool, all intact",
+        n
+    );
 
     // Random access pattern to stress eviction further
     use std::collections::HashSet;
@@ -247,12 +336,18 @@ fn crucible_buffer_pool_pressure() -> TestResult {
     let mut accessed = HashSet::new();
     for _ in 0..1000 {
         let id = (rng.next_u64() % n) as i64;
-        let res = exec(&db, &format!("MATCH (p:Pressure {{id: {}}}) RETURN p.val", id));
+        let res = exec(
+            &db,
+            &format!("MATCH (p:Pressure {{id: {}}}) RETURN p.val", id),
+        );
         if res.batches[0].num_rows() > 0 {
             accessed.insert(id);
         }
     }
-    println!("  Random access: {} unique pages retrieved under pressure", accessed.len());
+    println!(
+        "  Random access: {} unique pages retrieved under pressure",
+        accessed.len()
+    );
 
     Ok(())
 }
@@ -291,9 +386,17 @@ fn crucible_wal_crash_recovery_types() -> TestResult {
         let conn = db.connect();
 
         let res = exec(&db, "MATCH (t:Types) RETURN count(*)");
-        let count = res.batches[0].column(0)
-            .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-        assert_eq!(count, 50, "Expected 50 rows after WAL replay, got {}", count);
+        let count = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            count, 50,
+            "Expected 50 rows after WAL replay, got {}",
+            count
+        );
 
         // Verify each type round-trips correctly
         for i in 0..50 {
@@ -303,13 +406,37 @@ fn crucible_wal_crash_recovery_types() -> TestResult {
             let batch = &res.batches[0];
             assert!(batch.num_rows() > 0, "Row {} not found after WAL replay", i);
 
-            let int_v = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-            let float_v = batch.column(1).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
-            let str_v = batch.column(2).as_any().downcast_ref::<StringArray>().unwrap().value(0);
-            let bool_v = batch.column(3).as_any().downcast_ref::<BooleanArray>().unwrap().value(0);
+            let int_v = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0);
+            let float_v = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0);
+            let str_v = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0);
+            let bool_v = batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(0);
 
             assert_eq!(int_v, i * 10, "int mismatch for id {}", i);
-            assert!((float_v - (i as f64 * 1.5)).abs() < 0.001, "float mismatch for id {}", i);
+            assert!(
+                (float_v - (i as f64 * 1.5)).abs() < 0.001,
+                "float mismatch for id {}",
+                i
+            );
             assert_eq!(str_v, format!("str_{}", i), "string mismatch for id {}", i);
             assert_eq!(bool_v, i % 2 == 0, "bool mismatch for id {}", i);
         }
@@ -335,9 +462,17 @@ fn crucible_wal_crash_recovery_types() -> TestResult {
         let db = Database::new(&db_path, SystemConfig::default())?;
         let conn = db.connect();
         let res = exec(&db, "MATCH (t:Types) RETURN count(*)");
-        let count = res.batches[0].column(0)
-            .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-        assert_eq!(count, 75, "Expected 75 rows after second WAL replay, got {}", count);
+        let count = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(
+            count, 75,
+            "Expected 75 rows after second WAL replay, got {}",
+            count
+        );
         println!("  Second WAL replay: 75 rows total");
     }
 
@@ -354,54 +489,78 @@ fn crucible_readers_during_checkpoint() -> TestResult {
     let db = Arc::new(Database::new(dir.path(), SystemConfig::default())?);
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE CkptData(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE CkptData(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     for i in 0..2000 {
-        conn.execute(&format!("CREATE (:CkptData {{id: {}, val: {}}})", i, i * 3), None)?;
+        conn.execute(
+            &format!("CREATE (:CkptData {{id: {}, val: {}}})", i, i * 3),
+            None,
+        )?;
     }
 
     let num_readers = 4;
     let stop = Arc::new(AtomicBool::new(false));
 
     // Start reader threads
-    let readers: Vec<_> = (0..num_readers).map(|id| {
-        let db = Arc::clone(&db);
-        let stop = Arc::clone(&stop);
-        let reader_id = id;
-        std::thread::spawn(move || {
-            let conn = db.connect();
-            let mut reads = 0u64;
-            while !stop.load(Ordering::Relaxed) {
-                let _ = conn.execute(
-                    "MATCH (c:CkptData) WHERE c.val >= 0 RETURN count(*), avg(c.val)", None
-                );
-                let _ = conn.execute(
-                    "MATCH (c:CkptData) WHERE c.id < 100 RETURN c.id, c.val ORDER BY c.id", None
-                );
-                reads += 2;
-            }
-            (reader_id, reads)
+    let readers: Vec<_> = (0..num_readers)
+        .map(|id| {
+            let db = Arc::clone(&db);
+            let stop = Arc::clone(&stop);
+            let reader_id = id;
+            std::thread::spawn(move || {
+                let conn = db.connect();
+                let mut reads = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = conn.execute(
+                        "MATCH (c:CkptData) WHERE c.val >= 0 RETURN count(*), avg(c.val)",
+                        None,
+                    );
+                    let _ = conn.execute(
+                        "MATCH (c:CkptData) WHERE c.id < 100 RETURN c.id, c.val ORDER BY c.id",
+                        None,
+                    );
+                    reads += 2;
+                }
+                (reader_id, reads)
+            })
         })
-    }).collect();
+        .collect();
 
     // Run checkpoints while readers are active
     for i in 0..10 {
         db.checkpoint()?;
         std::thread::sleep(Duration::from_millis(5));
         if i % 5 == 4 {
-            println!("  Checkpoint {}/10 completed with {} readers active", i + 1, num_readers);
+            println!(
+                "  Checkpoint {}/10 completed with {} readers active",
+                i + 1,
+                num_readers
+            );
         }
     }
 
     stop.store(true, Ordering::Release);
 
     let total_reads: u64 = readers.into_iter().map(|h| h.join().unwrap().1).sum();
-    println!("  Readers during checkpoint: {} total reads, no crashes", total_reads);
+    println!(
+        "  Readers during checkpoint: {} total reads, no crashes",
+        total_reads
+    );
 
     // Data integrity check
     let res = exec(&db, "MATCH (c:CkptData) RETURN count(*)");
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-    assert_eq!(count, 2000, "Data should be intact after checkpoint with readers");
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(
+        count, 2000,
+        "Data should be intact after checkpoint with readers"
+    );
     println!("  Data integrity verified: {} rows", count);
 
     Ok(())
@@ -416,10 +575,20 @@ fn crucible_aggregate_functions() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Agg(id INT64, val INT64, cat STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Agg(id INT64, val INT64, cat STRING, PRIMARY KEY (id))",
+        None,
+    )?;
     for i in 1..=100 {
-        conn.execute(&format!("CREATE (:Agg {{id: {}, val: {}, cat: 'cat_{}'}})",
-            i, i * 2, (i % 5) + 1), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Agg {{id: {}, val: {}, cat: 'cat_{}'}})",
+                i,
+                i * 2,
+                (i % 5) + 1
+            ),
+            None,
+        )?;
     }
 
     // Basic aggregates
@@ -430,35 +599,60 @@ fn crucible_aggregate_functions() -> TestResult {
     // aggregate_comprehensive_test::test_agg_sum), so read them as f64.
     let res = exec(&db, "MATCH (a:Agg) RETURN sum(a.val)");
     // sum(1..100 * 2) = 2 * 5050 = 10100
-    let sum_val = res.batches[0].column(0)
-        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+    let sum_val = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(sum_val as i64, 10100, "sum should be 10100");
 
     let res = exec(&db, "MATCH (a:Agg) RETURN avg(a.val)");
-    let avg_val = res.batches[0].column(0)
-        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
-    assert!((avg_val - 101.0).abs() < 0.01, "avg should be ~101.0, got {}", avg_val);
+    let avg_val = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap()
+        .value(0);
+    assert!(
+        (avg_val - 101.0).abs() < 0.01,
+        "avg should be ~101.0, got {}",
+        avg_val
+    );
 
     let res = exec(&db, "MATCH (a:Agg) RETURN min(a.val), max(a.val)");
-    let min_val = res.batches[0].column(0)
-        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
-    let max_val = res.batches[0].column(1)
-        .as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+    let min_val = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap()
+        .value(0);
+    let max_val = res.batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(min_val as i64, 2, "min should be 2");
     assert_eq!(max_val as i64, 200, "max should be 200");
 
     // GROUP BY with aggregation
-    let res = exec(&db,
-        "MATCH (a:Agg) RETURN a.cat, count(*), sum(a.val) ORDER BY a.cat"
+    let res = exec(
+        &db,
+        "MATCH (a:Agg) RETURN a.cat, count(*), sum(a.val) ORDER BY a.cat",
     );
     assert_count!(res, 5);
     println!("  GROUP BY aggregates: 5 categories");
 
     // HAVING-style: GROUP BY with WHERE on aggregate column
-    let res = exec(&db,
-        "MATCH (a:Agg) WHERE a.val > 50 RETURN a.cat, count(*), avg(a.val) ORDER BY a.cat"
+    let res = exec(
+        &db,
+        "MATCH (a:Agg) WHERE a.val > 50 RETURN a.cat, count(*), avg(a.val) ORDER BY a.cat",
     );
-    println!("  Filtered GROUP BY: {} rows", res.batches.iter().map(|b| b.num_rows()).sum::<usize>());
+    println!(
+        "  Filtered GROUP BY: {} rows",
+        res.batches.iter().map(|b| b.num_rows()).sum::<usize>()
+    );
 
     Ok(())
 }
@@ -472,18 +666,26 @@ fn crucible_relationship_queries_at_scale() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))", None)?;
-    conn.execute("CREATE REL TABLE Knows(FROM Person TO Person, since INT64, strength DOUBLE)", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )?;
+    conn.execute(
+        "CREATE REL TABLE Knows(FROM Person TO Person, since INT64, strength DOUBLE)",
+        None,
+    )?;
 
     // Create 500 people
     use std::sync::Arc as A;
     let ids: Vec<i64> = (0..500).collect();
     let names: Vec<String> = (0..500).map(|i| format!("Person_{}", i)).collect();
-    let names_arr = arrow::array::StringArray::from(names.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    let names_arr =
+        arrow::array::StringArray::from(names.iter().map(|s| s.as_str()).collect::<Vec<_>>());
     let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
         ("id", A::new(arrow::array::Int64Array::from(ids)) as _),
         ("name", A::new(names_arr) as _),
-    ]).unwrap();
+    ])
+    .unwrap();
     conn.bulk_insert_batch("Person", &batch)?;
 
     // Create edges forming a small-world network
@@ -511,20 +713,37 @@ fn crucible_relationship_queries_at_scale() -> TestResult {
     println!("  Created {} people with {} Knows edges", 500, edge_count);
 
     // Count edges
-    let res = exec(&db, "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN count(*)");
-    let edges_found = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let res = exec(
+        &db,
+        "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN count(*)",
+    );
+    let edges_found = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     println!("  Edge count: {} (expected ~{})", edges_found, edge_count);
     assert!(edges_found > 0, "should have edges in the graph");
 
     // Filtered edge query
-    let res = exec(&db, "MATCH (a:Person)-[k:Knows]->(b:Person) WHERE k.strength > 0.5 RETURN count(*)");
-    let strong_edges = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let res = exec(
+        &db,
+        "MATCH (a:Person)-[k:Knows]->(b:Person) WHERE k.strength > 0.5 RETURN count(*)",
+    );
+    let strong_edges = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     println!("  Strong edges (strength > 0.5): {}", strong_edges);
 
     // Edge property aggregation
-    let res = exec(&db, "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN avg(k.strength), max(k.since), min(k.since)");
+    let res = exec(
+        &db,
+        "MATCH (a:Person)-[k:Knows]->(b:Person) RETURN avg(k.strength), max(k.since), min(k.since)",
+    );
     assert_count!(res, 1);
     println!("  Edge stats: OK");
 
@@ -548,22 +767,37 @@ fn crucible_graph_reachability() -> TestResult {
         conn.execute(&format!("CREATE (:GNode {{id: {}}})", i), None)?;
     }
     for i in 0..99 {
-        conn.execute(&format!(
-            "MATCH (a:GNode {{id: {}}}), (b:GNode {{id: {}}}) CREATE (a)-[:GEdge]->(b)",
-            i, i + 1
-        ), None)?;
+        conn.execute(
+            &format!(
+                "MATCH (a:GNode {{id: {}}}), (b:GNode {{id: {}}}) CREATE (a)-[:GEdge]->(b)",
+                i,
+                i + 1
+            ),
+            None,
+        )?;
     }
 
     // Edge count
     let res = exec(&db, "MATCH (a:GNode)-[:GEdge]->(b:GNode) RETURN count(*)");
-    let edges = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let edges = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(edges, 99, "should have 99 edges in chain");
 
     // CONTAINS (path pattern matching)
-    let res = exec(&db, "MATCH (a:GNode)-[:GEdge]->(b:GNode)-[:GEdge]->(c:GNode) RETURN count(*)");
-    let paths = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let res = exec(
+        &db,
+        "MATCH (a:GNode)-[:GEdge]->(b:GNode)-[:GEdge]->(c:GNode) RETURN count(*)",
+    );
+    let paths = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(paths, 98, "should have 98 paths of length 2");
     println!("  Path length 2: {}", paths);
 
@@ -598,12 +832,18 @@ fn crucible_parameterized_queries() -> TestResult {
     params.insert("name".to_string(), Value::String("param_test".to_string()));
     params.insert("score".to_string(), Value::Number(99.5));
     params.insert("active".to_string(), Value::Boolean(true));
-    conn.execute("CREATE (:ParamTest {id: $id, name: $name, score: $score, active: $active})", Some(params))?;
+    conn.execute(
+        "CREATE (:ParamTest {id: $id, name: $name, score: $score, active: $active})",
+        Some(params),
+    )?;
 
     // Select with parameter
     let mut params = std::collections::HashMap::new();
     params.insert("id".to_string(), Value::Number(1.0));
-    let res = conn.execute("MATCH (p:ParamTest) WHERE p.id = $id RETURN p.name, p.score, p.active", Some(params))?;
+    let res = conn.execute(
+        "MATCH (p:ParamTest) WHERE p.id = $id RETURN p.name, p.score, p.active",
+        Some(params),
+    )?;
     assert_count!(res, 1);
     assert_val!(res, 0, 0, "param_test", StringArray);
     assert_val!(res, 1, 0, 99.5, Float64Array);
@@ -613,7 +853,10 @@ fn crucible_parameterized_queries() -> TestResult {
     // Parameterized string match
     let mut params = std::collections::HashMap::new();
     params.insert("name".to_string(), Value::String("param_test".to_string()));
-    let res = conn.execute("MATCH (p:ParamTest) WHERE p.name = $name RETURN p.id", Some(params))?;
+    let res = conn.execute(
+        "MATCH (p:ParamTest) WHERE p.name = $name RETURN p.id",
+        Some(params),
+    )?;
     assert_val!(res, 0, 0, 1i64, Int64Array);
     println!("  Parameterized string match: OK");
 
@@ -621,7 +864,10 @@ fn crucible_parameterized_queries() -> TestResult {
     let mut params = std::collections::HashMap::new();
     params.insert("id".to_string(), Value::Number(1.0));
     params.insert("new_score".to_string(), Value::Number(100.0));
-    conn.execute("MATCH (p:ParamTest {id: $id}) SET p.score = $new_score", Some(params))?;
+    conn.execute(
+        "MATCH (p:ParamTest {id: $id}) SET p.score = $new_score",
+        Some(params),
+    )?;
 
     let res = exec(&db, "MATCH (p:ParamTest {id: 1}) RETURN p.score");
     assert_val!(res, 0, 0, 100.0, Float64Array);
@@ -655,35 +901,62 @@ fn crucible_bulk_insert_then_query() -> TestResult {
     let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
         ("id", A::new(arrow::array::Int64Array::from(ids)) as _),
         ("val", A::new(arrow::array::Int64Array::from(vals)) as _),
-        ("label", A::new(arrow::array::StringArray::from(labels.iter().map(|s| s.as_str()).collect::<Vec<_>>())) as _),
-        ("score", A::new(arrow::array::Float64Array::from(scores)) as _),
-    ]).unwrap();
+        (
+            "label",
+            A::new(arrow::array::StringArray::from(
+                labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            )) as _,
+        ),
+        (
+            "score",
+            A::new(arrow::array::Float64Array::from(scores)) as _,
+        ),
+    ])
+    .unwrap();
 
     let start = Instant::now();
     conn.bulk_insert_batch("Bulk", &batch)?;
     let elapsed = start.elapsed();
 
-    println!("  Bulk insert 10K rows in {:.3}s ({:.0}/sec)", elapsed.as_secs_f64(), n as f64 / elapsed.as_secs_f64());
+    println!(
+        "  Bulk insert 10K rows in {:.3}s ({:.0}/sec)",
+        elapsed.as_secs_f64(),
+        n as f64 / elapsed.as_secs_f64()
+    );
 
     // Verify count
     let res = exec(&db, "MATCH (b:Bulk) RETURN count(*)");
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count as u64, n, "Bulk count mismatch");
 
     // Filter queries on bulk data
     let res = exec(&db, "MATCH (b:Bulk) WHERE b.val = 500 RETURN count(*)");
-    let filtered = res.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let filtered = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     println!("  Filtered (val=500): {} rows", filtered);
 
     // Aggregate on bulk data
-    let res = exec(&db, "MATCH (b:Bulk) WHERE b.label = 'label_25' RETURN count(*), avg(b.score)");
+    let res = exec(
+        &db,
+        "MATCH (b:Bulk) WHERE b.label = 'label_25' RETURN count(*), avg(b.score)",
+    );
     assert_count!(res, 1);
     println!("  Aggregate on filtered bulk data: OK");
 
     // ORDER BY + LIMIT on 10K
-    let res = exec(&db, "MATCH (b:Bulk) RETURN b.id, b.val ORDER BY b.val DESC LIMIT 5");
+    let res = exec(
+        &db,
+        "MATCH (b:Bulk) RETURN b.id, b.val ORDER BY b.val DESC LIMIT 5",
+    );
     assert_count!(res, 5);
     println!("  ORDER BY + LIMIT on bulk: OK");
 
@@ -699,17 +972,25 @@ fn crucible_vacuum_data_integrity() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Vac(id INT64, val INT64, label STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Vac(id INT64, val INT64, label STRING, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Insert and delete many rows to create garbage
     for cycle in 0..5 {
         // Use UNWIND for efficient bulk insert
-        let items: Vec<String> = (0..500).map(|i| {
-            let id = cycle * 1000 + i;
-            format!("{{id: {}, val: {}, label: 'cycle_{}'}}", id, i, cycle)
-        }).collect();
+        let items: Vec<String> = (0..500)
+            .map(|i| {
+                let id = cycle * 1000 + i;
+                format!("{{id: {}, val: {}, label: 'cycle_{}'}}", id, i, cycle)
+            })
+            .collect();
         conn.execute(
-            &format!("UNWIND [{}] AS row CREATE (:Vac {{id: row.id, val: row.val, label: row.label}})", items.join(", ")),
+            &format!(
+                "UNWIND [{}] AS row CREATE (:Vac {{id: row.id, val: row.val, label: row.label}})",
+                items.join(", ")
+            ),
             None,
         )?;
     }
@@ -718,8 +999,12 @@ fn crucible_vacuum_data_integrity() -> TestResult {
     conn.execute("MATCH (v:Vac) WHERE v.id % 2 = 0 DELETE v", None)?;
 
     let before_vacuum = exec(&db, "MATCH (v:Vac) RETURN count(*)");
-    let before_count = before_vacuum.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let before_count = before_vacuum.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     println!("  Before vacuum: {} rows", before_count);
 
     // Vacuum
@@ -730,9 +1015,16 @@ fn crucible_vacuum_data_integrity() -> TestResult {
 
     // Verify same count after vacuum
     let after = exec(&db, "MATCH (v:Vac) RETURN count(*)");
-    let after_count = after.batches[0].column(0)
-        .as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-    assert_eq!(after_count, before_count, "Vacuum should not change row count");
+    let after_count = after.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(
+        after_count, before_count,
+        "Vacuum should not change row count"
+    );
     println!("  After vacuum: {} rows (correct)", after_count);
 
     // Verify individual values still accessible
@@ -754,14 +1046,23 @@ fn crucible_optimizer_pushdowns() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Opt(id INT64, val INT64, cat STRING, tag STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE Opt(id INT64, val INT64, cat STRING, tag STRING, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Insert data that benefits from filter pushdown
     for i in 0..2000 {
-        conn.execute(&format!(
-            "CREATE (:Opt {{id: {}, val: {}, cat: 'cat_{}', tag: 'tag_{}'}})",
-            i, (i * 3) % 500, i % 10, i % 20
-        ), None)?;
+        conn.execute(
+            &format!(
+                "CREATE (:Opt {{id: {}, val: {}, cat: 'cat_{}', tag: 'tag_{}'}})",
+                i,
+                (i * 3) % 500,
+                i % 10,
+                i % 20
+            ),
+            None,
+        )?;
     }
 
     // Filter pushdown: WHERE on indexed column
@@ -774,22 +1075,41 @@ fn crucible_optimizer_pushdowns() -> TestResult {
 
     // Composite filter pushdown
     let start = Instant::now();
-    let res = exec(&db, "MATCH (o:Opt) WHERE o.cat = 'cat_5' AND o.tag = 'tag_3' RETURN count(*)");
+    let res = exec(
+        &db,
+        "MATCH (o:Opt) WHERE o.cat = 'cat_5' AND o.tag = 'tag_3' RETURN count(*)",
+    );
     let elapsed = start.elapsed();
-    println!("  Composite filter: {} rows in {:.3}s",
-        res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0),
-        elapsed.as_secs_f64());
+    println!(
+        "  Composite filter: {} rows in {:.3}s",
+        res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        elapsed.as_secs_f64()
+    );
 
     // Projection pushdown: SELECT specific columns
     let start = Instant::now();
-    let res = exec(&db, "MATCH (o:Opt) WHERE o.val > 400 RETURN o.id, o.cat LIMIT 100");
+    let res = exec(
+        &db,
+        "MATCH (o:Opt) WHERE o.val > 400 RETURN o.id, o.cat LIMIT 100",
+    );
     let elapsed = start.elapsed();
     assert_count!(res, 100);
-    println!("  Projection pushdown: 100 rows in {:.3}s", elapsed.as_secs_f64());
+    println!(
+        "  Projection pushdown: 100 rows in {:.3}s",
+        elapsed.as_secs_f64()
+    );
 
     // ORDER BY + LIMIT pushdown
     let start = Instant::now();
-    let res = exec(&db, "MATCH (o:Opt) RETURN o.val, o.id ORDER BY o.val DESC LIMIT 10");
+    let res = exec(
+        &db,
+        "MATCH (o:Opt) RETURN o.val, o.id ORDER BY o.val DESC LIMIT 10",
+    );
     let elapsed = start.elapsed();
     assert_count!(res, 10);
     println!("  TopK pushdown: 10 rows in {:.3}s", elapsed.as_secs_f64());
@@ -806,7 +1126,10 @@ fn crucible_unwind_bulk_create() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE UnwindNode(id INT64, name STRING, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE UnwindNode(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Use UNWIND to create multiple nodes
     conn.execute(
@@ -820,12 +1143,15 @@ fn crucible_unwind_bulk_create() -> TestResult {
     println!("  UNWIND bulk create: OK");
 
     // UNWIND with larger dataset
-    let items: Vec<String> = (0..100).map(|i| {
-        format!("{{id: {}, name: 'unwind_{}'}}", i, i)
-    }).collect();
+    let items: Vec<String> = (0..100)
+        .map(|i| format!("{{id: {}, name: 'unwind_{}'}}", i, i))
+        .collect();
     let unwind_expr = items.join(", ");
     conn.execute(
-        &format!("UNWIND [{}] AS row CREATE (:UnwindNode {{id: row.id, name: row.name}})", unwind_expr),
+        &format!(
+            "UNWIND [{}] AS row CREATE (:UnwindNode {{id: row.id, name: row.name}})",
+            unwind_expr
+        ),
         None,
     )?;
 
@@ -845,7 +1171,10 @@ fn crucible_merge_operations() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE MergeNode(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE MergeNode(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // MERGE creates if not exists
     conn.execute("MERGE (m:MergeNode {id: 1}) SET m.val = 10", None)?;
@@ -878,17 +1207,26 @@ fn crucible_boolean_columns() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE BoolTable(id INT64, flag BOOL, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE BoolTable(id INT64, flag BOOL, PRIMARY KEY (id))",
+        None,
+    )?;
 
     // Insert bools
     conn.execute("CREATE (:BoolTable {id: 1, flag: TRUE})", None)?;
     conn.execute("CREATE (:BoolTable {id: 2, flag: FALSE})", None)?;
 
     // Filter on bool
-    let res = exec(&db, "MATCH (b:BoolTable) WHERE b.flag = TRUE RETURN count(*)");
+    let res = exec(
+        &db,
+        "MATCH (b:BoolTable) WHERE b.flag = TRUE RETURN count(*)",
+    );
     assert_val!(res, 0, 0, 1i64, Int64Array);
 
-    let res = exec(&db, "MATCH (b:BoolTable) WHERE b.flag = FALSE RETURN count(*)");
+    let res = exec(
+        &db,
+        "MATCH (b:BoolTable) WHERE b.flag = FALSE RETURN count(*)",
+    );
     assert_val!(res, 0, 0, 1i64, Int64Array);
 
     // Bool in UPDATE SET

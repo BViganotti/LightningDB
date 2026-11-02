@@ -46,13 +46,23 @@ fn scan_keeps_null_property_rows_under_projection() {
     let c = db.connect();
     c.execute("CREATE NODE TABLE T(id INT64, x INT64, y STRING)", None)
         .unwrap();
-    c.execute("CREATE (:T {id: 1, x: 1, y: 'a'})", None).unwrap();
+    c.execute("CREATE (:T {id: 1, x: 1, y: 'a'})", None)
+        .unwrap();
     c.execute("CREATE (:T {id: 2, x: null, y: null})", None)
         .unwrap();
-    c.execute("CREATE (:T {id: 3, x: 3, y: 'c'})", None).unwrap();
+    c.execute("CREATE (:T {id: 3, x: 3, y: 'c'})", None)
+        .unwrap();
 
-    assert_eq!(row_count(&db, "MATCH (t:T) RETURN t.x"), 3, "null x row kept");
-    assert_eq!(row_count(&db, "MATCH (t:T) RETURN t.y"), 3, "null y row kept");
+    assert_eq!(
+        row_count(&db, "MATCH (t:T) RETURN t.x"),
+        3,
+        "null x row kept"
+    );
+    assert_eq!(
+        row_count(&db, "MATCH (t:T) RETURN t.y"),
+        3,
+        "null y row kept"
+    );
 }
 
 /// Deleting a row must exclude it even when `_id` is not projected (the
@@ -61,10 +71,14 @@ fn scan_keeps_null_property_rows_under_projection() {
 fn scan_delete_excluded_under_projection() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE T(id INT64, x INT64, PRIMARY KEY (id))", None)
-        .unwrap();
+    c.execute(
+        "CREATE NODE TABLE T(id INT64, x INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
     for i in 0..5i64 {
-        c.execute(&format!("CREATE (:T {{id: {i}, x: {i}0}})"), None).unwrap();
+        c.execute(&format!("CREATE (:T {{id: {i}, x: {i}0}})"), None)
+            .unwrap();
     }
     c.execute("MATCH (t:T {id: 2}) DELETE t", None).unwrap();
     assert_eq!(row_count(&db, "MATCH (t:T) RETURN t.x"), 4);
@@ -79,8 +93,11 @@ fn scan_delete_excluded_under_projection() {
 fn optimize_then_commit_does_not_deadlock() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE P(id INT64, age INT64, dept STRING)", None)
-        .unwrap();
+    c.execute(
+        "CREATE NODE TABLE P(id INT64, age INT64, dept STRING)",
+        None,
+    )
+    .unwrap();
     for i in 0..200i64 {
         c.execute(
             &format!("CREATE (:P {{id: {i}, age: 25, dept: 'Engineering'}})"),
@@ -125,7 +142,10 @@ fn commit_does_not_leak_buffer_pins() {
     // Pre-fix this fails with "Buffer pool exhausted" part-way through.
     for i in 0..500i64 {
         c.execute(
-            &format!("CREATE (:S {{id: {i}, v: {}, data: 'row_{i}'}})", i * 3 % 1000),
+            &format!(
+                "CREATE (:S {{id: {i}, v: {}, data: 'row_{i}'}})",
+                i * 3 % 1000
+            ),
             None,
         )
         .unwrap();
@@ -141,12 +161,18 @@ fn commit_does_not_leak_buffer_pins() {
 fn coalesce_with_leading_null_returns_string() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE Person(name STRING, PRIMARY KEY (name))", None)
-        .unwrap();
+    c.execute(
+        "CREATE NODE TABLE Person(name STRING, PRIMARY KEY (name))",
+        None,
+    )
+    .unwrap();
     c.execute("CREATE (:Person {name: 'Alice'})", None).unwrap();
 
     let res = c
-        .execute("MATCH (p:Person) RETURN COALESCE(NULL, p.name, 'default')", None)
+        .execute(
+            "MATCH (p:Person) RETURN COALESCE(NULL, p.name, 'default')",
+            None,
+        )
         .unwrap();
     let col = res.batches[0].column(0);
     let s = col
@@ -220,9 +246,13 @@ fn unary_minus_on_property() {
 fn uint64_ddl_creates_unsigned_column() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE U(id UINT64, name STRING, PRIMARY KEY (id))", None)
+    c.execute(
+        "CREATE NODE TABLE U(id UINT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    c.execute("CREATE (:U {id: 7, name: 'seven'})", None)
         .unwrap();
-    c.execute("CREATE (:U {id: 7, name: 'seven'})", None).unwrap();
 
     let res = c.execute("MATCH (u:U) RETURN u.id", None).unwrap();
     let id_col = res.batches[0].column(0);
@@ -238,13 +268,18 @@ fn uint64_ddl_creates_unsigned_column() {
 fn merge_matches_existing_node_by_non_pk_property() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE Mg(id INT64, val INT64)", None).unwrap();
+    c.execute("CREATE NODE TABLE Mg(id INT64, val INT64)", None)
+        .unwrap();
     c.execute("CREATE (:Mg {id: 1, val: 10})", None).unwrap();
 
     c.execute("MERGE (m:Mg {id: 1}) ON MATCH SET m.val = 999", None)
         .unwrap();
 
-    assert_eq!(row_count(&db, "MATCH (m:Mg) RETURN m.id"), 1, "no duplicate");
+    assert_eq!(
+        row_count(&db, "MATCH (m:Mg) RETURN m.id"),
+        1,
+        "no duplicate"
+    );
     let res = c.execute("MATCH (m:Mg) RETURN m.val", None).unwrap();
     let v = res.batches[0]
         .column(0)
@@ -361,8 +396,11 @@ fn set_expression_remapped_under_projection_pushdown() {
         None,
     )
     .unwrap();
-    c.execute("CREATE (:E {id: 'x', type: 't', content: 'c', a: 1, b: 2, c: 3})", None)
-        .unwrap();
+    c.execute(
+        "CREATE (:E {id: 'x', type: 't', content: 'c', a: 1, b: 2, c: 3})",
+        None,
+    )
+    .unwrap();
 
     // WHERE touches only id/c; SET reads `a` (not in the WHERE), which forces
     // projection pushdown to include and remap `a`.
@@ -403,9 +441,17 @@ fn vector_index_supports_1536_dimensions() {
 
     // Vector-only recall (empty text => FTS contributes nothing).
     let hits = store.recall("", &embedding(0.0, dim), 5).unwrap();
-    assert_eq!(hits.len(), 5, "high-dim vector recall must return all vectors");
+    assert_eq!(
+        hits.len(),
+        5,
+        "high-dim vector recall must return all vectors"
+    );
     for h in &hits {
-        assert_eq!(h.entity.embedding.len(), dim, "returned embedding dimension");
+        assert_eq!(
+            h.entity.embedding.len(),
+            dim,
+            "returned embedding dimension"
+        );
     }
 
     // Delete one and confirm it disappears from vector recall.
@@ -443,19 +489,27 @@ fn offset_clause_is_supported() {
 fn alter_add_column_after_writes_then_set() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE E(id INT64, name STRING, PRIMARY KEY (id))", None)
-        .unwrap();
+    c.execute(
+        "CREATE NODE TABLE E(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
     for i in 0..100i64 {
         c.execute(&format!("CREATE (:E {{id: {i}, name: 'base_{i}'}})"), None)
             .unwrap();
     }
-    c.execute("ALTER TABLE E ADD COLUMN score DOUBLE", None).unwrap();
+    c.execute("ALTER TABLE E ADD COLUMN score DOUBLE", None)
+        .unwrap();
     c.execute("MATCH (e:E) SET e.score = 0.5", None).unwrap();
     assert_eq!(row_count(&db, "MATCH (e:E) RETURN e.score"), 100);
 
-    c.execute("ALTER TABLE E ADD COLUMN active BOOL", None).unwrap();
+    c.execute("ALTER TABLE E ADD COLUMN active BOOL", None)
+        .unwrap();
     c.execute("MATCH (e:E) SET e.active = TRUE", None).unwrap();
-    assert_eq!(row_count(&db, "MATCH (e:E {active: TRUE}) RETURN e.id"), 100);
+    assert_eq!(
+        row_count(&db, "MATCH (e:E {active: TRUE}) RETURN e.id"),
+        100
+    );
 }
 
 /// An unlabeled relationship pattern is resolved from the endpoint node labels
@@ -464,13 +518,18 @@ fn alter_add_column_after_writes_then_set() {
 fn unlabeled_relationship_pattern_resolves_single_table() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
-    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
     c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
     c.execute("CREATE (:X {id: 1})", None).unwrap();
     c.execute("CREATE (:Y {id: 1})", None).unwrap();
-    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
-        .unwrap();
+    c.execute(
+        "MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)",
+        None,
+    )
+    .unwrap();
 
     // No relationship label: inferred from X -> Y (only R1 connects them).
     assert_eq!(row_count(&db, "MATCH (x:X)-[r]->(y:Y) RETURN r"), 1);
@@ -482,14 +541,19 @@ fn unlabeled_relationship_pattern_resolves_single_table() {
 fn ddl_invalidates_plan_cache() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
-    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
     c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
     c.execute("CREATE (:X {id: 1})", None).unwrap();
     c.execute("CREATE (:Y {id: 1})", None).unwrap();
     c.execute("CREATE (:Y {id: 2})", None).unwrap();
-    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
-        .unwrap();
+    c.execute(
+        "MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)",
+        None,
+    )
+    .unwrap();
 
     // Cache a plan for this exact query string (single candidate => 1 edge).
     assert_eq!(one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"), 1);
@@ -498,8 +562,11 @@ fn ddl_invalidates_plan_cache() {
     // plan were reused the new edge would be missed; invalidation makes the
     // unlabeled pattern union both rel tables => 2 edges.
     c.execute("CREATE REL TABLE R2(FROM X TO Y)", None).unwrap();
-    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 2}) CREATE (x)-[:R2]->(y)", None)
-        .unwrap();
+    c.execute(
+        "MATCH (x:X {id: 1}), (y:Y {id: 2}) CREATE (x)-[:R2]->(y)",
+        None,
+    )
+    .unwrap();
     assert_eq!(
         one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"),
         2,
@@ -516,7 +583,8 @@ fn union_executes_all_arms_and_dedups() {
     c.execute("CREATE NODE TABLE P(name STRING, PRIMARY KEY (name))", None)
         .unwrap();
     for n in ["Alice", "Bob", "Charlie"] {
-        c.execute(&format!("CREATE (:P {{name: '{n}'}})"), None).unwrap();
+        c.execute(&format!("CREATE (:P {{name: '{n}'}})"), None)
+            .unwrap();
     }
 
     // UNION ALL of two different single-row arms => 2 rows.
@@ -561,11 +629,10 @@ fn list_parameter_unwinds() {
             lightning_core::Value::Number(3.0),
         ]),
     );
-    let res = c.execute("UNWIND $ids AS id RETURN id", Some(params)).unwrap();
-    assert_eq!(
-        res.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
-        3
-    );
+    let res = c
+        .execute("UNWIND $ids AS id RETURN id", Some(params))
+        .unwrap();
+    assert_eq!(res.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
 }
 
 /// Clause order must be preserved so a MATCH after UNWIND can reference the
@@ -580,7 +647,10 @@ fn unwind_then_correlated_match() {
     c.execute("CREATE (:T {x: 2})", None).unwrap();
 
     let res = c
-        .execute("UNWIND [1, 2] AS id MATCH (t:T) WHERE t.x = id RETURN t.x", None)
+        .execute(
+            "UNWIND [1, 2] AS id MATCH (t:T) WHERE t.x = id RETURN t.x",
+            None,
+        )
         .unwrap();
     assert_eq!(
         res.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
@@ -601,16 +671,24 @@ fn unwind_then_correlated_match() {
 fn unlabeled_relationship_pattern_unions_multiple_tables() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None).unwrap();
-    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None).unwrap();
+    c.execute("CREATE NODE TABLE X(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+    c.execute("CREATE NODE TABLE Y(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
     c.execute("CREATE REL TABLE R1(FROM X TO Y)", None).unwrap();
     c.execute("CREATE REL TABLE R2(FROM X TO Y)", None).unwrap();
     c.execute("CREATE (:X {id: 1})", None).unwrap();
     c.execute("CREATE (:Y {id: 1})", None).unwrap();
-    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)", None)
-        .unwrap();
-    c.execute("MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R2]->(y)", None)
-        .unwrap();
+    c.execute(
+        "MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R1]->(y)",
+        None,
+    )
+    .unwrap();
+    c.execute(
+        "MATCH (x:X {id: 1}), (y:Y {id: 1}) CREATE (x)-[:R2]->(y)",
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         one_i64(&db, "MATCH (x:X)-[r]->(y:Y) RETURN count(*)"),
@@ -651,7 +729,7 @@ fn concurrent_rollback_has_no_phantom_rows() {
     });
 
     barrier.wait(); // both txs active with their rows allocated
-    // A rolls back while B is still active -> concurrent rollback path.
+                    // A rolls back while B is still active -> concurrent rollback path.
     c_a.execute("ROLLBACK TRANSACTION", None).unwrap();
     commit_tx.send(()).unwrap();
     b.join().unwrap();
@@ -672,10 +750,14 @@ fn concurrent_rollback_has_no_phantom_rows() {
 fn optimize_compresses_and_data_roundtrips() {
     let (_d, db) = new_db();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE T(id INT64, x INT64, PRIMARY KEY (id))", None)
-        .unwrap();
+    c.execute(
+        "CREATE NODE TABLE T(id INT64, x INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
     for i in 0..200i64 {
-        c.execute(&format!("CREATE (:T {{id: {i}, x: 42}})"), None).unwrap();
+        c.execute(&format!("CREATE (:T {{id: {i}, x: 42}})"), None)
+            .unwrap();
     }
 
     let bm = db.buffer_manager();
@@ -690,5 +772,8 @@ fn optimize_compresses_and_data_roundtrips() {
     assert_eq!(one_i64(&db, "MATCH (t:T) RETURN count(*)"), 200);
     assert_eq!(one_i64(&db, "MATCH (t:T {id: 7}) RETURN t.x"), 42);
     // Full scan of the (possibly compressed) column.
-    assert_eq!(one_i64(&db, "MATCH (t:T) WHERE t.x = 42 RETURN count(*)"), 200);
+    assert_eq!(
+        one_i64(&db, "MATCH (t:T) WHERE t.x = 42 RETURN count(*)"),
+        200
+    );
 }

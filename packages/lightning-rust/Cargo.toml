@@ -2,9 +2,9 @@
 name = "lightning-client"
 version = "0.1.0"
 edition = "2021"
-description = "Production-grade Rust HTTP client for LightningDB — graph+vector+RAG database for AI agent memory"
-license = "BUSL-1.1"
-repository = "https://github.com/lightningDB/lightning"
+description = "Rust HTTP client for LightningDB — a graph+vector database with Cypher, MVCC, and full-text search"
+license = "MIT"
+repository = "https://github.com/BViganotti/LightningDB"
 keywords = ["lightning", "graph", "vector", "database", "client"]
 
 [workspace]

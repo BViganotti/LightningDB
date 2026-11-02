@@ -3,12 +3,21 @@ use lightning_core::{Database, SystemConfig};
 use std::collections::BTreeSet;
 
 fn scan_ids(db: &std::sync::Arc<Database>) -> BTreeSet<i64> {
-    let res = db.connect().execute("MATCH (t:T) RETURN t.id", None).unwrap();
+    let res = db
+        .connect()
+        .execute("MATCH (t:T) RETURN t.id", None)
+        .unwrap();
     let mut out = BTreeSet::new();
     for b in &res.batches {
-        let a = b.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let a = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
         for i in 0..a.len() {
-            if a.is_valid(i) { out.insert(a.value(i)); }
+            if a.is_valid(i) {
+                out.insert(a.value(i));
+            }
         }
     }
     out

@@ -116,7 +116,9 @@ pub async fn update_user_handler(
         if let Some(ref r) = req.role {
             let new_role = r.parse::<Role>().map_err(AppError::BadRequest)?;
             if new_role < Role::Admin {
-                return Err(AppError::BadRequest("cannot demote yourself below admin".to_string()));
+                return Err(AppError::BadRequest(
+                    "cannot demote yourself below admin".to_string(),
+                ));
             }
         }
     }

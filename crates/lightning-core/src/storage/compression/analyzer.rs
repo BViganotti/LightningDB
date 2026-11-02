@@ -1,7 +1,5 @@
 use crate::processor::Value;
-use crate::storage::compression::{
-    CompressionMetadata, CompressionType,
-};
+use crate::storage::compression::{CompressionMetadata, CompressionType};
 use lightning_types::LogicalType;
 use std::hash::{Hash, Hasher};
 
@@ -14,7 +12,9 @@ struct Hll {
 
 impl Hll {
     fn new() -> Self {
-        Self { registers: [0u8; 256] }
+        Self {
+            registers: [0u8; 256],
+        }
     }
 
     fn insert(&mut self, val: &Value) {
@@ -31,8 +31,14 @@ impl Hll {
 
     fn estimate(&self) -> usize {
         let m = 256usize;
-        let sum: f64 = self.registers.iter().map(|&r| 2.0f64.powi(-(r as i32))).sum();
-        if sum == 0.0 { return 0; }
+        let sum: f64 = self
+            .registers
+            .iter()
+            .map(|&r| 2.0f64.powi(-(r as i32)))
+            .sum();
+        if sum == 0.0 {
+            return 0;
+        }
         let alpha = 0.7213 / (1.0 + 1.079 / m as f64);
         let est = alpha * (m as f64) * (m as f64) / sum;
         if est < 2.5 * m as f64 {
@@ -63,8 +69,12 @@ impl CompressionAnalyzer {
             );
         }
 
-        let mut min = precomputed_min.cloned().unwrap_or_else(|| values[0].clone());
-        let mut max = precomputed_max.cloned().unwrap_or_else(|| values[0].clone());
+        let mut min = precomputed_min
+            .cloned()
+            .unwrap_or_else(|| values[0].clone());
+        let mut max = precomputed_max
+            .cloned()
+            .unwrap_or_else(|| values[0].clone());
         let mut all_same = true;
         let mut count_same = 0;
         let mut prev = &values[0];
@@ -133,9 +143,16 @@ impl CompressionAnalyzer {
                 }
             }
             (Value::Number(v1), Value::Number(v2)) => {
-                if matches!(*data_type,
-                    LogicalType::Int8 | LogicalType::Int16 | LogicalType::Int32 | LogicalType::Int64 |
-                    LogicalType::Uint8 | LogicalType::Uint16 | LogicalType::Uint32 | LogicalType::Uint64
+                if matches!(
+                    *data_type,
+                    LogicalType::Int8
+                        | LogicalType::Int16
+                        | LogicalType::Int32
+                        | LogicalType::Int64
+                        | LogicalType::Uint8
+                        | LogicalType::Uint16
+                        | LogicalType::Uint32
+                        | LogicalType::Uint64
                 ) {
                     // Saturating cast to prevent truncation for large floats
                     let min_val = (v1 as i128).max(i64::MIN as i128).min(i64::MAX as i128) as i64;

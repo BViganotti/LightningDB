@@ -62,9 +62,7 @@ impl FunctionRegistry {
         aggregate_functions.insert(
             "COUNT_DISTINCT".to_string(),
             Box::new(|| {
-                Box::new(
-                    crate::processor::functions::aggregate_function::CountDistinct::new(),
-                )
+                Box::new(crate::processor::functions::aggregate_function::CountDistinct::new())
             }),
         );
         // Define UPPER — Unicode-aware via char::to_uppercase
@@ -165,9 +163,9 @@ impl FunctionRegistry {
                             None,
                         ),
                         _ => {
-                            return Err(crate::LightningError::Internal(
-                                format!("Unsupported target type for CAST: {target_type_str}"),
-                            ))
+                            return Err(crate::LightningError::Internal(format!(
+                                "Unsupported target type for CAST: {target_type_str}"
+                            )))
                         }
                     };
 
@@ -195,7 +193,9 @@ impl FunctionRegistry {
                     let f64_arg = arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let result: arrow::array::Float64Array =
                         f64_arg.iter().map(|opt_n| opt_n.map(|n| n.abs())).collect();
                     Ok(Arc::new(result))
@@ -212,9 +212,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         use arrow::compute::cast;
                         use arrow::datatypes::DataType;
@@ -223,7 +223,9 @@ impl FunctionRegistry {
                         let f64_arg = arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let result: arrow::array::Float64Array = match *name {
                             "CEIL" => f64_arg
                                 .iter()
@@ -275,7 +277,8 @@ impl FunctionRegistry {
 
                     // Cast ALL arguments to the target type ONCE (not per row).
                     // This turns O(num_rows × num_args) casts into O(num_args) casts.
-                    let casted_args: Vec<ArrayRef> = args.iter()
+                    let casted_args: Vec<ArrayRef> = args
+                        .iter()
                         .map(|arg| {
                             if arg.data_type() == &target_type {
                                 Ok(arg.clone())
@@ -334,7 +337,10 @@ impl FunctionRegistry {
                                 result.push(crate::processor::Value::from_arrow(&args[1], i));
                             }
                         }
-                        Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                        Ok(crate::processor::arrow_utils::values_to_array(
+                            &result,
+                            &target_type,
+                        ))
                     }),
                 ),
             );
@@ -362,7 +368,10 @@ impl FunctionRegistry {
                             result.push(v1);
                         }
                     }
-                    Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                    Ok(crate::processor::arrow_utils::values_to_array(
+                        &result,
+                        &target_type,
+                    ))
                 }),
             ),
         );
@@ -380,11 +389,14 @@ impl FunctionRegistry {
                                 "{name} requires 3 arguments (condition, true_value, false_value)"
                             )));
                         }
-                        let cond = args[0].as_any()
+                        let cond = args[0]
+                            .as_any()
                             .downcast_ref::<arrow::array::BooleanArray>()
-                            .ok_or_else(|| crate::LightningError::Internal(
-                                "IF/IIF first argument must be boolean".into()
-                            ))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal(
+                                    "IF/IIF first argument must be boolean".into(),
+                                )
+                            })?;
                         let target_type = args[1].data_type().clone();
                         let mut result = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -394,7 +406,10 @@ impl FunctionRegistry {
                                 result.push(crate::processor::Value::from_arrow(&args[1], i));
                             }
                         }
-                        Ok(crate::processor::arrow_utils::values_to_array(&result, &target_type))
+                        Ok(crate::processor::arrow_utils::values_to_array(
+                            &result,
+                            &target_type,
+                        ))
                     }),
                 ),
             );
@@ -436,9 +451,9 @@ impl FunctionRegistry {
                     name.to_string(),
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         if let Some(string_array) =
                             args[0].as_any().downcast_ref::<arrow::array::StringArray>()
@@ -457,9 +472,9 @@ impl FunctionRegistry {
                                 .collect();
                             Ok(Arc::new(result))
                         } else {
-                            Err(crate::LightningError::Internal(
-                                format!("{name} expects a String or List argument"),
-                            ))
+                            Err(crate::LightningError::Internal(format!(
+                                "{name} expects a String or List argument"
+                            )))
                         }
                     }),
                 ),
@@ -485,7 +500,9 @@ impl FunctionRegistry {
                         let s_array = string_array
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         for (i, result) in result_vec.iter_mut().enumerate() {
                             if !s_array.is_null(i) {
                                 result.push_str(s_array.value(i));
@@ -505,8 +522,10 @@ impl FunctionRegistry {
                 Arc::new(|args, num_rows| {
                     if args.is_empty() {
                         let now = chrono::Utc::now().date_naive();
-                        let days = (now - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time"))
-                            .num_days() as i32;
+                        let days = (now
+                            - chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .expect("infallible: valid date/time"))
+                        .num_days() as i32;
                         return Ok(Arc::new(arrow::array::Date32Array::from(vec![
                             days;
                             num_rows
@@ -532,7 +551,8 @@ impl FunctionRegistry {
                             let s = string_array.value(i);
                             // Simple parse: YYYY-MM-DD
                             if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
+                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                    .expect("infallible: valid date/time");
                                 let days = d.signed_duration_since(epoch).num_days();
                                 builder.append_value(days as i32);
                             } else {
@@ -647,11 +667,15 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || start_arr.is_null(i) {
@@ -664,7 +688,11 @@ impl FunctionRegistry {
                             let l_arr = l
                                 .as_any()
                                 .downcast_ref::<arrow::array::Int64Array>()
-                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "type mismatch in function".into(),
+                                    )
+                                })?;
                             if l_arr.is_null(i) {
                                 result.append_null();
                                 continue;
@@ -702,15 +730,21 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let from_arr = from_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let to_arr = to_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut result = arrow::array::StringBuilder::new();
                     for i in 0..s_arr.len() {
                         if s_arr.is_null(i) || from_arr.is_null(i) || to_arr.is_null(i) {
@@ -863,11 +897,15 @@ impl FunctionRegistry {
                     let start_arr = start_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let end_arr = end_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let step_arr = step_arg.as_ref().map(|a| {
                         a.as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
@@ -895,12 +933,20 @@ impl FunctionRegistry {
 
                         const RANGE_MAX_ELEMS: u64 = 10_000_000;
                         let estimated = if step > 0 {
-                            if start > end { 0 } else { ((end as i128 - start as i128) / step as i128 + 1) as u64 }
-                        } else if start < end { 0 } else { ((start as i128 - end as i128) / (-step as i128) + 1) as u64 };
+                            if start > end {
+                                0
+                            } else {
+                                ((end as i128 - start as i128) / step as i128 + 1) as u64
+                            }
+                        } else if start < end {
+                            0
+                        } else {
+                            ((start as i128 - end as i128) / (-step as i128) + 1) as u64
+                        };
                         if estimated > RANGE_MAX_ELEMS {
-                            return Err(crate::LightningError::Query(
-                                format!("RANGE would produce {estimated} elements (max {RANGE_MAX_ELEMS})")
-                            ));
+                            return Err(crate::LightningError::Query(format!(
+                                "RANGE would produce {estimated} elements (max {RANGE_MAX_ELEMS})"
+                            )));
                         }
                         let mut range_vals = Vec::with_capacity(estimated as usize);
                         let mut curr = start;
@@ -939,9 +985,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 2 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 2 arguments"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -1044,17 +1090,17 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} expects a String argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} expects a String argument"
+                            )));
                         }
                         let string_array = args[0]
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
                             .ok_or_else(|| {
-                                crate::LightningError::Internal(
-                                    format!("{name} expects a String argument"),
-                                )
+                                crate::LightningError::Internal(format!(
+                                    "{name} expects a String argument"
+                                ))
                             })?;
                         let result: arrow::array::StringArray = string_array
                             .iter()
@@ -1082,9 +1128,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 2 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 2 arguments"
+                            )));
                         }
                         let base =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Utf8)
@@ -1095,11 +1141,15 @@ impl FunctionRegistry {
                         let base_arr = base
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let pattern_arr = pattern
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if base_arr.is_null(i) || pattern_arr.is_null(i) {
@@ -1131,9 +1181,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 2 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 2 arguments"
+                            )));
                         }
                         let s_arg =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Utf8)
@@ -1144,11 +1194,15 @@ impl FunctionRegistry {
                         let s_arr = s_arg
                             .as_any()
                             .downcast_ref::<arrow::array::StringArray>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results =
                             arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 8);
                         for i in 0..num_rows {
@@ -1191,11 +1245,15 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1219,7 +1277,8 @@ impl FunctionRegistry {
                 "CURRENT_DATE".to_string(),
                 Arc::new(|_args, num_rows| {
                     let now = chrono::Utc::now().date_naive();
-                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
+                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                        .expect("infallible: valid date/time");
                     let days = now.signed_duration_since(epoch).num_days() as i32;
                     Ok(Arc::new(arrow::array::Date32Array::from(vec![
                         days;
@@ -1243,7 +1302,9 @@ impl FunctionRegistry {
         );
 
         // Define SQRT, LOG, LN, EXP, SIN, COS, TAN
-        for name in &["SQRT", "LOG", "LN", "EXP", "SIN", "COS", "TAN", "ACOS", "ASIN", "ATAN", "COT", "SIGN"] {
+        for name in &[
+            "SQRT", "LOG", "LN", "EXP", "SIN", "COS", "TAN", "ACOS", "ASIN", "ATAN", "COT", "SIGN",
+        ] {
             let func_name = name.to_string();
             scalar_functions.insert(
                 func_name.clone(),
@@ -1251,9 +1312,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, _num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let n_arg =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
@@ -1261,7 +1322,9 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         // Vectorized: use Arrow unary kernel instead of per-row loop
                         use arrow::compute::kernels::arity::unary;
                         use arrow::datatypes::Float64Type;
@@ -1295,16 +1358,17 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             let val = crate::processor::Value::from_arrow(&args[0], i);
                             match val {
                                 crate::processor::Value::Date(days) => {
-                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                        .expect("infallible: valid date/time")
                                         + chrono::Duration::days(days as i64);
                                     use chrono::Datelike;
                                     let res = match *name {
@@ -1317,7 +1381,11 @@ impl FunctionRegistry {
                                 }
                                 crate::processor::Value::Timestamp(micros) => {
                                     let dt = chrono::DateTime::from_timestamp_micros(micros)
-                                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?
+                                        .ok_or_else(|| {
+                                            crate::LightningError::Internal(
+                                                "type mismatch in function".into(),
+                                            )
+                                        })?
                                         .naive_utc();
                                     use chrono::{Datelike, Timelike};
                                     let res = match *name {
@@ -1360,11 +1428,15 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -1395,11 +1467,15 @@ impl FunctionRegistry {
                     let n_arr = n_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if n_arr.is_null(i) || d_arr.is_null(i) || d_arr.value(i) == 0 {
@@ -1431,11 +1507,15 @@ impl FunctionRegistry {
                     let s_arr = s_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let d_arr = d_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
 
                     let mut results = Vec::with_capacity(num_rows);
                     for i in 0..num_rows {
@@ -1646,9 +1726,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -1705,9 +1785,9 @@ impl FunctionRegistry {
                             ));
                         }
                         if (*name == "MAP_KEYS" || *name == "MAP_VALUES") && args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
 
                         let mut results = Vec::with_capacity(num_rows);
@@ -1757,9 +1837,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 3 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 3 arguments (date, count, unit)"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 3 arguments (date, count, unit)"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -1773,7 +1853,8 @@ impl FunctionRegistry {
                                 crate::processor::Value::String(unit),
                             ) = (d_val, c_val, u_val)
                             {
-                                let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                                let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                    .expect("infallible: valid date/time")
                                     + chrono::Duration::days(days as i64);
                                 let count = if *name == "DATE_ADD" {
                                     count as i64
@@ -1784,7 +1865,9 @@ impl FunctionRegistry {
                                     "DAY" | "DAYS" => Some(dt + chrono::Duration::days(count)),
                                     "WEEK" | "WEEKS" => Some(dt + chrono::Duration::weeks(count)),
                                     "MONTH" | "MONTHS" => dt
-                                        .checked_add_months(chrono::Months::new(count.unsigned_abs() as u32))
+                                        .checked_add_months(chrono::Months::new(
+                                            count.unsigned_abs() as u32,
+                                        ))
                                         .map(|d| {
                                             if count < 0 {
                                                 dt.checked_sub_months(chrono::Months::new(
@@ -1798,8 +1881,8 @@ impl FunctionRegistry {
                                     _ => None,
                                 };
                                 if let Some(rdt) = res_dt {
-                                    let epoch =
-                                        chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
+                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                        .expect("infallible: valid date/time");
                                     results.push(crate::processor::Value::Date(
                                         rdt.signed_duration_since(epoch).num_days() as i32,
                                     ));
@@ -1871,9 +1954,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 2 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 2 arguments"
+                            )));
                         }
                         let a1 = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
                             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -1882,11 +1965,15 @@ impl FunctionRegistry {
                         let arr1 = a1
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let arr2 = a2
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr1.is_null(i) || arr2.is_null(i) {
@@ -1920,16 +2007,18 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let a = arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Int64)
                             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                         let arr = a
                             .as_any()
                             .downcast_ref::<arrow::array::Int64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if arr.is_null(i) {
@@ -1966,7 +2055,9 @@ impl FunctionRegistry {
                     let sep_arr = sep_arg
                         .as_any()
                         .downcast_ref::<arrow::array::StringArray>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results =
                         arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 32);
                     for i in 0..num_rows {
@@ -1983,7 +2074,11 @@ impl FunctionRegistry {
                             let s_arr = s_arg
                                 .as_any()
                                 .downcast_ref::<arrow::array::StringArray>()
-                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "type mismatch in function".into(),
+                                    )
+                                })?;
                             if !s_arr.is_null(i) {
                                 parts.push(s_arr.value(i).to_string());
                             }
@@ -2003,9 +2098,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() < 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 2 or 3 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 2 or 3 arguments"
+                            )));
                         }
                         let mut results =
                             arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 16);
@@ -2109,7 +2204,8 @@ impl FunctionRegistry {
                             crate::processor::Value::Date(days),
                         ) = (&u_val, &d_val)
                         {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .expect("infallible: valid date/time")
                                 + chrono::Duration::days(*days as i64);
                             use chrono::Datelike;
                             let res_dt = match unit.to_lowercase().as_str() {
@@ -2121,7 +2217,8 @@ impl FunctionRegistry {
                                 _ => None,
                             };
                             if let Some(rdt) = res_dt {
-                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time");
+                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                    .expect("infallible: valid date/time");
                                 results.push(crate::processor::Value::Date(
                                     rdt.signed_duration_since(epoch).num_days() as i32,
                                 ));
@@ -2155,7 +2252,8 @@ impl FunctionRegistry {
                     for i in 0..num_rows {
                         let d_val = crate::processor::Value::from_arrow(&args[0], i);
                         if let crate::processor::Value::Date(days) = d_val {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .expect("infallible: valid date/time")
                                 + chrono::Duration::days(days as i64);
                             let age = today.signed_duration_since(dt).num_days() / 365;
                             results.append_value(age);
@@ -2188,11 +2286,15 @@ impl FunctionRegistry {
                     let y_arr = y_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let x_arr = x_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if y_arr.is_null(i) || x_arr.is_null(i) {
@@ -2214,9 +2316,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let n_arg =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
@@ -2224,7 +2326,9 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -2279,9 +2383,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let mut results =
                             arrow::array::StringBuilder::with_capacity(num_rows, num_rows * 8);
@@ -2289,7 +2393,8 @@ impl FunctionRegistry {
                             let v = crate::processor::Value::from_arrow(&args[0], i);
                             match v {
                                 crate::processor::Value::Date(days) => {
-                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                                    let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                        .expect("infallible: valid date/time")
                                         + chrono::Duration::days(days as i64);
                                     let res = if *name == "MONTHNAME" {
                                         dt.format("%B").to_string()
@@ -2360,7 +2465,8 @@ impl FunctionRegistry {
                             crate::processor::Value::Date(days),
                         ) = (&unit_val, &d_val)
                         {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .expect("infallible: valid date/time")
                                 + chrono::Duration::days(*days as i64);
                             use chrono::Datelike;
                             let res = match unit.to_lowercase().as_str() {
@@ -2376,7 +2482,11 @@ impl FunctionRegistry {
                         ) = (&unit_val, &d_val)
                         {
                             let dt = chrono::DateTime::from_timestamp_micros(*micros)
-                                .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "type mismatch in function".into(),
+                                    )
+                                })?
                                 .naive_utc();
                             use chrono::{Datelike, Timelike};
                             let res = match unit.to_lowercase().as_str() {
@@ -2407,9 +2517,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 3 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 3 arguments (unit, start, end)"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 3 arguments (unit, start, end)"
+                            )));
                         }
                         let mut results = arrow::array::Int64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -2442,15 +2552,18 @@ impl FunctionRegistry {
                                 "WEEK" | "WEEKS" => diff_days / 7,
                                 "MONTH" | "MONTHS" => {
                                     use chrono::Datelike;
-                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
-                                    let start_date = epoch + chrono::Duration::days(match &start {
-                                        crate::processor::Value::Date(s) => *s as i64,
-                                        _ => 0,
-                                    });
-                                    let end_date = epoch + chrono::Duration::days(match &end {
-                                        crate::processor::Value::Date(e) => *e as i64,
-                                        _ => 0,
-                                    });
+                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                        .expect("valid date");
+                                    let start_date = epoch
+                                        + chrono::Duration::days(match &start {
+                                            crate::processor::Value::Date(s) => *s as i64,
+                                            _ => 0,
+                                        });
+                                    let end_date = epoch
+                                        + chrono::Duration::days(match &end {
+                                            crate::processor::Value::Date(e) => *e as i64,
+                                            _ => 0,
+                                        });
                                     let total_months = (end_date.year() - start_date.year()) * 12
                                         + (end_date.month() as i32 - start_date.month() as i32);
                                     if end_date.day() < start_date.day() {
@@ -2461,15 +2574,18 @@ impl FunctionRegistry {
                                 }
                                 "YEAR" | "YEARS" => {
                                     use chrono::Datelike;
-                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("valid date");
-                                    let start_date = epoch + chrono::Duration::days(match &start {
-                                        crate::processor::Value::Date(s) => *s as i64,
-                                        _ => 0,
-                                    });
-                                    let end_date = epoch + chrono::Duration::days(match &end {
-                                        crate::processor::Value::Date(e) => *e as i64,
-                                        _ => 0,
-                                    });
+                                    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                        .expect("valid date");
+                                    let start_date = epoch
+                                        + chrono::Duration::days(match &start {
+                                            crate::processor::Value::Date(s) => *s as i64,
+                                            _ => 0,
+                                        });
+                                    let end_date = epoch
+                                        + chrono::Duration::days(match &end {
+                                            crate::processor::Value::Date(e) => *e as i64,
+                                            _ => 0,
+                                        });
                                     let mut years = end_date.year() - start_date.year();
                                     if end_date.ordinal() < start_date.ordinal() {
                                         years -= 1;
@@ -2507,7 +2623,10 @@ impl FunctionRegistry {
                         .or_else(|_| std::env::var("LOGNAME"))
                         .unwrap_or_else(|_| "lightning_user".to_string());
                     move |_args, num_rows| {
-                        Ok(Arc::new(arrow::array::StringArray::from(vec![u.clone(); num_rows])))
+                        Ok(Arc::new(arrow::array::StringArray::from(vec![
+                            u.clone();
+                            num_rows
+                        ])))
                     }
                 }),
             ),
@@ -2530,24 +2649,40 @@ impl FunctionRegistry {
                         arrow::datatypes::DataType::Boolean => 1i64,
                         arrow::datatypes::DataType::Int8 | arrow::datatypes::DataType::UInt8 => 1,
                         arrow::datatypes::DataType::Int16 | arrow::datatypes::DataType::UInt16 => 2,
-                        arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::UInt32 | arrow::datatypes::DataType::Float32 | arrow::datatypes::DataType::Date32 => 4,
-                        arrow::datatypes::DataType::Int64 | arrow::datatypes::DataType::UInt64 | arrow::datatypes::DataType::Float64 | arrow::datatypes::DataType::Date64 | arrow::datatypes::DataType::Timestamp(_, _) => 8,
-                        arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
+                        arrow::datatypes::DataType::Int32
+                        | arrow::datatypes::DataType::UInt32
+                        | arrow::datatypes::DataType::Float32
+                        | arrow::datatypes::DataType::Date32 => 4,
+                        arrow::datatypes::DataType::Int64
+                        | arrow::datatypes::DataType::UInt64
+                        | arrow::datatypes::DataType::Float64
+                        | arrow::datatypes::DataType::Date64
+                        | arrow::datatypes::DataType::Timestamp(_, _) => 8,
+                        arrow::datatypes::DataType::Utf8
+                        | arrow::datatypes::DataType::LargeUtf8 => {
                             for i in 0..num_rows {
                                 let v = crate::processor::Value::from_arrow(&args[0], i);
                                 match v {
-                                    crate::processor::Value::String(s) => results.append_value(s.len() as i64),
+                                    crate::processor::Value::String(s) => {
+                                        results.append_value(s.len() as i64)
+                                    }
                                     crate::processor::Value::Null => results.append_null(),
                                     _ => results.append_null(),
                                 }
                             }
                             return Ok(Arc::new(results.finish()));
                         }
-                        arrow::datatypes::DataType::List(_) | arrow::datatypes::DataType::LargeList(_) | arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                        arrow::datatypes::DataType::List(_)
+                        | arrow::datatypes::DataType::LargeList(_)
+                        | arrow::datatypes::DataType::FixedSizeList(_, _) => {
                             for i in 0..num_rows {
                                 // For lists, we estimate element count as a proxy for size
                                 let arr = &args[0];
-                                if arr.is_null(i) { results.append_null(); } else { results.append_value(8); }
+                                if arr.is_null(i) {
+                                    results.append_null();
+                                } else {
+                                    results.append_value(8);
+                                }
                             }
                             return Ok(Arc::new(results.finish()));
                         }
@@ -2968,7 +3103,8 @@ impl FunctionRegistry {
                     for i in 0..num_rows {
                         let d_val = crate::processor::Value::from_arrow(&args[0], i);
                         if let crate::processor::Value::Date(days) = d_val {
-                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("infallible: valid date/time")
+                            let dt = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                .expect("infallible: valid date/time")
                                 + chrono::Duration::days(days as i64);
                             use chrono::Datelike;
                             let y = dt.year();
@@ -3137,9 +3273,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let n_arg =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
@@ -3147,7 +3283,9 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -3188,11 +3326,15 @@ impl FunctionRegistry {
                     let b_arr = b_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let e_arr = e_arg
                         .as_any()
                         .downcast_ref::<arrow::array::Float64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("type mismatch in function".into())
+                        })?;
                     let mut results = arrow::array::Float64Builder::with_capacity(num_rows);
                     for i in 0..num_rows {
                         if b_arr.is_null(i) || e_arr.is_null(i) {
@@ -3239,9 +3381,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let n_arg =
                             arrow::compute::cast(&args[0], &arrow::datatypes::DataType::Float64)
@@ -3249,7 +3391,9 @@ impl FunctionRegistry {
                         let n_arr = n_arg
                             .as_any()
                             .downcast_ref::<arrow::array::Float64Array>()
-                            .ok_or_else(|| crate::LightningError::Internal("type mismatch in function".into()))?;
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal("type mismatch in function".into())
+                            })?;
                         let mut results = arrow::array::BooleanBuilder::with_capacity(num_rows);
                         for i in 0..num_rows {
                             if n_arr.is_null(i) {
@@ -3325,7 +3469,7 @@ impl FunctionRegistry {
                         let val = match *name {
                             "PI" => std::f64::consts::PI,
                             "E" => std::f64::consts::E,
-                            "PHI" => 1.618033988749895,
+                            "PHI" => std::f64::consts::GOLDEN_RATIO,
                             "INFINITY" => f64::INFINITY,
                             _ => 0.0,
                         };
@@ -3424,7 +3568,9 @@ impl FunctionRegistry {
                     let mut state = (chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
                         ^ 0x9e3779b97f4a7c15;
                     for _ in 0..num_rows {
-                        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                        state = state
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
                         let a = (state >> 32) as u32;
                         let b = state as u32;
                         let c = (a.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as u16;
@@ -3460,9 +3606,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() < 2 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires at least 2 arguments"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires at least 2 arguments"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -3479,14 +3625,16 @@ impl FunctionRegistry {
                                         if *cached_pat == p {
                                             (*cached_re).clone()
                                         } else {
-                                            let compiled = regex::Regex::new(&p)
-                                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                                            let compiled = regex::Regex::new(&p).map_err(|e| {
+                                                crate::LightningError::Internal(e.to_string())
+                                            })?;
                                             *cache = Some((p.clone(), compiled.clone()));
                                             compiled
                                         }
                                     } else {
-                                        let compiled = regex::Regex::new(&p)
-                                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                                        let compiled = regex::Regex::new(&p).map_err(|e| {
+                                            crate::LightningError::Internal(e.to_string())
+                                        })?;
                                         *cache = Some((p.clone(), compiled.clone()));
                                         compiled
                                     }
@@ -3550,9 +3698,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -3689,9 +3837,9 @@ impl FunctionRegistry {
                     func_name,
                     Arc::new(move |args, num_rows| {
                         if args.len() != 1 {
-                            return Err(crate::LightningError::Internal(
-                                format!("{name} requires 1 argument (path)"),
-                            ));
+                            return Err(crate::LightningError::Internal(format!(
+                                "{name} requires 1 argument (path)"
+                            )));
                         }
                         let mut results = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
@@ -3721,24 +3869,32 @@ impl FunctionRegistry {
         Self {
             scalar_functions: RwLock::new(scalar_functions),
             aggregate_functions: RwLock::new(aggregate_functions),
+        }
     }
-}
 
-pub fn register_scalar(&self, func: ScalarFunction) {
+    pub fn register_scalar(&self, func: ScalarFunction) {
         let name = func.name.to_uppercase();
         let mut map = self.scalar_functions.write();
         if map.contains_key(&name) {
-            tracing::warn!("Duplicate scalar function registration: '{}' — overwriting previous", name);
+            tracing::warn!(
+                "Duplicate scalar function registration: '{}' — overwriting previous",
+                name
+            );
         }
         map.insert(name, func);
     }
 
     pub fn has_scalar(&self, name: &str) -> bool {
-        self.scalar_functions.read().contains_key(&name.to_uppercase())
+        self.scalar_functions
+            .read()
+            .contains_key(&name.to_uppercase())
     }
 
     pub fn get_scalar_function(&self, name: &str) -> Option<ScalarFunction> {
-        self.scalar_functions.read().get(&name.to_uppercase()).cloned()
+        self.scalar_functions
+            .read()
+            .get(&name.to_uppercase())
+            .cloned()
     }
 
     pub fn get_aggregate_function(
@@ -3761,14 +3917,13 @@ mod tests {
     #[test]
     fn test_register_scalar_duplicate_warning() {
         let mut registry = FunctionRegistry::new();
-        let exec: crate::processor::functions::ScalarFunctionExec = Arc::new(
-            |_args: &[ArrayRef], _num_rows: usize| {
+        let exec: crate::processor::functions::ScalarFunctionExec =
+            Arc::new(|_args: &[ArrayRef], _num_rows: usize| {
                 Ok(arrow::array::new_null_array(
                     &arrow::datatypes::DataType::Int64,
                     1,
                 ))
-            },
-        );
+            });
 
         let first = ScalarFunction::new("MY_FUNC".to_string(), Arc::clone(&exec));
         let second = ScalarFunction::new("my_func".to_string(), Arc::clone(&exec));

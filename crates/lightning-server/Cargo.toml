@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "HTTP server for LightningDB — graph+vector+RAG database for AI agent memory"
+description = "HTTP server for LightningDB — a graph+vector database with Cypher, MVCC, and full-text search"
 
 [[bin]]
 name = "lightning-server"

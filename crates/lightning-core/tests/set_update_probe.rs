@@ -41,7 +41,8 @@ fn setup() -> (tempfile::TempDir, Arc<Database>) {
 fn set_updates_existing_values() {
     let (_d, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE (:T {id: 1, s: 'a', n: 1})", None).unwrap();
+    conn.execute("CREATE (:T {id: 1, s: 'a', n: 1})", None)
+        .unwrap();
     conn.execute("MATCH (t:T {id: 1}) SET t.s = 'hello', t.n = 42", None)
         .unwrap();
     let res = conn
@@ -52,7 +53,8 @@ fn set_updates_existing_values() {
 
     // Absent int property at creation.
     conn.execute("CREATE (:T {id: 2, s: 'x'})", None).unwrap();
-    conn.execute("MATCH (t:T {id: 2}) SET t.n = 7", None).unwrap();
+    conn.execute("MATCH (t:T {id: 2}) SET t.n = 7", None)
+        .unwrap();
     let res = conn
         .execute("MATCH (t:T {id: 2}) RETURN t.s, t.n", None)
         .unwrap();

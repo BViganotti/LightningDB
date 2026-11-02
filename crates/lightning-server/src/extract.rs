@@ -81,10 +81,7 @@ where
 {
     type Rejection = (StatusCode, Json<ErrorResponse>);
 
-    async fn from_request_parts(
-        _parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = Arc::<AppState>::from_ref(state);
         Ok(app_state.connection_pool.acquire())
     }
@@ -99,10 +96,7 @@ where
 {
     type Rejection = (StatusCode, Json<ErrorResponse>);
 
-    async fn from_request_parts(
-        _parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = Arc::<AppState>::from_ref(state);
         Ok(AppStore(app_state.store.clone()))
     }
@@ -116,10 +110,7 @@ where
 {
     type Rejection = (StatusCode, Json<ErrorResponse>);
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let request_id = parts
             .extensions
             .get::<RequestIdExtension>()

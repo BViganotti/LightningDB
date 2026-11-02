@@ -42,7 +42,8 @@ pub async fn subscribe_handler(
                     continue;
                 }
                 Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                    if let Ok(event) = Event::default().json_data(serde_json::json!({"done": true})) {
+                    if let Ok(event) = Event::default().json_data(serde_json::json!({"done": true}))
+                    {
                         let _ = tx.send(Ok(event));
                     }
                     return;
@@ -57,7 +58,5 @@ pub async fn subscribe_handler(
         }
     };
 
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new().interval(std::time::Duration::from_secs(15)),
-    ))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15))))
 }

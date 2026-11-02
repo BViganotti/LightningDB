@@ -38,24 +38,18 @@ impl From<lightning_core::LightningError> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code) = match &self {
-            AppError::BadRequest(_) => {
-                (StatusCode::BAD_REQUEST, Some("BAD_REQUEST".into()))
-            }
-            AppError::Timeout(_) => {
-                (StatusCode::REQUEST_TIMEOUT, Some("QUERY_TIMEOUT".into()))
-            }
-            AppError::Unauthorized(_) => {
-                (StatusCode::UNAUTHORIZED, Some("UNAUTHORIZED".into()))
-            }
-            AppError::Forbidden(_) => {
-                (StatusCode::FORBIDDEN, Some("FORBIDDEN".into()))
-            }
-            AppError::TooManyRequests(_) => {
-                (StatusCode::TOO_MANY_REQUESTS, Some("TOO_MANY_REQUESTS".into()))
-            }
-            AppError::Internal(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
-            }
+            AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, Some("BAD_REQUEST".into())),
+            AppError::Timeout(_) => (StatusCode::REQUEST_TIMEOUT, Some("QUERY_TIMEOUT".into())),
+            AppError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, Some("UNAUTHORIZED".into())),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, Some("FORBIDDEN".into())),
+            AppError::TooManyRequests(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                Some("TOO_MANY_REQUESTS".into()),
+            ),
+            AppError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Some("INTERNAL_ERROR".into()),
+            ),
             AppError::Db(db_err) => {
                 let (status, code) = match db_err.code() {
                     lightning_core::ErrorCode::NotFound => {
@@ -73,18 +67,20 @@ impl IntoResponse for AppError {
                     lightning_core::ErrorCode::ConfigError => {
                         (StatusCode::BAD_REQUEST, Some("CONFIG_ERROR".into()))
                     }
-                    lightning_core::ErrorCode::Internal => {
-                        (StatusCode::INTERNAL_SERVER_ERROR, Some("INTERNAL_ERROR".into()))
-                    }
-                    lightning_core::ErrorCode::Database => {
-                        (StatusCode::SERVICE_UNAVAILABLE, Some("DATABASE_ERROR".into()))
-                    }
+                    lightning_core::ErrorCode::Internal => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some("INTERNAL_ERROR".into()),
+                    ),
+                    lightning_core::ErrorCode::Database => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Some("DATABASE_ERROR".into()),
+                    ),
                     lightning_core::ErrorCode::IoError => {
                         (StatusCode::INTERNAL_SERVER_ERROR, Some("IO_ERROR".into()))
                     }
                 };
                 (status, code)
-            },
+            }
         };
 
         let user_message = self.to_string();

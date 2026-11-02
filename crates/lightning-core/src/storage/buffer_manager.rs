@@ -3,9 +3,9 @@ use crate::{LightningError, Result};
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rayon::prelude::*;
-use std::collections::VecDeque;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -121,7 +121,10 @@ impl BufferManager {
         prefetch_confidence: f64,
     ) -> Self {
         let num_shards: usize = 16;
-        debug_assert!(num_shards.count_ones() == 1, "num_shards must be a power of 2");
+        debug_assert!(
+            num_shards.count_ones() == 1,
+            "num_shards must be a power of 2"
+        );
         let shard_capacity = capacity / num_shards;
         let prefetch_tracker = Arc::new(crate::storage::prefetch::PrefetchTracker::new());
         let mut shards = Vec::with_capacity(num_shards);
@@ -238,7 +241,8 @@ impl BufferManager {
 
                 if let Some(frame) = best_frame {
                     frame.pin_count.fetch_add(1, Ordering::AcqRel);
-                    self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+                    self.prefetch_tracker
+                        .record_access(fh_arc.file_id, page_idx);
                     return Ok(frame);
                 }
             }
@@ -271,7 +275,8 @@ impl BufferManager {
 
             if let Some(frame) = best_frame {
                 frame.pin_count.fetch_add(1, Ordering::AcqRel);
-                self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+                self.prefetch_tracker
+                    .record_access(fh_arc.file_id, page_idx);
                 return Ok(frame);
             }
         }
@@ -371,9 +376,13 @@ impl BufferManager {
                     // Reuse the existing uncommitted version for this transaction.
                     // This avoids creating a new CoW copy on every write to the same page
                     // within a transaction (critical for hash-index bulk inserts).
-                    pool.slots[idx].frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    pool.slots[idx]
+                        .frame
+                        .pin_count
+                        .fetch_add(1, Ordering::AcqRel);
                     pool.slots[idx].referenced = true;
-                    self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+                    self.prefetch_tracker
+                        .record_access(fh_arc.file_id, page_idx);
                     return Ok(Arc::clone(&pool.slots[idx].frame));
                 }
 
@@ -472,7 +481,8 @@ impl BufferManager {
 
         new_frame.pin_count.fetch_add(1, Ordering::AcqRel);
         // Record access for learned prefetch prediction.
-        self.prefetch_tracker.record_access(fh_arc.file_id, page_idx);
+        self.prefetch_tracker
+            .record_access(fh_arc.file_id, page_idx);
 
         // Collect prefetch predictions while holding the lock (cheap computation),
         // but defer the actual I/O until after the lock is released.
@@ -529,7 +539,9 @@ impl BufferManager {
                     let pf_frame = Arc::new(Frame::new(pf_data, 0));
 
                     // Insert into buffer pool (write lock, brief)
-                    let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { continue; };
+                    let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else {
+                        continue;
+                    };
                     if pool.page_to_slots.contains_key(&pf_key) {
                         continue; // Another thread already cached it
                     }
@@ -703,7 +715,10 @@ impl BufferManager {
             for &idx in slot_indices.iter().rev() {
                 let version = pool.slots[idx].frame.version.load(Ordering::Acquire);
                 if version == version_mark {
-                    pool.slots[idx].frame.pin_count.fetch_add(1, Ordering::AcqRel);
+                    pool.slots[idx]
+                        .frame
+                        .pin_count
+                        .fetch_add(1, Ordering::AcqRel);
                     return Some(Arc::clone(&pool.slots[idx].frame));
                 }
             }
@@ -717,7 +732,9 @@ impl BufferManager {
     pub fn invalidate_page(&self, file_id: u64, page_idx: u64) {
         let key = (file_id, page_idx);
         let shard_idx = self.get_shard_idx(key);
-        let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { return; };
+        let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else {
+            return;
+        };
         if let Some(slot_indices) = pool.page_to_slots.get(&key) {
             let indices: Vec<usize> = slot_indices.clone();
             for &idx in &indices {
@@ -779,7 +796,9 @@ impl BufferManager {
                     {
                         continue;
                     }
-                    let Some(key) = pool.slots[i].key else { continue };
+                    let Some(key) = pool.slots[i].key else {
+                        continue;
+                    };
                     if max_committed.get(&key).copied().unwrap_or(0) <= version {
                         continue;
                     }
@@ -847,9 +866,10 @@ impl BufferManager {
         for page in first_page..last_page {
             let key = (file_id, page);
             let shard_idx = self.get_shard_idx(key);
-            let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else { continue; };
-            let indices: Vec<usize> =
-                pool.page_to_slots.get(&key).cloned().unwrap_or_default();
+            let Some(mut pool) = self.lock_shard_write_or_skip(shard_idx) else {
+                continue;
+            };
+            let indices: Vec<usize> = pool.page_to_slots.get(&key).cloned().unwrap_or_default();
             if !indices.is_empty() {
                 let mut preserved: Vec<usize> = Vec::new();
                 for &idx in &indices {
@@ -864,10 +884,13 @@ impl BufferManager {
                     if pool.slots[idx].dirty {
                         if let Some((fid, pid)) = pool.slots[idx].key {
                             if let Some(fh) = pool.file_handles.get(&fid) {
-                                if let Err(e) = fh.write_page(pid, pool.slots[idx].frame.as_slice()) {
+                                if let Err(e) = fh.write_page(pid, pool.slots[idx].frame.as_slice())
+                                {
                                     tracing::error!(
                                         "Failed to write page {} on file {} during eviction: {}",
-                                        pid, fid, e
+                                        pid,
+                                        fid,
+                                        e
                                     );
                                 }
                             }
@@ -903,7 +926,10 @@ impl BufferManager {
             let tx_id = if let Some(slot_indices) = pool.page_to_slots.get(&key) {
                 let mut best_id = 0u64;
                 for &idx in slot_indices.iter() {
-                    let version = pool.slots[idx].frame.version.load(std::sync::atomic::Ordering::Acquire);
+                    let version = pool.slots[idx]
+                        .frame
+                        .version
+                        .load(std::sync::atomic::Ordering::Acquire);
                     let candidate = version & !UNCOMMITTED_BIT;
                     if candidate > best_id {
                         best_id = candidate;
@@ -918,7 +944,13 @@ impl BufferManager {
         Ok(())
     }
 
-    pub fn log_page_update_for_tx(&self, tx_id: u64, file_id: u64, page_idx: u64, data: &[u8]) -> Result<()> {
+    pub fn log_page_update_for_tx(
+        &self,
+        tx_id: u64,
+        file_id: u64,
+        page_idx: u64,
+        data: &[u8],
+    ) -> Result<()> {
         let shard_idx = self.get_shard_idx((file_id, page_idx));
         let pool = self.shards[shard_idx].read();
         if let Some(wal) = &pool.wal {
@@ -963,28 +995,32 @@ impl BufferManager {
             parking_lot::Mutex::new(std::collections::HashSet::new());
 
         // Phase 1: Parallel flush of dirty pages across all shards
-        let results: Vec<Result<()>> = self.shards.par_iter().map(|shard| {
-            let mut pool = shard.write();
-            for i in 0..pool.slots.len() {
-                if pool.slots[i].dirty {
-                    let version = pool.slots[i].frame.version.load(Ordering::Acquire);
-                    if version & UNCOMMITTED_BIT != 0 {
-                        continue;
-                    }
-                    if let Some((fid, pid)) = pool.slots[i].key {
-                        if let Some(fh) = pool.file_handles.get(&fid) {
-                            fh.write_page(pid, pool.slots[i].frame.as_slice())?;
-                            synced_fids.lock().insert(fid);
-                            if pool.slots[i].dirty {
-                                Self::decrement_dirty_count(&pool.dirty_count);
+        let results: Vec<Result<()>> = self
+            .shards
+            .par_iter()
+            .map(|shard| {
+                let mut pool = shard.write();
+                for i in 0..pool.slots.len() {
+                    if pool.slots[i].dirty {
+                        let version = pool.slots[i].frame.version.load(Ordering::Acquire);
+                        if version & UNCOMMITTED_BIT != 0 {
+                            continue;
+                        }
+                        if let Some((fid, pid)) = pool.slots[i].key {
+                            if let Some(fh) = pool.file_handles.get(&fid) {
+                                fh.write_page(pid, pool.slots[i].frame.as_slice())?;
+                                synced_fids.lock().insert(fid);
+                                if pool.slots[i].dirty {
+                                    Self::decrement_dirty_count(&pool.dirty_count);
+                                }
+                                pool.slots[i].dirty = false;
                             }
-                            pool.slots[i].dirty = false;
                         }
                     }
                 }
-            }
-            Ok(())
-        }).collect();
+                Ok(())
+            })
+            .collect();
 
         for r in &results {
             if let Err(e) = r {
@@ -1126,17 +1162,18 @@ impl BufferManager {
     }
 
     pub fn dirty_page_count(&self) -> usize {
-        self.shards.iter().map(|shard| {
-            shard.read().dirty_count.load(Ordering::Acquire) as usize
-        }).sum()
+        self.shards
+            .iter()
+            .map(|shard| shard.read().dirty_count.load(Ordering::Acquire) as usize)
+            .sum()
     }
 
     /// Decrement dirty count safely, preventing underflow.
     /// Uses fetch_update to atomically check and decrement.
     fn decrement_dirty_count(counter: &AtomicU64) {
-        counter.fetch_update(Ordering::Release, Ordering::Acquire, |v| {
-            v.checked_sub(1)
-        }).ok();
+        counter
+            .fetch_update(Ordering::Release, Ordering::Acquire, |v| v.checked_sub(1))
+            .ok();
     }
 
     pub fn shutdown(&self) {
@@ -1164,12 +1201,17 @@ impl BufferManager {
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = pool.file_handles.get(&fid) {
                             if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
-                                tracing::error!("flush_all: write error on page {} file {}: {}", pid, fid, e);
+                                tracing::error!(
+                                    "flush_all: write error on page {} file {}: {}",
+                                    pid,
+                                    fid,
+                                    e
+                                );
                             } else {
                                 if pool.slots[i].dirty {
-                        Self::decrement_dirty_count(&pool.dirty_count);
-                    }
-                    pool.slots[i].dirty = false;
+                                    Self::decrement_dirty_count(&pool.dirty_count);
+                                }
+                                pool.slots[i].dirty = false;
                             }
                         }
                     }
@@ -1207,7 +1249,9 @@ impl BufferManager {
                 if !pool.slots[i].dirty {
                     continue;
                 }
-                let Some(key) = pool.slots[i].key else { continue };
+                let Some(key) = pool.slots[i].key else {
+                    continue;
+                };
                 if !target_keys.contains(&key) {
                     continue;
                 }
@@ -1215,7 +1259,10 @@ impl BufferManager {
                 if version & UNCOMMITTED_BIT != 0 {
                     continue;
                 }
-                if newest_version.get(&key).is_some_and(|&best| best >= version) {
+                if newest_version
+                    .get(&key)
+                    .is_some_and(|&best| best >= version)
+                {
                     // Superseded older version: discard without writing.
                     pool.slots[i].dirty = false;
                     Self::decrement_dirty_count(&pool.dirty_count);
@@ -1233,7 +1280,12 @@ impl BufferManager {
                 let fh = pool.file_handles.get(&key.0).cloned();
                 if let Some(fh) = fh {
                     if let Err(e) = fh.write_page(key.1, pool.slots[*i].frame.as_slice()) {
-                        tracing::error!("flush_pages: write error on page {} file {}: {}", key.1, key.0, e);
+                        tracing::error!(
+                            "flush_pages: write error on page {} file {}: {}",
+                            key.1,
+                            key.0,
+                            e
+                        );
                     } else {
                         if pool.slots[*i].dirty {
                             Self::decrement_dirty_count(&pool.dirty_count);
@@ -1276,12 +1328,17 @@ impl BufferManager {
                     if let Some((fid, pid)) = pool.slots[i].key {
                         if let Some(fh) = fh_map.get(&fid) {
                             if let Err(e) = fh.write_page(pid, pool.slots[i].frame.as_slice()) {
-                                tracing::error!("flush_all_with_handles: write error on page {} file {}: {}", pid, fid, e);
+                                tracing::error!(
+                                    "flush_all_with_handles: write error on page {} file {}: {}",
+                                    pid,
+                                    fid,
+                                    e
+                                );
                             } else {
                                 if pool.slots[i].dirty {
-                        Self::decrement_dirty_count(&pool.dirty_count);
-                    }
-                    pool.slots[i].dirty = false;
+                                    Self::decrement_dirty_count(&pool.dirty_count);
+                                }
+                                pool.slots[i].dirty = false;
                             }
                         }
                     }
@@ -1314,11 +1371,16 @@ mod tests {
         BufferManager::new(capacity_pages, None, false, 0, 0.0)
     }
 
-    fn begin_tx(tm: &TransactionManager) -> Arc<crate::transaction::transaction_manager::Transaction> {
+    fn begin_tx(
+        tm: &TransactionManager,
+    ) -> Arc<crate::transaction::transaction_manager::Transaction> {
         Arc::new(tm.begin(false).unwrap())
     }
 
-    fn begin_tx_at(tm: &TransactionManager, ts: u64) -> Arc<crate::transaction::transaction_manager::Transaction> {
+    fn begin_tx_at(
+        tm: &TransactionManager,
+        ts: u64,
+    ) -> Arc<crate::transaction::transaction_manager::Transaction> {
         Arc::new(tm.begin_at(true, Some(ts)).unwrap())
     }
 
@@ -1437,7 +1499,10 @@ mod tests {
         let tx = begin_tx(&tm);
         let tx_id = tx.tx_id;
         let frame = bm.create_new_version(Arc::clone(&fh), 0, &tx).unwrap();
-        assert_eq!(frame.version.load(Ordering::Acquire), tx_id | UNCOMMITTED_BIT);
+        assert_eq!(
+            frame.version.load(Ordering::Acquire),
+            tx_id | UNCOMMITTED_BIT
+        );
         bm.update_timestamps(fh.file_id, 0, tx_id, 200);
         assert_eq!(frame.version.load(Ordering::Acquire), 200);
     }
@@ -1518,9 +1583,7 @@ mod tests {
         for i in 0..32 {
             let _f = bm.pin_page(Arc::clone(&fh), i, &tx).unwrap();
         }
-        let total_mapped: usize = bm.shards.iter()
-            .map(|s| s.read().page_to_slots.len())
-            .sum();
+        let total_mapped: usize = bm.shards.iter().map(|s| s.read().page_to_slots.len()).sum();
         assert_eq!(total_mapped, 32);
     }
 
@@ -1604,7 +1667,10 @@ mod tests {
 
         // No version created for page 5
         let result = bm.pin_page_by_key(fh.file_id, 5, tx_id_marked);
-        assert!(result.is_none(), "Should return None for non-existent version");
+        assert!(
+            result.is_none(),
+            "Should return None for non-existent version"
+        );
     }
 
     #[test]
@@ -1759,7 +1825,10 @@ mod tests {
         // Transaction 2: should see the committed data
         let tx2 = begin_tx_at(&tm, commit_ts);
         let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
-        assert_eq!(f2.as_slice()[..8], [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE]);
+        assert_eq!(
+            f2.as_slice()[..8],
+            [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE]
+        );
     }
 
     #[test]
@@ -1801,7 +1870,8 @@ mod tests {
         let tx2 = begin_tx_at(&tm, commit_ts);
         let f2 = bm.pin_page(Arc::clone(&fh), 0, &tx2).unwrap();
         assert_eq!(
-            f2.as_slice()[0], 0x42,
+            f2.as_slice()[0],
+            0x42,
             "uncommitted write must survive eviction pressure until commit"
         );
     }

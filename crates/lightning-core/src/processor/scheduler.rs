@@ -39,14 +39,18 @@ impl Scheduler {
                         match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
                             Ok(Some(chunk)) => {
                                 if ch_tx.send(Ok(chunk)).is_err() {
-                                    tracing::warn!("Failed to send chunk from merged worker: receiver dropped");
+                                    tracing::warn!(
+                                        "Failed to send chunk from merged worker: receiver dropped"
+                                    );
                                     break;
                                 }
                             }
                             Ok(None) => break,
                             Err(e) => {
                                 if ch_tx.send(Err(e)).is_err() {
-                                    tracing::warn!("Failed to send error from merged worker: receiver dropped");
+                                    tracing::warn!(
+                                        "Failed to send error from merged worker: receiver dropped"
+                                    );
                                 }
                                 break;
                             }
@@ -67,14 +71,18 @@ impl Scheduler {
                     match op.get_next(&db, &tx_clone, p_clone.as_ref().map(|p| p.as_ref())) {
                         Ok(Some(chunk)) => {
                             if ch_tx.send(Ok(chunk)).is_err() {
-                                tracing::warn!("Failed to send chunk from worker {i}: receiver dropped");
+                                tracing::warn!(
+                                    "Failed to send chunk from worker {i}: receiver dropped"
+                                );
                                 break;
                             }
                         }
                         Ok(None) => break,
                         Err(e) => {
                             if ch_tx.send(Err(e)).is_err() {
-                                tracing::warn!("Failed to send error from worker {i}: receiver dropped");
+                                tracing::warn!(
+                                    "Failed to send error from worker {i}: receiver dropped"
+                                );
                             }
                             break;
                         }

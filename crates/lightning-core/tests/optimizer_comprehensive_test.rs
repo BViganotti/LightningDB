@@ -10,7 +10,8 @@ fn setup() -> (tempfile::TempDir, Arc<Database>) {
     let conn = db.connect();
     conn.execute("CREATE NODE TABLE T(x INT64)", None).unwrap();
     for i in 0..50 {
-        conn.execute(&format!("CREATE (:T {{x: {}}})", i), None).unwrap();
+        conn.execute(&format!("CREATE (:T {{x: {}}})", i), None)
+            .unwrap();
     }
     (dir, db)
 }
@@ -78,8 +79,11 @@ fn test_optimizer_count() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 50);
     Ok(())
 }

@@ -2,7 +2,11 @@ use lightning_core::parser::parse;
 
 fn test_parse(query: &str) {
     let ast = parse(query).unwrap();
-    assert_eq!(ast.union_queries.len(), 1, "Expected 1 union query for: {query}");
+    assert_eq!(
+        ast.union_queries.len(),
+        1,
+        "Expected 1 union query for: {query}"
+    );
 }
 
 #[test]
@@ -82,7 +86,9 @@ fn test_parse_where_not() {
 
 #[test]
 fn test_parse_where_parentheses() {
-    test_parse("MATCH (n:Person) WHERE (n.age > 25 AND n.name = 'Bob') OR n.age < 20 RETURN n.name");
+    test_parse(
+        "MATCH (n:Person) WHERE (n.age > 25 AND n.name = 'Bob') OR n.age < 20 RETURN n.name",
+    );
 }
 
 #[test]

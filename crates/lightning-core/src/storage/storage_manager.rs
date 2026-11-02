@@ -357,7 +357,8 @@ impl Table {
                     crate::processor::Value::Null
                 });
             }
-            let col_modified = self.columns[col_idx].batch_append_values(bm, &vals, start_id, tx)?;
+            let col_modified =
+                self.columns[col_idx].batch_append_values(bm, &vals, start_id, tx)?;
             all_modified_rows.extend(col_modified);
         }
         if !all_modified_rows.is_empty() {
@@ -464,8 +465,10 @@ impl Table {
         // fetch_add. Use fetch_max (not store): a stale/lower caller-supplied
         // `start_id` must never roll the counter backwards and let subsequent
         // inserts reuse ids that are already occupied.
-        self.next_row_id
-            .fetch_max(start_id + num_rows as u64, std::sync::atomic::Ordering::Release);
+        self.next_row_id.fetch_max(
+            start_id + num_rows as u64,
+            std::sync::atomic::Ordering::Release,
+        );
         Ok(())
     }
 
@@ -590,7 +593,9 @@ impl StorageManager {
         let index_path = self.db_path.join(format!("{table_name}_vector.ltng"));
         let fh = Arc::new(FileHandle::open(&index_path)?);
         self.file_handles.insert(fh.file_id, Arc::clone(&fh));
-        let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(fh, dim));
+        let index = Arc::new(crate::storage::index::vector_index::VectorIndex::new(
+            fh, dim,
+        ));
         self.vector_indexes.insert(table_name.to_string(), index);
         Ok(())
     }
@@ -632,10 +637,14 @@ impl StorageManager {
         let bwd_off_fh = Arc::new(FileHandle::open(&bwd_offset_path)?);
         let bwd_adj_fh = Arc::new(FileHandle::open(&bwd_adj_path)?);
 
-        self.file_handles.insert(fwd_off_fh.file_id, Arc::clone(&fwd_off_fh));
-        self.file_handles.insert(fwd_adj_fh.file_id, Arc::clone(&fwd_adj_fh));
-        self.file_handles.insert(bwd_off_fh.file_id, Arc::clone(&bwd_off_fh));
-        self.file_handles.insert(bwd_adj_fh.file_id, Arc::clone(&bwd_adj_fh));
+        self.file_handles
+            .insert(fwd_off_fh.file_id, Arc::clone(&fwd_off_fh));
+        self.file_handles
+            .insert(fwd_adj_fh.file_id, Arc::clone(&fwd_adj_fh));
+        self.file_handles
+            .insert(bwd_off_fh.file_id, Arc::clone(&bwd_off_fh));
+        self.file_handles
+            .insert(bwd_adj_fh.file_id, Arc::clone(&bwd_adj_fh));
 
         let fwd = crate::storage::index::csr::CSRIndex::new(fwd_off_fh, fwd_adj_fh);
         let bwd = crate::storage::index::csr::CSRIndex::new(bwd_off_fh, bwd_adj_fh);
@@ -844,9 +853,7 @@ impl StorageManager {
         col_type: LogicalType,
         version_info: Arc<RowVersion>,
     ) -> Result<Column> {
-        let path = self
-            .db_path
-            .join(format!("{table_name}_{col_name}.ltng"));
+        let path = self.db_path.join(format!("{table_name}_{col_name}.ltng"));
         let fh = Arc::new(FileHandle::open(&path)?);
         self.file_handles.insert(fh.file_id, Arc::clone(&fh));
         let null_path = self
@@ -953,7 +960,9 @@ impl StorageManager {
             .get(table_name)
             .or_else(|| self.rel_tables.get(table_name))
             .map(|t| t.version_info.clone())
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!("Table '{table_name}' not found"))
+            })?;
 
         // Check for duplicate column
         let has_dup = self
@@ -981,21 +990,21 @@ impl StorageManager {
             .node_tables
             .get_mut(table_name)
             .or_else(|| self.rel_tables.get_mut(table_name))
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!("Table '{table_name}' not found"))
+            })?;
         table.columns.push(col);
         Ok(())
     }
 
-    pub fn remove_column_from_table(
-        &mut self,
-        table_name: &str,
-        col_name: &str,
-    ) -> Result<()> {
+    pub fn remove_column_from_table(&mut self, table_name: &str, col_name: &str) -> Result<()> {
         let table = self
             .node_tables
             .get_mut(table_name)
             .or_else(|| self.rel_tables.get_mut(table_name))
-            .ok_or_else(|| crate::LightningError::Database(format!("Table '{table_name}' not found")))?;
+            .ok_or_else(|| {
+                crate::LightningError::Database(format!("Table '{table_name}' not found"))
+            })?;
 
         let idx = table
             .columns
@@ -1030,7 +1039,9 @@ impl StorageManager {
             .chain(self.rel_tables.values())
             .any(|table| {
                 let guard = table.write_buffer.read();
-                guard.values().any(|wb| wb.columns.first().map(|c| !c.is_empty()).unwrap_or(false))
+                guard
+                    .values()
+                    .any(|wb| wb.columns.first().map(|c| !c.is_empty()).unwrap_or(false))
             });
 
         if any_pending {
@@ -1103,7 +1114,8 @@ impl StorageManager {
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let has_csr = self.fwd_csr.contains_key(table_name) || self.bwd_csr.contains_key(table_name);
+        let has_csr =
+            self.fwd_csr.contains_key(table_name) || self.bwd_csr.contains_key(table_name);
         if !has_csr {
             return Ok(());
         }
@@ -1111,12 +1123,19 @@ impl StorageManager {
             Some(t) => t.stats.read().cardinality,
             None => return Ok(()),
         };
-        let last_rebuilt = self.csr_cardinalities.read().get(table_name).copied().unwrap_or(0);
+        let last_rebuilt = self
+            .csr_cardinalities
+            .read()
+            .get(table_name)
+            .copied()
+            .unwrap_or(0);
         if current_cardinality == last_rebuilt {
             return Ok(());
         }
         self.rebuild_csr(table_name, bm, tx)?;
-        self.csr_cardinalities.write().insert(table_name.to_string(), current_cardinality);
+        self.csr_cardinalities
+            .write()
+            .insert(table_name.to_string(), current_cardinality);
         Ok(())
     }
 
@@ -1136,7 +1155,8 @@ impl StorageManager {
         } else {
             tracing::warn!(
                 "WAL replay: skipping page {} for unknown file_id {} (file may have been dropped)",
-                page_idx, file_id
+                page_idx,
+                file_id
             );
         }
         Ok(())
@@ -1187,9 +1207,9 @@ impl StorageManager {
         bm: &BufferManager,
         tx: &crate::transaction::transaction_manager::Transaction,
     ) -> Result<()> {
-        let table = self.get_table(table_name).ok_or_else(|| {
-            crate::LightningError::Query(format!("Table {table_name} not found"))
-        })?;
+        let table = self
+            .get_table(table_name)
+            .ok_or_else(|| crate::LightningError::Query(format!("Table {table_name} not found")))?;
         let fwd_csr = self.fwd_csr.get(table_name);
         let bwd_csr = self.bwd_csr.get(table_name);
 
@@ -1211,7 +1231,9 @@ impl StorageManager {
                             "rebuild_csr: cardinality ({stats_count}) is >2x file rows ({file_rows}) for {table_name}; capping at file count"
                         );
                         table.stats.write().cardinality = file_rows;
-                        table.next_row_id.store(file_rows, std::sync::atomic::Ordering::Release);
+                        table
+                            .next_row_id
+                            .store(file_rows, std::sync::atomic::Ordering::Release);
                         file_rows
                     } else {
                         stats_count
@@ -1338,6 +1360,10 @@ mod tests {
 
         sm.node_tables.get("N").unwrap().stats.write().cardinality = 1_234;
         sm.node_tables.get("M").unwrap().stats.write().cardinality = 50;
-        assert_eq!(sm.node_id_capacity(), 1_234, "bound is the largest node table");
+        assert_eq!(
+            sm.node_id_capacity(),
+            1_234,
+            "bound is the largest node table"
+        );
     }
 }

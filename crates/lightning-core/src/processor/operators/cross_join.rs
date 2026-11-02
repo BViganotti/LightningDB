@@ -135,14 +135,20 @@ impl PhysicalCrossJoin {
         shared.num_active_builders -= 1;
         if shared.num_active_builders == 0 {
             if let Some(schema) = shared.right_schema.clone() {
-                let batches: Vec<RecordBatch> = shared.right_chunks.iter().map(|c| c.batch.clone()).collect();
+                let batches: Vec<RecordBatch> = shared
+                    .right_chunks
+                    .iter()
+                    .map(|c| c.batch.clone())
+                    .collect();
                 if batches.len() > 1 {
                     match arrow::compute::concat_batches(&schema, &batches) {
                         Ok(merged) => {
                             shared.right_chunks = vec![DataChunk { batch: merged }];
                         }
                         Err(e) => {
-                            tracing::warn!("cross_join concat_batches failed: {e} — using individual chunks");
+                            tracing::warn!(
+                                "cross_join concat_batches failed: {e} — using individual chunks"
+                            );
                         }
                     }
                 }
@@ -161,14 +167,21 @@ impl PhysicalCrossJoin {
         // builder errored and leaked num_active_builders), return an error
         // instead of hanging the query forever.
         while !*done {
-            let wait_result = self.build_cv.wait_for(&mut done, std::time::Duration::from_secs(30));
+            let wait_result = self
+                .build_cv
+                .wait_for(&mut done, std::time::Duration::from_secs(30));
             if wait_result.timed_out() {
                 return Err(crate::LightningError::Internal(
                     "Cross join build timed out after 30s".into(),
                 ));
             }
         }
-        if self.shared_build.read().build_failed.load(Ordering::Acquire) {
+        if self
+            .shared_build
+            .read()
+            .build_failed
+            .load(Ordering::Acquire)
+        {
             return Err(crate::LightningError::Internal(
                 "Cross join build side failed; right child errored mid-build".into(),
             ));
@@ -206,9 +219,12 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 }
             }
 
-            let left_batch = self.current_left_chunk.as_ref()
+            let left_batch = self
+                .current_left_chunk
+                .as_ref()
                 .expect("current_left_chunk should be Some when processing")
-                .batch.clone();
+                .batch
+                .clone();
             let left_num_cols = left_batch.num_columns();
             let left_num_rows = left_batch.num_rows();
             let left_schema = left_batch.schema();
@@ -279,11 +295,10 @@ impl PhysicalOperator for PhysicalCrossJoin {
                 for i in 0..left_num_cols {
                     let field = left_schema.field(i);
                     final_fields.push(Arc::new((*field).clone()));
-                    final_columns.push(arrow::compute::take(
-                        left_batch.column(i),
-                        &left_idx_arr,
-                        None,
-                    ).map_err(|e| crate::LightningError::Internal(e.to_string()))?);
+                    final_columns.push(
+                        arrow::compute::take(left_batch.column(i), &left_idx_arr, None)
+                            .map_err(|e| crate::LightningError::Internal(e.to_string()))?,
+                    );
                 }
 
                 if let Some(right_schema) = &shared.right_schema {
@@ -292,11 +307,10 @@ impl PhysicalOperator for PhysicalCrossJoin {
                     for i in 0..right_column_count {
                         let field = right_schema.field(i);
                         final_fields.push(Arc::new((*field).clone()));
-                        final_columns.push(arrow::compute::take(
-                            right_batch.column(i),
-                            &right_idx_arr,
-                            None,
-                        ).map_err(|e| crate::LightningError::Internal(e.to_string()))?);
+                        final_columns.push(
+                            arrow::compute::take(right_batch.column(i), &right_idx_arr, None)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?,
+                        );
                     }
                 }
 

@@ -1,14 +1,18 @@
 # LightningDB
 
+[![CI](https://github.com/BViganotti/LightningDB/actions/workflows/ci.yml/badge.svg)](https://github.com/BViganotti/LightningDB/actions/workflows/ci.yml)
+
 A graph+vector database server with Cypher queries, MVCC, and full-text search. Written in Rust.
 
 ## Status
 
-**Pre-alpha.** The core engine compiles and passes 1000+ tests across 60+ test files, including a 90-test relationship traversal crucible (71 passing). Python, Node.js, and C bindings exist. HTTP server with 20+ endpoints works. Expect breaking changes.
+**Pre-alpha.** The core engine compiles and runs 950+ tests across 60+ test files, including an 87-test relationship traversal crucible (71 passing). Python, Node.js, and C bindings exist. HTTP server with 20+ endpoints works. Expect breaking changes.
 
 ## What It Is
 
 LightningDB is a standalone HTTP server that stores graph nodes and relationships in columnar pages with MVCC. It runs as a single binary or Docker container — deploy it anywhere, access it from any language via HTTP.
+
+## Features
 
 - **Graph model**: Node and relationship tables with Cypher MATCH/CREATE/SET/DELETE/MERGE
 - **Vector search**: Flat cosine similarity (SIMD via auto-detected AVX2/SSE), configurable dimensions
@@ -23,6 +27,18 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 - **Time-travel**: Query the database at any prior MVCC timestamp via `execute_at()`
 - **Auth**: Three modes (`none`/`token`/`jwt`). JWT access + refresh tokens, API key authentication, RBAC (Reader/Writer/Admin), brute-force login lockout, per-IP rate limiting. Auth stored in DB system tables with WAL durability — no config file needed.
 - **TLS/mTLS**: Optional TLS with configurable protocol versions (1.2/1.3) and mutual TLS
+
+## Who It's For
+
+LightningDB is for developers who want one self-hosted engine for graph queries, vector similarity, and full-text search instead of operating a graph database, a vector store, and a search service side by side. It is aimed at embedded and single-node deployments, local-first applications, developer tools, and small services that need Cypher, transactional writes, and hybrid retrieval without a cluster.
+
+## Built With
+
+Rust (edition 2021), Apache Arrow for columnar interop, Tantivy for full-text search, Axum for the HTTP server, and Pest for the Cypher parser. Rust, Python, TypeScript, and Go client SDKs live in this repository.
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the full task list and current progress. The project is under active development; the next milestones cover `shortestPath()`, parser support for index/sequence/macro DDL, `OptionalMatch`, projection-pushdown column remapping, on-disk index persistence, and publishing the client SDKs.
 
 ## What's Partial / Disabled / Missing
 
@@ -54,13 +70,13 @@ LightningDB is a standalone HTTP server that stores graph nodes and relationship
 
 ```bash
 # From source:
-cargo run -p lightning-server -- --data-dir /tmp/lightning-data
+cargo run -p lightning-server -- --db-path /tmp/lightning-data
 
 # Or build the Docker image first:
 docker build -t lightningdb . && docker run -p 8080:8080 -v ./data:/data lightningdb
 ```
 
-Flags: `--port` (default 8080), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--tls-min-version`, `--tls-max-version`, `--auth-mode` (`none`|`token`|`jwt`), `--admin-username` (default `admin`), `--admin-password` (generated if not set), `--jwt-secret` (generated if not set; supports `@file` prefix), `--jwt-access-ttl` (default 900s), `--jwt-refresh-ttl` (default 2592000s / 30 days), `--buffer-pool-size`.
+Flags: `--db-path` (default `./lightning-data`), `--host` (default `127.0.0.1`), `--port` (default 8080), `--buffer-pool-mb` (default 1024), `--read-only`, `--vacuum-interval-ms` (default 1000), `--max-connections` (default 100), `--embedding-dim` (default 768), `--query-timeout-ms` (default 30000), `--tls-enabled`, `--tls-cert`, `--tls-key`, `--tls-min-version` (default 1.2), `--tls-max-version` (default 1.3), `--mtls-enabled`, `--mtls-ca`, `--cors-allowed-origins`, `--auth-token`, `--auth-mode` (`none`|`token`|`jwt`), `--admin-username` (default `admin`), `--admin-password` (generated if not set), `--jwt-secret` (generated if not set; supports `@file` prefix), `--jwt-access-ttl-secs` (default 900), `--jwt-refresh-ttl-secs` (default 604800 / 7 days).
 
 ### 2. Run queries
 
@@ -89,13 +105,13 @@ Three auth modes, set via `--auth-mode`:
 
 **Start in JWT mode** (password auto-generated if not set):
 ```bash
-cargo run -p lightning-server -- --data-dir /tmp/lightning-data --auth-mode jwt
+cargo run -p lightning-server -- --db-path /tmp/lightning-data --auth-mode jwt
 # Look for the generated admin password in the terminal output.
 ```
 
 **Start in JWT mode with explicit credentials:**
 ```bash
-cargo run -p lightning-server -- --data-dir /tmp/lightning-data \
+cargo run -p lightning-server -- --db-path /tmp/lightning-data \
   --auth-mode jwt --admin-password my-password --jwt-secret $(openssl rand -base64 32)
 ```
 
@@ -182,8 +198,8 @@ curl -s -X POST http://localhost:8080/v1/admin/users/u_xxx/reset-password \
 
 **Python:**
 ```bash
-# Install from source:
-cd python && pip install .
+# From the repository root:
+pip install .
 ```
 
 ```python
@@ -243,7 +259,7 @@ const keyClient = new Client('http://localhost:8080', {
 **Rust (library):**
 ```toml
 [dependencies]
-lightning = { git = "https://github.com/lightningDB/lightning" }
+lightning = { git = "https://github.com/BViganotti/LightningDB" }
 ```
 
 ```rust
@@ -353,10 +369,8 @@ for row in &result.rows {
 
 ## Acknowledgments
 
-LightningDB began as a fork of [KuzuDB](https://kuzudb.com/), a graph database. KuzuDB's columnar storage design, MVCC architecture, and Cypher query engine were the direct inspiration for this project. The codebase has since been substantially rewritten and extended with vector search, full-text indexing, WASM UDFs, time-travel queries, and an HTTP server layer, but KuzuDB's foundational design decisions remain visible throughout the storage engine and query planner.
+LightningDB began as an independent Rust port of [KuzuDB](https://kuzudb.com/), a graph database. KuzuDB's columnar storage design, MVCC architecture, and Cypher query engine were the starting point for this project. The codebase has since been substantially rewritten and extended with vector search, full-text indexing, WASM UDFs, time-travel queries, and an HTTP server layer. This is not a GitHub fork and shares no commit history with KuzuDB; every commit in this repository was authored by the maintainer.
 
 ## License
 
-Business Source License 1.1 (BUSL-1.1) — see [LICENSE](LICENSE).
-
-You may use LightningDB for non-production purposes (testing, evaluation, research) and for production use as long as you do not offer it as a Database Service. Upon 2030-06-15, the project automatically converts to MIT.
+MIT — see [LICENSE](LICENSE). KuzuDB's MIT copyright notice is included for the portions derived from its engine.

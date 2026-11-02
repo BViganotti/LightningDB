@@ -234,27 +234,44 @@ impl HashJoin {
             let key_col = batch.column(self.right_key_idx);
             match key_col.data_type() {
                 DataType::UInt64 => {
-                    let arr = key_col.as_any().downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("hash join build: UInt64 key".into()))?;
+                    let arr = key_col
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("hash join build: UInt64 key".into())
+                        })?;
                     for row_idx in 0..num_rows {
                         if !arr.is_null(row_idx) {
-                            local_u64.entry(arr.value(row_idx)).or_default().push(base_offset + row_idx);
+                            local_u64
+                                .entry(arr.value(row_idx))
+                                .or_default()
+                                .push(base_offset + row_idx);
                         }
                     }
                 }
                 DataType::Int64 => {
-                    let arr = key_col.as_any().downcast_ref::<Int64Array>()
-                        .ok_or_else(|| crate::LightningError::Internal("hash join build: Int64 key".into()))?;
+                    let arr = key_col
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal("hash join build: Int64 key".into())
+                        })?;
                     for row_idx in 0..num_rows {
                         if !arr.is_null(row_idx) {
-                            local_i64.entry(arr.value(row_idx)).or_default().push(base_offset + row_idx);
+                            local_i64
+                                .entry(arr.value(row_idx))
+                                .or_default()
+                                .push(base_offset + row_idx);
                         }
                     }
                 }
                 _ => {
                     for row_idx in 0..num_rows {
                         let key = Value::from_arrow(key_col, row_idx);
-                        local_val.entry(key).or_default().push(base_offset + row_idx);
+                        local_val
+                            .entry(key)
+                            .or_default()
+                            .push(base_offset + row_idx);
                     }
                 }
             }
@@ -263,13 +280,18 @@ impl HashJoin {
             base_offset += num_rows;
         }
 
-                // Batch-merge local staging into shared tables under a single write lock acquisition
+        // Batch-merge local staging into shared tables under a single write lock acquisition
         {
             let mut shared = self.shared_build.write();
 
             if shared.right_schema.is_none() && !local_chunks.is_empty() {
                 shared.right_schema = Some(local_chunks[0].schema());
-                shared.key_type = Some(local_chunks[0].column(self.right_key_idx).data_type().clone());
+                shared.key_type = Some(
+                    local_chunks[0]
+                        .column(self.right_key_idx)
+                        .data_type()
+                        .clone(),
+                );
             }
 
             for (key, vals) in local_u64 {
@@ -287,7 +309,9 @@ impl HashJoin {
 
         tracing::debug!(
             "HashJoin::build done: {} chunks, {} rows, right_key_idx={}",
-            build_chunk_count, total_build_rows, self.right_key_idx
+            build_chunk_count,
+            total_build_rows,
+            self.right_key_idx
         );
 
         // Success path: the finalize block below owns the counter decrement
@@ -320,7 +344,9 @@ impl HashJoin {
         // builder errored and leaked num_active_builders), return an error
         // instead of hanging the query forever.
         while !*done {
-            let wait_result = self.build_cv.wait_for(&mut done, std::time::Duration::from_secs(30));
+            let wait_result = self
+                .build_cv
+                .wait_for(&mut done, std::time::Duration::from_secs(30));
             if wait_result.timed_out() {
                 return Err(crate::LightningError::Internal(
                     "Hash join build timed out after 30s".into(),
@@ -386,12 +412,23 @@ impl PhysicalOperator for HashJoin {
                 }
                 tracing::debug!(
                     "HashJoin::get_next: got left chunk with {} rows, {} cols",
-                    self.current_left_chunk.as_ref().expect("hash_join left chunk num_rows").num_rows(),
-                    self.current_left_chunk.as_ref().expect("hash_join left chunk num_cols").batch.num_columns()
+                    self.current_left_chunk
+                        .as_ref()
+                        .expect("hash_join left chunk num_rows")
+                        .num_rows(),
+                    self.current_left_chunk
+                        .as_ref()
+                        .expect("hash_join left chunk num_cols")
+                        .batch
+                        .num_columns()
                 );
             }
 
-            let left_batch = &self.current_left_chunk.as_ref().expect("required handle not present").batch;
+            let left_batch = &self
+                .current_left_chunk
+                .as_ref()
+                .expect("required handle not present")
+                .batch;
             let left_num_rows = left_batch.num_rows();
 
             let mut left_indices: Vec<u64> = Vec::with_capacity(1024);
@@ -399,7 +436,7 @@ impl PhysicalOperator for HashJoin {
 
             let left_key_col = left_batch.column(self.left_key_idx);
 
-                        // Vectorized Probe Phase
+            // Vectorized Probe Phase
             while self.left_row_idx < left_num_rows && left_indices.len() < 1024 {
                 if self.is_cross_join {
                     // Cross join: pair each left row with ALL build rows across ALL chunks.
@@ -422,7 +459,9 @@ impl PhysicalOperator for HashJoin {
                     // Find matches using specialized or generic hash table
                     let matches_ref = match left_key_col.data_type() {
                         DataType::UInt64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<UInt64Array>()
+                            let arr = left_key_col
+                                .as_any()
+                                .downcast_ref::<UInt64Array>()
                                 .expect("hash join probe: UInt64 key");
                             if arr.is_null(self.left_row_idx) {
                                 None
@@ -431,14 +470,14 @@ impl PhysicalOperator for HashJoin {
                             }
                         }
                         DataType::Int64 => {
-                            let arr = left_key_col.as_any().downcast_ref::<Int64Array>()
+                            let arr = left_key_col
+                                .as_any()
+                                .downcast_ref::<Int64Array>()
                                 .expect("hash join probe: Int64 key");
                             if arr.is_null(self.left_row_idx) {
                                 None
                             } else {
-                                shared
-                                    .i64_hash_table
-                                    .get(&arr.value(self.left_row_idx))
+                                shared.i64_hash_table.get(&arr.value(self.left_row_idx))
                             }
                         }
                         _ => {
@@ -491,7 +530,7 @@ impl PhysicalOperator for HashJoin {
                 }
             }
 
-                        if !left_indices.is_empty() {
+            if !left_indices.is_empty() {
                 tracing::debug!(
                     "HashJoin::get_next: found {} matches from {} left rows",
                     left_indices.len(),
@@ -518,10 +557,8 @@ impl PhysicalOperator for HashJoin {
                     if shared.build_chunks.is_empty() {
                         if let Some(schema) = &shared.right_schema {
                             for field in schema.fields() {
-                                final_columns.push(arrow::array::new_null_array(
-                                    field.data_type(),
-                                    total,
-                                ));
+                                final_columns
+                                    .push(arrow::array::new_null_array(field.data_type(), total));
                                 final_fields.push(field.as_ref().clone());
                             }
                         }
@@ -542,18 +579,17 @@ impl PhysicalOperator for HashJoin {
                         // Multiple chunks: group by chunk, take per chunk, concatenate
                         let chunks = shared.build_chunks.clone();
                         let offsets = shared.chunk_offsets.clone();
-                        let right_schema = shared.right_schema.clone()
+                        let right_schema = shared
+                            .right_schema
+                            .clone()
                             .expect("right_schema should be set after build");
                         let num_cols = chunks[0].num_columns();
 
                         // Group (left_index, right_index) by chunk
-                        let mut chunk_rows: Vec<Vec<(u64, u64)>> =
-                            vec![Vec::new(); chunks.len()];
+                        let mut chunk_rows: Vec<Vec<(u64, u64)>> = vec![Vec::new(); chunks.len()];
                         for (i, g) in right_indices.iter().enumerate() {
                             if let Some(global_idx) = g {
-                                let ci = match offsets.binary_search(
-                                    &(*global_idx as usize)
-                                ) {
+                                let ci = match offsets.binary_search(&(*global_idx as usize)) {
                                     Ok(pos) => pos,
                                     Err(pos) => pos.saturating_sub(1),
                                 };
@@ -569,7 +605,8 @@ impl PhysicalOperator for HashJoin {
                                 if rows.is_empty() {
                                     continue;
                                 }
-                                let local_indices: Vec<u64> = rows.iter().map(|(_, r)| *r).collect();
+                                let local_indices: Vec<u64> =
+                                    rows.iter().map(|(_, r)| *r).collect();
                                 let idx_arr = UInt64Array::from(local_indices);
                                 partial.push(arrow::compute::take(
                                     chunks[ci].column(col_idx),

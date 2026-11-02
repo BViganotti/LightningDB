@@ -32,23 +32,21 @@ impl PhysicalCall {
             all_names.push(*name);
         }
         let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(StringArray::from(all_names))],
-        )
-        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(all_names))])
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         Ok(DataChunk::new(batch))
     }
 
     fn proc_db_labels(database: &crate::Database) -> Result<DataChunk> {
         let cat = database.catalog.read();
         let names: Vec<&str> = cat.node_tables.keys().map(|s| s.as_str()).collect();
-        let schema = Arc::new(Schema::new(vec![Field::new("label", DataType::Utf8, false)]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(StringArray::from(names))],
-        )
-        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(names))])
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         Ok(DataChunk::new(batch))
     }
 
@@ -60,11 +58,8 @@ impl PhysicalCall {
             DataType::Utf8,
             false,
         )]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(StringArray::from(names))],
-        )
-        .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(names))])
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         Ok(DataChunk::new(batch))
     }
 

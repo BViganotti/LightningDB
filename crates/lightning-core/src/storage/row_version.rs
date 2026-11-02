@@ -17,7 +17,7 @@ struct CommittedVersion {
 }
 
 pub struct RowVersionShard {
-    versions: RwLock<HashMap<u64, u64>>,           // row_id -> tx_id
+    versions: RwLock<HashMap<u64, u64>>, // row_id -> tx_id
     committed: RwLock<HashMap<u64, CommittedVersion>>, // row_id -> commit history
 }
 
@@ -43,7 +43,11 @@ impl RowVersion {
                 committed: RwLock::new(HashMap::new()),
             });
         }
-        Self { shards, num_shards, dirty_flag: AtomicBool::new(false) }
+        Self {
+            shards,
+            num_shards,
+            dirty_flag: AtomicBool::new(false),
+        }
     }
 
     fn get_shard_idx(&self, row_id: u64) -> usize {
@@ -120,9 +124,10 @@ impl RowVersion {
         let mut versions = self.shards[shard_idx].versions.write();
         versions.remove(&row_id);
         let mut committed = self.shards[shard_idx].committed.write();
-        let entry = committed
-            .entry(row_id)
-            .or_insert(CommittedVersion { first_ts: commit_ts, last_ts: commit_ts });
+        let entry = committed.entry(row_id).or_insert(CommittedVersion {
+            first_ts: commit_ts,
+            last_ts: commit_ts,
+        });
         entry.first_ts = entry.first_ts.min(commit_ts);
         entry.last_ts = entry.last_ts.max(commit_ts);
     }
@@ -141,9 +146,10 @@ impl RowVersion {
             let mut committed = self.shards[shard_idx].committed.write();
             for row_id in ids {
                 versions.remove(row_id);
-                let entry = committed
-                    .entry(*row_id)
-                    .or_insert(CommittedVersion { first_ts: commit_ts, last_ts: commit_ts });
+                let entry = committed.entry(*row_id).or_insert(CommittedVersion {
+                    first_ts: commit_ts,
+                    last_ts: commit_ts,
+                });
                 entry.first_ts = entry.first_ts.min(commit_ts);
                 entry.last_ts = entry.last_ts.max(commit_ts);
             }
@@ -167,7 +173,9 @@ impl RowVersion {
             // snapshot (first_ts <= read_ts).
             drop(versions);
             let committed = self.shards[shard_idx].committed.read();
-            return committed.get(&row_id).is_some_and(|e| e.first_ts <= read_ts);
+            return committed
+                .get(&row_id)
+                .is_some_and(|e| e.first_ts <= read_ts);
         }
         let committed = self.shards[shard_idx].committed.read();
         if let Some(entry) = committed.get(&row_id) {
@@ -214,9 +222,7 @@ impl RowVersion {
                         // match 0 rows and silently skip their update (lost
                         // update). Rows with no committed version (new inserts)
                         // remain invisible.
-                        visible = committed
-                            .get(row_id)
-                            .is_some_and(|e| e.first_ts <= read_ts);
+                        visible = committed.get(row_id).is_some_and(|e| e.first_ts <= read_ts);
                     }
                 } else if let Some(entry) = committed.get(row_id) {
                     visible = entry.first_ts <= read_ts;
@@ -503,7 +509,10 @@ mod tests {
 
         // Vacuum: remove entries with commit_ts < 150
         let removed = rv.vacuum(150);
-        assert_eq!(removed, 2, "rows 1 (ts=50) and 2 (ts=100) should be removed");
+        assert_eq!(
+            removed, 2,
+            "rows 1 (ts=50) and 2 (ts=100) should be removed"
+        );
 
         // Row 3 still visible (commit_ts=200 >= 150)
         assert!(rv.is_visible(3, 300, 300));
@@ -561,7 +570,7 @@ mod tests {
 
         assert!(rv.is_visible(1, 300, 300));
         assert!(rv.is_visible(2, 300, 300)); // rolled back → visible by default
-        assert!(rv.is_visible(3, 100, 0));   // still uncommitted by us
+        assert!(rv.is_visible(3, 100, 0)); // still uncommitted by us
     }
 
     #[test]

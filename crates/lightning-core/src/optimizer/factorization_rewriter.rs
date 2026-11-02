@@ -46,8 +46,12 @@ impl FactorizationRewriter {
                 let right_rewritten = self.rewrite(*right)?;
 
                 // Detect Cartesian product on the right side: Join with true literal condition
-                if let LogicalOperator::Join(_join_left, _join_right, join_cond) = &right_rewritten {
-                    if matches!(join_cond, BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))) {
+                if let LogicalOperator::Join(_join_left, _join_right, join_cond) = &right_rewritten
+                {
+                    if matches!(
+                        join_cond,
+                        BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true))
+                    ) {
                         // A genuine cross product on the right of a semi-join.
                         // Left as-is (see the module docs).
                         return Ok(LogicalOperator::SemiJoin(

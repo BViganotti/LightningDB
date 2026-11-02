@@ -4,12 +4,13 @@ use crate::processor::arrow_utils::values_to_array;
 use crate::processor::Value;
 use crate::{LightningError, Result};
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray, StructArray,
+    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, ListArray, RecordBatch, StringArray,
+    StructArray,
 };
 
-use arrow::compute::{cast, interleave};
 use arrow::compute::kernels::boolean::{and, not, or};
 use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
+use arrow::compute::{cast, interleave};
 use arrow::datatypes::{DataType, Field, Schema};
 use lightning_types::LogicalType;
 use std::collections::HashMap;
@@ -47,12 +48,20 @@ impl ExpressionEvaluator {
             BoundExpression::PropertyLookup(var_name, idx, _) => {
                 if let Some(b) = batch {
                     if *idx >= b.num_columns() {
-                        let col_names: Vec<String> = b.schema().fields().iter().map(|f| f.name().clone()).collect();
+                        let col_names: Vec<String> = b
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().clone())
+                            .collect();
                         // Debug: log the full expression tree
                         tracing::error!(
                             "PropertyLookup `{}` idx={} OOB batch_cols={} schema={:?}. \
                              Use RETURN with explicit alias or property name.",
-                            var_name, idx, b.num_columns(), col_names,
+                            var_name,
+                            idx,
+                            b.num_columns(),
+                            col_names,
                         );
                         return Err(LightningError::Internal(format!(
                             "PropertyLookup `{}` index {} out of bounds for batch with {} columns. batch cols: {:?}",
@@ -82,12 +91,18 @@ impl ExpressionEvaluator {
                         }
                         return Err(LightningError::Internal(format!(
                             "UnwindProperty `{}` is not a struct column (type: {:?})",
-                            var_name, col.data_type(),
+                            var_name,
+                            col.data_type(),
                         )));
                     }
                     Err(LightningError::Internal(format!(
                         "UnwindProperty `{}` not found in batch schema: {:?}",
-                        var_name, b.schema().fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+                        var_name,
+                        b.schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name())
+                            .collect::<Vec<_>>(),
                     )))
                 } else {
                     Err(LightningError::Internal(
@@ -119,9 +134,9 @@ impl ExpressionEvaluator {
                     ) = (&**left, &**right)
                     {
                         if *col_idx < b.num_columns() {
-                            if let Some(result) = Self::compare_column_literal(
-                                b.column(*col_idx), lit, op, num_rows,
-                            ) {
+                            if let Some(result) =
+                                Self::compare_column_literal(b.column(*col_idx), lit, op, num_rows)
+                            {
                                 return result;
                             }
                         }
@@ -137,18 +152,25 @@ impl ExpressionEvaluator {
                             let swapped_op = match op {
                                 crate::parser::ast::ComparisonOperator::Equal => Some(*op),
                                 crate::parser::ast::ComparisonOperator::NotEqual => Some(*op),
-                                crate::parser::ast::ComparisonOperator::LessThan =>
-                                    Some(crate::parser::ast::ComparisonOperator::GreaterThan),
-                                crate::parser::ast::ComparisonOperator::LessThanOrEqual =>
-                                    Some(crate::parser::ast::ComparisonOperator::GreaterThanOrEqual),
-                                crate::parser::ast::ComparisonOperator::GreaterThan =>
-                                    Some(crate::parser::ast::ComparisonOperator::LessThan),
-                                crate::parser::ast::ComparisonOperator::GreaterThanOrEqual =>
-                                    Some(crate::parser::ast::ComparisonOperator::LessThanOrEqual),
+                                crate::parser::ast::ComparisonOperator::LessThan => {
+                                    Some(crate::parser::ast::ComparisonOperator::GreaterThan)
+                                }
+                                crate::parser::ast::ComparisonOperator::LessThanOrEqual => {
+                                    Some(crate::parser::ast::ComparisonOperator::GreaterThanOrEqual)
+                                }
+                                crate::parser::ast::ComparisonOperator::GreaterThan => {
+                                    Some(crate::parser::ast::ComparisonOperator::LessThan)
+                                }
+                                crate::parser::ast::ComparisonOperator::GreaterThanOrEqual => {
+                                    Some(crate::parser::ast::ComparisonOperator::LessThanOrEqual)
+                                }
                             };
                             if let Some(swapped) = swapped_op {
                                 if let Some(result) = Self::compare_column_literal(
-                                    b.column(*col_idx), lit, &swapped, num_rows,
+                                    b.column(*col_idx),
+                                    lit,
+                                    &swapped,
+                                    num_rows,
                                 ) {
                                     return result;
                                 }
@@ -218,10 +240,8 @@ impl ExpressionEvaluator {
                 Ok(Arc::new(res))
             }
             BoundExpression::Arithmetic(left, op, right) => {
-                let left_arr =
-                    Self::evaluate(left, batch, params, num_rows, registry, database)?;
-                let right_arr =
-                    Self::evaluate(right, batch, params, num_rows, registry, database)?;
+                let left_arr = Self::evaluate(left, batch, params, num_rows, registry, database)?;
+                let right_arr = Self::evaluate(right, batch, params, num_rows, registry, database)?;
 
                 if left_arr.data_type() == &DataType::Int64
                     && right_arr.data_type() == &DataType::Int64
@@ -289,9 +309,8 @@ impl ExpressionEvaluator {
                         // Short-circuit: if every non-null left value is FALSE the
                         // result is FALSE regardless of the right side. NULLs on the
                         // left still need right-side evaluation since FALSE AND NULL = FALSE.
-                        let any_true_or_null = (0..l_bool.len()).any(|i| {
-                            !l_bool.is_valid(i) || l_bool.value(i)
-                        });
+                        let any_true_or_null =
+                            (0..l_bool.len()).any(|i| !l_bool.is_valid(i) || l_bool.value(i));
                         if !any_true_or_null {
                             return Ok(Arc::new(l_bool.clone()));
                         }
@@ -300,10 +319,10 @@ impl ExpressionEvaluator {
                             &DataType::Boolean,
                         )
                         .map_err(|e| LightningError::Internal(e.to_string()))?;
-                        let r_bool = r
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
+                        let r_bool =
+                            r.as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+                                LightningError::Internal("Expected BooleanArray".into())
+                            })?;
                         let res = and(l_bool, r_bool)
                             .map_err(|e| LightningError::Internal(e.to_string()))?;
                         Ok(Arc::new(res))
@@ -314,15 +333,15 @@ impl ExpressionEvaluator {
                             &DataType::Boolean,
                         )
                         .map_err(|e| LightningError::Internal(e.to_string()))?;
-                        let r_bool = r
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
+                        let r_bool =
+                            r.as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+                                LightningError::Internal("Expected BooleanArray".into())
+                            })?;
                         // XOR as (l AND NOT r) OR (NOT l AND r)
-                        let not_l = not(l_bool)
-                            .map_err(|e| LightningError::Internal(e.to_string()))?;
-                        let not_r = not(r_bool)
-                            .map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let not_l =
+                            not(l_bool).map_err(|e| LightningError::Internal(e.to_string()))?;
+                        let not_r =
+                            not(r_bool).map_err(|e| LightningError::Internal(e.to_string()))?;
                         let l_and_not_r = and(l_bool, &not_r)
                             .map_err(|e| LightningError::Internal(e.to_string()))?;
                         let not_l_and_r = and(&not_l, r_bool)
@@ -337,10 +356,10 @@ impl ExpressionEvaluator {
                             &DataType::Boolean,
                         )
                         .map_err(|e| LightningError::Internal(e.to_string()))?;
-                        let r_bool = r
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
+                        let r_bool =
+                            r.as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+                                LightningError::Internal("Expected BooleanArray".into())
+                            })?;
                         let res = or(l_bool, r_bool)
                             .map_err(|e| LightningError::Internal(e.to_string()))?;
                         Ok(Arc::new(res))
@@ -356,44 +375,55 @@ impl ExpressionEvaluator {
                     .downcast_ref::<BooleanArray>()
                     .ok_or_else(|| LightningError::Internal("Expected BooleanArray".into()))?;
 
-                let res = not(arr)
-                    .map_err(|e| LightningError::Internal(e.to_string()))?;
+                let res = not(arr).map_err(|e| LightningError::Internal(e.to_string()))?;
                 Ok(Arc::new(res))
             }
             BoundExpression::Function(name, args, _) => {
                 // Handle list functions with lambdas BEFORE generic arg evaluation
                 match name.as_str() {
                     "LIST_FILTER" => {
-                        let list_array = Self::evaluate(
-                            &args[0], batch, params, num_rows, registry, database,
-                        )?;
+                        let list_array =
+                            Self::evaluate(&args[0], batch, params, num_rows, registry, database)?;
                         let lambda = &args[1];
                         if let BoundExpression::Lambda(var, body) = lambda {
                             return Self::evaluate_list_filter(
-                                &list_array, var, body, params, registry, database,
+                                &list_array,
+                                var,
+                                body,
+                                params,
+                                registry,
+                                database,
                             );
                         }
                     }
                     "LIST_TRANSFORM" => {
-                        let list_array = Self::evaluate(
-                            &args[0], batch, params, num_rows, registry, database,
-                        )?;
+                        let list_array =
+                            Self::evaluate(&args[0], batch, params, num_rows, registry, database)?;
                         let lambda = &args[1];
                         if let BoundExpression::Lambda(var, body) = lambda {
                             return Self::evaluate_list_transform(
-                                &list_array, var, body, params, registry, database,
+                                &list_array,
+                                var,
+                                body,
+                                params,
+                                registry,
+                                database,
                             );
                         }
                     }
                     "LIST_ANY" | "LIST_ALL" | "LIST_SINGLE" | "LIST_NONE" => {
-                        let list_array = Self::evaluate(
-                            &args[0], batch, params, num_rows, registry, database,
-                        )?;
+                        let list_array =
+                            Self::evaluate(&args[0], batch, params, num_rows, registry, database)?;
                         let lambda = &args[1];
                         if let BoundExpression::Lambda(var, body) = lambda {
                             return Self::evaluate_list_predicate(
-                                &list_array, var, body, name.as_str(),
-                                params, registry, database,
+                                &list_array,
+                                var,
+                                body,
+                                name.as_str(),
+                                params,
+                                registry,
+                                database,
                             );
                         }
                     }
@@ -435,19 +465,27 @@ impl ExpressionEvaluator {
                         let start_arr = if let Some(arg) = args.first() {
                             Self::evaluate(arg, batch, params, num_rows, registry, database)?
                         } else {
-                            return Err(LightningError::Internal("SHORTEST_PATH requires start node".into()));
+                            return Err(LightningError::Internal(
+                                "SHORTEST_PATH requires start node".into(),
+                            ));
                         };
                         let end_arr = if args.len() > 1 {
                             Self::evaluate(&args[1], batch, params, num_rows, registry, database)?
                         } else {
-                            return Err(LightningError::Internal("SHORTEST_PATH requires end node".into()));
+                            return Err(LightningError::Internal(
+                                "SHORTEST_PATH requires end node".into(),
+                            ));
                         };
                         let max_depth = if args.len() > 3 {
                             let depth_arr = Self::evaluate(
                                 &args[3], batch, params, num_rows, registry, database,
                             )?;
                             if let Some(arr) = depth_arr.as_any().downcast_ref::<Int64Array>() {
-                                if !arr.is_null(0) { arr.value(0) as u32 } else { 0 }
+                                if !arr.is_null(0) {
+                                    arr.value(0) as u32
+                                } else {
+                                    0
+                                }
                             } else {
                                 0
                             }
@@ -485,8 +523,9 @@ impl ExpressionEvaluator {
                         let mut paths: Vec<Option<String>> = Vec::with_capacity(num_rows);
                         for i in 0..num_rows {
                             let src = if !start_arr.is_null(i) {
-                                if let Some(arr) =
-                                    start_arr.as_any().downcast_ref::<arrow::array::UInt64Array>()
+                                if let Some(arr) = start_arr
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::UInt64Array>()
                                 {
                                     arr.value(i)
                                 } else {
@@ -522,10 +561,8 @@ impl ExpressionEvaluator {
                                             let path_strs: Vec<String> = found_paths
                                                 .iter()
                                                 .map(|p| {
-                                                    let ids: Vec<String> = p
-                                                        .iter()
-                                                        .map(|id| id.to_string())
-                                                        .collect();
+                                                    let ids: Vec<String> =
+                                                        p.iter().map(|id| id.to_string()).collect();
                                                     format!("[{}]", ids.join(", "))
                                                 })
                                                 .collect();
@@ -544,7 +581,9 @@ impl ExpressionEvaluator {
                             paths.into_iter().map(|p| p),
                         )));
                     }
-                    return Err(LightningError::Internal("SHORTEST_PATH requires a batch".into()));
+                    return Err(LightningError::Internal(
+                        "SHORTEST_PATH requires a batch".into(),
+                    ));
                 }
 
                 for arg in args {
@@ -623,12 +662,9 @@ impl ExpressionEvaluator {
                 let mut fields = Vec::new();
                 let mut arrays = Vec::new();
                 for ((_key, expr), field_def) in entries.iter().zip(field_defs.iter()) {
-                    let arr = Self::evaluate(
-                        expr, batch, params, num_rows, registry, database,
-                    )?;
-                    let arrow_type = crate::processor::arrow_utils::logical_type_to_arrow_type(
-                        &field_def.type_,
-                    );
+                    let arr = Self::evaluate(expr, batch, params, num_rows, registry, database)?;
+                    let arrow_type =
+                        crate::processor::arrow_utils::logical_type_to_arrow_type(&field_def.type_);
                     // Cast if needed
                     let cast_arr = if arr.data_type() != &arrow_type {
                         arrow::compute::kernels::cast::cast(&arr, &arrow_type)
@@ -659,12 +695,17 @@ impl ExpressionEvaluator {
                     return if let Some(ref expr) = else_expression {
                         Self::evaluate(expr, batch, params, num_rows, registry, database)
                     } else {
-                        Ok(arrow::array::new_null_array(&arrow::datatypes::DataType::Null, num_rows))
+                        Ok(arrow::array::new_null_array(
+                            &arrow::datatypes::DataType::Null,
+                            num_rows,
+                        ))
                     };
                 }
 
                 let case_val = if let Some(ref expr) = expression {
-                    Some(Self::evaluate(expr, batch, params, num_rows, registry, database)?)
+                    Some(Self::evaluate(
+                        expr, batch, params, num_rows, registry, database,
+                    )?)
                 } else {
                     None
                 };
@@ -672,14 +713,18 @@ impl ExpressionEvaluator {
                 let evaluated: Vec<(ArrayRef, ArrayRef)> = when_then
                     .iter()
                     .map(|(when, then)| {
-                        let when_arr = Self::evaluate(when, batch, params, num_rows, registry, database)?;
-                        let then_arr = Self::evaluate(then, batch, params, num_rows, registry, database)?;
+                        let when_arr =
+                            Self::evaluate(when, batch, params, num_rows, registry, database)?;
+                        let then_arr =
+                            Self::evaluate(then, batch, params, num_rows, registry, database)?;
                         Ok((when_arr, then_arr))
                     })
                     .collect::<Result<Vec<_>>>()?;
 
                 let else_arr = if let Some(ref expr) = else_expression {
-                    Some(Self::evaluate(expr, batch, params, num_rows, registry, database)?)
+                    Some(Self::evaluate(
+                        expr, batch, params, num_rows, registry, database,
+                    )?)
                 } else {
                     None
                 };
@@ -694,7 +739,10 @@ impl ExpressionEvaluator {
                         })
                         .collect::<Result<Vec<_>>>()?
                 } else {
-                    evaluated.iter().map(|(when_arr, _)| when_arr.clone()).collect()
+                    evaluated
+                        .iter()
+                        .map(|(when_arr, _)| when_arr.clone())
+                        .collect()
                 };
 
                 let mut sources: Vec<ArrayRef> = Vec::new();
@@ -704,9 +752,14 @@ impl ExpressionEvaluator {
                 if let Some(ref arr) = else_arr {
                     sources.push(arr.clone());
                 } else if !sources.is_empty() {
-                    sources.push(arrow::array::new_null_array(sources[0].data_type(), num_rows));
+                    sources.push(arrow::array::new_null_array(
+                        sources[0].data_type(),
+                        num_rows,
+                    ));
                 } else {
-                    return Err(LightningError::Internal("CASE WHEN without any branches".into()));
+                    return Err(LightningError::Internal(
+                        "CASE WHEN without any branches".into(),
+                    ));
                 }
                 let else_idx = sources.len() - 1;
 
@@ -716,10 +769,12 @@ impl ExpressionEvaluator {
                 for i in 0..num_rows {
                     let mut matched = false;
                     for (j, mask) in match_masks.iter().enumerate() {
-                        let bool_mask = mask
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .ok_or_else(|| LightningError::Internal("CASE WHEN must be boolean".into()))?;
+                        let bool_mask =
+                            mask.as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .ok_or_else(|| {
+                                    LightningError::Internal("CASE WHEN must be boolean".into())
+                                })?;
                         if !bool_mask.is_null(i) && bool_mask.value(i) {
                             indices.push((j, i));
                             matched = true;
@@ -731,14 +786,15 @@ impl ExpressionEvaluator {
                     }
                 }
                 // Use arrow::compute::interleave which replaces the removed MutableArrayData
-                let result_arr = interleave(&source_refs, &indices)
-                    .map_err(|e| LightningError::Internal(format!("CASE interleave failed: {e}")))?;
+                let result_arr = interleave(&source_refs, &indices).map_err(|e| {
+                    LightningError::Internal(format!("CASE interleave failed: {e}"))
+                })?;
                 Ok(result_arr)
             }
             BoundExpression::Parameter(name) => {
-                let val = params.and_then(|p| p.get(name)).ok_or_else(|| {
-                    LightningError::Query(format!("Parameter {name} not found"))
-                })?;
+                let val = params
+                    .and_then(|p| p.get(name))
+                    .ok_or_else(|| LightningError::Query(format!("Parameter {name} not found")))?;
                 match val {
                     Value::Number(n) => Ok(Arc::new(Float64Array::from_value(*n, num_rows))),
                     Value::String(s) => Ok(Arc::new(StringArray::from_iter_values(
@@ -786,12 +842,15 @@ impl ExpressionEvaluator {
                                 .map_err(|e| LightningError::Internal(e.to_string()))?,
                         ));
                     }
-                    Value::Map(_) | Value::Node(_) | Value::Relationship(_)
-                    | Value::Path(_) | Value::Date(_) | Value::Timestamp(_) | Value::Struct(_) => {
-                        Err(LightningError::Internal(format!(
-                            "Parameter type not yet supported for evaluation: {val:?}"
-                        )))
-                    }
+                    Value::Map(_)
+                    | Value::Node(_)
+                    | Value::Relationship(_)
+                    | Value::Path(_)
+                    | Value::Date(_)
+                    | Value::Timestamp(_)
+                    | Value::Struct(_) => Err(LightningError::Internal(format!(
+                        "Parameter type not yet supported for evaluation: {val:?}"
+                    ))),
                 }
             }
             BoundExpression::Exists(steps) => {
@@ -818,14 +877,12 @@ impl ExpressionEvaluator {
         right: &ArrayRef,
         op: &crate::parser::ast::ArithmeticOperator,
     ) -> Result<ArrayRef> {
-        let l = left
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| LightningError::Internal("Expected Int64Array for left operand".into()))?;
-        let r = right
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| LightningError::Internal("Expected Int64Array for right operand".into()))?;
+        let l = left.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+            LightningError::Internal("Expected Int64Array for left operand".into())
+        })?;
+        let r = right.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+            LightningError::Internal("Expected Int64Array for right operand".into())
+        })?;
 
         use crate::parser::ast::ArithmeticOperator::*;
         let res: ArrayRef = match op {
@@ -833,19 +890,19 @@ impl ExpressionEvaluator {
                 let raw = arrow::compute::kernels::numeric::add(l, r)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
                 // Check for overflow: if any value wrapped, promote to Float64
-                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => a.overflowing_add(b).1,
-                        _ => false,
-                    }
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => a.overflowing_add(b).1,
+                    _ => false,
                 });
                 if has_overflow {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
+                    let f: arrow::array::Float64Array = l
+                        .iter()
+                        .zip(r.iter())
+                        .map(|(a, b)| match (a, b) {
                             (Some(a), Some(b)) => Some(a as f64 + b as f64),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     Arc::new(f)
                 } else {
                     Arc::new(raw)
@@ -854,19 +911,19 @@ impl ExpressionEvaluator {
             Subtract => {
                 let raw = arrow::compute::kernels::numeric::sub(l, r)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
-                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => a.overflowing_sub(b).1,
-                        _ => false,
-                    }
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => a.overflowing_sub(b).1,
+                    _ => false,
                 });
                 if has_overflow {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
+                    let f: arrow::array::Float64Array = l
+                        .iter()
+                        .zip(r.iter())
+                        .map(|(a, b)| match (a, b) {
                             (Some(a), Some(b)) => Some(a as f64 - b as f64),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     Arc::new(f)
                 } else {
                     Arc::new(raw)
@@ -875,42 +932,50 @@ impl ExpressionEvaluator {
             Multiply => {
                 let raw = arrow::compute::kernels::numeric::mul(l, r)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
-                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => a.overflowing_mul(b).1,
-                        _ => false,
-                    }
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => a.overflowing_mul(b).1,
+                    _ => false,
                 });
                 if has_overflow {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
+                    let f: arrow::array::Float64Array = l
+                        .iter()
+                        .zip(r.iter())
+                        .map(|(a, b)| match (a, b) {
                             (Some(a), Some(b)) => Some(a as f64 * b as f64),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     Arc::new(f)
                 } else {
                     Arc::new(raw)
                 }
             }
             Divide => {
-                let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                    match (a, b) {
-                        (Some(_), Some(0)) => None, // Division by zero → NULL (SQL standard)
-                        (Some(a), Some(b)) => a.checked_div(b),
-                        _ => None,
-                    }
-                }).collect();
+                let result: arrow::array::Int64Array = l
+                    .iter()
+                    .zip(r.iter())
+                    .map(|(a, b)| {
+                        match (a, b) {
+                            (Some(_), Some(0)) => None, // Division by zero → NULL (SQL standard)
+                            (Some(a), Some(b)) => a.checked_div(b),
+                            _ => None,
+                        }
+                    })
+                    .collect();
                 Arc::new(result)
             }
             Modulo => {
-                let result: arrow::array::Int64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                    match (a, b) {
-                        (Some(_), Some(0)) => None,
-                        (Some(a), Some(b)) => a.checked_rem(b), // handles i64::MIN % -1
-                        _ => None,
-                    }
-                }).collect();
+                let result: arrow::array::Int64Array = l
+                    .iter()
+                    .zip(r.iter())
+                    .map(|(a, b)| {
+                        match (a, b) {
+                            (Some(_), Some(0)) => None,
+                            (Some(a), Some(b)) => a.checked_rem(b), // handles i64::MIN % -1
+                            _ => None,
+                        }
+                    })
+                    .collect();
                 Arc::new(result)
             }
         };
@@ -925,41 +990,43 @@ impl ExpressionEvaluator {
         let l = left
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
-            .ok_or_else(|| LightningError::Internal("Expected UInt64Array for left operand".into()))?;
+            .ok_or_else(|| {
+                LightningError::Internal("Expected UInt64Array for left operand".into())
+            })?;
         let r = right
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
-            .ok_or_else(|| LightningError::Internal("Expected UInt64Array for right operand".into()))?;
+            .ok_or_else(|| {
+                LightningError::Internal("Expected UInt64Array for right operand".into())
+            })?;
 
         use crate::parser::ast::ArithmeticOperator::*;
         let res: ArrayRef = match op {
             Add => {
                 let raw = arrow::compute::kernels::numeric::add(l, r)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
-                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => a.overflowing_add(b).1,
-                        _ => false,
-                    }
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => a.overflowing_add(b).1,
+                    _ => false,
                 });
                 if has_overflow {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
+                    let f: arrow::array::Float64Array = l
+                        .iter()
+                        .zip(r.iter())
+                        .map(|(a, b)| match (a, b) {
                             (Some(a), Some(b)) => Some(a as f64 + b as f64),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     Arc::new(f)
                 } else {
                     Arc::new(raw)
                 }
             }
             Subtract => {
-                let has_neg = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => b > a,
-                        _ => false,
-                    }
+                let has_neg = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => b > a,
+                    _ => false,
                 });
                 if has_neg {
                     return Err(LightningError::Query(
@@ -973,42 +1040,46 @@ impl ExpressionEvaluator {
             Multiply => {
                 let raw = arrow::compute::kernels::numeric::mul(l, r)
                     .map_err(|e| LightningError::Internal(e.to_string()))?;
-                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| {
-                    match (a, b) {
-                        (Some(a), Some(b)) => a.overflowing_mul(b).1,
-                        _ => false,
-                    }
+                let has_overflow = l.iter().zip(r.iter()).any(|(a, b)| match (a, b) {
+                    (Some(a), Some(b)) => a.overflowing_mul(b).1,
+                    _ => false,
                 });
                 if has_overflow {
-                    let f: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                        match (a, b) {
+                    let f: arrow::array::Float64Array = l
+                        .iter()
+                        .zip(r.iter())
+                        .map(|(a, b)| match (a, b) {
                             (Some(a), Some(b)) => Some(a as f64 * b as f64),
                             _ => None,
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     Arc::new(f)
                 } else {
                     Arc::new(raw)
                 }
             }
             Divide => {
-                let result: arrow::array::Float64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                    match (a, b) {
+                let result: arrow::array::Float64Array = l
+                    .iter()
+                    .zip(r.iter())
+                    .map(|(a, b)| match (a, b) {
                         (Some(_), Some(0)) => None,
                         (Some(a), Some(b)) => Some(a as f64 / b as f64),
                         _ => None,
-                    }
-                }).collect();
+                    })
+                    .collect();
                 Arc::new(result)
             }
             Modulo => {
-                let result: arrow::array::UInt64Array = l.iter().zip(r.iter()).map(|(a, b)| {
-                    match (a, b) {
+                let result: arrow::array::UInt64Array = l
+                    .iter()
+                    .zip(r.iter())
+                    .map(|(a, b)| match (a, b) {
                         (Some(_), Some(0)) => None,
                         (Some(a), Some(b)) => Some(a % b),
                         _ => None,
-                    }
-                }).collect();
+                    })
+                    .collect();
                 Arc::new(result)
             }
         };
@@ -1022,10 +1093,9 @@ impl ExpressionEvaluator {
             Value::String(_) => DataType::Utf8,
             Value::Boolean(_) => DataType::Boolean,
             Value::Date(_) => DataType::Date32,
-            Value::Timestamp(_) => DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Microsecond,
-                None,
-            ),
+            Value::Timestamp(_) => {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+            }
             _ => DataType::Null,
         }
     }
@@ -1034,9 +1104,9 @@ impl ExpressionEvaluator {
     fn scalar_array_from_value(v: &Value, dtype: &DataType) -> Result<ArrayRef> {
         let arr: ArrayRef = match v {
             Value::Number(n) => Arc::new(Float64Array::from_value(*n, 1)),
-            Value::String(s) => Arc::new(StringArray::from_iter_values(std::iter::once(
-                s.as_str(),
-            ))),
+            Value::String(s) => {
+                Arc::new(StringArray::from_iter_values(std::iter::once(s.as_str())))
+            }
             Value::Boolean(b) => Arc::new(BooleanArray::from(vec![*b])),
             Value::Null => arrow::array::new_null_array(dtype, 1),
             other => {
@@ -1066,7 +1136,10 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(arr, &scalar_i),
                     GreaterThanOrEqual => gt_eq(arr, &scalar_i),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                 if *n < 0 {
@@ -1099,16 +1172,20 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(arr, &scalar_u),
                     GreaterThanOrEqual => gt_eq(arr, &scalar_u),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
         }
         if let Literal::Number(n) = lit {
             let val = *n;
             let scalar = arrow::array::Float64Array::new_scalar(val);
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
-                let f64_arr = arrow::compute::cast(arr, &DataType::Float64)
-                    .ok()?;
-                let f64_arr = f64_arr.as_any().downcast_ref::<arrow::array::Float64Array>()?;
+                let f64_arr = arrow::compute::cast(arr, &DataType::Float64).ok()?;
+                let f64_arr = f64_arr
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()?;
                 let res = match op {
                     Equal => eq(f64_arr, &scalar),
                     NotEqual => neq(f64_arr, &scalar),
@@ -1117,12 +1194,16 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(f64_arr, &scalar),
                     GreaterThanOrEqual => gt_eq(f64_arr, &scalar),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                let f64_arr = arrow::compute::cast(arr, &DataType::Float64)
-                    .ok()?;
-                let f64_arr = f64_arr.as_any().downcast_ref::<arrow::array::Float64Array>()?;
+                let f64_arr = arrow::compute::cast(arr, &DataType::Float64).ok()?;
+                let f64_arr = f64_arr
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()?;
                 let res = match op {
                     Equal => eq(f64_arr, &scalar),
                     NotEqual => neq(f64_arr, &scalar),
@@ -1131,12 +1212,16 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(f64_arr, &scalar),
                     GreaterThanOrEqual => gt_eq(f64_arr, &scalar),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                let f64_arr = arrow::compute::cast(arr, &DataType::Float64)
-                    .ok()?;
-                let f64_arr = f64_arr.as_any().downcast_ref::<arrow::array::Float64Array>()?;
+                let f64_arr = arrow::compute::cast(arr, &DataType::Float64).ok()?;
+                let f64_arr = f64_arr
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()?;
                 let res = match op {
                     Equal => eq(f64_arr, &scalar),
                     NotEqual => neq(f64_arr, &scalar),
@@ -1145,7 +1230,10 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(f64_arr, &scalar),
                     GreaterThanOrEqual => gt_eq(f64_arr, &scalar),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
                 let scalar_f = arrow::array::Float64Array::new_scalar(*n);
@@ -1157,7 +1245,10 @@ impl ExpressionEvaluator {
                     GreaterThan => gt(arr, &scalar_f),
                     GreaterThanOrEqual => gt_eq(arr, &scalar_f),
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
         }
         if let Literal::String(s) = lit {
@@ -1168,7 +1259,10 @@ impl ExpressionEvaluator {
                     NotEqual => neq(arr, &scalar_s),
                     _ => return None,
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
         }
         if let Literal::Boolean(b) = lit {
@@ -1192,7 +1286,10 @@ impl ExpressionEvaluator {
                     NotEqual => neq(&int_arr, &scalar_f),
                     _ => return None,
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             // Handle booleans stored as Int64 (0/1)
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
@@ -1202,7 +1299,10 @@ impl ExpressionEvaluator {
                     NotEqual => neq(arr, &scalar_i),
                     _ => return None,
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
             // Handle booleans stored as Float64 (0.0/1.0)
             if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
@@ -1212,7 +1312,10 @@ impl ExpressionEvaluator {
                     NotEqual => neq(arr, &scalar_f),
                     _ => return None,
                 };
-                return Some(res.map(|a| Arc::new(a) as ArrayRef).map_err(|e| LightningError::Internal(e.to_string())));
+                return Some(
+                    res.map(|a| Arc::new(a) as ArrayRef)
+                        .map_err(|e| LightningError::Internal(e.to_string())),
+                );
             }
         }
         None
@@ -1245,7 +1348,11 @@ impl ExpressionEvaluator {
         let data_type = (0..num_elements)
             .find_map(|i| {
                 let v = list_arr.value(i);
-                if !v.is_empty() { Some(v.data_type().clone()) } else { None }
+                if !v.is_empty() {
+                    Some(v.data_type().clone())
+                } else {
+                    None
+                }
             })
             .unwrap_or(arrow::datatypes::DataType::Null);
 
@@ -1268,7 +1375,14 @@ impl ExpressionEvaluator {
                 .map_err(|e| LightningError::Internal(e.to_string()))?;
             let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
             let batch = RecordBatch::try_new(schema, vec![concat_all])?;
-            Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?
+            Self::evaluate(
+                body,
+                Some(&batch),
+                params,
+                batch.num_rows(),
+                registry,
+                database,
+            )?
         };
 
         // Split the boolean result per element and filter original values
@@ -1282,9 +1396,12 @@ impl ExpressionEvaluator {
                 continue;
             }
             let mask_slice = result_arr.slice(input_pos, orig_len);
-            let mask = mask_slice.as_any()
+            let mask = mask_slice
+                .as_any()
                 .downcast_ref::<arrow::array::BooleanArray>()
-                .ok_or_else(|| LightningError::Internal("LIST_FILTER predicate did not return boolean".into()))?;
+                .ok_or_else(|| {
+                    LightningError::Internal("LIST_FILTER predicate did not return boolean".into())
+                })?;
             let original_vals = list_arr.value(elem_idx);
             let filtered = arrow::compute::filter(&original_vals, mask)
                 .map_err(|e| LightningError::Internal(e.to_string()))?;
@@ -1300,8 +1417,7 @@ impl ExpressionEvaluator {
             filtered_pieces.remove(0)
         } else {
             let refs: Vec<&dyn Array> = filtered_pieces.iter().map(|a| a.as_ref()).collect();
-            arrow::compute::concat(&refs)
-                .map_err(|e| LightningError::Internal(e.to_string()))?
+            arrow::compute::concat(&refs).map_err(|e| LightningError::Internal(e.to_string()))?
         };
 
         let field = Arc::new(Field::new("item", flat_values.data_type().clone(), true));
@@ -1337,7 +1453,11 @@ impl ExpressionEvaluator {
         let data_type = (0..num_elements)
             .find_map(|i| {
                 let v = list_arr.value(i);
-                if !v.is_empty() { Some(v.data_type().clone()) } else { None }
+                if !v.is_empty() {
+                    Some(v.data_type().clone())
+                } else {
+                    None
+                }
             })
             .unwrap_or(arrow::datatypes::DataType::Null);
 
@@ -1355,13 +1475,26 @@ impl ExpressionEvaluator {
 
         // Evaluate the transform ONCE on concatenated values
         let (result_arr, empty_result) = if value_refs.is_empty() {
-            (arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0), true)
+            (
+                arrow::array::new_null_array(&arrow::datatypes::DataType::Null, 0),
+                true,
+            )
         } else {
             let concat_all = arrow::compute::concat(&value_refs)
                 .map_err(|e| LightningError::Internal(e.to_string()))?;
             let schema = Arc::new(Schema::new(vec![Field::new(var, data_type, true)]));
             let batch = RecordBatch::try_new(schema, vec![concat_all])?;
-            (Self::evaluate(body, Some(&batch), params, batch.num_rows(), registry, database)?, false)
+            (
+                Self::evaluate(
+                    body,
+                    Some(&batch),
+                    params,
+                    batch.num_rows(),
+                    registry,
+                    database,
+                )?,
+                false,
+            )
         };
 
         if empty_result {
@@ -1393,8 +1526,7 @@ impl ExpressionEvaluator {
             transformed_pieces.remove(0)
         } else {
             let refs: Vec<&dyn Array> = transformed_pieces.iter().map(|a| a.as_ref()).collect();
-            arrow::compute::concat(&refs)
-                .map_err(|e| LightningError::Internal(e.to_string()))?
+            arrow::compute::concat(&refs).map_err(|e| LightningError::Internal(e.to_string()))?
         };
 
         let field = Arc::new(Field::new("item", flat_values.data_type().clone(), true));
@@ -1444,11 +1576,13 @@ impl ExpressionEvaluator {
                 continue;
             }
 
-            let schema = canned_schema.clone().unwrap_or_else(|| Arc::new(Schema::new(vec![Field::new(
-                var,
-                values.data_type().clone(),
-                true,
-            )])));
+            let schema = canned_schema.clone().unwrap_or_else(|| {
+                Arc::new(Schema::new(vec![Field::new(
+                    var,
+                    values.data_type().clone(),
+                    true,
+                )]))
+            });
             let sub_batch = RecordBatch::try_new(schema, vec![values.clone()])?;
 
             let bool_res = Self::evaluate(
@@ -1491,7 +1625,10 @@ impl ExpressionEvaluator {
 /// Evaluate a `COUNT { MATCH ... WHERE ... }` subquery by scanning the target table,
 /// building a RecordBatch, evaluating the WHERE expression, and counting matching rows.
 fn evaluate_subquery_count(
-    steps: &[(crate::planner::binder::BoundMatchClause, Option<crate::planner::binder::BoundWhereClause>)],
+    steps: &[(
+        crate::planner::binder::BoundMatchClause,
+        Option<crate::planner::binder::BoundWhereClause>,
+    )],
     database: &crate::Database,
     registry: &crate::processor::functions::FunctionRegistry,
 ) -> Result<i64> {
@@ -1525,9 +1662,14 @@ fn evaluate_subquery_count(
             if num_table_rows == 0 {
                 0
             } else if let Some(where_clause) = sub_where {
-                
                 scan_table_with_where(
-                    &table, bm, &tx, num_table_rows, &where_clause.expression, database, registry,
+                    &table,
+                    bm,
+                    &tx,
+                    num_table_rows,
+                    &where_clause.expression,
+                    database,
+                    registry,
                 )?
             } else {
                 num_table_rows as i64
@@ -1543,7 +1685,10 @@ fn evaluate_subquery_count(
 /// Evaluate an `EXISTS { MATCH ... WHERE ... }` subquery by scanning the target table,
 /// building a RecordBatch, evaluating the WHERE expression, and checking if any row matches.
 fn evaluate_subquery_exists(
-    steps: &[(crate::planner::binder::BoundMatchClause, Option<crate::planner::binder::BoundWhereClause>)],
+    steps: &[(
+        crate::planner::binder::BoundMatchClause,
+        Option<crate::planner::binder::BoundWhereClause>,
+    )],
     database: &crate::Database,
     registry: &crate::processor::functions::FunctionRegistry,
 ) -> Result<bool> {
@@ -1578,7 +1723,13 @@ fn evaluate_subquery_exists(
                 false
             } else if let Some(where_clause) = sub_where {
                 let count = scan_table_with_where(
-                    &table, bm, &tx, num_table_rows, &where_clause.expression, database, registry,
+                    &table,
+                    bm,
+                    &tx,
+                    num_table_rows,
+                    &where_clause.expression,
+                    database,
+                    registry,
                 )?;
                 count > 0
             } else {
@@ -1628,7 +1779,9 @@ fn scan_table_with_where(
     let bool_arr = filter_arr
         .as_any()
         .downcast_ref::<BooleanArray>()
-        .ok_or_else(|| LightningError::Internal("COUNT/EXISTS subquery WHERE must evaluate to boolean".into()))?;
+        .ok_or_else(|| {
+            LightningError::Internal("COUNT/EXISTS subquery WHERE must evaluate to boolean".into())
+        })?;
 
     let mut count: i64 = 0;
     for i in 0..bool_arr.len() {

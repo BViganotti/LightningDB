@@ -56,7 +56,11 @@ pub struct UnionQuery {
 impl UnionQuery {
     pub fn is_read_only(&self) -> bool {
         self.statement.is_read_only()
-            && self.next_union.as_ref().map(|(uq, _)| uq.is_read_only()).unwrap_or(true)
+            && self
+                .next_union
+                .as_ref()
+                .map(|(uq, _)| uq.is_read_only())
+                .unwrap_or(true)
     }
 }
 
@@ -77,7 +81,10 @@ pub enum Statement {
         columns: Vec<ColumnDefinition>,
         if_not_exists: bool,
     },
-    AlterTable { name: String, operation: AlterOperation },
+    AlterTable {
+        name: String,
+        operation: AlterOperation,
+    },
     DropTable(String, bool), // name, if_exists
     CopyFrom {
         table_name: String,
@@ -132,15 +139,18 @@ pub enum Statement {
 impl Statement {
     pub fn is_read_only(&self) -> bool {
         match self {
-            Statement::Match(_, _, clauses) => {
-                !clauses.iter().any(|c| matches!(c,
-                    Clause::Delete(..) | Clause::Set(..) | Clause::Remove(..) |
-                    Clause::Create(..) | Clause::Merge(..)
-                ))
-            }
-            | Statement::StandaloneCall(..)
-            | Statement::CopyTo { .. } => true,
-            | Statement::Create(..)
+            Statement::Match(_, _, clauses) => !clauses.iter().any(|c| {
+                matches!(
+                    c,
+                    Clause::Delete(..)
+                        | Clause::Set(..)
+                        | Clause::Remove(..)
+                        | Clause::Create(..)
+                        | Clause::Merge(..)
+                )
+            }),
+            Statement::StandaloneCall(..) | Statement::CopyTo { .. } => true,
+            Statement::Create(..)
             | Statement::CreateTableNode { .. }
             | Statement::CreateTableRel { .. }
             | Statement::AlterTable { .. }

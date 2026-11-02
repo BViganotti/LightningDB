@@ -36,15 +36,15 @@
 ///   The per-record length prefix allows the parser to skip past corrupted records
 ///   without losing synchronization — the fundamental improvement over v1.
 use crate::storage::buffer_manager::PAGE_SIZE;
-use crate::SyncMode;
 use crate::Result;
+use crate::SyncMode;
+use crc::{Algorithm, Crc};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crc::{Algorithm, Crc};
 
 const CRC32C: Crc<u32> = Crc::<u32>::new(&Algorithm {
     width: 32,
@@ -138,7 +138,8 @@ impl WAL {
                 // all committed data is already on data files at that point.
                 tracing::warn!(
                     "WAL file truncated ({} bytes < {} byte header), reinitializing",
-                    metadata.len(), WAL_HEADER_SIZE
+                    metadata.len(),
+                    WAL_HEADER_SIZE
                 );
                 file.set_len(0)?;
                 file.seek(SeekFrom::Start(0))?;
@@ -189,26 +190,28 @@ impl WAL {
         let dir = archive_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
         let max_seq = std::fs::read_dir(&dir)?
-            .filter_map(|e| {
-                match e {
-                    Ok(entry) => Some(entry),
-                    Err(err) => {
-                        tracing::warn!("Cannot read directory entry in archive: {err}");
-                        None
-                    }
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    tracing::warn!("Cannot read directory entry in archive: {err}");
+                    None
                 }
             })
             .filter_map(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
                 if name.starts_with("wal_") && name.ends_with(".ltng") {
-                    match name.trim_start_matches("wal_")
+                    match name
+                        .trim_start_matches("wal_")
                         .trim_end_matches(".ltng")
                         .parse::<u64>()
                     {
                         Ok(seq) => Some(seq),
                         Err(_) => {
-                            tracing::warn!("Archive file '{}' does not have a valid sequence number", name);
+                            tracing::warn!(
+                                "Archive file '{}' does not have a valid sequence number",
+                                name
+                            );
                             None
                         }
                     }
@@ -405,11 +408,7 @@ impl WAL {
         Ok(())
     }
 
-    pub fn replay<F>(
-        &self,
-        mut apply_page: F,
-        last_checkpoint_tx: u64,
-    ) -> Result<WALReplayReport>
+    pub fn replay<F>(&self, mut apply_page: F, last_checkpoint_tx: u64) -> Result<WALReplayReport>
     where
         F: FnMut(u64, u64, &[u8]) -> Result<()>,
     {
@@ -435,7 +434,17 @@ impl WAL {
 
             let record_ok = match record_type[0] {
                 RECORD_TYPE_PAGE_UPDATE => {
-                    if !self.read_and_apply_page_update(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                    if !self.read_and_apply_page_update(
+                        &mut file,
+                        &mut commits,
+                        &mut pending,
+                        &mut apply_page,
+                        last_checkpoint_tx,
+                        &mut max_tx_id,
+                        &mut framing_lost,
+                        &mut corrupt_records_skipped,
+                        &mut partial_record_at_eof,
+                    ) {
                         if partial_record_at_eof || framing_lost {
                             break;
                         }
@@ -444,7 +453,17 @@ impl WAL {
                     true
                 }
                 RECORD_TYPE_COMMIT => {
-                    if !self.read_and_apply_commit(&mut file, &mut commits, &mut pending, &mut apply_page, last_checkpoint_tx, &mut max_tx_id, &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof) {
+                    if !self.read_and_apply_commit(
+                        &mut file,
+                        &mut commits,
+                        &mut pending,
+                        &mut apply_page,
+                        last_checkpoint_tx,
+                        &mut max_tx_id,
+                        &mut framing_lost,
+                        &mut corrupt_records_skipped,
+                        &mut partial_record_at_eof,
+                    ) {
                         if partial_record_at_eof || framing_lost {
                             break;
                         }
@@ -459,7 +478,13 @@ impl WAL {
                     false
                 }
                 _ => {
-                    self.skip_unknown_record(&mut file, record_type[0], &mut framing_lost, &mut corrupt_records_skipped, &mut partial_record_at_eof);
+                    self.skip_unknown_record(
+                        &mut file,
+                        record_type[0],
+                        &mut framing_lost,
+                        &mut corrupt_records_skipped,
+                        &mut partial_record_at_eof,
+                    );
                     if partial_record_at_eof || framing_lost {
                         break;
                     }
@@ -557,18 +582,13 @@ impl WAL {
             }
 
             let stored_crc = u32::from_le_bytes(checksum_bytes);
-            let expected_crc = Self::compute_checksum_v2(
-                RECORD_TYPE_PAGE_UPDATE,
-                record_length as u16,
-                &payload,
-            );
+            let expected_crc =
+                Self::compute_checksum_v2(RECORD_TYPE_PAGE_UPDATE, record_length as u16, &payload);
             if expected_crc != stored_crc {
                 // Framing is intact (length was valid and fully consumed), so
                 // the next record can still be parsed: skip and continue.
                 *corrupt_records_skipped += 1;
-                tracing::warn!(
-                    "Skipping corrupt WAL page update record (checksum mismatch)"
-                );
+                tracing::warn!("Skipping corrupt WAL page update record (checksum mismatch)");
                 return false;
             }
 
@@ -578,7 +598,16 @@ impl WAL {
             let data = &payload[24..];
             *max_tx_id = (*max_tx_id).max(tx_id);
 
-            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_tx, tx_id, file_id, page_idx, data);
+            Self::handle_page_update(
+                commits,
+                pending,
+                apply_page,
+                last_checkpoint_tx,
+                tx_id,
+                file_id,
+                page_idx,
+                data,
+            );
             true
         } else {
             // v1 format: [type:1][crc32c:4][tx_id:8][file_id:8][page_idx:8][data:4096]
@@ -619,7 +648,16 @@ impl WAL {
             let page_idx = u64::from_le_bytes(page_idx_bytes);
             *max_tx_id = (*max_tx_id).max(tx_id);
 
-            Self::handle_page_update(commits, pending, apply_page, last_checkpoint_tx, tx_id, file_id, page_idx, &data);
+            Self::handle_page_update(
+                commits,
+                pending,
+                apply_page,
+                last_checkpoint_tx,
+                tx_id,
+                file_id,
+                page_idx,
+                &data,
+            );
             true
         }
     }
@@ -639,7 +677,10 @@ impl WAL {
         if commits.contains(&tx_id) && tx_id > last_checkpoint_tx {
             let _ = apply_page(file_id, page_idx, data);
         } else {
-            pending.entry(tx_id).or_default().push((file_id, page_idx, data.to_vec()));
+            pending
+                .entry(tx_id)
+                .or_default()
+                .push((file_id, page_idx, data.to_vec()));
         }
     }
 
@@ -701,11 +742,8 @@ impl WAL {
             }
 
             let stored_crc = u32::from_le_bytes(checksum_bytes);
-            let expected_crc = Self::compute_checksum_v2(
-                RECORD_TYPE_COMMIT,
-                record_length as u16,
-                &tx_id_bytes,
-            );
+            let expected_crc =
+                Self::compute_checksum_v2(RECORD_TYPE_COMMIT, record_length as u16, &tx_id_bytes);
             if expected_crc != stored_crc {
                 *corrupt_records_skipped += 1;
                 tracing::warn!("Skipping corrupt WAL commit record (checksum mismatch)");
@@ -825,16 +863,14 @@ impl WAL {
             *corrupt_records_skipped += 1;
             tracing::warn!(
                 "Skipping unknown WAL record type: {} ({} byte record)",
-                record_type_byte, 1 + WAL_LENGTH_SIZE + record_length
+                record_type_byte,
+                1 + WAL_LENGTH_SIZE + record_length
             );
         } else {
             // v1: no length prefix — advance one byte and retry.
             // This will produce one warning per byte of corrupted data,
             // which is noisy but the only option without record framing.
-            tracing::warn!(
-                "Skipping unknown WAL record type: {}",
-                record_type_byte
-            );
+            tracing::warn!("Skipping unknown WAL record type: {}", record_type_byte);
             *corrupt_records_skipped += 1;
         }
     }
@@ -908,7 +944,12 @@ impl WAL {
             };
 
             if start >= file_len {
-                return Ok(WALRecordIter { buf: Vec::new(), pos: 0, base_offset: start, version });
+                return Ok(WALRecordIter {
+                    buf: Vec::new(),
+                    pos: 0,
+                    base_offset: start,
+                    version,
+                });
             }
 
             file.seek(SeekFrom::Start(start))?;
@@ -921,7 +962,12 @@ impl WAL {
             (buf, start)
         };
 
-        Ok(WALRecordIter { buf, pos: 0, base_offset: start, version })
+        Ok(WALRecordIter {
+            buf,
+            pos: 0,
+            base_offset: start,
+            version,
+        })
     }
 }
 
@@ -959,14 +1005,17 @@ impl WALRecordIter {
 
                     if self.version >= 2 {
                         // v2: [type:1][length:2][crc32c:4][tx_id:8][file_id:8][page_idx:8][data:4096]
-                        let length_bytes: [u8; 2] = self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
+                        let length_bytes: [u8; 2] =
+                            self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
                         let record_length = u16::from_le_bytes(length_bytes);
 
                         let crc_start = self.pos + 1 + WAL_LENGTH_SIZE;
                         let payload_start = crc_start + WAL_CHECKSUM_SIZE;
 
                         let stored_crc = u32::from_le_bytes(
-                            self.buf[crc_start..crc_start + WAL_CHECKSUM_SIZE].try_into().ok()?
+                            self.buf[crc_start..crc_start + WAL_CHECKSUM_SIZE]
+                                .try_into()
+                                .ok()?,
                         );
 
                         // Validate the length matches expected page update size
@@ -983,15 +1032,20 @@ impl WALRecordIter {
                         }
 
                         let tx_id = u64::from_le_bytes(
-                            self.buf[payload_start..payload_start + 8].try_into().ok()?
+                            self.buf[payload_start..payload_start + 8].try_into().ok()?,
                         );
                         let file_id = u64::from_le_bytes(
-                            self.buf[payload_start + 8..payload_start + 16].try_into().ok()?
+                            self.buf[payload_start + 8..payload_start + 16]
+                                .try_into()
+                                .ok()?,
                         );
                         let page_idx = u64::from_le_bytes(
-                            self.buf[payload_start + 16..payload_start + 24].try_into().ok()?
+                            self.buf[payload_start + 16..payload_start + 24]
+                                .try_into()
+                                .ok()?,
                         );
-                        let data = self.buf[payload_start + 24..payload_start + 24 + PAGE_SIZE].to_vec();
+                        let data =
+                            self.buf[payload_start + 24..payload_start + 24 + PAGE_SIZE].to_vec();
 
                         let computed_crc = WAL::compute_checksum_v2(
                             RECORD_TYPE_PAGE_UPDATE,
@@ -1011,17 +1065,26 @@ impl WALRecordIter {
                         }
 
                         self.pos += needed;
-                        return Some(WALRecord::PageUpdate { tx_id, file_id, page_idx, data });
+                        return Some(WALRecord::PageUpdate {
+                            tx_id,
+                            file_id,
+                            page_idx,
+                            data,
+                        });
                     } else {
                         // v1: [type:1][crc32c:4][tx_id:8][file_id:8][page_idx:8][data:4096]
                         let off = self.pos + 1 + WAL_CHECKSUM_SIZE;
                         let stored_crc = u32::from_le_bytes(
-                            self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE].try_into().ok()?
+                            self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE]
+                                .try_into()
+                                .ok()?,
                         );
 
                         let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
-                        let file_id = u64::from_le_bytes(self.buf[off + 8..off + 16].try_into().ok()?);
-                        let page_idx = u64::from_le_bytes(self.buf[off + 16..off + 24].try_into().ok()?);
+                        let file_id =
+                            u64::from_le_bytes(self.buf[off + 8..off + 16].try_into().ok()?);
+                        let page_idx =
+                            u64::from_le_bytes(self.buf[off + 16..off + 24].try_into().ok()?);
                         let data_start = off + 24;
                         let data = self.buf[data_start..data_start + PAGE_SIZE].to_vec();
 
@@ -1043,7 +1106,12 @@ impl WALRecordIter {
                             });
                         }
 
-                        let record = WALRecord::PageUpdate { tx_id, file_id, page_idx, data };
+                        let record = WALRecord::PageUpdate {
+                            tx_id,
+                            file_id,
+                            page_idx,
+                            data,
+                        };
 
                         self.pos += needed;
                         return Some(record);
@@ -1061,14 +1129,17 @@ impl WALRecordIter {
 
                     if self.version >= 2 {
                         // v2: [type:1][length:2][crc32c:4][tx_id:8]
-                        let length_bytes: [u8; 2] = self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
+                        let length_bytes: [u8; 2] =
+                            self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
                         let record_length = u16::from_le_bytes(length_bytes);
 
                         let crc_start = self.pos + 1 + WAL_LENGTH_SIZE;
                         let payload_start = crc_start + WAL_CHECKSUM_SIZE;
 
                         let stored_crc = u32::from_le_bytes(
-                            self.buf[crc_start..crc_start + WAL_CHECKSUM_SIZE].try_into().ok()?
+                            self.buf[crc_start..crc_start + WAL_CHECKSUM_SIZE]
+                                .try_into()
+                                .ok()?,
                         );
 
                         // Validate the length matches expected commit size
@@ -1084,7 +1155,8 @@ impl WALRecordIter {
                             });
                         }
 
-                        let tx_id_bytes: [u8; 8] = self.buf[payload_start..payload_start + 8].try_into().ok()?;
+                        let tx_id_bytes: [u8; 8] =
+                            self.buf[payload_start..payload_start + 8].try_into().ok()?;
                         let tx_id = u64::from_le_bytes(tx_id_bytes);
 
                         let computed_crc = WAL::compute_checksum_v2(
@@ -1113,7 +1185,9 @@ impl WALRecordIter {
                         let tx_id = u64::from_le_bytes(self.buf[off..off + 8].try_into().ok()?);
 
                         let mut crc_bytes = [0u8; WAL_CHECKSUM_SIZE];
-                        crc_bytes.copy_from_slice(&self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE]);
+                        crc_bytes.copy_from_slice(
+                            &self.buf[self.pos + 1..self.pos + 1 + WAL_CHECKSUM_SIZE],
+                        );
                         let stored_crc = u32::from_le_bytes(crc_bytes);
 
                         let mut digest = CRC32C.digest();
@@ -1149,7 +1223,8 @@ impl WALRecordIter {
                         if self.pos + 1 + WAL_LENGTH_SIZE > self.buf.len() {
                             return None;
                         }
-                        let length_bytes: [u8; 2] = self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
+                        let length_bytes: [u8; 2] =
+                            self.buf[self.pos + 1..self.pos + 1 + 2].try_into().ok()?;
                         let record_length = u16::from_le_bytes(length_bytes) as usize;
                         let skip = record_length.min(MAX_SKIP_PER_CORRUPT_RECORD);
                         let total = 1 + WAL_LENGTH_SIZE + skip;
@@ -1296,13 +1371,15 @@ mod tests {
         }
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
         let mut applied: Vec<(u64, u64, Vec<u8>)> = Vec::new();
-        let report = wal.replay(
-            |fid, pid, data| {
-                applied.push((fid, pid, data.to_vec()));
-                Ok(())
-            },
-            0,
-        ).unwrap();
+        let report = wal
+            .replay(
+                |fid, pid, data| {
+                    applied.push((fid, pid, data.to_vec()));
+                    Ok(())
+                },
+                0,
+            )
+            .unwrap();
         assert_eq!(report.records_read, 2);
         assert_eq!(report.corrupt_records_skipped, 0);
         assert!(!report.partial_record_at_eof);
@@ -1321,10 +1398,15 @@ mod tests {
         }
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
         let mut applied = 0u64;
-        let report = wal.replay(
-            |_fid, _pid, _data| { applied += 1; Ok(()) },
-            1,
-        ).unwrap();
+        let report = wal
+            .replay(
+                |_fid, _pid, _data| {
+                    applied += 1;
+                    Ok(())
+                },
+                1,
+            )
+            .unwrap();
         assert_eq!(applied, 0);
         assert_eq!(report.records_read, 2);
     }
@@ -1365,7 +1447,8 @@ mod tests {
                 .unwrap();
             // Corrupt a byte in the first record's payload (skip header + type + length + crc)
             let v2_record_header = WAL_HEADER_SIZE + 1 + WAL_LENGTH_SIZE + WAL_CHECKSUM_SIZE;
-            f.seek(std::io::SeekFrom::Start(v2_record_header as u64 + 5)).unwrap();
+            f.seek(std::io::SeekFrom::Start(v2_record_header as u64 + 5))
+                .unwrap();
             f.write_all(&[0xFF]).unwrap();
         }
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
@@ -1515,9 +1598,13 @@ mod tests {
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
         let mut applied = Vec::new();
         wal.replay(
-            |fid, pid, data| { applied.push((fid, pid, data.to_vec())); Ok(()) },
+            |fid, pid, data| {
+                applied.push((fid, pid, data.to_vec()));
+                Ok(())
+            },
             0,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0], (1, 100, vec![0x11u8; PAGE_SIZE]));
     }
@@ -1583,10 +1670,15 @@ mod tests {
         assert_eq!(wal.wal_version, WAL_VERSION_V1);
 
         let mut applied = Vec::new();
-        let report = wal.replay(
-            |fid, pid, data| { applied.push((fid, pid, data.to_vec())); Ok(()) },
-            0,
-        ).unwrap();
+        let report = wal
+            .replay(
+                |fid, pid, data| {
+                    applied.push((fid, pid, data.to_vec()));
+                    Ok(())
+                },
+                0,
+            )
+            .unwrap();
         assert_eq!(report.records_read, 2);
         assert_eq!(report.corrupt_records_skipped, 0);
         assert_eq!(applied.len(), 1);
@@ -1619,7 +1711,8 @@ mod tests {
             f.write_all(&length.to_le_bytes()).unwrap();
             // Deliberately wrong CRC (computed over different data)
             f.write_all(&0xDEADBEEFu32.to_le_bytes()).unwrap();
-            f.write_all(&vec![0x42u8; PAGE_UPDATE_PAYLOAD_SIZE]).unwrap();
+            f.write_all(&vec![0x42u8; PAGE_UPDATE_PAYLOAD_SIZE])
+                .unwrap();
         }
 
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
@@ -1667,9 +1760,11 @@ mod tests {
         let wal_path = dir.path().join("wal.ltng");
         {
             let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
-            wal.log_page_update(1, 7, 1, &vec![0x11u8; PAGE_SIZE]).unwrap();
+            wal.log_page_update(1, 7, 1, &vec![0x11u8; PAGE_SIZE])
+                .unwrap();
             wal.log_commit(1).unwrap();
-            wal.log_page_update(2, 7, 2, &vec![0x22u8; PAGE_SIZE]).unwrap();
+            wal.log_page_update(2, 7, 2, &vec![0x22u8; PAGE_SIZE])
+                .unwrap();
             wal.log_commit(2).unwrap();
         }
         // Corrupt the first page-update record's CRC (which follows the record
@@ -1724,7 +1819,10 @@ mod tests {
 
         let wal = WAL::new(dir.path(), SyncMode::Off).unwrap();
         let report = wal.replay(|_, _, _| Ok(()), 0).unwrap();
-        assert!(report.framing_lost, "corrupt commit length must lose framing");
+        assert!(
+            report.framing_lost,
+            "corrupt commit length must lose framing"
+        );
     }
 
     #[test]

@@ -120,16 +120,21 @@ impl PhysicalDDL {
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
-    pub fn new_drop(name: String, if_exists: bool, db: Arc<Database>, undo_buffer: Arc<UndoBuffer>) -> Self {
+    pub fn new_drop(
+        name: String,
+        if_exists: bool,
+        db: Arc<Database>,
+        undo_buffer: Arc<UndoBuffer>,
+    ) -> Self {
         Self {
             action: DDLAction::DropTable(name, if_exists),
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
     pub fn new_create_sequence(
@@ -148,7 +153,7 @@ impl PhysicalDDL {
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
     pub fn new_create_macro(
@@ -174,7 +179,11 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::CreateConstraint { name, table_name, property },
+            action: DDLAction::CreateConstraint {
+                name,
+                table_name,
+                property,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
@@ -202,18 +211,18 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::CreateIndex { name, table_name, property },
+            action: DDLAction::CreateIndex {
+                name,
+                table_name,
+                property,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn new_drop_index(
-        name: String,
-        db: Arc<Database>,
-        undo_buffer: Arc<UndoBuffer>,
-    ) -> Self {
+    pub fn new_drop_index(name: String, db: Arc<Database>, undo_buffer: Arc<UndoBuffer>) -> Self {
         Self {
             action: DDLAction::DropIndex(name),
             db,
@@ -230,7 +239,11 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::CreateVectorIndex { table_name, metric, dimension },
+            action: DDLAction::CreateVectorIndex {
+                table_name,
+                metric,
+                dimension,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
@@ -258,11 +271,15 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::AlterAddColumn { table_name, col_name, data_type },
+            action: DDLAction::AlterAddColumn {
+                table_name,
+                col_name,
+                data_type,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
     pub fn new_alter_drop_column(
@@ -272,11 +289,14 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::AlterDropColumn { table_name, col_name },
+            action: DDLAction::AlterDropColumn {
+                table_name,
+                col_name,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
     pub fn new_alter_rename_table(
@@ -290,7 +310,7 @@ impl PhysicalDDL {
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 
     pub fn new_alter_rename_column(
@@ -301,11 +321,15 @@ impl PhysicalDDL {
         undo_buffer: Arc<UndoBuffer>,
     ) -> Self {
         Self {
-            action: DDLAction::AlterRenameColumn { table_name, old_name, new_name },
+            action: DDLAction::AlterRenameColumn {
+                table_name,
+                old_name,
+                new_name,
+            },
             db,
             undo_buffer,
             executed: Arc::new(AtomicBool::new(false)),
-    }
+        }
     }
 }
 
@@ -491,7 +515,9 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
             DDLAction::DropConstraint(name) => {
                 let mut catalog = database.catalog.write();
                 // Capture constraint info before removing for undo
-                let constraint_info = catalog.node_tables.values()
+                let constraint_info = catalog
+                    .node_tables
+                    .values()
                     .flat_map(|t| t.constraints.iter().map(move |c| (t.name.clone(), c)))
                     .find(|(_, c)| c.name == *name)
                     .map(|(table_name, c)| (table_name, c.property.clone()));
@@ -511,15 +537,18 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 property,
             } => {
                 fn sanitize(s: &str) -> String {
-                    s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
+                    s.chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                        .collect()
                 }
                 let mut storage = database.storage_manager.write();
                 let safe_name = sanitize(name);
                 let safe_table = sanitize(table_name);
-                let index_path = database._path.join(format!("{safe_table}_{safe_name}_idx.ltng"));
-                let index = crate::storage::index::hash_index::HashIndex::open_or_create(
-                    &index_path,
-                )?;
+                let index_path = database
+                    ._path
+                    .join(format!("{safe_table}_{safe_name}_idx.ltng"));
+                let index =
+                    crate::storage::index::hash_index::HashIndex::open_or_create(&index_path)?;
                 storage.indexes.insert(name.clone(), Arc::new(index));
                 {
                     let mut cat = database.catalog.write();
@@ -545,7 +574,15 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     let mut table = None;
                     let mut property = None;
                     for entry in cat.node_tables.values() {
-                        if let Some(found_name) = entry.secondary_indexes.iter().find_map(|(k, v)| if v == name { Some((k.clone(), v.clone())) } else { None }) {
+                        if let Some(found_name) =
+                            entry.secondary_indexes.iter().find_map(|(k, v)| {
+                                if v == name {
+                                    Some((k.clone(), v.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                        {
                             table = Some(entry.name.clone());
                             property = Some(found_name.0);
                             break;
@@ -556,7 +593,9 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 {
                     let mut cat = database.catalog.write();
                     for entry in cat.node_tables.values_mut() {
-                        entry.secondary_indexes.retain(|_, idx_name| idx_name != name);
+                        entry
+                            .secondary_indexes
+                            .retain(|_, idx_name| idx_name != name);
                     }
                     database.catalog.mark_dirty();
                 }
@@ -580,11 +619,17 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                 storage.create_fts_index(table_name)?;
                 database.catalog.mark_dirty();
             }
-            DDLAction::AlterAddColumn { table_name, col_name, data_type } => {
+            DDLAction::AlterAddColumn {
+                table_name,
+                col_name,
+                data_type,
+            } => {
                 let mut catalog = database.catalog.write();
                 let mut storage = database.storage_manager.write();
                 storage.add_column_to_table(table_name, col_name, data_type.clone())?;
-                if let Err(e) = catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone()) {
+                if let Err(e) =
+                    catalog.add_column_to_table(table_name, col_name.clone(), data_type.clone())
+                {
                     storage.remove_column_from_table(table_name, col_name).ok();
                     return Err(e);
                 }
@@ -594,7 +639,10 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     col_name: col_name.clone(),
                 });
             }
-            DDLAction::AlterDropColumn { table_name, col_name } => {
+            DDLAction::AlterDropColumn {
+                table_name,
+                col_name,
+            } => {
                 let mut catalog = database.catalog.write();
                 let mut storage = database.storage_manager.write();
                 storage.remove_column_from_table(table_name, col_name)?;
@@ -627,7 +675,11 @@ impl crate::processor::PhysicalOperator for PhysicalDDL {
                     new_name: new_name.clone(),
                 });
             }
-            DDLAction::AlterRenameColumn { table_name, old_name, new_name } => {
+            DDLAction::AlterRenameColumn {
+                table_name,
+                old_name,
+                new_name,
+            } => {
                 let mut catalog = database.catalog.write();
                 catalog.rename_column_in_table(table_name, old_name, new_name)?;
                 {

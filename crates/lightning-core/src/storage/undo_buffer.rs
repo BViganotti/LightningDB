@@ -102,7 +102,11 @@ impl UndoBuffer {
                     let fts_dir = db._path.join(format!("{name}_fts"));
                     {
                         let storage = db.storage_manager.read();
-                        if let Some(table) = storage.node_tables.get(&name).or_else(|| storage.rel_tables.get(&name)) {
+                        if let Some(table) = storage
+                            .node_tables
+                            .get(&name)
+                            .or_else(|| storage.rel_tables.get(&name))
+                        {
                             Self::collect_column_paths(&table.columns, &mut paths_to_delete);
                         }
                         if storage.fwd_csr.contains_key(&name) {
@@ -132,7 +136,11 @@ impl UndoBuffer {
                     let fts_dir = db._path.join(format!("{name}_fts"));
                     {
                         let storage = db.storage_manager.read();
-                        if let Some(table) = storage.node_tables.get(&name).or_else(|| storage.rel_tables.get(&name)) {
+                        if let Some(table) = storage
+                            .node_tables
+                            .get(&name)
+                            .or_else(|| storage.rel_tables.get(&name))
+                        {
                             Self::collect_column_paths(&table.columns, &mut paths_to_delete);
                         }
                         if storage.fwd_csr.contains_key(&name) {
@@ -190,24 +198,45 @@ impl UndoBuffer {
                         }
                     }
                 }
-                UndoRecord::AlterAddColumn { table_name, col_name } => {
+                UndoRecord::AlterAddColumn {
+                    table_name,
+                    col_name,
+                } => {
                     let mut catalog = db.catalog.write();
                     if let Err(e) = catalog.remove_column_from_table(&table_name, &col_name) {
-                        tracing::error!("Rollback AlterAddColumn: failed to remove column from catalog: {}", e);
+                        tracing::error!(
+                            "Rollback AlterAddColumn: failed to remove column from catalog: {}",
+                            e
+                        );
                     }
                     let mut storage = db.storage_manager.write();
                     if let Err(e) = storage.remove_column_from_table(&table_name, &col_name) {
-                        tracing::error!("Rollback AlterAddColumn: failed to remove column from storage: {}", e);
+                        tracing::error!(
+                            "Rollback AlterAddColumn: failed to remove column from storage: {}",
+                            e
+                        );
                     }
                 }
-                UndoRecord::AlterDropColumn { table_name, col_name, col_type } => {
+                UndoRecord::AlterDropColumn {
+                    table_name,
+                    col_name,
+                    col_type,
+                } => {
                     let mut catalog = db.catalog.write();
-                    if let Err(e) = catalog.add_column_to_table(&table_name, col_name.clone(), col_type.clone()) {
-                        tracing::error!("Rollback AlterDropColumn: failed to add column to catalog: {}", e);
+                    if let Err(e) =
+                        catalog.add_column_to_table(&table_name, col_name.clone(), col_type.clone())
+                    {
+                        tracing::error!(
+                            "Rollback AlterDropColumn: failed to add column to catalog: {}",
+                            e
+                        );
                     }
                     let mut storage = db.storage_manager.write();
                     if let Err(e) = storage.add_column_to_table(&table_name, &col_name, col_type) {
-                        tracing::error!("Rollback AlterDropColumn: failed to add column to storage: {}", e);
+                        tracing::error!(
+                            "Rollback AlterDropColumn: failed to add column to storage: {}",
+                            e
+                        );
                     }
                 }
                 UndoRecord::AlterRenameTable { old_name, new_name } => {
@@ -230,10 +259,19 @@ impl UndoBuffer {
                         storage.rel_tables.insert(old_name.clone(), entry);
                     }
                 }
-                UndoRecord::AlterRenameColumn { table_name, old_name, new_name } => {
+                UndoRecord::AlterRenameColumn {
+                    table_name,
+                    old_name,
+                    new_name,
+                } => {
                     let mut catalog = db.catalog.write();
-                    if let Err(e) = catalog.rename_column_in_table(&table_name, &new_name, &old_name) {
-                        tracing::error!("Rollback AlterRenameColumn: failed to rename column in catalog: {}", e);
+                    if let Err(e) =
+                        catalog.rename_column_in_table(&table_name, &new_name, &old_name)
+                    {
+                        tracing::error!(
+                            "Rollback AlterRenameColumn: failed to rename column in catalog: {}",
+                            e
+                        );
                     }
                     let mut storage = db.storage_manager.write();
                     let table = if storage.node_tables.contains_key(&table_name) {
@@ -263,7 +301,11 @@ impl UndoBuffer {
                         table.constraints.retain(|c| c.name != name);
                     }
                 }
-                UndoRecord::DropConstraint { name, table_name, property } => {
+                UndoRecord::DropConstraint {
+                    name,
+                    table_name,
+                    property,
+                } => {
                     // Re-add the constraint that was dropped
                     let mut catalog = db.catalog.write();
                     if let Some(table) = catalog.node_tables.get_mut(&table_name) {
@@ -284,7 +326,11 @@ impl UndoBuffer {
                     let mut storage = db.storage_manager.write();
                     storage.indexes.remove(&name);
                     if let Err(e) = std::fs::remove_file(&index_path) {
-                        tracing::error!("Rollback CreateIndex: failed to remove index file {}: {}", index_path.display(), e);
+                        tracing::error!(
+                            "Rollback CreateIndex: failed to remove index file {}: {}",
+                            index_path.display(),
+                            e
+                        );
                     }
                     drop(storage);
                     {
@@ -295,19 +341,30 @@ impl UndoBuffer {
                         db.catalog.mark_dirty();
                     }
                 }
-                UndoRecord::DropIndex { name, table_name, property } => {
+                UndoRecord::DropIndex {
+                    name,
+                    table_name,
+                    property,
+                } => {
                     let mut storage = db.storage_manager.write();
                     fn sanitize(s: &str) -> String {
-                        s.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
+                        s.chars()
+                            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                            .collect()
                     }
                     let safe_name = sanitize(&name);
                     let index_path = db._path.join(format!("{safe_name}_idx.ltng"));
-                    match crate::storage::index::hash_index::HashIndex::open_or_create(&index_path) {
+                    match crate::storage::index::hash_index::HashIndex::open_or_create(&index_path)
+                    {
                         Ok(index) => {
                             storage.indexes.insert(name.clone(), Arc::new(index));
                         }
                         Err(e) => {
-                            tracing::error!("Rollback DropIndex: failed to re-create index '{}': {}", name, e);
+                            tracing::error!(
+                                "Rollback DropIndex: failed to re-create index '{}': {}",
+                                name,
+                                e
+                            );
                         }
                     }
                     drop(storage);
@@ -392,26 +449,35 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig {
-            buffer_pool_size: 64 * 1024 * 1024,
-            prefetch_enabled: false,
-            vacuum_interval_ms: 86_400_000_000,
-            ..Default::default()
-        }).unwrap();
+        let db = Database::new(
+            dir.path(),
+            SystemConfig {
+                buffer_pool_size: 64 * 1024 * 1024,
+                prefetch_enabled: false,
+                vacuum_interval_ms: 86_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let tx = db.transaction_manager.begin(false).unwrap();
 
         // Create a table, then undo it via CreateNodeTable rollback
         let undo = UndoBuffer::new();
-        undo.push(UndoRecord::CreateNodeTable("rollback_test_table".to_string()));
+        undo.push(UndoRecord::CreateNodeTable(
+            "rollback_test_table".to_string(),
+        ));
 
         // Manually create the table first (simulating what the executor does before recording undo)
-        db.storage_manager.write().create_table(
-            "rollback_test_table".to_string(),
-            vec![("id".to_string(), lightning_types::LogicalType::Int64)],
-            false,
-            None,
-        ).unwrap();
+        db.storage_manager
+            .write()
+            .create_table(
+                "rollback_test_table".to_string(),
+                vec![("id".to_string(), lightning_types::LogicalType::Int64)],
+                false,
+                None,
+            )
+            .unwrap();
         db.catalog.write().node_tables.insert(
             "rollback_test_table".to_string(),
             NodeTableCatalogEntry {
@@ -430,14 +496,26 @@ mod tests {
         );
 
         // Verify table exists
-        assert!(db.storage_manager.read().node_tables.contains_key("rollback_test_table"));
+        assert!(db
+            .storage_manager
+            .read()
+            .node_tables
+            .contains_key("rollback_test_table"));
 
         // Rollback should remove the table
         undo.rollback(&db, tx.tx_id).unwrap();
 
         // After rollback, the table should be gone from both catalog and storage
-        assert!(!db.storage_manager.read().node_tables.contains_key("rollback_test_table"));
-        assert!(!db.catalog.read().node_tables.contains_key("rollback_test_table"));
+        assert!(!db
+            .storage_manager
+            .read()
+            .node_tables
+            .contains_key("rollback_test_table"));
+        assert!(!db
+            .catalog
+            .read()
+            .node_tables
+            .contains_key("rollback_test_table"));
     }
 
     #[test]
@@ -449,12 +527,16 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig {
-            buffer_pool_size: 64 * 1024 * 1024,
-            prefetch_enabled: false,
-            vacuum_interval_ms: 86_400_000_000,
-            ..Default::default()
-        }).unwrap();
+        let db = Database::new(
+            dir.path(),
+            SystemConfig {
+                buffer_pool_size: 64 * 1024 * 1024,
+                prefetch_enabled: false,
+                vacuum_interval_ms: 86_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let tx = db.transaction_manager.begin(false).unwrap();
 
@@ -462,12 +544,15 @@ mod tests {
         undo.push(UndoRecord::CreateRelTable("rollback_rel_test".to_string()));
 
         // Create table in storage + catalog
-        db.storage_manager.write().create_table(
-            "rollback_rel_test".to_string(),
-            vec![("from".to_string(), lightning_types::LogicalType::Uint64)],
-            true,
-            None,
-        ).unwrap();
+        db.storage_manager
+            .write()
+            .create_table(
+                "rollback_rel_test".to_string(),
+                vec![("from".to_string(), lightning_types::LogicalType::Uint64)],
+                true,
+                None,
+            )
+            .unwrap();
         db.catalog.write().rel_tables.insert(
             "rollback_rel_test".to_string(),
             RelTableCatalogEntry {
@@ -484,12 +569,24 @@ mod tests {
             },
         );
 
-        assert!(db.storage_manager.read().rel_tables.contains_key("rollback_rel_test"));
+        assert!(db
+            .storage_manager
+            .read()
+            .rel_tables
+            .contains_key("rollback_rel_test"));
 
         undo.rollback(&db, tx.tx_id).unwrap();
 
-        assert!(!db.storage_manager.read().rel_tables.contains_key("rollback_rel_test"));
-        assert!(!db.catalog.read().rel_tables.contains_key("rollback_rel_test"));
+        assert!(!db
+            .storage_manager
+            .read()
+            .rel_tables
+            .contains_key("rollback_rel_test"));
+        assert!(!db
+            .catalog
+            .read()
+            .rel_tables
+            .contains_key("rollback_rel_test"));
     }
 
     #[test]
@@ -499,12 +596,16 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig {
-            buffer_pool_size: 64 * 1024 * 1024,
-            prefetch_enabled: false,
-            vacuum_interval_ms: 86_400_000_000,
-            ..Default::default()
-        }).unwrap();
+        let db = Database::new(
+            dir.path(),
+            SystemConfig {
+                buffer_pool_size: 64 * 1024 * 1024,
+                prefetch_enabled: false,
+                vacuum_interval_ms: 86_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let tx = db.transaction_manager.begin(false).unwrap();
         let undo = UndoBuffer::new();
@@ -522,12 +623,16 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
-        let db = Database::new(dir.path(), SystemConfig {
-            buffer_pool_size: 64 * 1024 * 1024,
-            prefetch_enabled: false,
-            vacuum_interval_ms: 86_400_000_000,
-            ..Default::default()
-        }).unwrap();
+        let db = Database::new(
+            dir.path(),
+            SystemConfig {
+                buffer_pool_size: 64 * 1024 * 1024,
+                prefetch_enabled: false,
+                vacuum_interval_ms: 86_400_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let tx = db.transaction_manager.begin(false).unwrap();
         let entry = NodeTableCatalogEntry {
@@ -567,7 +672,11 @@ mod tests {
     #[test]
     fn test_undo_buffer_serialization() {
         let ub = UndoBuffer::new();
-        ub.push(UndoRecord::UpdateColumn("t".into(), 42, Value::Number(3.14)));
+        ub.push(UndoRecord::UpdateColumn(
+            "t".into(),
+            42,
+            Value::Number(3.14),
+        ));
         ub.push(UndoRecord::CreateNodeTable("test_table".into()));
         ub.push(UndoRecord::DeleteNode("t".into(), 99));
         assert_eq!(ub.records.lock().len(), 3);

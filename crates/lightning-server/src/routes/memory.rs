@@ -8,10 +8,9 @@ use crate::models::request::{
     RecallRecentRequest, RecallRequest, StoreBatchRequest, StoreRequest,
 };
 use crate::models::response::{
-    ApiResponse, ConsolidationReportResponse, ContradictionDetailResponse,
-    DecayResponse, EntitiesResponse, EntityHistoryResponse, EntityItem,
-    ForgetResponse, LinkDetailResponse, RecallResponse, ResponseMeta,
-    SearchResultItem, StoreBatchResponse,
+    ApiResponse, ConsolidationReportResponse, ContradictionDetailResponse, DecayResponse,
+    EntitiesResponse, EntityHistoryResponse, EntityItem, ForgetResponse, LinkDetailResponse,
+    RecallResponse, ResponseMeta, SearchResultItem, StoreBatchResponse,
 };
 
 fn entity_to_item(e: &MemoryEntity) -> EntityItem {
@@ -284,9 +283,9 @@ pub async fn consolidate_handler(
         || req.max_comparisons_per_entity.is_some()
     {
         Some(lightning_core::memory::ConsolidationConfig {
-            similarity_threshold: req.similarity_threshold.ok_or_else(|| {
-                AppError::BadRequest("similarity_threshold is required".into())
-            })?,
+            similarity_threshold: req
+                .similarity_threshold
+                .ok_or_else(|| AppError::BadRequest("similarity_threshold is required".into()))?,
             contradiction_jaccard_max: req.contradiction_jaccard_max.ok_or_else(|| {
                 AppError::BadRequest("contradiction_jaccard_max is required".into())
             })?,
@@ -322,22 +321,30 @@ pub async fn consolidate_handler(
 
     let (links, contradictions) = match report.details {
         Some(d) => {
-            let l: Vec<LinkDetailResponse> = d.links.into_iter().map(|ld| LinkDetailResponse {
-                source_id: ld.source_id,
-                target_id: ld.target_id,
-                rel_type: ld.rel_type,
-                score: ld.score,
-                reason: ld.reason,
-            }).collect();
-            let c: Vec<ContradictionDetailResponse> = d.contradictions.into_iter().map(|cd| ContradictionDetailResponse {
-                entity_id: cd.entity_id,
-                source_id: cd.source_id,
-                target_id: cd.target_id,
-                fields: cd.fields,
-                cosine_sim: cd.cosine_sim,
-                jaccard_sim: cd.jaccard_sim,
-                reason: cd.reason,
-            }).collect();
+            let l: Vec<LinkDetailResponse> = d
+                .links
+                .into_iter()
+                .map(|ld| LinkDetailResponse {
+                    source_id: ld.source_id,
+                    target_id: ld.target_id,
+                    rel_type: ld.rel_type,
+                    score: ld.score,
+                    reason: ld.reason,
+                })
+                .collect();
+            let c: Vec<ContradictionDetailResponse> = d
+                .contradictions
+                .into_iter()
+                .map(|cd| ContradictionDetailResponse {
+                    entity_id: cd.entity_id,
+                    source_id: cd.source_id,
+                    target_id: cd.target_id,
+                    fields: cd.fields,
+                    cosine_sim: cd.cosine_sim,
+                    jaccard_sim: cd.jaccard_sim,
+                    reason: cd.reason,
+                })
+                .collect();
             (Some(l), Some(c))
         }
         None => (None, None),

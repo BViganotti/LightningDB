@@ -43,7 +43,8 @@ impl CompressionAlg for DictCompression {
         if dst.len() < 4 + dict.len() * element_size + 32 {
             return Err(crate::LightningError::Internal(format!(
                 "Dict compress: dst buffer too small ({} bytes needed, {} available)",
-                4 + dict.len() * element_size + 32, dst.len()
+                4 + dict.len() * element_size + 32,
+                dst.len()
             )));
         }
 
@@ -86,7 +87,9 @@ impl CompressionAlg for DictCompression {
 
         let dict_count = {
             if src.len() < 4 {
-                return Err(LightningError::Internal("Dict decompress: src too short for header".into()));
+                return Err(LightningError::Internal(
+                    "Dict decompress: src too short for header".into(),
+                ));
             }
             let mut bytes = [0u8; 4];
             bytes.copy_from_slice(&src[..4]);
@@ -104,7 +107,8 @@ impl CompressionAlg for DictCompression {
         if dict_end > src.len() {
             return Err(LightningError::Internal(format!(
                 "Dict decompress: dict entries exceed src length (dict_end={}, src_len={})",
-                dict_end, src.len()
+                dict_end,
+                src.len()
             )));
         }
 

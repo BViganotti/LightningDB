@@ -1,7 +1,7 @@
 {
   "name": "@lightningDB/client",
   "version": "0.1.0",
-  "description": "HTTP client SDK for LightningDB — graph+vector+RAG database for AI agent memory",
+  "description": "TypeScript HTTP client SDK for LightningDB — a graph+vector database with Cypher, MVCC, and full-text search",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -26,11 +26,11 @@
     "database",
     "graph",
     "vector",
-    "rag",
-    "memory",
-    "ai"
+    "database",
+    "cypher",
+    "mvcc"
   ],
-  "license": "BUSL-1.1",
+  "license": "MIT",
   "dependencies": {
     "uuid": "^9.0.0"
   },

@@ -27,8 +27,7 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Result<&'a str, crate::Lightni
 }
 
 fn c_string_from_str(s: &str) -> Result<CString, crate::LightningError> {
-    CString::new(s)
-        .map_err(|_| crate::LightningError::Internal("string contains null byte".into()))
+    CString::new(s).map_err(|_| crate::LightningError::Internal("string contains null byte".into()))
 }
 
 #[no_mangle]

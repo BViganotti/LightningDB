@@ -17,36 +17,36 @@ pub fn arrow_row_to_json(batch: &RecordBatch, row_idx: usize) -> serde_json::Val
             serde_json::Value::Null
         } else {
             match arr.data_type() {
-                DataType::Int64 => {
-                    arr.as_any().downcast_ref::<Int64Array>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
-                DataType::UInt64 => {
-                    arr.as_any().downcast_ref::<UInt64Array>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
-                DataType::Float32 => {
-                    arr.as_any().downcast_ref::<Float32Array>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
-                DataType::Float64 => {
-                    arr.as_any().downcast_ref::<Float64Array>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
-                DataType::Boolean => {
-                    arr.as_any().downcast_ref::<BooleanArray>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
-                DataType::Utf8 | DataType::LargeUtf8 => {
-                    arr.as_any().downcast_ref::<StringArray>()
-                        .map(|c| serde_json::json!(c.value(row_idx)))
-                        .unwrap_or(serde_json::Value::Null)
-                }
+                DataType::Int64 => arr
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
+                DataType::UInt64 => arr
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
+                DataType::Float32 => arr
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
+                DataType::Float64 => arr
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
+                DataType::Boolean => arr
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
+                DataType::Utf8 | DataType::LargeUtf8 => arr
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .map(|c| serde_json::json!(c.value(row_idx)))
+                    .unwrap_or(serde_json::Value::Null),
                 _ => {
                     // Fallback: try StringArray
                     if let Some(c) = arr.as_any().downcast_ref::<StringArray>() {

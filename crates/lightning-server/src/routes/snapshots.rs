@@ -56,7 +56,6 @@ pub async fn snapshots_handler(
 fn iso_from_micros(micros: i64) -> String {
     let secs = micros / 1_000_000;
     let nanos = ((micros % 1_000_000) * 1_000) as u32;
-    let d = chrono::DateTime::from_timestamp(secs, nanos)
-        .unwrap_or_default();
+    let d = chrono::DateTime::from_timestamp(secs, nanos).unwrap_or_default();
     d.to_rfc3339()
 }

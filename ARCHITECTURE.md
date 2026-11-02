@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lightning is a **columnar, graph-native database server** with built-in vector search, full-text search, and AI agent memory capabilities. It runs as a standalone HTTP server or Docker container.
+Lightning is a **columnar, graph-native database server** with built-in vector search, full-text search, and an optional high-level memory API. It runs as a standalone HTTP server or Docker container.
 
 ## Crate Map
 
@@ -145,7 +145,7 @@ B-tree-like index for primary key lookups. Maps key → row_id.
 - **Hybrid**: Reciprocal Rank Fusion (RRF) with configurable k
 - **Trigram**: n-gram index for substring/fuzzy matching
 
-## AI Agent Memory Features
+## Memory API (Optional)
 
 ### MemoryStore API
 High-level Rust/Python API for agent memory:

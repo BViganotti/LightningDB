@@ -225,15 +225,13 @@ impl FilterPushDown {
     }
 
     fn rebuild_conjuncts(conjuncts: Vec<BoundExpression>) -> Option<BoundExpression> {
-        conjuncts
-            .into_iter()
-            .reduce(|acc, conjunct| {
-                BoundExpression::Logical(
-                    Box::new(acc),
-                    crate::parser::ast::LogicalOperator::And,
-                    Box::new(conjunct),
-                )
-            })
+        conjuncts.into_iter().reduce(|acc, conjunct| {
+            BoundExpression::Logical(
+                Box::new(acc),
+                crate::parser::ast::LogicalOperator::And,
+                Box::new(conjunct),
+            )
+        })
     }
 
     fn push_down(&self, plan: LogicalOperator) -> Result<LogicalOperator> {
@@ -253,13 +251,11 @@ impl FilterPushDown {
                         scan_vars.insert(var.clone());
                         if condition_vars.is_subset(&scan_vars) {
                             let new_filter = match filter {
-                                Some(existing) => {
-                                    BoundExpression::Logical(
-                                        Box::new(existing),
-                                        crate::parser::ast::LogicalOperator::And,
-                                        Box::new(condition),
-                                    )
-                                }
+                                Some(existing) => BoundExpression::Logical(
+                                    Box::new(existing),
+                                    crate::parser::ast::LogicalOperator::And,
+                                    Box::new(condition),
+                                ),
                                 None => condition,
                             };
                             Ok(LogicalOperator::Scan(
@@ -272,7 +268,9 @@ impl FilterPushDown {
                         } else {
                             // Can't push into this scan — keep filter above
                             Ok(LogicalOperator::Filter(
-                                Box::new(LogicalOperator::Scan(table, var, mask, projected, filter)),
+                                Box::new(LogicalOperator::Scan(
+                                    table, var, mask, projected, filter,
+                                )),
                                 condition,
                             ))
                         }
@@ -302,12 +300,8 @@ impl FilterPushDown {
                             }
                         }
 
-                        let left = if let Some(left_cond) =
-                            Self::rebuild_conjuncts(left_pushable)
-                        {
-                            Box::new(
-                                self.push_down(LogicalOperator::Filter(left, left_cond))?,
-                            )
+                        let left = if let Some(left_cond) = Self::rebuild_conjuncts(left_pushable) {
+                            Box::new(self.push_down(LogicalOperator::Filter(left, left_cond))?)
                         } else {
                             left
                         };
@@ -315,9 +309,7 @@ impl FilterPushDown {
                         let right = if let Some(right_cond) =
                             Self::rebuild_conjuncts(right_pushable)
                         {
-                            Box::new(
-                                self.push_down(LogicalOperator::Filter(right, right_cond))?,
-                            )
+                            Box::new(self.push_down(LogicalOperator::Filter(right, right_cond))?)
                         } else {
                             right
                         };

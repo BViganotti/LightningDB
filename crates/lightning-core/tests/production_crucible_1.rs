@@ -8,10 +8,7 @@
 ///
 /// Failures here indicate real production-blocking bugs. Every test
 /// is self-contained and verifies data integrity invariants.
-
-use lightning_core::memory::{
-    ConsolidationConfig, MemoryEntity, MemoryStore, RagConfig,
-};
+use lightning_core::memory::{ConsolidationConfig, MemoryEntity, MemoryStore, RagConfig};
 use lightning_core::{Database, SystemConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -63,11 +60,18 @@ fn crucible_memory_crud_lifecycle() -> TestResult {
     let (_dir, _db, store) = setup_store()?;
 
     // CREATE
-    let e = make_entity("user_42", "user", "Alice likes hiking and Python", make_embedding(1.0, 384));
+    let e = make_entity(
+        "user_42",
+        "user",
+        "Alice likes hiking and Python",
+        make_embedding(1.0, 384),
+    );
     store.store(e)?;
 
     // READ via get
-    let got = store.get("user_42")?.expect("entity should exist after store");
+    let got = store
+        .get("user_42")?
+        .expect("entity should exist after store");
     assert_eq!(got.id, "user_42", "id mismatch");
     assert_eq!(got.entity_type, "user", "type mismatch");
     assert!(got.content.contains("hiking"), "content mismatch");
@@ -109,11 +113,36 @@ fn crucible_hybrid_search_recall() -> TestResult {
 
     // Store varied entities
     let entities = vec![
-        make_entity("doc_python", "document", "Python is a programming language used for data science and web development", make_embedding(0.1, 384)),
-        make_entity("doc_rust", "document", "Rust is a systems programming language focused on safety and performance", make_embedding(0.5, 384)),
-        make_entity("doc_javascript", "document", "JavaScript powers interactive web pages and is used in browsers worldwide", make_embedding(0.9, 384)),
-        make_entity("doc_cpp", "document", "C++ is a high-performance language used in games and systems programming", make_embedding(1.3, 384)),
-        make_entity("doc_go", "document", "Go is a compiled language designed for concurrency at Google", make_embedding(1.7, 384)),
+        make_entity(
+            "doc_python",
+            "document",
+            "Python is a programming language used for data science and web development",
+            make_embedding(0.1, 384),
+        ),
+        make_entity(
+            "doc_rust",
+            "document",
+            "Rust is a systems programming language focused on safety and performance",
+            make_embedding(0.5, 384),
+        ),
+        make_entity(
+            "doc_javascript",
+            "document",
+            "JavaScript powers interactive web pages and is used in browsers worldwide",
+            make_embedding(0.9, 384),
+        ),
+        make_entity(
+            "doc_cpp",
+            "document",
+            "C++ is a high-performance language used in games and systems programming",
+            make_embedding(1.3, 384),
+        ),
+        make_entity(
+            "doc_go",
+            "document",
+            "Go is a compiled language designed for concurrency at Google",
+            make_embedding(1.7, 384),
+        ),
     ];
     for e in entities {
         store.store(e)?;
@@ -122,23 +151,52 @@ fn crucible_hybrid_search_recall() -> TestResult {
     // FTS-dominant search: text query "programming language"
     let fts_results = store.recall("programming language", &[], 3)?;
     assert!(!fts_results.is_empty(), "FTS recall should return results");
-    println!("  FTS results: {:?}", fts_results.iter().map(|r| (r.entity.id.as_str(), r.score)).collect::<Vec<_>>());
+    println!(
+        "  FTS results: {:?}",
+        fts_results
+            .iter()
+            .map(|r| (r.entity.id.as_str(), r.score))
+            .collect::<Vec<_>>()
+    );
 
     // Vector-dominant search: embedding close to Python doc
     let vec_results = store.recall("", &make_embedding(0.1, 384), 3)?;
-    assert!(!vec_results.is_empty(), "Vector recall should return results");
-    println!("  Vector results: {:?}", vec_results.iter().map(|r| (r.entity.id.as_str(), r.score)).collect::<Vec<_>>());
+    assert!(
+        !vec_results.is_empty(),
+        "Vector recall should return results"
+    );
+    println!(
+        "  Vector results: {:?}",
+        vec_results
+            .iter()
+            .map(|r| (r.entity.id.as_str(), r.score))
+            .collect::<Vec<_>>()
+    );
 
     // Full hybrid: both text and embedding
-    let hybrid = store.recall_with_config("programming", &make_embedding(0.5, 384), 3, &RagConfig {
-        hybrid_search_k: 60.0,
-        ..Default::default()
-    })?;
+    let hybrid = store.recall_with_config(
+        "programming",
+        &make_embedding(0.5, 384),
+        3,
+        &RagConfig {
+            hybrid_search_k: 60.0,
+            ..Default::default()
+        },
+    )?;
     assert!(!hybrid.is_empty(), "Hybrid recall should return results");
-    println!("  Hybrid results: {:?}", hybrid.iter().map(|r| (r.entity.id.as_str(), r.score)).collect::<Vec<_>>());
+    println!(
+        "  Hybrid results: {:?}",
+        hybrid
+            .iter()
+            .map(|r| (r.entity.id.as_str(), r.score))
+            .collect::<Vec<_>>()
+    );
 
     // Verify ordering — first result should be most relevant
-    assert!(hybrid[0].score > 0.0, "First result should have positive score");
+    assert!(
+        hybrid[0].score > 0.0,
+        "First result should have positive score"
+    );
 
     Ok(())
 }
@@ -152,12 +210,17 @@ fn crucible_recall_stream() -> TestResult {
     let (_dir, _db, store) = setup_store()?;
 
     let entities: Vec<MemoryEntity> = (0..50)
-        .map(|i| make_entity(
-            &format!("entity_{}", i),
-            "test",
-            &format!("This is test entity number {} with some content for searching", i),
-            make_embedding(i as f32 * 0.1, 384),
-        ))
+        .map(|i| {
+            make_entity(
+                &format!("entity_{}", i),
+                "test",
+                &format!(
+                    "This is test entity number {} with some content for searching",
+                    i
+                ),
+                make_embedding(i as f32 * 0.1, 384),
+            )
+        })
         .collect();
     for e in &entities {
         store.store(e.clone())?;
@@ -196,14 +259,37 @@ fn crucible_rag_pipeline() -> TestResult {
 
     // Seed entities on a topic with cross-references
     let docs = vec![
-        ("rag_1", "guide", "RAG systems combine retrieval with generation for better LLM answers"),
-        ("rag_2", "guide", "Vector databases store embeddings that enable semantic search"),
-        ("rag_3", "guide", "Graph traversal finds related concepts across connected documents"),
-        ("rag_4", "example", "A typical RAG app: embed query, search vector DB, expand graph, build context"),
-        ("rag_5", "example", "Hybrid search uses both keyword (BM25) and vector (ANN) scores fused via RRF"),
+        (
+            "rag_1",
+            "guide",
+            "RAG systems combine retrieval with generation for better LLM answers",
+        ),
+        (
+            "rag_2",
+            "guide",
+            "Vector databases store embeddings that enable semantic search",
+        ),
+        (
+            "rag_3",
+            "guide",
+            "Graph traversal finds related concepts across connected documents",
+        ),
+        (
+            "rag_4",
+            "example",
+            "A typical RAG app: embed query, search vector DB, expand graph, build context",
+        ),
+        (
+            "rag_5",
+            "example",
+            "Hybrid search uses both keyword (BM25) and vector (ANN) scores fused via RRF",
+        ),
     ];
     for (id, typ, content) in &docs {
-        let emb = make_embedding(docs.iter().position(|d| d.0 == *id).unwrap_or(0) as f32 * 0.2, 384);
+        let emb = make_embedding(
+            docs.iter().position(|d| d.0 == *id).unwrap_or(0) as f32 * 0.2,
+            384,
+        );
         store.store(make_entity(id, typ, content, emb))?;
     }
 
@@ -230,12 +316,29 @@ fn crucible_rag_pipeline() -> TestResult {
     )?;
 
     // Verify result structure
-    assert!(!result.context.is_empty(), "RAG context should not be empty");
+    assert!(
+        !result.context.is_empty(),
+        "RAG context should not be empty"
+    );
     assert!(!result.sources.is_empty(), "RAG should return sources");
-    assert_eq!(result.total_sources, result.sources.len(), "source count mismatch");
-    assert!(result.context.contains("Query:"), "context should contain query header");
-    assert!(result.context.contains("Total sources:"), "context should contain source summary");
-    println!("  RAG context length: {} chars, {} sources", result.context.len(), result.total_sources);
+    assert_eq!(
+        result.total_sources,
+        result.sources.len(),
+        "source count mismatch"
+    );
+    assert!(
+        result.context.contains("Query:"),
+        "context should contain query header"
+    );
+    assert!(
+        result.context.contains("Total sources:"),
+        "context should contain source summary"
+    );
+    println!(
+        "  RAG context length: {} chars, {} sources",
+        result.context.len(),
+        result.total_sources
+    );
     println!("  RAG sources: {:?}", result.sources);
 
     Ok(())
@@ -252,7 +355,12 @@ fn crucible_graph_expansion() -> TestResult {
     // Create a chain: a -> b -> c -> d -> e
     let names = ["a", "b", "c", "d", "e"];
     for (i, name) in names.iter().enumerate() {
-        store.store(make_entity(name, "node", &format!("Node {}", name), make_embedding(i as f32, 384)))?;
+        store.store(make_entity(
+            name,
+            "node",
+            &format!("Node {}", name),
+            make_embedding(i as f32, 384),
+        ))?;
     }
     store.associate("a", "b", "knows", 1.0)?;
     store.associate("b", "c", "knows", 1.0)?;
@@ -294,21 +402,48 @@ fn crucible_consolidation_pipeline() -> TestResult {
 
     // Store entities with similar content (should be auto-linked)
     let similar_pairs = vec![
-        ("ent_1", "person", "Alice is a software engineer who loves Rust programming"),
-        ("ent_2", "person", "Alice enjoys coding in Rust and building systems"),
-        ("ent_3", "person", "Bob is a data scientist who uses Python for machine learning"),
-        ("ent_4", "person", "Bob works with Python and machine learning models daily"),
-        ("ent_5", "concept", "Rust is a safe systems programming language"),
-        ("ent_6", "concept", "Python is great for data science and ML"),
+        (
+            "ent_1",
+            "person",
+            "Alice is a software engineer who loves Rust programming",
+        ),
+        (
+            "ent_2",
+            "person",
+            "Alice enjoys coding in Rust and building systems",
+        ),
+        (
+            "ent_3",
+            "person",
+            "Bob is a data scientist who uses Python for machine learning",
+        ),
+        (
+            "ent_4",
+            "person",
+            "Bob works with Python and machine learning models daily",
+        ),
+        (
+            "ent_5",
+            "concept",
+            "Rust is a safe systems programming language",
+        ),
+        (
+            "ent_6",
+            "concept",
+            "Python is great for data science and ML",
+        ),
     ];
     for (id, typ, content) in &similar_pairs {
-        let emb = make_embedding(similar_pairs.iter().position(|p| p.0 == *id).unwrap_or(0) as f32 * 1.5, 384);
+        let emb = make_embedding(
+            similar_pairs.iter().position(|p| p.0 == *id).unwrap_or(0) as f32 * 1.5,
+            384,
+        );
         store.store(make_entity(id, typ, content, emb))?;
     }
 
     // Run consolidation with explicit config
     let report = store.consolidate(Some(ConsolidationConfig {
-        similarity_threshold: 0.05,  // low threshold to ensure links are created
+        similarity_threshold: 0.05, // low threshold to ensure links are created
         contradiction_jaccard_max: 0.4,
         contradiction_cosine_min: 0.3,
         contradiction_length_sim_min: 0.0,
@@ -316,13 +451,21 @@ fn crucible_consolidation_pipeline() -> TestResult {
         collect_details: true,
     }))?;
 
-    println!("  Consolidation: {} links created, {} contradictions, {} total entities, {} warnings",
-        report.links_created, report.contradictions_found, report.total_entities, report.warnings.len());
+    println!(
+        "  Consolidation: {} links created, {} contradictions, {} total entities, {} warnings",
+        report.links_created,
+        report.contradictions_found,
+        report.total_entities,
+        report.warnings.len()
+    );
 
     // Should have found some links (similar content pairs)
     // We don't assert exact count since it depends on content similarity,
     // but at least the pipeline ran without error
-    assert!(report.total_entities >= 6, "should have processed 6+ entities");
+    assert!(
+        report.total_entities >= 6,
+        "should have processed 6+ entities"
+    );
 
     // Verify PageRank metadata was written (check one entity)
     let alice = store.get("ent_1")?.expect("ent_1 should exist");
@@ -351,14 +494,19 @@ fn crucible_entity_decay() -> TestResult {
     let expired = MemoryEntity {
         created_at: 1,  // long ago
         ttl_seconds: 1, // 1 second TTL
-        ..make_entity("expired", "test", "I should be gone", make_embedding(2.0, 384))
+        ..make_entity(
+            "expired",
+            "test",
+            "I should be gone",
+            make_embedding(2.0, 384),
+        )
     };
     store.store(expired)?;
 
     // Store entity with a fresh TTL (should stay)
     let fresh = MemoryEntity {
         created_at: std::time::SystemTime::now()
-.duration_since(std::time::UNIX_EPOCH)
+            .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as i64)
             .unwrap_or(0),
         ttl_seconds: 86400, // 1 day TTL
@@ -371,9 +519,15 @@ fn crucible_entity_decay() -> TestResult {
     println!("  Decayed {} entities", decayed);
 
     // Permanent should still be there
-    assert!(store.get("perm")?.is_some(), "permanent entity should survive decay");
+    assert!(
+        store.get("perm")?.is_some(),
+        "permanent entity should survive decay"
+    );
     // Fresh should still be there
-    assert!(store.get("fresh")?.is_some(), "fresh entity should survive decay");
+    assert!(
+        store.get("fresh")?.is_some(),
+        "fresh entity should survive decay"
+    );
 
     Ok(())
 }
@@ -389,8 +543,18 @@ fn crucible_change_data_capture() -> TestResult {
     let rx = store.subscribe_changes()?;
 
     // Perform operations that should emit CDC events
-    store.store(make_entity("cdc_1", "test", "CDC event 1", make_embedding(1.0, 384)))?;
-    store.store(make_entity("cdc_2", "test", "CDC event 2", make_embedding(2.0, 384)))?;
+    store.store(make_entity(
+        "cdc_1",
+        "test",
+        "CDC event 1",
+        make_embedding(1.0, 384),
+    ))?;
+    store.store(make_entity(
+        "cdc_2",
+        "test",
+        "CDC event 2",
+        make_embedding(2.0, 384),
+    ))?;
     store.forget("cdc_1")?;
 
     // Collect events from channel (non-blocking poll)
@@ -405,7 +569,10 @@ fn crucible_change_data_capture() -> TestResult {
     // Verify event structure
     for event in &events {
         assert!(event.timestamp > 0, "event should have timestamp");
-        println!("    CDC event: op={:?}, id={:?}", event.operation_type, event.entity_id);
+        println!(
+            "    CDC event: op={:?}, id={:?}",
+            event.operation_type, event.entity_id
+        );
     }
 
     Ok(())
@@ -420,7 +587,12 @@ fn crucible_mvcc_time_travel() -> TestResult {
     let (_dir, _db, store) = setup_store()?;
 
     // Store first version
-    store.store(make_entity("mvcc_test", "test", "version 1", make_embedding(1.0, 384)))?;
+    store.store(make_entity(
+        "mvcc_test",
+        "test",
+        "version 1",
+        make_embedding(1.0, 384),
+    ))?;
     let t1 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
@@ -429,7 +601,12 @@ fn crucible_mvcc_time_travel() -> TestResult {
     std::thread::sleep(Duration::from_millis(10));
 
     // Store second version (update)
-    store.store(make_entity("mvcc_test", "test", "version 2", make_embedding(1.0, 384)))?;
+    store.store(make_entity(
+        "mvcc_test",
+        "test",
+        "version 2",
+        make_embedding(1.0, 384),
+    ))?;
     let t2 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
@@ -438,7 +615,12 @@ fn crucible_mvcc_time_travel() -> TestResult {
     std::thread::sleep(Duration::from_millis(10));
 
     // Store third version
-    store.store(make_entity("mvcc_test", "test", "version 3", make_embedding(1.0, 384)))?;
+    store.store(make_entity(
+        "mvcc_test",
+        "test",
+        "version 3",
+        make_embedding(1.0, 384),
+    ))?;
 
     // Recall_at_time should give us the entity at t1 (between version 1 and version 2)
     let at_t1 = store.recall_at_time(t1 as i64, 5)?;
@@ -451,12 +633,18 @@ fn crucible_mvcc_time_travel() -> TestResult {
     let history = store.entity_history("mvcc_test")?;
     println!("  Entity history: {} versions", history.len());
     for (i, v) in history.iter().enumerate() {
-        println!("    Version {}: content='{}', valid_from={}", i, v.content, v.valid_from);
+        println!(
+            "    Version {}: content='{}', valid_from={}",
+            i, v.content, v.valid_from
+        );
     }
 
     // Current version should be "version 3"
     let current = store.get("mvcc_test")?.expect("entity should exist");
-    assert_eq!(current.content, "version 3", "current version should be version 3");
+    assert_eq!(
+        current.content, "version 3",
+        "current version should be version 3"
+    );
 
     Ok(())
 }
@@ -520,7 +708,10 @@ fn crucible_high_volume_batch() -> TestResult {
         entities.push(MemoryEntity {
             id: format!("batch_{}", i),
             entity_type: "batch_test".to_string(),
-            content: format!("Batch entity {} with some padding content for testing purpose", i),
+            content: format!(
+                "Batch entity {} with some padding content for testing purpose",
+                i
+            ),
             created_at: 0,
             last_accessed: 0,
             access_count: 1,
@@ -536,12 +727,26 @@ fn crucible_high_volume_batch() -> TestResult {
     let inserted = store.store_batch(entities)?;
     let elapsed = start.elapsed();
 
-    assert_eq!(inserted, batch_size, "should have inserted all {} entities", batch_size);
-    println!("  Batch inserted {} entities in {:.3}s ({:.0}/sec)", batch_size, elapsed.as_secs_f64(), batch_size as f64 / elapsed.as_secs_f64());
+    assert_eq!(
+        inserted, batch_size,
+        "should have inserted all {} entities",
+        batch_size
+    );
+    println!(
+        "  Batch inserted {} entities in {:.3}s ({:.0}/sec)",
+        batch_size,
+        elapsed.as_secs_f64(),
+        batch_size as f64 / elapsed.as_secs_f64()
+    );
 
     // Verify count
     let all = store.recall_recent(batch_size)?;
-    assert_eq!(all.len(), batch_size, "should recall all {} recent entities", batch_size);
+    assert_eq!(
+        all.len(),
+        batch_size,
+        "should recall all {} recent entities",
+        batch_size
+    );
 
     Ok(())
 }
@@ -561,31 +766,35 @@ fn crucible_concurrent_writes() -> TestResult {
     let total_ops = Arc::new(AtomicU64::new(0));
 
     // Each thread creates its own MemoryStore and writes independent entities
-    let handles: Vec<_> = (0..num_threads).map(|t| {
-        let db = Arc::clone(&db);
-        let errs = Arc::clone(&error_count);
-        let ops = Arc::clone(&total_ops);
-        std::thread::spawn(move || {
-            let conn = db.connect();
-            let store = MemoryStore::new(conn, 384);
-            for i in 0..ops_per_thread {
-                let id = format!("concurrent_{}_{}", t, i);
-                let e = make_entity(
-                    &id,
-                    "concurrent",
-                    &format!("Thread {} entity {} with concurrent write test", t, i),
-                    make_embedding((t * ops_per_thread + i) as f32, 384),
-                );
-                match store.store(e) {
-                    Ok(_) => { ops.fetch_add(1, Ordering::SeqCst); }
-                    Err(e) => {
-                        errs.fetch_add(1, Ordering::SeqCst);
-                        eprintln!("  write error: {}", e);
+    let handles: Vec<_> = (0..num_threads)
+        .map(|t| {
+            let db = Arc::clone(&db);
+            let errs = Arc::clone(&error_count);
+            let ops = Arc::clone(&total_ops);
+            std::thread::spawn(move || {
+                let conn = db.connect();
+                let store = MemoryStore::new(conn, 384);
+                for i in 0..ops_per_thread {
+                    let id = format!("concurrent_{}_{}", t, i);
+                    let e = make_entity(
+                        &id,
+                        "concurrent",
+                        &format!("Thread {} entity {} with concurrent write test", t, i),
+                        make_embedding((t * ops_per_thread + i) as f32, 384),
+                    );
+                    match store.store(e) {
+                        Ok(_) => {
+                            ops.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            errs.fetch_add(1, Ordering::SeqCst);
+                            eprintln!("  write error: {}", e);
+                        }
                     }
                 }
-            }
+            })
         })
-    }).collect();
+        .collect();
 
     for h in handles {
         h.join().unwrap();
@@ -593,7 +802,12 @@ fn crucible_concurrent_writes() -> TestResult {
 
     let total = total_ops.load(Ordering::SeqCst);
     let errors = error_count.load(Ordering::SeqCst);
-    println!("  Concurrent writes: {}/{} succeeded, {} errors", total, num_threads * ops_per_thread, errors);
+    println!(
+        "  Concurrent writes: {}/{} succeeded, {} errors",
+        total,
+        num_threads * ops_per_thread,
+        errors
+    );
 
     // Verify all data is accessible
     let conn = db.connect();
@@ -625,7 +839,12 @@ fn crucible_concurrent_read_write_mix() -> TestResult {
     let conn = db.connect();
     let store = MemoryStore::new(conn, 384);
     for i in 0..500 {
-        store.store(make_entity(&format!("readwrite_{}", i), "rw_test", &format!("Entity {} for concurrent test", i), make_embedding(i as f32 * 0.05, 384)))?;
+        store.store(make_entity(
+            &format!("readwrite_{}", i),
+            "rw_test",
+            &format!("Entity {} for concurrent test", i),
+            make_embedding(i as f32 * 0.05, 384),
+        ))?;
     }
 
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -639,7 +858,12 @@ fn crucible_concurrent_read_write_mix() -> TestResult {
         let mut i = 0;
         while !stop_w.load(Ordering::Relaxed) {
             let id = format!("readwrite_{}", i % 500);
-            let e = make_entity(&id, "rw_test", &format!("Updated {} at iteration {}", id, i), make_embedding(i as f32, 384));
+            let e = make_entity(
+                &id,
+                "rw_test",
+                &format!("Updated {} at iteration {}", id, i),
+                make_embedding(i as f32, 384),
+            );
             let _ = store.store(e);
             i += 1;
             if i % 100 == 0 {
@@ -653,25 +877,27 @@ fn crucible_concurrent_read_write_mix() -> TestResult {
     let num_readers = 4;
     let db_r = Arc::clone(&db);
     let stop_r = Arc::clone(&stop_flag);
-    let readers: Vec<_> = (0..num_readers).map(|_| {
-        let db = Arc::clone(&db_r);
-        let stop = Arc::clone(&stop_r);
-        std::thread::spawn(move || {
-            let conn = db.connect();
-            let store = MemoryStore::new(conn, 384);
-            let mut reads = 0u64;
-            while !stop.load(Ordering::Relaxed) {
-                for id_i in 0..10 {
-                    let _ = store.get(&format!("readwrite_{}", id_i));
-                    reads += 1;
+    let readers: Vec<_> = (0..num_readers)
+        .map(|_| {
+            let db = Arc::clone(&db_r);
+            let stop = Arc::clone(&stop_r);
+            std::thread::spawn(move || {
+                let conn = db.connect();
+                let store = MemoryStore::new(conn, 384);
+                let mut reads = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    for id_i in 0..10 {
+                        let _ = store.get(&format!("readwrite_{}", id_i));
+                        reads += 1;
+                    }
+                    if reads % 500 == 0 {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
                 }
-                if reads % 500 == 0 {
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-            }
-            reads
+                reads
+            })
         })
-    }).collect();
+        .collect();
 
     // Let them run for 3 seconds
     std::thread::sleep(Duration::from_secs(3));
@@ -683,14 +909,21 @@ fn crucible_concurrent_read_write_mix() -> TestResult {
         total_reads += r.join().unwrap();
     }
 
-    println!("  Concurrent mix: {} writes, {} reads in 3s", writes, total_reads);
+    println!(
+        "  Concurrent mix: {} writes, {} reads in 3s",
+        writes, total_reads
+    );
 
     // Final data integrity check
     let conn = db.connect();
     let store = MemoryStore::new(conn, 384);
     for i in 0..500 {
         let entity = store.get(&format!("readwrite_{}", i))?;
-        assert!(entity.is_some(), "entity readwrite_{} should still exist after concurrent mix", i);
+        assert!(
+            entity.is_some(),
+            "entity readwrite_{} should still exist after concurrent mix",
+            i
+        );
     }
     println!("  All 500 entities intact after concurrent read/write mix");
 
@@ -710,7 +943,9 @@ fn crucible_high_dim_vectors() -> TestResult {
 
     // Store entities with 1536-dim vectors
     for i in 0..20 {
-        let emb: Vec<f32> = (0..1536).map(|d| ((i as f32 * 100.0 + d as f32) * 0.001).sin()).collect();
+        let emb: Vec<f32> = (0..1536)
+            .map(|d| ((i as f32 * 100.0 + d as f32) * 0.001).sin())
+            .collect();
         store.store(make_entity(
             &format!("hd_{}", i),
             "high_dim",
@@ -728,8 +963,15 @@ fn crucible_high_dim_vectors() -> TestResult {
     // Verify all results have valid scores
     for r in &results {
         assert!(r.score > 0.0, "result score should be positive");
-        assert!(!r.entity.embedding.is_empty(), "entity should have embedding");
-        assert_eq!(r.entity.embedding.len(), 1536, "embedding dimension should match");
+        assert!(
+            !r.entity.embedding.is_empty(),
+            "entity should have embedding"
+        );
+        assert_eq!(
+            r.entity.embedding.len(),
+            1536,
+            "embedding dimension should match"
+        );
     }
 
     Ok(())
@@ -747,12 +989,28 @@ fn crucible_edge_case_content() -> TestResult {
     let edge_cases = vec![
         ("empty", "", "empty content string"),
         ("unicode", "Hello 世界! ñoño 🎉🔥🚀 αβγ", "unicode string"),
-        ("special", "line1\nline2\ttab\"quotes\"'single'\\backslash", "special characters"),
+        (
+            "special",
+            "line1\nline2\ttab\"quotes\"'single'\\backslash",
+            "special characters",
+        ),
         ("very_long", &long_str, "10K character string"),
-        ("html", "<script>alert('xss')</script> &amp; <p>tags</p>", "HTML content"),
-        ("json", r#"{"key": "value", "nested": {"a": 1, "b": [1,2,3]}}"#, "JSON content"),
+        (
+            "html",
+            "<script>alert('xss')</script> &amp; <p>tags</p>",
+            "HTML content",
+        ),
+        (
+            "json",
+            r#"{"key": "value", "nested": {"a": 1, "b": [1,2,3]}}"#,
+            "JSON content",
+        ),
         ("null_bytes", "null\x00byte\x00content", "null bytes"),
-        ("mixed_lang", "English + 中文 + 日本語 + 한국어 + Русский + العربية", "mixed languages"),
+        (
+            "mixed_lang",
+            "English + 中文 + 日本語 + 한국어 + Русский + العربية",
+            "mixed languages",
+        ),
     ];
 
     for (id, content, _description) in &edge_cases {
@@ -761,18 +1019,33 @@ fn crucible_edge_case_content() -> TestResult {
 
     // Verify each roundtrips correctly
     for (id, content, _description) in &edge_cases {
-        let got = store.get(id)?.expect(&format!("entity {} should exist", id));
-        assert_eq!(got.content.as_str(), *content, "content mismatch for entity {}", id);
+        let got = store
+            .get(id)?
+            .expect(&format!("entity {} should exist", id));
+        assert_eq!(
+            got.content.as_str(),
+            *content,
+            "content mismatch for entity {}",
+            id
+        );
     }
 
     // Also verify via recall
     let results = store.recall_recent(20)?;
-    let found_ids: std::collections::HashSet<&str> = results.iter().map(|e| e.id.as_str()).collect();
+    let found_ids: std::collections::HashSet<&str> =
+        results.iter().map(|e| e.id.as_str()).collect();
     for (id, _, _) in &edge_cases {
-        assert!(found_ids.contains(id), "entity {} should appear in recall_recent", id);
+        assert!(
+            found_ids.contains(id),
+            "entity {} should appear in recall_recent",
+            id
+        );
     }
 
-    println!("  All {} edge case values roundtripped correctly", edge_cases.len());
+    println!(
+        "  All {} edge case values roundtripped correctly",
+        edge_cases.len()
+    );
     Ok(())
 }
 
@@ -786,8 +1059,18 @@ fn crucible_many_to_many_associations() -> TestResult {
 
     // Create 50 users and 50 topics
     for i in 0..50 {
-        store.store(make_entity(&format!("user_{}", i), "user", &format!("User {}", i), make_embedding(i as f32, 384)))?;
-        store.store(make_entity(&format!("topic_{}", i), "topic", &format!("Topic {}", i), make_embedding(i as f32 * 0.5, 384)))?;
+        store.store(make_entity(
+            &format!("user_{}", i),
+            "user",
+            &format!("User {}", i),
+            make_embedding(i as f32, 384),
+        ))?;
+        store.store(make_entity(
+            &format!("topic_{}", i),
+            "topic",
+            &format!("Topic {}", i),
+            make_embedding(i as f32 * 0.5, 384),
+        ))?;
     }
 
     // Create associations: each user likes 5 topics
@@ -795,7 +1078,12 @@ fn crucible_many_to_many_associations() -> TestResult {
     for u in 0..50 {
         for t in 0..5 {
             let topic_idx = (u * 5 + t) % 50;
-            store.associate(&format!("user_{}", u), &format!("topic_{}", topic_idx), "likes", 1.0)?;
+            store.associate(
+                &format!("user_{}", u),
+                &format!("topic_{}", topic_idx),
+                "likes",
+                1.0,
+            )?;
             total_rels += 1;
         }
     }
@@ -804,7 +1092,10 @@ fn crucible_many_to_many_associations() -> TestResult {
     // Expand from a user to find liked topics
     let liked = store.expand("user_0", 1, &[])?;
     println!("  User 0 connections: {} (expected ~5)", liked.len());
-    assert!(liked.len() >= 3, "user_0 should have at least ~5 connections");
+    assert!(
+        liked.len() >= 3,
+        "user_0 should have at least ~5 connections"
+    );
 
     // Verify association symmetry via the Relates table CSR
     for result in &liked {
@@ -831,19 +1122,34 @@ fn crucible_checkpoint_crash_recovery() -> TestResult {
         let store = MemoryStore::new(conn, 384);
 
         for i in 0..100 {
-            store.store(make_entity(&format!("cp_{}", i), "ckpt", &format!("Pre-checkpoint entity {}", i), make_embedding(i as f32, 384)))?;
+            store.store(make_entity(
+                &format!("cp_{}", i),
+                "ckpt",
+                &format!("Pre-checkpoint entity {}", i),
+                make_embedding(i as f32, 384),
+            ))?;
         }
         db.checkpoint()?;
 
         for i in 100..200 {
-            store.store(make_entity(&format!("cp_{}", i), "ckpt", &format!("Post-checkpoint entity {}", i), make_embedding(i as f32, 384)))?;
+            store.store(make_entity(
+                &format!("cp_{}", i),
+                "ckpt",
+                &format!("Post-checkpoint entity {}", i),
+                make_embedding(i as f32, 384),
+            ))?;
         }
 
         // Simulate multiple checkpoint cycles
         for cycle in 0..5 {
             for i in 0..20 {
                 let id = format!("cp_cycle_{}_{}", cycle, i);
-                store.store(make_entity(&id, "ckpt", &format!("Cycle {} entity {}", cycle, i), make_embedding(i as f32, 384)))?;
+                store.store(make_entity(
+                    &id,
+                    "ckpt",
+                    &format!("Cycle {} entity {}", cycle, i),
+                    make_embedding(i as f32, 384),
+                ))?;
             }
             db.checkpoint()?;
         }
@@ -858,18 +1164,34 @@ fn crucible_checkpoint_crash_recovery() -> TestResult {
         let store = MemoryStore::new(conn, 384);
 
         let all = store.recall_recent(1000)?;
-        assert!(all.len() >= total_expected as usize - 10, // allow small tolerance
-            "Expected ~{} entities after crash recovery, got {}", total_expected, all.len());
-        println!("  After crash recovery: {} entities (expected ~{})", all.len(), total_expected);
+        assert!(
+            all.len() >= total_expected as usize - 10, // allow small tolerance
+            "Expected ~{} entities after crash recovery, got {}",
+            total_expected,
+            all.len()
+        );
+        println!(
+            "  After crash recovery: {} entities (expected ~{})",
+            all.len(),
+            total_expected
+        );
 
         // Verify a sampling of entities
         for i in (0..200).step_by(10) {
             let entity = store.get(&format!("cp_{}", i))?;
-            assert!(entity.is_some(), "entity cp_{} should survive crash recovery", i);
+            assert!(
+                entity.is_some(),
+                "entity cp_{} should survive crash recovery",
+                i
+            );
         }
         for cycle in 0..5 {
             let entity = store.get(&format!("cp_cycle_{}_0", cycle))?;
-            assert!(entity.is_some(), "entity cp_cycle_{}_0 should survive crash recovery", cycle);
+            assert!(
+                entity.is_some(),
+                "entity cp_cycle_{}_0 should survive crash recovery",
+                cycle
+            );
         }
 
         println!("  Checkpoint + crash recovery: ALL DATA INTACT");
@@ -890,11 +1212,21 @@ fn crucible_large_rag_context() -> TestResult {
     let n_entities = 100;
     for i in 0..n_entities {
         let content = format!("Research paper {}: This paper discusses advanced topics in machine learning and artificial intelligence including deep neural networks, transformer architectures, and attention mechanisms. The key findings show significant improvements in natural language understanding tasks.", i);
-        store.store(make_entity(&format!("paper_{}", i), "research_paper", &content, make_embedding(i as f32 * 0.1, 384)))?;
+        store.store(make_entity(
+            &format!("paper_{}", i),
+            "research_paper",
+            &content,
+            make_embedding(i as f32 * 0.1, 384),
+        ))?;
 
         // Link papers in citation chains
         if i > 0 {
-            store.associate(&format!("paper_{}", i), &format!("paper_{}", i - 1), "cites", 0.9)?;
+            store.associate(
+                &format!("paper_{}", i),
+                &format!("paper_{}", i - 1),
+                "cites",
+                0.9,
+            )?;
         }
     }
 
@@ -913,13 +1245,23 @@ fn crucible_large_rag_context() -> TestResult {
         },
     )?;
 
-    println!("  Large RAG context: {} chars, {} sources, {} warnings",
-        result.context.len(), result.total_sources, result.warnings.len());
-    assert!(result.total_sources > 0, "should have sources in RAG result");
+    println!(
+        "  Large RAG context: {} chars, {} sources, {} warnings",
+        result.context.len(),
+        result.total_sources,
+        result.warnings.len()
+    );
+    assert!(
+        result.total_sources > 0,
+        "should have sources in RAG result"
+    );
     assert!(result.context.len() > 200, "context should be substantive");
 
     // Context should contain source numbering
-    assert!(result.context.contains("[1]"), "context should be formatted with source numbers");
+    assert!(
+        result.context.contains("[1]"),
+        "context should be formatted with source numbers"
+    );
 
     Ok(())
 }
@@ -957,7 +1299,12 @@ fn crucible_rapid_store_recall_loop() -> TestResult {
 
     let elapsed = start.elapsed();
     let ops = cycles as f64 / elapsed.as_secs_f64();
-    println!("  Rapid store/recall: {} cycles in {:.3}s ({:.0} ops/sec)", cycles, elapsed.as_secs_f64(), ops);
+    println!(
+        "  Rapid store/recall: {} cycles in {:.3}s ({:.0} ops/sec)",
+        cycles,
+        elapsed.as_secs_f64(),
+        ops
+    );
 
     // Final verification
     let recent = store.recall_recent(10)?;
@@ -1033,7 +1380,7 @@ fn crucible_mixed_embedding_batch() -> TestResult {
     // Entities WITHOUT embeddings
     for i in 0..50 {
         entities.push(MemoryEntity {
-            embedding: vec![],  // no embedding
+            embedding: vec![], // no embedding
             ..make_entity(
                 &format!("no_emb_{}", i),
                 "emb_test",
@@ -1056,7 +1403,10 @@ fn crucible_mixed_embedding_batch() -> TestResult {
 
     // Vector search should still work (only finds entities WITH embeddings)
     let vec_results = store.recall("", &make_embedding(0.5, 384), 50)?;
-    println!("  Vector recall with mixed batch: {} results", vec_results.len());
+    println!(
+        "  Vector recall with mixed batch: {} results",
+        vec_results.len()
+    );
 
     Ok(())
 }

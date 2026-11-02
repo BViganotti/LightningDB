@@ -82,7 +82,10 @@ fn test_bitpacking_width_0() {
 
     let mut unpacked = [7u64; 32];
     BitPacker::unpack_32(&output, bit_width, &mut unpacked);
-    assert_eq!(unpacked, [7u64; 32], "width-0 unpack must be a no-op on the buffer");
+    assert_eq!(
+        unpacked, [7u64; 32],
+        "width-0 unpack must be a no-op on the buffer"
+    );
 }
 
 #[test]
@@ -105,7 +108,13 @@ fn test_bitpacking_width_64() {
 #[test]
 fn test_bitpacking_roundtrip_all_widths() {
     for bw in 0u8..=64u8 {
-        let max_val = if bw == 64 { u64::MAX } else if bw == 0 { 0 } else { (1u64 << (bw - 1)) - 1 };
+        let max_val = if bw == 64 {
+            u64::MAX
+        } else if bw == 0 {
+            0
+        } else {
+            (1u64 << (bw - 1)) - 1
+        };
         let mut values = [0u64; 32];
         for i in 0..32 {
             values[i] = (i as u64).min(max_val);

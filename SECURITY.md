@@ -60,4 +60,4 @@ The following areas are in scope for the security policy:
 ### Security Advisories
 
 Published advisories are available at
-[GitHub Security Advisories](https://github.com/lightningDB/lightning/security/advisories).
+[GitHub Security Advisories](https://github.com/BViganotti/LightningDB/security/advisories).

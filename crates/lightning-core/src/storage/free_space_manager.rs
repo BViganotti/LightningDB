@@ -36,8 +36,8 @@ impl FreeSpaceManager {
         let map = self.free_pages.read();
         // Always write, even when empty. A stale file from a previous run would
         // otherwise be reloaded on restart and freed pages handed out twice.
-        let buf =
-            bincode::serialize(&*map).map_err(|e| crate::LightningError::Database(e.to_string()))?;
+        let buf = bincode::serialize(&*map)
+            .map_err(|e| crate::LightningError::Database(e.to_string()))?;
         // Write to temporary file first, then atomically rename
         let tmp_path = path.with_extension("bin.tmp");
         {
@@ -103,7 +103,10 @@ mod tests {
         fsm.save(&path).expect("internal invariant violated");
         // An empty map is still written, so a stale file from a previous run is
         // overwritten (otherwise freed pages could be handed out twice).
-        assert!(path.exists(), "empty free-space map must still be persisted");
+        assert!(
+            path.exists(),
+            "empty free-space map must still be persisted"
+        );
 
         let loaded = FreeSpaceManager::load(&path).expect("internal invariant violated");
         assert_eq!(loaded.get_free_page(1), None);

@@ -59,7 +59,11 @@ impl PhysicalRecursiveJoin {
         let max_id = match storage.get_table(&self.dst_node_table) {
             Some(t) => {
                 let nid = t.next_row_id.load(std::sync::atomic::Ordering::SeqCst);
-                if nid == 0 { 1 } else { nid }
+                if nid == 0 {
+                    1
+                } else {
+                    nid
+                }
             }
             None => {
                 return Err(crate::LightningError::Internal(format!(
@@ -89,8 +93,14 @@ impl PhysicalRecursiveJoin {
                     let mut neighbors = Vec::new();
                     for rel_table in rel_tables {
                         if let Some(fwd_csr) = storage.fwd_csr.get(rel_table) {
-                            if let Err(e) = fwd_csr.for_each_neighbor(bm, node, tx, |n| neighbors.push(n)) {
-                                tracing::warn!("CSR traversal error for node {} in BFS: {}", node, e);
+                            if let Err(e) =
+                                fwd_csr.for_each_neighbor(bm, node, tx, |n| neighbors.push(n))
+                            {
+                                tracing::warn!(
+                                    "CSR traversal error for node {} in BFS: {}",
+                                    node,
+                                    e
+                                );
                             }
                         }
                     }
@@ -125,13 +135,18 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
             // Determine src_col_idx from the src_var name by matching against child schema
             if let Some(chunk) = self.child.get_next(database, tx, params)? {
                 let schema = chunk.batch.schema();
-                let idx = schema.fields().iter().position(|f| f.name() == &self.src_var);
+                let idx = schema
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == &self.src_var);
                 self.src_col_idx = idx;
                 // Put the chunk back into output_buffer for processing
-                let src_idx = self.src_col_idx
-                    .ok_or_else(|| crate::LightningError::Internal(format!(
-                        "src_var '{}' not found in child schema", self.src_var
-                    )))?;
+                let src_idx = self.src_col_idx.ok_or_else(|| {
+                    crate::LightningError::Internal(format!(
+                        "src_var '{}' not found in child schema",
+                        self.src_var
+                    ))
+                })?;
                 let num_rows = chunk.num_rows();
                 for i in 0..num_rows {
                     let val = Value::from_arrow(chunk.batch.column(src_idx), i);
@@ -150,8 +165,9 @@ impl PhysicalOperator for PhysicalRecursiveJoin {
 
         while !self.exhausted_child && self.output_buffer.is_empty() {
             if let Some(chunk) = self.child.get_next(database, tx, params)? {
-                let src_idx = self.src_col_idx
-                    .ok_or_else(|| crate::LightningError::Internal("src_col_idx not initialized".into()))?;
+                let src_idx = self.src_col_idx.ok_or_else(|| {
+                    crate::LightningError::Internal("src_col_idx not initialized".into())
+                })?;
                 let num_rows = chunk.num_rows();
 
                 for i in 0..num_rows {

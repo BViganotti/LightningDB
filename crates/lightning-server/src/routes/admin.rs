@@ -14,7 +14,9 @@ pub async fn checkpoint_handler(
     RequestId(request_id): RequestId,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     if state.config.read_only {
-        return Err(AppError::BadRequest("Checkpoint not allowed in read-only mode".into()));
+        return Err(AppError::BadRequest(
+            "Checkpoint not allowed in read-only mode".into(),
+        ));
     }
     let start = std::time::Instant::now();
 
@@ -37,7 +39,9 @@ pub async fn vacuum_handler(
     RequestId(request_id): RequestId,
 ) -> Result<Json<ApiResponse<()>>, AppError> {
     if state.config.read_only {
-        return Err(AppError::BadRequest("Vacuum not allowed in read-only mode".into()));
+        return Err(AppError::BadRequest(
+            "Vacuum not allowed in read-only mode".into(),
+        ));
     }
     let start = std::time::Instant::now();
 
@@ -57,7 +61,11 @@ pub async fn vacuum_handler(
 
 pub async fn metrics_handler(
     State(state): State<Arc<AppState>>,
-) -> (axum::http::StatusCode, [(axum::http::header::HeaderName, &'static str); 1], String) {
+) -> (
+    axum::http::StatusCode,
+    [(axum::http::header::HeaderName, &'static str); 1],
+    String,
+) {
     let db_metrics = state.db.metrics();
 
     let total_queries = db_metrics.total_queries.load(Ordering::Relaxed);
@@ -92,7 +100,10 @@ lightning_uptime_seconds {uptime_secs}
 
     (
         axum::http::StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         metrics,
     )
 }

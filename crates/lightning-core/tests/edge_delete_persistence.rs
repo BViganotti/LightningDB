@@ -51,12 +51,20 @@ fn edge_delete_persists_across_reopen() {
         let conn = db.connect();
         conn.execute("MATCH (a:N)-[r:E]->(b:N) DELETE r", None)
             .expect("delete edge");
-        assert_eq!(edge_count(&db), 0, "edge should be gone immediately after DELETE");
+        assert_eq!(
+            edge_count(&db),
+            0,
+            "edge should be gone immediately after DELETE"
+        );
         db.checkpoint().expect("checkpoint");
     }
 
     let db = Database::new(&path, SystemConfig::default()).expect("reopen");
-    assert_eq!(edge_count(&db), 0, "edge deletion must persist across reopen");
+    assert_eq!(
+        edge_count(&db),
+        0,
+        "edge deletion must persist across reopen"
+    );
 }
 
 #[test]

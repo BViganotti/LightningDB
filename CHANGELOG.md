@@ -32,9 +32,8 @@ subject to breaking changes without notice. Not recommended for production use.
 
 ### Changed
 
-- License changed from MIT to **BSL 1.1** (Business Source License) with
-  Change Date of 2030-06-15, MIT as Change License — prevents competitors
-  from offering LightningDB as a service without licensing
+- License: **MIT**. The project was briefly under BUSL-1.1 in June 2026;
+  the 0.1.0 release is MIT-licensed.
 - README rewritten with real API examples (Python, Rust, cURL) and HTTP
   endpoint reference table
 - Repository cleanup: removed stale files, audit reports, agent artifacts,
@@ -111,4 +110,4 @@ subject to breaking changes without notice. Not recommended for production use.
 - Bounds checks in dictionary decompression, hash index, and string overflow
 - Rate limiter entry eviction prevents unbounded memory growth
 
-[0.1.0]: https://github.com/lightningDB/lightning/releases/tag/v0.1.0
+[0.1.0]: https://github.com/BViganotti/LightningDB/releases/tag/v0.1.0

@@ -5,20 +5,20 @@ pub use api::*;
 pub mod capi;
 pub mod memory;
 pub mod optimizer;
-pub mod wasm_function;
 pub mod parser;
 pub mod planner;
 pub mod processor;
 pub mod storage;
 pub mod transaction;
+pub mod wasm_function;
 
 use arrow::array::{Array, ArrayRef, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use lightning_types::LogicalType;
+use lru::LruCache;
 use parking_lot::RwLock;
 pub use processor::Value;
 use serde::{Deserialize, Serialize};
-use lru::LruCache;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,7 @@ fn hash_cache_key(key: &str) -> u64 {
 }
 
 use crate::catalog::{Catalog, LazyCatalog};
+use crate::parser::ast::{Clause, NodePattern, Pattern, Query, Statement};
 use crate::parser::parse;
 use crate::planner::Binder;
 use crate::processor::physical_plan::PhysicalPlanner;
@@ -54,8 +55,6 @@ use crate::processor::Processor;
 use crate::storage::WAL;
 use crate::transaction::transaction_manager::Transaction;
 use crate::transaction::TransactionManager;
-use crate::parser::ast::{Clause, NodePattern, Pattern, Query, Statement};
-
 
 /// System table names that must not be accessible via Cypher queries.
 /// These tables store authentication data (password hashes, tokens, API keys)
@@ -90,7 +89,11 @@ fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
         Statement::Merge(mc) => {
             validate_pattern_no_auth_tables(&mc.pattern)?;
         }
-        Statement::CreateTableNode { name, if_not_exists, .. } => {
+        Statement::CreateTableNode {
+            name,
+            if_not_exists,
+            ..
+        } => {
             if SYSTEM_AUTH_TABLES.contains(&name.as_str()) {
                 // Allow CREATE TABLE IF NOT EXISTS for auth tables (used during
                 // server initialization). All other operations on auth tables
@@ -104,9 +107,15 @@ fn validate_statement_no_auth_tables(stmt: &Statement) -> Result<()> {
         }
         Statement::AlterTable { name, .. }
         | Statement::DropTable(name, _)
-        | Statement::CreateIndex { table_label: name, .. }
-        | Statement::CreateConstraint { table_label: name, .. }
-        | Statement::CreateVectorIndex { table_name: name, .. } => {
+        | Statement::CreateIndex {
+            table_label: name, ..
+        }
+        | Statement::CreateConstraint {
+            table_label: name, ..
+        }
+        | Statement::CreateVectorIndex {
+            table_name: name, ..
+        } => {
             if SYSTEM_AUTH_TABLES.contains(&name.as_str()) {
                 return Err(LightningError::Query(format!(
                     "Access to system table '{name}' is not allowed via Cypher"
@@ -304,27 +313,27 @@ impl SystemConfig {
     pub fn validate(&self) -> Result<()> {
         if self.buffer_pool_size == 0 {
             return Err(LightningError::Config(
-                "buffer_pool_size must be greater than 0".into()
+                "buffer_pool_size must be greater than 0".into(),
             ));
         }
         if self.buffer_pool_size < 1024 * 1024 {
             return Err(LightningError::Config(
-                "buffer_pool_size must be at least 1MB".into()
+                "buffer_pool_size must be at least 1MB".into(),
             ));
         }
         if self.vacuum_interval_ms < 100 {
             return Err(LightningError::Config(
-                "vacuum_interval_ms must be at least 100ms".into()
+                "vacuum_interval_ms must be at least 100ms".into(),
             ));
         }
         if self.prefetch_depth > 100 {
             return Err(LightningError::Config(
-                "prefetch_depth must be <= 100".into()
+                "prefetch_depth must be <= 100".into(),
             ));
         }
         if !(0.0..=1.0).contains(&self.prefetch_confidence) {
             return Err(LightningError::Config(
-                "prefetch_confidence must be between 0.0 and 1.0".into()
+                "prefetch_confidence must be between 0.0 and 1.0".into(),
             ));
         }
         Ok(())
@@ -369,7 +378,8 @@ impl DatabaseMetrics {
 
     pub fn record_checkpoint(&self, duration_us: u64) {
         self.total_checkpoints.fetch_add(1, Ordering::Relaxed);
-        self.checkpoint_duration_us.fetch_add(duration_us, Ordering::Relaxed);
+        self.checkpoint_duration_us
+            .fetch_add(duration_us, Ordering::Relaxed);
     }
 
     pub fn record_wal_write(&self, bytes: u64) {
@@ -396,12 +406,18 @@ impl DatabaseMetrics {
         let hits = self.buffer_hit_count.load(Ordering::Relaxed);
         let misses = self.buffer_miss_count.load(Ordering::Relaxed);
         let total = hits + misses;
-        if total == 0 { 0.0 } else { hits as f64 / total as f64 }
+        if total == 0 {
+            0.0
+        } else {
+            hits as f64 / total as f64
+        }
     }
 
     pub fn avg_checkpoint_duration_ms(&self) -> f64 {
         let count = self.total_checkpoints.load(Ordering::Relaxed);
-        if count == 0 { return 0.0; }
+        if count == 0 {
+            return 0.0;
+        }
         let total_us = self.checkpoint_duration_us.load(Ordering::Relaxed);
         (total_us / count) as f64 / 1000.0
     }
@@ -440,7 +456,13 @@ pub struct Database {
             >,
         >,
     >,
-    pub(crate) physical_plan_caches: Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>>,
+    pub(crate) physical_plan_caches: Vec<
+        Arc<
+            parking_lot::Mutex<
+                LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>,
+            >,
+        >,
+    >,
     pub(crate) metrics: DatabaseMetrics,
 
     vacuum_handle: Option<std::thread::JoinHandle<()>>,
@@ -646,17 +668,18 @@ impl Database {
         let fsm_path = path.join("free_space.bin");
         // Surface a corrupt free-space map: silently starting fresh can hand out
         // pages that are still referenced.
-        let free_space_manager = Arc::new(match crate::storage::FreeSpaceManager::load(&fsm_path) {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::error!(
-                    "Failed to load free-space map {}: {e}; starting fresh. Freed pages \
+        let free_space_manager =
+            Arc::new(match crate::storage::FreeSpaceManager::load(&fsm_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to load free-space map {}: {e}; starting fresh. Freed pages \
                      may be reallocated unsafely until the next checkpoint.",
-                    fsm_path.display()
-                );
-                crate::storage::FreeSpaceManager::new()
-            }
-        });
+                        fsm_path.display()
+                    );
+                    crate::storage::FreeSpaceManager::new()
+                }
+            });
 
         // Wire FreeSpaceManager into all existing file handles so page
         // allocation reuses freed pages before extending files.
@@ -724,8 +747,20 @@ impl Database {
             catalog,
             function_registry: Arc::new(crate::processor::functions::FunctionRegistry::new()),
             header: RwLock::new(header),
-            plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(256).expect("infallible: 256 > 0"))))).collect(),
-            physical_plan_caches: (0..4).map(|_| Arc::new(parking_lot::Mutex::new(LruCache::new(NonZeroUsize::new(64).expect("infallible: 64 > 0"))))).collect(),
+            plan_caches: (0..4)
+                .map(|_| {
+                    Arc::new(parking_lot::Mutex::new(LruCache::new(
+                        NonZeroUsize::new(256).expect("infallible: 256 > 0"),
+                    )))
+                })
+                .collect(),
+            physical_plan_caches: (0..4)
+                .map(|_| {
+                    Arc::new(parking_lot::Mutex::new(LruCache::new(
+                        NonZeroUsize::new(64).expect("infallible: 64 > 0"),
+                    )))
+                })
+                .collect(),
             metrics: DatabaseMetrics::new(),
             vacuum_handle: Some(vacuum_handle),
         });
@@ -736,7 +771,10 @@ impl Database {
         // Checkpoint to truncate WAL if corrupt records were found during replay.
         // This prevents re-processing the same torn writes on every restart.
         if needs_checkpoint {
-            tracing::warn!("Checkpointing to truncate WAL after {} corrupt records", replay_report.corrupt_records_skipped);
+            tracing::warn!(
+                "Checkpointing to truncate WAL after {} corrupt records",
+                replay_report.corrupt_records_skipped
+            );
             if let Err(e) = db.checkpoint() {
                 tracing::warn!("WAL cleanup checkpoint failed (non-fatal): {e}");
             }
@@ -764,27 +802,34 @@ impl Database {
                 .collect();
             let mut stats = table_entry.stats.clone();
             stats.cardinality = stats.cardinality.max(table_entry.num_rows);
-            storage_manager.create_table(
-                table_entry.name.clone(),
-                col_defs,
-                false,
-                Some(stats),
-            )?;
+            storage_manager.create_table(table_entry.name.clone(), col_defs, false, Some(stats))?;
             let physical = table_entry.next_row_id.max(table_entry.num_rows);
             if physical > 0 {
                 if let Some(table) = storage_manager.node_tables.get_mut(&table_entry.name) {
-                    table.next_row_id.store(physical, std::sync::atomic::Ordering::Release);
+                    table
+                        .next_row_id
+                        .store(physical, std::sync::atomic::Ordering::Release);
                 }
             }
             if table_entry.primary_key.is_some() {
                 storage_manager.create_index(&table_entry.name)?;
             }
-            storage_manager.create_fts_index(&table_entry.name).map_err(|e| {
-                LightningError::Internal(format!("FTS index creation failed for {}: {}", table_entry.name, e))
-            })?;
-            storage_manager.create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM).map_err(|e| {
-                LightningError::Internal(format!("Vector index creation failed for {}: {}", table_entry.name, e))
-            })?;
+            storage_manager
+                .create_fts_index(&table_entry.name)
+                .map_err(|e| {
+                    LightningError::Internal(format!(
+                        "FTS index creation failed for {}: {}",
+                        table_entry.name, e
+                    ))
+                })?;
+            storage_manager
+                .create_vector_index(&table_entry.name, crate::memory::DEFAULT_EMBEDDING_DIM)
+                .map_err(|e| {
+                    LightningError::Internal(format!(
+                        "Vector index creation failed for {}: {}",
+                        table_entry.name, e
+                    ))
+                })?;
         }
         for table_entry in cat.rel_tables.values() {
             let col_defs: Vec<(String, LogicalType)> = table_entry
@@ -794,16 +839,13 @@ impl Database {
                 .collect();
             let mut stats = table_entry.stats.clone();
             stats.cardinality = stats.cardinality.max(table_entry.num_rows);
-            storage_manager.create_table(
-                table_entry.name.clone(),
-                col_defs,
-                true,
-                Some(stats),
-            )?;
+            storage_manager.create_table(table_entry.name.clone(), col_defs, true, Some(stats))?;
             let physical = table_entry.next_row_id.max(table_entry.num_rows);
             if physical > 0 {
                 if let Some(table) = storage_manager.rel_tables.get_mut(&table_entry.name) {
-                    table.next_row_id.store(physical, std::sync::atomic::Ordering::Release);
+                    table
+                        .next_row_id
+                        .store(physical, std::sync::atomic::Ordering::Release);
                 }
             }
         }
@@ -825,17 +867,17 @@ impl Database {
                 }
                 let db = match db_weak.upgrade() {
                     Some(d) => d,
-                    None => return Err(crate::LightningError::Internal(
-                        "Database dropped during SEARCH evaluation".into(),
-                    )),
+                    None => {
+                        return Err(crate::LightningError::Internal(
+                            "Database dropped during SEARCH evaluation".into(),
+                        ))
+                    }
                 };
                 let storage = db.storage_manager.read();
                 let fts_values: Vec<Option<f32>> = {
                     let mut results = Vec::new();
-                    let node_arr = args[0].as_any()
-                        .downcast_ref::<arrow::array::UInt64Array>();
-                    let query_arr = args[1].as_any()
-                        .downcast_ref::<arrow::array::StringArray>();
+                    let node_arr = args[0].as_any().downcast_ref::<arrow::array::UInt64Array>();
+                    let query_arr = args[1].as_any().downcast_ref::<arrow::array::StringArray>();
                     match (node_arr, query_arr) {
                         (Some(ids), Some(queries)) => {
                             for i in 0..ids.len() {
@@ -844,10 +886,16 @@ impl Database {
                                     let query_str = queries.value(i);
                                     let mut best_score = 0.0f32;
                                     for fts in storage.fts_indexes.values() {
-                                        let Ok(tx) = db.transaction_manager.begin(true) else { continue };
-                                        if let Ok(res) = fts.search(query_str, 1, &db.buffer_manager, &tx) {
+                                        let Ok(tx) = db.transaction_manager.begin(true) else {
+                                            continue;
+                                        };
+                                        if let Ok(res) =
+                                            fts.search(query_str, 1, &db.buffer_manager, &tx)
+                                        {
                                             if let Some(&(_, s)) = res.first() {
-                                                if s > best_score { best_score = s; }
+                                                if s > best_score {
+                                                    best_score = s;
+                                                }
                                             }
                                         }
                                     }
@@ -918,11 +966,33 @@ impl Database {
         &self.header
     }
 
-    pub fn plan_caches(&self) -> &Vec<Arc<parking_lot::Mutex<LruCache<String, Arc<(crate::planner::binder::BoundStatement, std::collections::HashMap<String, usize>)>>>>> {
+    pub fn plan_caches(
+        &self,
+    ) -> &Vec<
+        Arc<
+            parking_lot::Mutex<
+                LruCache<
+                    String,
+                    Arc<(
+                        crate::planner::binder::BoundStatement,
+                        std::collections::HashMap<String, usize>,
+                    )>,
+                >,
+            >,
+        >,
+    > {
         &self.plan_caches
     }
 
-    pub fn physical_plan_caches(&self) -> &Vec<Arc<parking_lot::Mutex<LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>>>> {
+    pub fn physical_plan_caches(
+        &self,
+    ) -> &Vec<
+        Arc<
+            parking_lot::Mutex<
+                LruCache<u64, Arc<dyn crate::processor::PhysicalOperator + Send + Sync>>,
+            >,
+        >,
+    > {
         &self.physical_plan_caches
     }
 
@@ -958,7 +1028,9 @@ impl Database {
         func_name: &str,
     ) -> Result<()> {
         if self._config.read_only {
-            return Err(LightningError::Config("Database is opened as read-only".into()));
+            return Err(LightningError::Config(
+                "Database is opened as read-only".into(),
+            ));
         }
         let wat_bytes = self.read_wasm_file(wasm_path.as_ref())?;
         let wasm_func = crate::wasm_function::WasmFunction::from_wat_bytes(wat_bytes, func_name)?;
@@ -976,9 +1048,9 @@ impl Database {
     /// to prevent symlink-based TOCTOU attacks. The file is opened within the
     /// validation scope so there is no gap between path validation and file I/O.
     fn read_wasm_file(&self, user_path: &Path) -> Result<Vec<u8>> {
+        use std::io::Read;
         use std::os::unix::fs::OpenOptionsExt;
         use std::path::Component;
-        use std::io::Read;
 
         let base_dir = self._config.wasm_base_dir.as_deref();
         let database_path = &self._path;
@@ -1032,28 +1104,33 @@ impl Database {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(&canonical)
-            .map_err(|e| LightningError::Database(format!(
-                "Failed to open WASM file '{}': {e}",
-                canonical.display()
-            )))?;
+            .map_err(|e| {
+                LightningError::Database(format!(
+                    "Failed to open WASM file '{}': {e}",
+                    canonical.display()
+                ))
+            })?;
 
         // O_NOFOLLOW guarantees on all supported platforms (Linux, macOS)
         // that we didn't follow a trailing symlink. The open would have failed
         // with ELOOP if the final component was a symlink.
 
         let mut wat_bytes = Vec::new();
-        file.read_to_end(&mut wat_bytes)
-            .map_err(|e| LightningError::Database(format!(
+        file.read_to_end(&mut wat_bytes).map_err(|e| {
+            LightningError::Database(format!(
                 "Failed to read WASM file '{}': {e}",
                 canonical.display()
-            )))?;
+            ))
+        })?;
 
         Ok(wat_bytes)
     }
 
     pub fn checkpoint(&self) -> Result<()> {
         if self._config.read_only {
-            return Err(LightningError::Config("Cannot checkpoint a read-only database".into()));
+            return Err(LightningError::Config(
+                "Cannot checkpoint a read-only database".into(),
+            ));
         }
         let start = std::time::Instant::now();
         // Flush all dirty pages to disk and sync data files
@@ -1075,7 +1152,9 @@ impl Database {
         {
             let fsm_path = self._path.join("free_space.bin");
             self.free_space_manager.save(&fsm_path).map_err(|e| {
-                LightningError::Internal(format!("Failed to save free space map during checkpoint: {e}"))
+                LightningError::Internal(format!(
+                    "Failed to save free space map during checkpoint: {e}"
+                ))
             })?;
         }
 
@@ -1143,7 +1222,8 @@ impl Database {
             tracing::debug!("Vacuumed {total_evicted} RowVersion committed entries");
         }
 
-        self.metrics.record_checkpoint(start.elapsed().as_micros() as u64);
+        self.metrics
+            .record_checkpoint(start.elapsed().as_micros() as u64);
         Ok(())
     }
 
@@ -1276,7 +1356,9 @@ impl Database {
                 }
             }
             // Rebuild CSR indexes if present
-            self.storage_manager.write().ensure_csr_fresh(table_name, bm, &tx)?;
+            self.storage_manager
+                .write()
+                .ensure_csr_fresh(table_name, bm, &tx)?;
         }
 
         // Commit the optimization transaction so re-encoded (compressed) pages
@@ -1284,15 +1366,17 @@ impl Database {
         // checkpoint.
         self.transaction_manager
             .commit(&tx, bm, self)
-            .map_err(|e| {
-                LightningError::Internal(format!("optimization commit failed: {e}"))
-            })?;
+            .map_err(|e| LightningError::Internal(format!("optimization commit failed: {e}")))?;
 
         // Force a checkpoint to persist the optimized state
         self.checkpoint()?;
 
         let elapsed = start.elapsed();
-        tracing::info!("VACUUM completed in {:?} for {} tables", elapsed, tables.len());
+        tracing::info!(
+            "VACUUM completed in {:?} for {} tables",
+            elapsed,
+            tables.len()
+        );
         Ok(())
     }
 
@@ -1479,7 +1563,8 @@ impl Connection {
 
     pub fn commit(&self) -> Result<()> {
         let mut guard = self.transaction.lock();
-        let tx = guard.take()
+        let tx = guard
+            .take()
             .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
         let bm = &self.client_context.database.buffer_manager;
@@ -1494,7 +1579,8 @@ impl Connection {
         // Hold the transaction lock during commit to prevent another thread
         // from starting a new transaction or calling execute on a stale tx.
         // Only release after the commit record is written to the WAL.
-        let result = self.client_context
+        let result = self
+            .client_context
             .database
             .transaction_manager
             .commit(&tx, bm, db);
@@ -1504,7 +1590,9 @@ impl Connection {
 
     pub fn fast_insert(&self, table_name: &str, rows: Vec<Vec<(String, Value)>>) -> Result<usize> {
         if self.client_context.database._config.read_only {
-            return Err(LightningError::Config("Database is opened as read-only".into()));
+            return Err(LightningError::Config(
+                "Database is opened as read-only".into(),
+            ));
         }
         use arrow::array::*;
 
@@ -1710,11 +1798,13 @@ impl Connection {
 
     pub fn rollback(&self) -> Result<()> {
         let mut guard = self.transaction.lock();
-        let tx = guard.take()
+        let tx = guard
+            .take()
             .ok_or_else(|| LightningError::Query("No active transaction".into()))?;
 
         let db: &Database = &self.client_context.database;
-        let result = self.client_context
+        let result = self
+            .client_context
             .database
             .transaction_manager
             .rollback(db, &tx);
@@ -1766,12 +1856,8 @@ impl Connection {
             let plan = cached_plan.clone_box();
             let tx = match (snapshot_ts, explicit_tx) {
                 (_, Some(tx)) => tx,
-                (Some(ts), None) => Arc::new(
-                    db.transaction_manager.begin_at(true, Some(ts))?,
-                ),
-                (None, None) => Arc::new(
-                    db.transaction_manager.begin(true)?,
-                ),
+                (Some(ts), None) => Arc::new(db.transaction_manager.begin_at(true, Some(ts))?),
+                (None, None) => Arc::new(db.transaction_manager.begin(true)?),
             };
             println!("DEBUG_PLAN: CACHE HIT for query_hash={}", query_hash);
             return Ok((plan, tx));
@@ -1780,8 +1866,7 @@ impl Connection {
         // Cache miss: parse first to determine if query is read-only.
         // This lets us create a read-only transaction for read-only
         // queries, avoiding catalog write locks during commit.
-        let query = parse(query_str)
-            .map_err(|e| LightningError::Query(e.to_string()))?;
+        let query = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
         if !self.skip_auth_check {
             validate_no_auth_table_access(&query)?;
         }
@@ -1797,12 +1882,8 @@ impl Connection {
 
         let tx = match (snapshot_ts, explicit_tx) {
             (_, Some(tx)) => tx,
-            (Some(ts), None) => Arc::new(
-                db.transaction_manager.begin_at(true, Some(ts))?,
-            ),
-            (None, None) => Arc::new(
-                db.transaction_manager.begin(is_read_only)?,
-            ),
+            (Some(ts), None) => Arc::new(db.transaction_manager.begin_at(true, Some(ts))?),
+            (None, None) => Arc::new(db.transaction_manager.begin(is_read_only)?),
         };
 
         if !is_read_only {
@@ -1840,10 +1921,7 @@ impl Connection {
                 } else {
                     drop(cache);
                     let catalog = db.catalog.read();
-                    let mut binder = Binder::new(
-                        &catalog,
-                        &db.function_registry,
-                    );
+                    let mut binder = Binder::new(&catalog, &db.function_registry);
                     let bound_query = binder.bind_query(&query)?;
                     drop(catalog);
                     let binder_offsets = bound_query.column_offsets.clone();
@@ -1854,7 +1932,10 @@ impl Connection {
                     let stmt = bound_union.statement.clone();
                     if matches!(stmt, crate::planner::binder::BoundStatement::Query(..)) {
                         let mut cache = db.plan_caches[cache_shard_idx].lock();
-                        cache.put(plan_cache_key, Arc::new((stmt.clone(), binder_offsets.clone())));
+                        cache.put(
+                            plan_cache_key,
+                            Arc::new((stmt.clone(), binder_offsets.clone())),
+                        );
                     }
                     (stmt, binder_offsets)
                 }
@@ -1930,11 +2011,7 @@ impl Connection {
         }
         let (physical_plan, tx) = self.build_physical_plan(query_str, None, None)?;
         let mut processor = Processor::new(physical_plan);
-        processor.execute_stream(
-            Arc::clone(&self.client_context.database),
-            tx,
-            params,
-        )
+        processor.execute_stream(Arc::clone(&self.client_context.database), tx, params)
     }
 
     /// Cheap pre-filter for transaction control statements: returns true when
@@ -1963,8 +2040,7 @@ impl Connection {
     /// snapshot isolation for BEGIN), and a string COMMIT committed nothing
     /// (and double-committed the throwaway transaction).
     fn execute_transaction_statement(&self, query_str: &str) -> Result<QueryResult> {
-        let parsed = parse(query_str)
-            .map_err(|e| LightningError::Query(e.to_string()))?;
+        let parsed = parse(query_str).map_err(|e| LightningError::Query(e.to_string()))?;
         let action = match parsed.union_queries.first().map(|uq| &uq.statement) {
             Some(Statement::Transaction(action)) => action.clone(),
             _ => {
@@ -1991,11 +2067,9 @@ impl Connection {
                 "Transaction rolled back"
             }
         };
-        let schema = Arc::new(arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
-            "result",
-            arrow::datatypes::DataType::Utf8,
-            false,
-        )]));
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("result", arrow::datatypes::DataType::Utf8, false),
+        ]));
         let batch = RecordBatch::try_new(
             schema,
             vec![Arc::new(arrow::array::StringArray::from(vec![message]))],
@@ -2026,17 +2100,14 @@ impl Connection {
             drop(active_tx_guard);
             return Err(LightningError::Query(
                 "execute_at cannot be used inside an explicit transaction; \
-                 the snapshot timestamp would conflict with the transaction's read timestamp".into()
+                 the snapshot timestamp would conflict with the transaction's read timestamp"
+                    .into(),
             ));
         }
         let is_autocommit = true;
         drop(active_tx_guard);
 
-        let (physical_plan, tx) = self.build_physical_plan(
-            query_str,
-            Some(snapshot_ts),
-            None,
-        )?;
+        let (physical_plan, tx) = self.build_physical_plan(query_str, Some(snapshot_ts), None)?;
         let mut processor = Processor::new(physical_plan);
         let chunks = processor.execute(
             Arc::clone(&self.client_context.database),
@@ -2047,16 +2118,19 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
-                if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
-                    tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
-                }
-            })?;
+            db.transaction_manager
+                .commit(&tx, bm, db)
+                .inspect_err(|_e| {
+                    if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
+                        tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
+                    }
+                })?;
             let _ = self.client_context.database.maybe_checkpoint_wal();
         }
 
         Ok(QueryResult::new_arrow(
-            vec![], vec![],
+            vec![],
+            vec![],
             chunks.into_iter().map(|c| c.batch).collect(),
         ))
     }
@@ -2093,7 +2167,7 @@ impl Connection {
             if tx.finalized.load(std::sync::atomic::Ordering::Acquire) {
                 drop(active_tx_guard);
                 return Err(LightningError::Internal(
-                    "Transaction has already been committed or rolled back".into()
+                    "Transaction has already been committed or rolled back".into(),
                 ));
             }
         }
@@ -2114,16 +2188,21 @@ impl Connection {
                 .spawn(move || {
                     let _ = result_tx.send(processor.execute(db, tx_clone, params));
                 })
-                .map_err(|e| LightningError::Internal(format!("failed to spawn query thread: {e}")))?;
+                .map_err(|e| {
+                    LightningError::Internal(format!("failed to spawn query thread: {e}"))
+                })?;
             match result_rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
                 Ok(result) => result,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     return Err(LightningError::Internal(format!(
-                        "Query timed out after {}ms", timeout_ms
+                        "Query timed out after {}ms",
+                        timeout_ms
                     )));
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(LightningError::Internal("Query thread terminated unexpectedly".into()));
+                    return Err(LightningError::Internal(
+                        "Query thread terminated unexpectedly".into(),
+                    ));
                 }
             }
         } else {
@@ -2152,11 +2231,13 @@ impl Connection {
         if is_autocommit {
             let bm = &self.client_context.database.buffer_manager;
             let db = &*self.client_context.database;
-            db.transaction_manager.commit(&tx, bm, db).inspect_err(|_e| {
-                if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
-                    tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
-                }
-            })?;
+            db.transaction_manager
+                .commit(&tx, bm, db)
+                .inspect_err(|_e| {
+                    if let Err(rollback_err) = db.transaction_manager.rollback(db, &tx) {
+                        tracing::warn!("Rollback after commit failure failed: {}", rollback_err);
+                    }
+                })?;
         }
 
         // Bound WAL growth for all write statements, including inside an
@@ -2172,11 +2253,7 @@ impl Connection {
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let threshold = self.client_context.database._config.slow_query_threshold_ms;
         if threshold > 0 && elapsed_ms >= threshold {
-            tracing::warn!(
-                "SLOW QUERY: {} ms | query: {}",
-                elapsed_ms,
-                query_str
-            );
+            tracing::warn!("SLOW QUERY: {} ms | query: {}", elapsed_ms, query_str);
         }
 
         Ok(QueryResult::new_arrow(
@@ -2188,7 +2265,9 @@ impl Connection {
 
     pub fn bulk_insert_batch(&self, table_name: &str, batch: &RecordBatch) -> Result<usize> {
         if self.client_context.database._config.read_only {
-            return Err(LightningError::Config("Database is opened as read-only".into()));
+            return Err(LightningError::Config(
+                "Database is opened as read-only".into(),
+            ));
         }
         let db = self.client_context.database.clone();
         let table = {
@@ -2316,12 +2395,14 @@ impl Connection {
                 let new_id_field =
                     arrow::datatypes::Field::new("_id", arrow::datatypes::DataType::UInt64, false);
                 let take_indices = arrow::array::UInt32Array::from(new_indices);
-                let new_id_values: UInt64Array = (start_id..start_id + new_rows_count as u64).collect();
+                let new_id_values: UInt64Array =
+                    (start_id..start_id + new_rows_count as u64).collect();
                 let mut new_fields = vec![new_id_field];
                 let mut new_cols: Vec<ArrayRef> = vec![Arc::new(new_id_values)];
                 for col_idx in 0..batch.num_columns() {
-                    let taken = arrow::compute::take(batch.column(col_idx).as_ref(), &take_indices, None)
-                        .map_err(|e| LightningError::Internal(format!("take failed: {e}")))?;
+                    let taken =
+                        arrow::compute::take(batch.column(col_idx).as_ref(), &take_indices, None)
+                            .map_err(|e| LightningError::Internal(format!("take failed: {e}")))?;
                     new_fields.push(batch.schema().field(col_idx).clone());
                     new_cols.push(taken);
                 }
@@ -2436,7 +2517,8 @@ impl Connection {
                 .collect();
 
             if !string_cols.is_empty() {
-                let col_names: Vec<String> = string_cols.iter()
+                let col_names: Vec<String> = string_cols
+                    .iter()
                     .map(|&i| table.columns[i].name.clone())
                     .collect();
                 let mut muts = tx.index_mutations.lock();
@@ -2449,16 +2531,19 @@ impl Connection {
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
                         {
                             if str_arr.is_valid(i) && !str_arr.value(i).is_empty() {
-                                fields_vec.push((col_names[j].clone(), str_arr.value(i).to_string()));
+                                fields_vec
+                                    .push((col_names[j].clone(), str_arr.value(i).to_string()));
                             }
                         }
                     }
                     if !fields_vec.is_empty() {
-                        muts.push(crate::transaction::transaction_manager::IndexMutation::FtsInsert {
-                            index: Arc::clone(&fts),
-                            node_id,
-                            fields: fields_vec,
-                        });
+                        muts.push(
+                            crate::transaction::transaction_manager::IndexMutation::FtsInsert {
+                                index: Arc::clone(&fts),
+                                node_id,
+                                fields: fields_vec,
+                            },
+                        );
                     }
                 }
             }
@@ -2468,7 +2553,6 @@ impl Connection {
         db.transaction_manager.commit(&tx, &bm, &db)?;
         // Bulk inserts are a common source of WAL growth (edges/nodes); bound it.
         let _ = db.maybe_checkpoint_wal();
-
 
         {
             let mut cat = db.catalog.write();
@@ -2483,8 +2567,14 @@ impl Connection {
         let stats_snapshot = {
             let storage = db.storage_manager.read();
             (
-                storage.rel_tables.get(table_name).map(|t| t.stats.read().clone()),
-                storage.node_tables.get(table_name).map(|t| t.stats.read().clone()),
+                storage
+                    .rel_tables
+                    .get(table_name)
+                    .map(|t| t.stats.read().clone()),
+                storage
+                    .node_tables
+                    .get(table_name)
+                    .map(|t| t.stats.read().clone()),
             )
         };
         {

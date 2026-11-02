@@ -24,8 +24,11 @@ fn test_wal_basic_write() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 3);
     Ok(())
 }
@@ -38,8 +41,11 @@ fn test_wal_multiple_writes() -> TestResult {
         conn.execute(&format!("CREATE (:T {{x: {}}})", i), None)?;
     }
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 13);
     Ok(())
 }
@@ -50,8 +56,11 @@ fn test_wal_update() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 SET t.x = 42", None)?;
     let res = conn.execute("MATCH (t:T) WHERE t.x = 42 RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 1);
     Ok(())
 }
@@ -62,8 +71,11 @@ fn test_wal_delete() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 DELETE t", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 2);
     Ok(())
 }
@@ -74,8 +86,11 @@ fn test_wal_checkpoint() -> TestResult {
     let conn = db.connect();
     db.checkpoint()?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 3);
     Ok(())
 }

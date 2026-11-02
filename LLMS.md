@@ -1,16 +1,16 @@
 # LightningDB — LLM Reference
 
 > Auto-generated reference for LLM consumption. Concise, structured, accurate.
-> For human docs see: README.md, ARCHITECTURE.md, CYPHER_REFERENCE.md, PERFORMANCE_TUNING.md, ROADMAP.md
+> For human docs see: README.md, ARCHITECTURE.md, CYPHER_REFERENCE.md, ROADMAP.md
 
 ## Project Identity
 
 - **Name**: LightningDB (crate: `lightning`)
 - **Type**: Graph+vector+hybrid database server
 - **Language**: Rust
-- **Status**: Pre-alpha (400+ tests passing)
+- **Status**: Pre-alpha (950+ tests)
 - **License**: MIT
-- **Monorepo path**: `/research/lightning/`
+- **Repository**: https://github.com/BViganotti/LightningDB
 
 ## What It Does
 

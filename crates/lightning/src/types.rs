@@ -122,7 +122,10 @@ impl TypedQueryResult {
 }
 
 impl Serialize for TypedQueryResult {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(3))?;
         map.serialize_entry("columns", &self.columns)?;

@@ -100,7 +100,11 @@ impl HashIndex {
     /// twice the bucket count, and rehashes every entry.
     /// Header is updated LAST to prevent concurrent lookups (which do
     /// NOT hold the resize lock) from reading garbage bucket pages.
-    pub fn resize(&self, bm: &BufferManager, tx: &crate::transaction::transaction_manager::Transaction) -> Result<()> {
+    pub fn resize(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
         let _lock = self.resize_lock.lock();
         let entries = self.collect_all_entries(bm, tx)?;
         let old_buckets = self.num_buckets.load(std::sync::atomic::Ordering::Acquire);
@@ -149,11 +153,16 @@ impl HashIndex {
                 8,
             );
         }
-        bm.log_page_update(self.file_handle.file_id, HEADER_PAGE_IDX, header_frame.as_slice())?;
+        bm.log_page_update(
+            self.file_handle.file_id,
+            HEADER_PAGE_IDX,
+            header_frame.as_slice(),
+        )?;
         bm.unpin_page(self.fh(), HEADER_PAGE_IDX, header_frame);
 
         // 4. Update the in-memory count
-        self.num_buckets.store(new_buckets, std::sync::atomic::Ordering::Release);
+        self.num_buckets
+            .store(new_buckets, std::sync::atomic::Ordering::Release);
 
         // 5. Re-insert all collected entries (insert_internal reads header → new_buckets ✓)
         for (hash, key, row_id) in &entries {
@@ -219,7 +228,9 @@ impl HashIndex {
             tracing::warn!("HashIndex num_buckets=0 at insert, reinitializing with 64 buckets");
             self.initialize_header(Some(bm))?;
             let n = self.buckets();
-            if n == 0 { return Err(LightningError::Internal("HashIndex reinit failed".into())); }
+            if n == 0 {
+                return Err(LightningError::Internal("HashIndex reinit failed".into()));
+            }
             n
         } else {
             num_buckets
@@ -234,7 +245,12 @@ impl HashIndex {
 
             if (num_entries as usize) < MAX_ENTRIES_PER_PAGE {
                 Self::write_entry_to_page(data_ptr, num_entries, hash, key_bytes, row_id)?;
-                bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, frame.as_slice())?;
+                bm.log_page_update_for_tx(
+                    tx.tx_id,
+                    self.fh().file_id,
+                    current_page,
+                    frame.as_slice(),
+                )?;
                 bm.unpin_page(self.fh(), current_page, frame);
                 return Ok(());
             }
@@ -244,7 +260,8 @@ impl HashIndex {
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
-                let bucket_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
+                let bucket_frame =
+                    bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         new_page.to_le_bytes().as_ptr(),
@@ -252,7 +269,12 @@ impl HashIndex {
                         8,
                     );
                 }
-                bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, bucket_frame.as_slice())?;
+                bm.log_page_update_for_tx(
+                    tx.tx_id,
+                    self.fh().file_id,
+                    current_page,
+                    bucket_frame.as_slice(),
+                )?;
                 bm.unpin_page(self.fh(), current_page, bucket_frame);
                 current_page = new_page;
             } else {
@@ -380,12 +402,16 @@ impl HashIndex {
     }
     fn deserialize_value(buf: &[u8]) -> Result<Value> {
         if buf.is_empty() {
-            return Err(LightningError::Internal("empty buffer in deserialize_value".into()));
+            return Err(LightningError::Internal(
+                "empty buffer in deserialize_value".into(),
+            ));
         }
         match buf[0] {
             0 => {
                 if buf.len() < 9 {
-                    return Err(LightningError::Internal("short buffer for Number in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Number in deserialize_value".into(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
@@ -393,7 +419,9 @@ impl HashIndex {
             }
             1 => {
                 if buf.len() < 5 {
-                    return Err(LightningError::Internal("short buffer for String length in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for String length in deserialize_value".into(),
+                    ));
                 }
                 let mut len_bytes = [0u8; 4];
                 len_bytes.copy_from_slice(&buf[1..5]);
@@ -411,13 +439,17 @@ impl HashIndex {
             }
             2 => {
                 if buf.len() < 2 {
-                    return Err(LightningError::Internal("short buffer for Boolean in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Boolean in deserialize_value".into(),
+                    ));
                 }
                 Ok(Value::Boolean(buf[1] != 0))
             }
             3 => {
                 if buf.len() < 9 {
-                    return Err(LightningError::Internal("short buffer for Node in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Node in deserialize_value".into(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
@@ -425,7 +457,9 @@ impl HashIndex {
             }
             4 => {
                 if buf.len() < 9 {
-                    return Err(LightningError::Internal("short buffer for Relationship in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Relationship in deserialize_value".into(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
@@ -433,7 +467,9 @@ impl HashIndex {
             }
             5 => {
                 if buf.len() < 5 {
-                    return Err(LightningError::Internal("short buffer for Date in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Date in deserialize_value".into(),
+                    ));
                 }
                 let mut bytes = [0u8; 4];
                 bytes.copy_from_slice(&buf[1..5]);
@@ -441,15 +477,17 @@ impl HashIndex {
             }
             6 => {
                 if buf.len() < 9 {
-                    return Err(LightningError::Internal("short buffer for Timestamp in deserialize_value".into()));
+                    return Err(LightningError::Internal(
+                        "short buffer for Timestamp in deserialize_value".into(),
+                    ));
                 }
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[1..9]);
                 Ok(Value::Timestamp(i64::from_le_bytes(bytes)))
             }
-            t => Err(LightningError::Internal(
-                format!("Unsupported index value type tag {t}"),
-            )),
+            t => Err(LightningError::Internal(format!(
+                "Unsupported index value type tag {t}"
+            ))),
         }
     }
 
@@ -464,7 +502,8 @@ impl HashIndex {
         if num_entries == 0 {
             // Check if page looks like it should have entries (non-zero data after header)
             let has_nonzero = data[16..std::cmp::min(16 + ENTRY_SIZE, PAGE_SIZE)]
-                .iter().any(|&b| b != 0);
+                .iter()
+                .any(|&b| b != 0);
             if has_nonzero {
                 tracing::warn!(
                     "scan_bucket_page: num_entries=0 but page has non-zero data at offset 16+, hash={:#x}",
@@ -532,7 +571,9 @@ impl HashIndex {
             std::ptr::copy_nonoverlapping(hash.to_le_bytes().as_ptr(), data_ptr.add(offset), 8);
         }
         if key_bytes.len() != MAX_VAL_SIZE {
-            return Err(LightningError::Internal("key_bytes length must match MAX_VAL_SIZE".into()));
+            return Err(LightningError::Internal(
+                "key_bytes length must match MAX_VAL_SIZE".into(),
+            ));
         }
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -570,7 +611,9 @@ impl HashIndex {
             tracing::warn!("HashIndex num_buckets=0 at delete_if, reinitializing with 64 buckets");
             self.initialize_header(Some(bm))?;
             let n = self.buckets();
-            if n == 0 { return Err(LightningError::Internal("HashIndex reinit failed".into())); }
+            if n == 0 {
+                return Err(LightningError::Internal("HashIndex reinit failed".into()));
+            }
             n
         } else {
             num_buckets
@@ -587,7 +630,12 @@ impl HashIndex {
                 let mut key_buf = vec![0u8; MAX_VAL_SIZE];
                 Self::serialize_value(key, &mut key_buf)?;
                 Self::write_entry_to_page(data_ptr, num_entries, hash, &key_buf, row_id)?;
-                bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, frame.as_slice())?;
+                bm.log_page_update_for_tx(
+                    tx.tx_id,
+                    self.fh().file_id,
+                    current_page,
+                    frame.as_slice(),
+                )?;
                 bm.unpin_page(self.fh(), current_page, frame);
                 break;
             }
@@ -598,7 +646,8 @@ impl HashIndex {
 
             if next_page == 0 {
                 let new_page = self.allocate_overflow_page(bm, tx)?;
-                let bucket_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
+                let bucket_frame =
+                    bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
                 // SAFETY: SAFETY: Writing overflow page link into newly created version.
                 unsafe {
                     std::ptr::copy_nonoverlapping(
@@ -607,7 +656,12 @@ impl HashIndex {
                         8,
                     );
                 }
-                bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, bucket_frame.as_slice())?;
+                bm.log_page_update_for_tx(
+                    tx.tx_id,
+                    self.fh().file_id,
+                    current_page,
+                    bucket_frame.as_slice(),
+                )?;
                 bm.unpin_page(self.fh(), current_page, bucket_frame);
                 current_page = new_page;
             } else {
@@ -654,9 +708,8 @@ impl HashIndex {
                         continue;
                     }
                     if stored_hash == hash {
-                        let stored_val = Self::deserialize_value(
-                            &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
-                        )?;
+                        let stored_val =
+                            Self::deserialize_value(&data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
                         if stored_val == *key {
                             let stored_row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
                             if stored_row_id == row_id {
@@ -671,17 +724,19 @@ impl HashIndex {
             if found {
                 bm.unpin_page(self.fh(), current_page, frame);
                 if let Some(offset) = found_offset {
-                    let write_frame = bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
+                    let write_frame =
+                        bm.create_new_version(Arc::clone(self.fh()), current_page, tx)?;
                     unsafe {
                         let ptr = write_frame.as_ptr();
                         let tombstone = (hash | DELETED_BIT).to_le_bytes();
-                        std::ptr::copy_nonoverlapping(
-                            tombstone.as_ptr(),
-                            ptr.add(offset),
-                            8,
-                        );
+                        std::ptr::copy_nonoverlapping(tombstone.as_ptr(), ptr.add(offset), 8);
                     }
-                    bm.log_page_update_for_tx(tx.tx_id, self.fh().file_id, current_page, write_frame.as_slice())?;
+                    bm.log_page_update_for_tx(
+                        tx.tx_id,
+                        self.fh().file_id,
+                        current_page,
+                        write_frame.as_slice(),
+                    )?;
                     bm.unpin_page(self.fh(), current_page, write_frame);
                 }
                 return Ok(true);
@@ -770,9 +825,8 @@ impl HashIndex {
                     if stored_hash & DELETED_BIT != 0 {
                         continue;
                     }
-                    let key = Self::deserialize_value(
-                        &data[offset + 8..offset + 8 + MAX_VAL_SIZE],
-                    )?;
+                    let key =
+                        Self::deserialize_value(&data[offset + 8..offset + 8 + MAX_VAL_SIZE])?;
                     let row_id = read_u64_at(data, offset + 8 + MAX_VAL_SIZE)?;
                     results.push((key, row_id));
                 }
@@ -813,7 +867,11 @@ mod tests {
         assert_eq!(index.buckets(), 64);
         // Initial header should show 64 buckets
         let data = std::fs::read(&path).expect("internal invariant violated");
-        let header_buckets = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
+        let header_buckets = u64::from_le_bytes(
+            data[0..8]
+                .try_into()
+                .expect("infallible: fixed-size array conversion"),
+        );
         assert_eq!(header_buckets, 64);
     }
 
@@ -824,19 +882,28 @@ mod tests {
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
         index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 128);
 
         // Commit and checkpoint to flush to disk
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
         db.checkpoint().expect("internal invariant violated");
 
         // Verify header on disk
         let data = std::fs::read(&path).expect("internal invariant violated");
-        let nb = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
+        let nb = u64::from_le_bytes(
+            data[0..8]
+                .try_into()
+                .expect("infallible: fixed-size array conversion"),
+        );
         assert_eq!(nb, 128, "On-disk header should be 128");
 
         // Reopen and verify
@@ -851,7 +918,10 @@ mod tests {
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
 
         assert_eq!(index.buckets(), 64);
         index.resize(bm, &tx).expect("internal invariant violated");
@@ -859,11 +929,17 @@ mod tests {
         index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 256);
 
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
         db.checkpoint().expect("internal invariant violated");
 
         let data = std::fs::read(&path).expect("internal invariant violated");
-        let nb = u64::from_le_bytes(data[0..8].try_into().expect("infallible: fixed-size array conversion"));
+        let nb = u64::from_le_bytes(
+            data[0..8]
+                .try_into()
+                .expect("infallible: fixed-size array conversion"),
+        );
         assert_eq!(nb, 256, "Double resize: on-disk header should be 256");
     }
 
@@ -872,17 +948,23 @@ mod tests {
         // Edge case: resize when there's only 1 bucket
         let dir = tempdir().expect("internal invariant violated");
         let path = dir.path().join("test_index.lbug");
-        let index = HashIndex::open_or_create_with_buckets(&path, 1).expect("internal invariant violated");
+        let index =
+            HashIndex::open_or_create_with_buckets(&path, 1).expect("internal invariant violated");
         assert_eq!(index.buckets(), 1);
 
         let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
 
         index.resize(bm, &tx).expect("internal invariant violated");
         assert_eq!(index.buckets(), 2);
 
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -892,11 +974,16 @@ mod tests {
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
 
         // Insert 5 entries
         for i in 0..5u64 {
-            index.insert(bm, &Value::Number(i as f64), 100 + i, &tx).expect("internal invariant violated");
+            index
+                .insert(bm, &Value::Number(i as f64), 100 + i, &tx)
+                .expect("internal invariant violated");
         }
 
         let entries = index.entries(bm, &tx).expect("internal invariant violated");
@@ -908,13 +995,17 @@ mod tests {
             }
         }
 
-        index.delete(bm, &Value::Number(2.0), 102, &tx).expect("internal invariant violated");
+        index
+            .delete(bm, &Value::Number(2.0), 102, &tx)
+            .expect("internal invariant violated");
         let after_delete = index.entries(bm, &tx).expect("internal invariant violated");
         assert_eq!(after_delete.len(), 4, "Should skip deleted entry");
         let still_present = after_delete.iter().any(|(_, id)| *id == 102);
         assert!(!still_present, "Deleted entry should not appear");
 
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -924,12 +1015,17 @@ mod tests {
         let path = dir.path().join("test_index.lbug");
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
 
         let entries = index.entries(bm, &tx).expect("internal invariant violated");
         assert_eq!(entries.len(), 0, "Empty index should have 0 entries");
 
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
     }
 
     // === Commit visibility tests ===
@@ -944,21 +1040,39 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // Transaction 1: insert entries
-        let tx1 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx1 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..10u64 {
-            index.insert(bm, &Value::Number(i as f64), 1000 + i, &tx1)
+            index
+                .insert(bm, &Value::Number(i as f64), 1000 + i, &tx1)
                 .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx1, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx1, bm, &db)
+            .expect("internal invariant violated");
 
         // Transaction 2: lookup should find all entries
-        let tx2 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx2 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..10u64 {
-            let result = index.lookup(bm, &Value::Number(i as f64), &tx2)
+            let result = index
+                .lookup(bm, &Value::Number(i as f64), &tx2)
                 .expect("internal invariant violated");
-            assert_eq!(result, Some(1000 + i), "lookup({}) should find row_id={}", i, 1000 + i);
+            assert_eq!(
+                result,
+                Some(1000 + i),
+                "lookup({}) should find row_id={}",
+                i,
+                1000 + i
+            );
         }
-        db.transaction_manager.commit(&tx2, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx2, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -968,32 +1082,54 @@ mod tests {
         let index_path = dir.path().join("test_index.lbug");
 
         {
-            let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
-            let index = HashIndex::open_or_create(&index_path).expect("internal invariant violated");
+            let db =
+                Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
+            let index =
+                HashIndex::open_or_create(&index_path).expect("internal invariant violated");
             let bm = &db.buffer_manager;
 
-            let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+            let tx = db
+                .transaction_manager
+                .begin(false)
+                .expect("internal invariant violated");
             for i in 0..20u64 {
-                index.insert(bm, &Value::String(format!("key_{}", i)), i * 100, &tx)
+                index
+                    .insert(bm, &Value::String(format!("key_{}", i)), i * 100, &tx)
                     .expect("internal invariant violated");
             }
-            db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+            db.transaction_manager
+                .commit(&tx, bm, &db)
+                .expect("internal invariant violated");
             db.checkpoint().expect("internal invariant violated");
         }
 
         // Reopen
         {
-            let db = Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
-            let index = HashIndex::open_or_create(&index_path).expect("internal invariant violated");
+            let db =
+                Database::new(dir.path(), small_db_config()).expect("internal invariant violated");
+            let index =
+                HashIndex::open_or_create(&index_path).expect("internal invariant violated");
             let bm = &db.buffer_manager;
 
-            let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+            let tx = db
+                .transaction_manager
+                .begin(false)
+                .expect("internal invariant violated");
             for i in 0..20u64 {
-                let result = index.lookup(bm, &Value::String(format!("key_{}", i)), &tx)
+                let result = index
+                    .lookup(bm, &Value::String(format!("key_{}", i)), &tx)
                     .expect("internal invariant violated");
-                assert_eq!(result, Some(i * 100), "After reopen: key_{} should have row_id={}", i, i * 100);
+                assert_eq!(
+                    result,
+                    Some(i * 100),
+                    "After reopen: key_{} should have row_id={}",
+                    i,
+                    i * 100
+                );
             }
-            db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+            db.transaction_manager
+                .commit(&tx, bm, &db)
+                .expect("internal invariant violated");
         }
     }
 
@@ -1007,30 +1143,53 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // First insert
-        let tx1 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx1 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..5u64 {
-            index.insert(bm, &Value::Number(i as f64), 100 + i, &tx1)
+            index
+                .insert(bm, &Value::Number(i as f64), 100 + i, &tx1)
                 .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx1, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx1, bm, &db)
+            .expect("internal invariant violated");
 
         // Second insert (same keys, different row_ids — simulates re-index)
-        let tx2 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx2 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..5u64 {
-            index.insert(bm, &Value::Number(i as f64), 200 + i, &tx2)
+            index
+                .insert(bm, &Value::Number(i as f64), 200 + i, &tx2)
                 .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx2, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx2, bm, &db)
+            .expect("internal invariant violated");
 
         // lookup_multi should find both entries for each key (insert doesn't deduplicate)
-        let tx3 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx3 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..5u64 {
-            let results = index.lookup_multi(bm, &Value::Number(i as f64), None, &tx3)
+            let results = index
+                .lookup_multi(bm, &Value::Number(i as f64), None, &tx3)
                 .expect("internal invariant violated");
             // Hash index insert is append-only, so we expect 2 entries per key
-            assert!(results.len() >= 1, "key {} should have at least 1 entry, got {}", i, results.len());
+            assert!(
+                results.len() >= 1,
+                "key {} should have at least 1 entry, got {}",
+                i,
+                results.len()
+            );
         }
-        db.transaction_manager.commit(&tx3, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx3, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -1049,21 +1208,33 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // Insert many entries to fill buffer pool
-        let tx1 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx1 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..500u64 {
-            index.insert(bm, &Value::String(format!("key_{:04}", i)), i, &tx1)
+            index
+                .insert(bm, &Value::String(format!("key_{:04}", i)), i, &tx1)
                 .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx1, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx1, bm, &db)
+            .expect("internal invariant violated");
 
         // Lookup in new transaction — should find all entries despite eviction pressure
-        let tx2 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx2 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..500u64 {
-            let result = index.lookup(bm, &Value::String(format!("key_{:04}", i)), &tx2)
+            let result = index
+                .lookup(bm, &Value::String(format!("key_{:04}", i)), &tx2)
                 .expect("internal invariant violated");
             assert_eq!(result, Some(i), "key_{:04} should be found after commit", i);
         }
-        db.transaction_manager.commit(&tx2, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx2, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -1076,26 +1247,38 @@ mod tests {
         let bm = &db.buffer_manager;
 
         for batch in 0..5u64 {
-            let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+            let tx = db
+                .transaction_manager
+                .begin(false)
+                .expect("internal invariant violated");
             for i in 0..10u64 {
                 let key = batch * 10 + i;
-                index.insert(bm, &Value::Number(key as f64), key * 10, &tx)
+                index
+                    .insert(bm, &Value::Number(key as f64), key * 10, &tx)
                     .expect("internal invariant violated");
             }
-            db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+            db.transaction_manager
+                .commit(&tx, bm, &db)
+                .expect("internal invariant violated");
         }
 
         // All 50 entries should be visible
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for batch in 0..5u64 {
             for i in 0..10u64 {
                 let key = batch * 10 + i;
-                let result = index.lookup(bm, &Value::Number(key as f64), &tx)
+                let result = index
+                    .lookup(bm, &Value::Number(key as f64), &tx)
                     .expect("internal invariant violated");
                 assert_eq!(result, Some(key * 10), "key={} should be found", key);
             }
         }
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -1107,35 +1290,79 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // Insert
-        let tx1 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        index.insert(bm, &Value::Number(42.0), 100, &tx1).expect("internal invariant violated");
-        db.transaction_manager.commit(&tx1, bm, &db).expect("internal invariant violated");
+        let tx1 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        index
+            .insert(bm, &Value::Number(42.0), 100, &tx1)
+            .expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx1, bm, &db)
+            .expect("internal invariant violated");
 
         // Verify insert
-        let tx2 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        assert_eq!(index.lookup(bm, &Value::Number(42.0), &tx2).unwrap(), Some(100));
-        db.transaction_manager.commit(&tx2, bm, &db).expect("internal invariant violated");
+        let tx2 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        assert_eq!(
+            index.lookup(bm, &Value::Number(42.0), &tx2).unwrap(),
+            Some(100)
+        );
+        db.transaction_manager
+            .commit(&tx2, bm, &db)
+            .expect("internal invariant violated");
 
         // Delete
-        let tx3 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx3 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         let deleted = index.delete(bm, &Value::Number(42.0), 100, &tx3).unwrap();
         assert!(deleted, "Should delete successfully");
-        db.transaction_manager.commit(&tx3, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx3, bm, &db)
+            .expect("internal invariant violated");
 
         // Verify deletion
-        let tx4 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        assert_eq!(index.lookup(bm, &Value::Number(42.0), &tx4).unwrap(), None, "Should be gone after delete");
-        db.transaction_manager.commit(&tx4, bm, &db).expect("internal invariant violated");
+        let tx4 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        assert_eq!(
+            index.lookup(bm, &Value::Number(42.0), &tx4).unwrap(),
+            None,
+            "Should be gone after delete"
+        );
+        db.transaction_manager
+            .commit(&tx4, bm, &db)
+            .expect("internal invariant violated");
 
         // Re-insert same key with different row_id
-        let tx5 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        index.insert(bm, &Value::Number(42.0), 200, &tx5).expect("internal invariant violated");
-        db.transaction_manager.commit(&tx5, bm, &db).expect("internal invariant violated");
+        let tx5 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        index
+            .insert(bm, &Value::Number(42.0), 200, &tx5)
+            .expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx5, bm, &db)
+            .expect("internal invariant violated");
 
         // Verify re-insert
-        let tx6 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        assert_eq!(index.lookup(bm, &Value::Number(42.0), &tx6).unwrap(), Some(200));
-        db.transaction_manager.commit(&tx6, bm, &db).expect("internal invariant violated");
+        let tx6 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        assert_eq!(
+            index.lookup(bm, &Value::Number(42.0), &tx6).unwrap(),
+            Some(200)
+        );
+        db.transaction_manager
+            .commit(&tx6, bm, &db)
+            .expect("internal invariant violated");
     }
 
     #[test]
@@ -1150,11 +1377,16 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // Load page 0 into buffer pool (will be all zeros since file is new)
-        let tx = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         let f = bm.pin_page(Arc::clone(index.fh()), 0, &tx).unwrap();
         let initial_data = f.as_slice()[..8].to_vec();
         bm.unpin_page(index.fh(), 0, f);
-        db.transaction_manager.commit(&tx, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx, bm, &db)
+            .expect("internal invariant violated");
 
         // The header should have num_buckets=64 (written by initialize_header during open_or_create)
         let num_buckets = u64::from_le_bytes(initial_data[..8].try_into().unwrap());
@@ -1171,16 +1403,28 @@ mod tests {
         let bm = &db.buffer_manager;
 
         // Pre-insert some entries
-        let tx0 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx0 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..10u64 {
-            index.insert(bm, &Value::Number(i as f64), i, &tx0).expect("internal invariant violated");
+            index
+                .insert(bm, &Value::Number(i as f64), i, &tx0)
+                .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx0, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx0, bm, &db)
+            .expect("internal invariant violated");
 
         // Read-only transaction should see all 10 entries
-        let tx_read = db.transaction_manager.begin(true).expect("internal invariant violated");
+        let tx_read = db
+            .transaction_manager
+            .begin(true)
+            .expect("internal invariant violated");
         for i in 0..10u64 {
-            let result = index.lookup(bm, &Value::Number(i as f64), &tx_read).unwrap();
+            let result = index
+                .lookup(bm, &Value::Number(i as f64), &tx_read)
+                .unwrap();
             assert_eq!(result, Some(i), "Read tx should see key {}", i);
         }
     }
@@ -1194,17 +1438,34 @@ mod tests {
         let index = HashIndex::open_or_create(&path).expect("internal invariant violated");
         let bm = &db.buffer_manager;
 
-        let tx1 = db.transaction_manager.begin(false).expect("internal invariant violated");
+        let tx1 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
         for i in 0..100u64 {
-            index.insert(bm, &Value::Number(i as f64), i * 10, &tx1)
+            index
+                .insert(bm, &Value::Number(i as f64), i * 10, &tx1)
                 .expect("internal invariant violated");
         }
-        db.transaction_manager.commit(&tx1, bm, &db).expect("internal invariant violated");
+        db.transaction_manager
+            .commit(&tx1, bm, &db)
+            .expect("internal invariant violated");
 
         // Full scan in new transaction
-        let tx2 = db.transaction_manager.begin(false).expect("internal invariant violated");
-        let entries = index.entries(bm, &tx2).expect("internal invariant violated");
-        assert_eq!(entries.len(), 100, "Should find all 100 entries after commit");
-        db.transaction_manager.commit(&tx2, bm, &db).expect("internal invariant violated");
+        let tx2 = db
+            .transaction_manager
+            .begin(false)
+            .expect("internal invariant violated");
+        let entries = index
+            .entries(bm, &tx2)
+            .expect("internal invariant violated");
+        assert_eq!(
+            entries.len(),
+            100,
+            "Should find all 100 entries after commit"
+        );
+        db.transaction_manager
+            .commit(&tx2, bm, &db)
+            .expect("internal invariant violated");
     }
 }

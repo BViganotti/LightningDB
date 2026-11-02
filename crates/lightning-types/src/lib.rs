@@ -73,7 +73,9 @@ impl fmt::Display for LogicalType {
             LogicalType::Struct(fields) => {
                 write!(f, "STRUCT(")?;
                 for (i, field) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", field.name, field.type_)?;
                 }
                 write!(f, ")")
@@ -82,7 +84,9 @@ impl fmt::Display for LogicalType {
             LogicalType::Union(fields) => {
                 write!(f, "UNION(")?;
                 for (i, field) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", field.name, field.type_)?;
                 }
                 write!(f, ")")
@@ -90,7 +94,9 @@ impl fmt::Display for LogicalType {
             LogicalType::Node(fields) => {
                 write!(f, "NODE(")?;
                 for (i, field) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", field.name, field.type_)?;
                 }
                 write!(f, ")")
@@ -98,7 +104,9 @@ impl fmt::Display for LogicalType {
             LogicalType::Rel(fields) => {
                 write!(f, "REL(")?;
                 for (i, field) in fields.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", field.name, field.type_)?;
                 }
                 write!(f, ")")

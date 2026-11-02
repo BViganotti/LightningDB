@@ -187,7 +187,11 @@ impl Default for Sum {
 
 impl Sum {
     pub fn new() -> Self {
-        Self { sum: 0.0, int_sum: 0, is_integer: false }
+        Self {
+            sum: 0.0,
+            int_sum: 0,
+            is_integer: false,
+        }
     }
 }
 
@@ -293,7 +297,11 @@ impl AggregateFunction for Sum {
         }
     }
     fn clone_box(&self) -> Box<dyn AggregateFunction> {
-        Box::new(Self { sum: self.sum, int_sum: self.int_sum, is_integer: self.is_integer })
+        Box::new(Self {
+            sum: self.sum,
+            int_sum: self.int_sum,
+            is_integer: self.is_integer,
+        })
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -452,9 +460,9 @@ impl AggregateFunction for Min {
     fn merge(&mut self, other: &dyn AggregateFunction) -> Result<()> {
         if let Some(other_min) = other.as_any().downcast_ref::<Min>() {
             if let Some(v) = other_min.min {
-                    if self.min.is_none_or(|m| v < m) {
-                        self.min = Some(v);
-                    }
+                if self.min.is_none_or(|m| v < m) {
+                    self.min = Some(v);
+                }
             }
         }
         Ok(())

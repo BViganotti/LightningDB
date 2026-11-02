@@ -82,21 +82,20 @@ impl PhysicalOperator for PhysicalIndexScan {
         // If the resolved row's primary key does not match the key we looked up,
         // fall back to a linear scan for the correct, visible row.
         if let (Some(rid), Some(ci)) = (lookup_row_id, pk_col_idx) {
-            let actual = self
-                .table.columns[ci]
+            let actual = self.table.columns[ci]
                 .get_value(&self.buffer_manager, rid, tx)
                 .unwrap_or(Value::Null);
             if actual != pk_value {
                 let n = self.table.next_row_id.load(Ordering::Acquire);
                 let mut found = None;
                 for cand in 0..n {
-                    if !self.table.columns[0].version_info.is_visible(
-                        cand, tx.tx_id, tx.read_ts,
-                    ) {
+                    if !self.table.columns[0]
+                        .version_info
+                        .is_visible(cand, tx.tx_id, tx.read_ts)
+                    {
                         continue;
                     }
-                    let v = self
-                        .table.columns[ci]
+                    let v = self.table.columns[ci]
                         .get_value(&self.buffer_manager, cand, tx)
                         .unwrap_or(Value::Null);
                     if v == pk_value {
@@ -109,9 +108,10 @@ impl PhysicalOperator for PhysicalIndexScan {
         }
         if let Some(row_id) = lookup_row_id {
             // Check MVCC visibility for this row using the transaction's read_ts
-            if !self.table.columns[0].version_info.is_visible(
-                row_id, tx.tx_id, tx.read_ts
-            ) {
+            if !self.table.columns[0]
+                .version_info
+                .is_visible(row_id, tx.tx_id, tx.read_ts)
+            {
                 return Ok(None);
             }
             let mut columns = Vec::new();

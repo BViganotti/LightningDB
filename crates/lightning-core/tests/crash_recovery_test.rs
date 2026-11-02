@@ -12,7 +12,10 @@ fn test_committed_data_survives_clean_shutdown() -> TestResult {
     let db = Database::new(&db_path, config.clone())?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:T {id: 1, val: 100})", None)?;
     conn.execute("CREATE (:T {id: 2, val: 200})", None)?;
 
@@ -23,10 +26,16 @@ fn test_committed_data_survives_clean_shutdown() -> TestResult {
     let db2 = Database::new(&db_path, config)?;
     let conn2 = db2.connect();
     let r = conn2.execute("MATCH (t:T) RETURN t.id, t.val ORDER BY t.id", None)?;
-    let ids = r.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
-    let vals = r.batches[0].column(1)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let ids = r.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
+    let vals = r.batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(ids.len(), 2, "Both committed rows should survive");
     assert_eq!(ids.value(0), 1);
     assert_eq!(vals.value(0), 100);
@@ -44,7 +53,10 @@ fn test_wal_replay_with_corrupt_records() -> TestResult {
     let db = Database::new(&db_path, config)?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:T {id: 1, val: 100})", None)?;
     conn.execute("CREATE (:T {id: 2, val: 200})", None)?;
 
@@ -67,9 +79,16 @@ fn test_wal_replay_with_corrupt_records() -> TestResult {
     let db2 = Database::new(&db_path, SystemConfig::default())?;
     let conn2 = db2.connect();
     let r = conn2.execute("MATCH (t:T) RETURN count(*) as cnt", None)?;
-    let count = r.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(0);
-    assert_eq!(count, 2, "Valid records should survive WAL replay despite corruption");
+    let count = r.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(
+        count, 2,
+        "Valid records should survive WAL replay despite corruption"
+    );
     Ok(())
 }
 
@@ -80,7 +99,10 @@ fn test_wal_header_validated_on_open() -> TestResult {
 
     let db = Database::new(&db_path, SystemConfig::default())?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:T {id: 1, val: 100})", None)?;
     drop(conn);
     drop(db);
@@ -116,8 +138,11 @@ fn test_wal_header_validated_on_open() -> TestResult {
     let conn2 = db2.connect();
     let r = conn2.execute("MATCH (t:T) RETURN count(*) as cnt", None)?;
     assert_eq!(
-        r.batches[0].column(0)
-            .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap()
+        r.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
             .value(0),
         1,
         "checkpointed data must survive WAL auto-repair"
@@ -134,7 +159,10 @@ fn test_rolled_back_data_not_leaked_to_data_files() -> TestResult {
     let db = Database::new(&db_path, config.clone())?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
 
     conn.begin()?;
     conn.execute("CREATE (:T {id: 1, val: 10})", None)?;

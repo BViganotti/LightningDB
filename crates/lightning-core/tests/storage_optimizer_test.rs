@@ -12,24 +12,26 @@ fn test_storage_compression_rewrite_roundtrip() {
     // 1. Setup Catalog and Storage
     {
         let mut catalog = db.catalog().write();
-        catalog.add_node_table(
-            "Person".into(),
-            vec![
-                lightning_core::catalog::PropertyDefinition {
-                    name: "id".into(),
-                    type_: lightning_types::LogicalType::Int64,
-                },
-                lightning_core::catalog::PropertyDefinition {
-                    name: "age".into(),
-                    type_: lightning_types::LogicalType::Int64,
-                },
-                lightning_core::catalog::PropertyDefinition {
-                    name: "dept".into(),
-                    type_: lightning_types::LogicalType::String,
-                },
-            ],
-            None,
-        ).unwrap();
+        catalog
+            .add_node_table(
+                "Person".into(),
+                vec![
+                    lightning_core::catalog::PropertyDefinition {
+                        name: "id".into(),
+                        type_: lightning_types::LogicalType::Int64,
+                    },
+                    lightning_core::catalog::PropertyDefinition {
+                        name: "age".into(),
+                        type_: lightning_types::LogicalType::Int64,
+                    },
+                    lightning_core::catalog::PropertyDefinition {
+                        name: "dept".into(),
+                        type_: lightning_types::LogicalType::String,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
 
         let mut storage = db.storage_manager().write();
         storage

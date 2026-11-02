@@ -13,15 +13,17 @@ use axum::Router;
 use lightning::memory::MemoryStore;
 use lightning::Database;
 use parking_lot::Mutex;
-use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::compression::CompressionLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use rustls::pki_types::CertificateDer;
 
-use crate::auth::middleware::{auth_middleware, require_admin_role, require_reader_role, require_writer_role};
+use crate::auth::middleware::{
+    auth_middleware, require_admin_role, require_reader_role, require_writer_role,
+};
 use crate::auth::models::AuthMode;
 use crate::auth::store::AuthStore;
 use crate::config::{self as server_config, ServerConfig};
@@ -56,7 +58,9 @@ impl RateLimiter {
         if windows.len() > 1000 {
             let stale_threshold = self.window * 2;
             windows.retain(|_, sw| {
-                sw.timestamps.back().is_some_and(|t| now.duration_since(*t) < stale_threshold)
+                sw.timestamps
+                    .back()
+                    .is_some_and(|t| now.duration_since(*t) < stale_threshold)
             });
         }
 
@@ -64,7 +68,11 @@ impl RateLimiter {
             timestamps: VecDeque::new(),
         });
 
-        while sw.timestamps.front().is_some_and(|t| now.duration_since(*t) > self.window) {
+        while sw
+            .timestamps
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > self.window)
+        {
             sw.timestamps.pop_front();
         }
 
@@ -129,10 +137,7 @@ impl Clone for AppState {
     }
 }
 
-async fn request_id_middleware(
-    mut req: Request,
-    next: Next,
-) -> Response {
+async fn request_id_middleware(mut req: Request, next: Next) -> Response {
     const MAX_REQUEST_ID_LEN: usize = 256;
     let request_id = req
         .headers()
@@ -170,17 +175,16 @@ impl Server {
         req: Request,
         next: Next,
     ) -> Response {
-        let client_ip = req.extensions()
+        let client_ip = req
+            .extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map(|ci| ci.0.ip())
             .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
         if !state.rate_limiter.check(client_ip) {
             let mut resp = (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
-            resp.headers_mut().insert(
-                header::RETRY_AFTER,
-                header::HeaderValue::from_static("1"),
-            );
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, header::HeaderValue::from_static("1"));
             return resp;
         }
         next.run(req).await
@@ -205,7 +209,9 @@ impl Server {
             .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
             .collect();
         let cors_layer = if origins.is_empty() {
-            tracing::warn!("No valid CORS origins configured; CORS will deny all cross-origin requests");
+            tracing::warn!(
+                "No valid CORS origins configured; CORS will deny all cross-origin requests"
+            );
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|_origin, _parts| false))
                 .allow_methods([
@@ -213,9 +219,7 @@ impl Server {
                     axum::http::Method::POST,
                     axum::http::Method::OPTIONS,
                 ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                ])
+                .allow_headers([axum::http::header::CONTENT_TYPE])
         } else {
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(origins))
@@ -238,16 +242,27 @@ impl Server {
             .route("/health", get(routes::health::health_handler))
             .route("/metrics", get(routes::admin::metrics_handler))
             .route("/v1/auth/login", post(routes::auth::login_handler))
-
             // Reader-guarded routes (any authenticated user with at least Reader role)
             .merge(
                 Router::new()
                     .route("/v1/query", post(routes::query::query_handler))
-                    .route("/v1/query/stream", post(routes::query::query_stream_handler))
+                    .route(
+                        "/v1/query/stream",
+                        post(routes::query::query_stream_handler),
+                    )
                     .route("/v1/memory/recall", post(routes::memory::recall_handler))
-                    .route("/v1/memory/recall-recent", post(routes::memory::recall_recent_handler))
-                    .route("/v1/memory/recall-by-type", post(routes::memory::recall_by_type_handler))
-                    .route("/v1/memory/entity-history", post(routes::memory::entity_history_handler))
+                    .route(
+                        "/v1/memory/recall-recent",
+                        post(routes::memory::recall_recent_handler),
+                    )
+                    .route(
+                        "/v1/memory/recall-by-type",
+                        post(routes::memory::recall_by_type_handler),
+                    )
+                    .route(
+                        "/v1/memory/entity-history",
+                        post(routes::memory::entity_history_handler),
+                    )
                     .route("/v1/graph/expand", post(routes::graph::expand_handler))
                     .route("/v1/rag/query", post(routes::rag::rag_query_handler))
                     .route("/v1/subscribe", get(routes::subscribe::subscribe_handler))
@@ -257,35 +272,68 @@ impl Server {
                     .route("/v1/auth/me", get(routes::auth::me_handler))
                     .layer(middleware::from_fn(require_reader_role)),
             )
-
             // Writer-guarded routes
             .merge(
                 Router::new()
                     .route("/v1/memory/store", post(routes::memory::store_handler))
-                    .route("/v1/memory/store-batch", post(routes::memory::store_batch_handler))
+                    .route(
+                        "/v1/memory/store-batch",
+                        post(routes::memory::store_batch_handler),
+                    )
                     .route("/v1/memory/forget", post(routes::memory::forget_handler))
                     .route("/v1/memory/decay", post(routes::memory::decay_handler))
-                    .route("/v1/memory/consolidate", post(routes::memory::consolidate_handler))
-                    .route("/v1/graph/associate", post(routes::graph::associate_handler))
+                    .route(
+                        "/v1/memory/consolidate",
+                        post(routes::memory::consolidate_handler),
+                    )
+                    .route(
+                        "/v1/graph/associate",
+                        post(routes::graph::associate_handler),
+                    )
                     .layer(middleware::from_fn(require_writer_role)),
             )
-
             // Admin-guarded routes
             .merge(
                 Router::new()
-                    .route("/v1/admin/checkpoint", post(routes::admin::checkpoint_handler))
+                    .route(
+                        "/v1/admin/checkpoint",
+                        post(routes::admin::checkpoint_handler),
+                    )
                     .route("/v1/admin/vacuum", post(routes::admin::vacuum_handler))
-                    .route("/v1/admin/users", get(routes::admin_users::list_users_handler))
-                    .route("/v1/admin/users", post(routes::admin_users::create_user_handler))
-                    .route("/v1/admin/users/{id}", post(routes::admin_users::update_user_handler))
-                    .route("/v1/admin/users/{id}", delete(routes::admin_users::delete_user_handler))
-                    .route("/v1/admin/users/{id}/reset-password", post(routes::admin_users::reset_password_handler))
-                    .route("/v1/admin/users/{id}/keys", get(routes::admin_users::list_api_keys_handler))
-                    .route("/v1/admin/users/{id}/keys", post(routes::admin_users::create_api_key_handler))
-                    .route("/v1/admin/users/{user_id}/keys/{key_id}", delete(routes::admin_users::delete_api_key_handler))
+                    .route(
+                        "/v1/admin/users",
+                        get(routes::admin_users::list_users_handler),
+                    )
+                    .route(
+                        "/v1/admin/users",
+                        post(routes::admin_users::create_user_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{id}",
+                        post(routes::admin_users::update_user_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{id}",
+                        delete(routes::admin_users::delete_user_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{id}/reset-password",
+                        post(routes::admin_users::reset_password_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{id}/keys",
+                        get(routes::admin_users::list_api_keys_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{id}/keys",
+                        post(routes::admin_users::create_api_key_handler),
+                    )
+                    .route(
+                        "/v1/admin/users/{user_id}/keys/{key_id}",
+                        delete(routes::admin_users::delete_api_key_handler),
+                    )
                     .layer(middleware::from_fn(require_admin_role)),
             )
-
             // Auth middleware (checks JWT/API key/Token, populates AuthenticatedUser)
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -356,9 +404,8 @@ impl Server {
                 );
 
                 let server = axum_server::bind_rustls(addr, tls_config);
-                let serve_future = server.serve(
-                    app.into_make_service_with_connect_info::<SocketAddr>(),
-                );
+                let serve_future =
+                    server.serve(app.into_make_service_with_connect_info::<SocketAddr>());
                 tokio::select! {
                     result = serve_future => {
                         result.expect("Server exited with error");
@@ -377,9 +424,9 @@ impl Server {
                 listener,
                 app.into_make_service_with_connect_info::<SocketAddr>(),
             )
-                .with_graceful_shutdown(shutdown_signal())
-                .await
-                .expect("Server exited with error");
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .expect("Server exited with error");
         }
 
         tracing::info!("Shutdown complete");
@@ -420,9 +467,8 @@ async fn run_mtls_server(
         axum_server::tls_rustls::RustlsConfig::from_config(std::sync::Arc::new(server_config));
 
     let server = axum_server::bind_rustls(addr, tls_config);
-    let serve_future = server.serve(
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    );
+    let serve_future =
+        server.serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>());
     tokio::select! {
         result = serve_future => {
             result.expect("Server exited with error");

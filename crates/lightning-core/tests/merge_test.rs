@@ -12,9 +12,21 @@ fn read_file_hashes(db: &std::sync::Arc<Database>) -> Vec<(String, String, Strin
         .unwrap();
     let mut out = Vec::new();
     for batch in &res.batches {
-        let c0 = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
-        let c1 = batch.column(1).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
-        let c2 = batch.column(2).as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+        let c0 = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        let c1 = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        let c2 = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
         for i in 0..batch.num_rows() {
             out.push((
                 c0.value(i).to_string(),
@@ -62,7 +74,11 @@ fn test_merge_persists_property_values() {
     assert_eq!(rows.len(), 1, "one row after first MERGE, got {rows:?}");
     assert_eq!(
         rows[0],
-        ("src/a.rs".to_string(), "HASH_V1".to_string(), "ws-1".to_string()),
+        (
+            "src/a.rs".to_string(),
+            "HASH_V1".to_string(),
+            "ws-1".to_string()
+        ),
         "MERGE-created node must persist the pattern PK and ON CREATE SET values"
     );
 
@@ -77,7 +93,11 @@ fn test_merge_persists_property_values() {
     }
 
     let rows = read_file_hashes(&db);
-    assert_eq!(rows.len(), 1, "still one row after re-MERGE (no duplicate), got {rows:?}");
+    assert_eq!(
+        rows.len(),
+        1,
+        "still one row after re-MERGE (no duplicate), got {rows:?}"
+    );
     assert_eq!(
         rows[0].1, "HASH_V2",
         "ON MATCH SET must update the existing node's hash in place, got {rows:?}"
@@ -99,7 +119,9 @@ fn match_count(db: &std::sync::Arc<Database>, table: &str) -> i64 {
             } else if let Some(a) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                 Some(a.value(0) as i64)
             } else {
-                col.as_any().downcast_ref::<arrow::array::Float64Array>().map(|a| a.value(0) as i64)
+                col.as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()
+                    .map(|a| a.value(0) as i64)
             }
         })
         .expect("count(n) should return a row")
@@ -134,17 +156,23 @@ fn test_merge_basic() {
             None,
         )
         .unwrap();
-        conn.execute("MERGE (n:Person {id: 1, name: 'Alice'})", None).unwrap();
+        conn.execute("MERGE (n:Person {id: 1, name: 'Alice'})", None)
+            .unwrap();
     }
 
     // First MERGE creates Alice.
-    assert_eq!(match_count(&db, "Person"), 1, "first MERGE creates one node");
+    assert_eq!(
+        match_count(&db, "Person"),
+        1,
+        "first MERGE creates one node"
+    );
     assert_eq!(person_name(&db, 1).as_deref(), Some("Alice"));
 
     // Second identical MERGE matches instead of duplicating.
     {
         let conn = db.connect();
-        conn.execute("MERGE (n:Person {id: 1, name: 'Alice'})", None).unwrap();
+        conn.execute("MERGE (n:Person {id: 1, name: 'Alice'})", None)
+            .unwrap();
     }
     assert_eq!(
         match_count(&db, "Person"),
@@ -158,14 +186,22 @@ fn test_merge_basic() {
 fn person_flags(db: &std::sync::Arc<Database>, id: i64) -> Option<(bool, bool)> {
     let conn = db.connect();
     let res = conn
-        .query(&format!("MATCH (n:Person {{id: {id}}}) RETURN n.created, n.matched"))
+        .query(&format!(
+            "MATCH (n:Person {{id: {id}}}) RETURN n.created, n.matched"
+        ))
         .unwrap();
     res.batches.first().and_then(|b| {
         if b.num_rows() == 0 {
             return None;
         }
-        let created = b.column(0).as_any().downcast_ref::<arrow::array::BooleanArray>()?;
-        let matched = b.column(1).as_any().downcast_ref::<arrow::array::BooleanArray>()?;
+        let created = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()?;
+        let matched = b
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()?;
         Some((created.value(0), matched.value(0)))
     })
 }
@@ -190,10 +226,17 @@ fn test_merge_on_create_on_match() {
         .unwrap();
     }
 
-    assert_eq!(match_count(&db, "Person"), 1, "ON CREATE MERGE creates one node");
+    assert_eq!(
+        match_count(&db, "Person"),
+        1,
+        "ON CREATE MERGE creates one node"
+    );
     let (created, matched) = person_flags(&db, 1).expect("node exists");
     assert!(created, "created must be TRUE after ON CREATE SET");
-    assert!(!matched, "matched must remain FALSE before any ON MATCH SET");
+    assert!(
+        !matched,
+        "matched must remain FALSE before any ON MATCH SET"
+    );
 
     {
         let conn = db.connect();
@@ -205,7 +248,11 @@ fn test_merge_on_create_on_match() {
         .unwrap();
     }
 
-    assert_eq!(match_count(&db, "Person"), 1, "ON MATCH MERGE must not duplicate");
+    assert_eq!(
+        match_count(&db, "Person"),
+        1,
+        "ON MATCH MERGE must not duplicate"
+    );
     let (created, matched) = person_flags(&db, 1).expect("node exists");
     assert!(created, "created stays TRUE from the create");
     assert!(matched, "matched must be TRUE after ON MATCH SET");

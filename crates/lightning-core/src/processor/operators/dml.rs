@@ -23,9 +23,11 @@ fn rows_to_batch(rows: &[Vec<Value>], table: &Table) -> Result<RecordBatch> {
     let num_rows = rows.len();
     if num_rows == 0 {
         return Ok(RecordBatch::new_empty(Arc::new(Schema::new(
-            table.columns.iter().map(|c| {
-                Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
-            }).collect::<Vec<_>>(),
+            table
+                .columns
+                .iter()
+                .map(|c| Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true))
+                .collect::<Vec<_>>(),
         ))));
     }
     let mut arrow_cols: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
@@ -36,19 +38,29 @@ fn rows_to_batch(rows: &[Vec<Value>], table: &Table) -> Result<RecordBatch> {
             col_values.push(val);
         }
         #[cfg(debug_assertions)]
-        tracing::debug!("rows_to_batch: col={} name={} values={:?}",
-            col_idx, col.name, col_values);
+        tracing::debug!(
+            "rows_to_batch: col={} name={} values={:?}",
+            col_idx,
+            col.name,
+            col_values
+        );
         let dt = logical_type_to_arrow_type(&col.data_type);
         let arr = values_to_array(&col_values, &dt);
         #[cfg(debug_assertions)]
-        tracing::debug!("rows_to_batch: col={} arrow_type={:?} arr_len={}",
-            col_idx, dt, arr.len());
+        tracing::debug!(
+            "rows_to_batch: col={} arrow_type={:?} arr_len={}",
+            col_idx,
+            dt,
+            arr.len()
+        );
         arrow_cols.push(arr);
     }
     let schema = Arc::new(Schema::new(
-        table.columns.iter().map(|c| {
-            Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
-        }).collect::<Vec<_>>(),
+        table
+            .columns
+            .iter()
+            .map(|c| Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true))
+            .collect::<Vec<_>>(),
     ));
     RecordBatch::try_new(schema, arrow_cols)
         .map_err(|e| LightningError::Internal(format!("Failed to build DML result batch: {e}")))
@@ -66,9 +78,11 @@ fn read_node_batch(
     let num_rows = ids.len();
     if num_rows == 0 {
         return Ok(RecordBatch::new_empty(Arc::new(Schema::new(
-            table.columns.iter().map(|c| {
-                Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
-            }).collect::<Vec<_>>(),
+            table
+                .columns
+                .iter()
+                .map(|c| Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true))
+                .collect::<Vec<_>>(),
         ))));
     }
     let mut arrow_cols: Vec<ArrayRef> = Vec::with_capacity(table.columns.len());
@@ -82,9 +96,11 @@ fn read_node_batch(
         arrow_cols.push(arr);
     }
     let schema = Arc::new(Schema::new(
-        table.columns.iter().map(|c| {
-            Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true)
-        }).collect::<Vec<_>>(),
+        table
+            .columns
+            .iter()
+            .map(|c| Field::new(&c.name, logical_type_to_arrow_type(&c.data_type), true))
+            .collect::<Vec<_>>(),
     ));
     RecordBatch::try_new(schema, arrow_cols)
         .map_err(|e| LightningError::Internal(format!("Failed to build DML result batch: {e}")))
@@ -233,14 +249,20 @@ impl PhysicalOperator for PhysicalCreate {
                     let table_name = &self.table_name;
                     if let Some(fts) = storage_guard.fts_indexes.get(table_name) {
                         // Build column-name→index map once, avoiding O(num_cols²) per row
-                        let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
+                        let col_name_to_idx: std::collections::HashMap<&str, usize> = self
+                            .table
+                            .columns
+                            .iter()
                             .enumerate()
                             .map(|(i, c)| (c.name.as_str(), i))
                             .collect();
                         let mut muts = tx.index_mutations.lock();
                         for (i, row) in rows.iter().enumerate() {
                             let node_id = start_id + i as u64;
-                            let fields: Vec<(String, String)> = self.table.columns.iter()
+                            let fields: Vec<(String, String)> = self
+                                .table
+                                .columns
+                                .iter()
                                 .filter_map(|col| {
                                     let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row.get(idx).and_then(|v| match v {
@@ -290,7 +312,10 @@ impl PhysicalOperator for PhysicalCreate {
                     row_data[*idx] = val;
                 }
                 self.shared_state.affected_ids.write().push(next_id);
-                self.shared_state.affected_rows.write().push(row_data.clone());
+                self.shared_state
+                    .affected_rows
+                    .write()
+                    .push(row_data.clone());
                 {
                     let storage = self.storage_manager.read();
                     if let Some(table) = storage.get_table(&self.table_name) {
@@ -315,7 +340,10 @@ impl PhysicalOperator for PhysicalCreate {
                                 .filter(|(_, c)| &c.name == pk_name)
                             {
                                 // Check primary key uniqueness before inserting
-                                if index.lookup(&self.buffer_manager, &row_data[idx], tx)?.is_some() {
+                                if index
+                                    .lookup(&self.buffer_manager, &row_data[idx], tx)?
+                                    .is_some()
+                                {
                                     return Err(LightningError::Query(format!(
                                         "Duplicate primary key value '{}' for table '{}'",
                                         row_data[idx], self.table_name,
@@ -413,7 +441,6 @@ impl PhysicalSet {
             tx_id,
         }
     }
-
 }
 impl PhysicalOperator for PhysicalSet {
     fn is_read_only(&self) -> bool {
@@ -447,9 +474,9 @@ impl PhysicalOperator for PhysicalSet {
                 // the same column (e.g., SET n.x = 1, n.x = 2) — the undo records must capture the
                 // original pre-SET value, not the intermediate value from an earlier assignment.
                 let mut assignment_snapshots: Vec<(
-                    usize,                           // property_idx
-                    arrow::array::ArrayRef,           // evaluated expression result
-                    Vec<(u64, Value)>,                // (node_id, original_value) for each row
+                    usize,                  // property_idx
+                    arrow::array::ArrayRef, // evaluated expression result
+                    Vec<(u64, Value)>,      // (node_id, original_value) for each row
                 )> = Vec::with_capacity(self.assignments.len());
 
                 for assignment in &self.assignments {
@@ -519,10 +546,17 @@ impl PhysicalOperator for PhysicalSet {
             let table_name = &self.table.name;
 
             // PK hash index: check if primary key was updated
-            let pk_idx = database.catalog.read()
+            let pk_idx = database
+                .catalog
+                .read()
                 .get_node_table(table_name)
                 .and_then(|t| t.primary_key.as_ref())
-                .and_then(|pk| self.table.columns.iter().position(|c| c.name == pk.as_str()));
+                .and_then(|pk| {
+                    self.table
+                        .columns
+                        .iter()
+                        .position(|c| c.name == pk.as_str())
+                });
 
             // FTS index: check if any string column was updated
             let fts_opt = storage_guard.fts_indexes.get(table_name);
@@ -551,9 +585,13 @@ impl PhysicalOperator for PhysicalSet {
                 // the document from ALL string columns so fields not part of this
                 // SET are preserved.
                 if let Some(fts) = fts_opt {
-                    let string_fields: Vec<(String, String)> = self.table.columns.iter()
+                    let string_fields: Vec<(String, String)> = self
+                        .table
+                        .columns
+                        .iter()
                         .filter_map(|col| {
-                            let val = col.get_value(&self.buffer_manager, *node_id, tx)
+                            let val = col
+                                .get_value(&self.buffer_manager, *node_id, tx)
                                 .unwrap_or(Value::Null);
                             match val {
                                 Value::String(s) => Some((col.name.clone(), s)),
@@ -562,7 +600,10 @@ impl PhysicalOperator for PhysicalSet {
                         })
                         .collect();
                     let mut muts = tx.index_mutations.lock();
-                    muts.push(IndexMutation::FtsDelete { index: Arc::clone(fts), node_id: *node_id });
+                    muts.push(IndexMutation::FtsDelete {
+                        index: Arc::clone(fts),
+                        node_id: *node_id,
+                    });
                     if !string_fields.is_empty() {
                         muts.push(IndexMutation::FtsInsert {
                             index: Arc::clone(fts),
@@ -575,27 +616,37 @@ impl PhysicalOperator for PhysicalSet {
                 // Vector index: check if embedding column was updated
                 if let Some(vec_idx) = vec_opt {
                     let emb_col_idx = self.table.columns.iter().position(|c| {
-                        c.data_type == lightning_types::LogicalType::List(
-                            Box::new(lightning_types::LogicalType::Float)
-                        )
+                        c.data_type
+                            == lightning_types::LogicalType::List(Box::new(
+                                lightning_types::LogicalType::Float,
+                            ))
                     });
                     if let Some(emb_idx) = emb_col_idx {
                         if updated_props.contains(&emb_idx) {
-                            if let Ok(Value::List(ref emb)) = self.table.columns[emb_idx]
-                                .get_value(&self.buffer_manager, *node_id, tx)
-                            {
+                            if let Ok(Value::List(ref emb)) = self.table.columns[emb_idx].get_value(
+                                &self.buffer_manager,
+                                *node_id,
+                                tx,
+                            ) {
                                 if emb.len() == vec_idx.dimension() {
-                                    let emb_f32: Vec<f32> = emb.iter()
+                                    let emb_f32: Vec<f32> = emb
+                                        .iter()
                                         .filter_map(|v| {
-                                            if let Value::Number(n) = v { Some(*n as f32) } else { None }
+                                            if let Value::Number(n) = v {
+                                                Some(*n as f32)
+                                            } else {
+                                                None
+                                            }
                                         })
                                         .collect();
                                     if emb_f32.len() == vec_idx.dimension() {
-                                        tx.index_mutations.lock().push(IndexMutation::VectorUpsert {
-                                            index: Arc::clone(vec_idx),
-                                            node_id: *node_id,
-                                            embedding: emb_f32,
-                                        });
+                                        tx.index_mutations.lock().push(
+                                            IndexMutation::VectorUpsert {
+                                                index: Arc::clone(vec_idx),
+                                                node_id: *node_id,
+                                                embedding: emb_f32,
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -667,7 +718,6 @@ impl PhysicalDelete {
             detach,
         }
     }
-
 }
 impl PhysicalOperator for PhysicalDelete {
     fn is_read_only(&self) -> bool {
@@ -710,7 +760,9 @@ impl PhysicalOperator for PhysicalDelete {
                     let mut row_data = Vec::with_capacity(self.table.columns.len());
                     row_data.push(Value::Node(id));
                     for col in self.table.columns.iter().skip(1) {
-                        let v = col.get_value(&self.buffer_manager, id, tx).unwrap_or(Value::Null);
+                        let v = col
+                            .get_value(&self.buffer_manager, id, tx)
+                            .unwrap_or(Value::Null);
                         row_data.push(v);
                     }
                     // Snapshot the PK value before row_data is moved, then
@@ -728,7 +780,12 @@ impl PhysicalOperator for PhysicalDelete {
                     // a later column aborted the delete half-applied (e.g. `_id`
                     // already nulled), and the discarded CoW version did not
                     // always restore the null bitmap -> phantom deletes.
-                    for col in self.table.columns.iter().filter(|c| !c.name.starts_with('_')) {
+                    for col in self
+                        .table
+                        .columns
+                        .iter()
+                        .filter(|c| !c.name.starts_with('_'))
+                    {
                         col.version_info
                             .mark_row(id, tx.tx_id, tx.read_ts)
                             .map_err(crate::LightningError::Database)?;
@@ -768,8 +825,7 @@ impl PhysicalOperator for PhysicalDelete {
             }
             // Batch detach: scan each relationship table once for all deleted IDs
             if self.detach && !deleted_ids.is_empty() {
-                let deleted_set: std::collections::HashSet<u64> =
-                    deleted_ids.into_iter().collect();
+                let deleted_set: std::collections::HashSet<u64> = deleted_ids.into_iter().collect();
                 // Node row ids are PER-TABLE, so only compare the endpoint of a
                 // rel that belongs to the deleted node's table. Comparing both
                 // endpoints against one table's ids wrongly detaches edges whose
@@ -794,21 +850,27 @@ impl PhysicalOperator for PhysicalDelete {
                         continue;
                     }
                     let storage = database.storage_manager.read();
-                    let Some(rel_table) = storage.get_table(rel_name) else { continue };
+                    let Some(rel_table) = storage.get_table(rel_name) else {
+                        continue;
+                    };
                     let bm = &self.buffer_manager;
                     // Relationship endpoints live in the `_src` / `_dst`
                     // columns (not `FROM` / `TO`), so the old lookup always
                     // failed and DETACH DELETE silently left dangling edges.
-                    let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "_src") else { continue };
-                    let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "_dst") else { continue };
+                    let Some(from_col) = rel_table.columns.iter().find(|c| c.name == "_src") else {
+                        continue;
+                    };
+                    let Some(to_col) = rel_table.columns.iter().find(|c| c.name == "_dst") else {
+                        continue;
+                    };
                     // Use the authoritative physical row count, not the catalog's
                     // `num_rows` (which is stale/0 until a catalog sync runs).
                     // The old code silently skipped every rel table with a stale
                     // count, leaving dangling edges after DELETE n.
-                    let num_rel_rows = rel_table
-                        .next_row_id
-                        .load(Ordering::Acquire);
-                    if num_rel_rows == 0 { continue; }
+                    let num_rel_rows = rel_table.next_row_id.load(Ordering::Acquire);
+                    if num_rel_rows == 0 {
+                        continue;
+                    }
                     let from_arr = from_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
                     let to_arr = to_col.scan_to_array(bm, 0, num_rel_rows, tx, None)?;
                     let mut detached: u64 = 0;
@@ -1026,23 +1088,35 @@ impl PhysicalOperator for PhysicalCreateRel {
                         let dst_val = Value::from_arrow(dst_col, i);
 
                         let src_id = Self::lookup_internal_id(
-                            src_val, true, &src_node, &dst_node, &sm,
-                            &self.buffer_manager, tx,
+                            src_val,
+                            true,
+                            &src_node,
+                            &dst_node,
+                            &sm,
+                            &self.buffer_manager,
+                            tx,
                         )?;
                         let dst_id = Self::lookup_internal_id(
-                            dst_val, false, &src_node, &dst_node, &sm,
-                            &self.buffer_manager, tx,
+                            dst_val,
+                            false,
+                            &src_node,
+                            &dst_node,
+                            &sm,
+                            &self.buffer_manager,
+                            tx,
                         )?;
-                        let (Some(src_id), Some(dst_id)) = (src_id, dst_id) else { continue };
+                        let (Some(src_id), Some(dst_id)) = (src_id, dst_id) else {
+                            continue;
+                        };
 
                         let mut row_data = vec![Value::Null; self.table.columns.len()];
-                    if row_data.len() >= 2 {
-                        row_data[0] = Value::Node(src_id);
-                        row_data[1] = Value::Node(dst_id);
-                    }
-                    for (idx, arr) in &col_arrays {
-                        row_data[*idx] = Value::from_arrow(arr, i);
-                    }
+                        if row_data.len() >= 2 {
+                            row_data[0] = Value::Node(src_id);
+                            row_data[1] = Value::Node(dst_id);
+                        }
+                        for (idx, arr) in &col_arrays {
+                            row_data[*idx] = Value::from_arrow(arr, i);
+                        }
                         rows.push(row_data);
                     }
                     if !rows.is_empty() {
@@ -1082,7 +1156,10 @@ impl PhysicalOperator for PhysicalCreateRel {
             }
             // Auto-build CSR indices after insert
             // Acquire write lock explicitly to avoid deadlock from read→write upgrade
-            database.storage_manager.write().mark_csr_stale(&self.table_name);
+            database
+                .storage_manager
+                .write()
+                .mark_csr_stale(&self.table_name);
         }
         if self
             .shared_state
@@ -1246,11 +1323,7 @@ impl PhysicalMerge {
                 continue;
             }
             for (col_idx, want) in pattern_values {
-                match self
-                    .table
-                    .columns[*col_idx]
-                    .get_value(&self.buffer_manager, row, tx)
-                {
+                match self.table.columns[*col_idx].get_value(&self.buffer_manager, row, tx) {
                     Ok(got) if &got == want => {}
                     _ => continue 'rows,
                 }
@@ -1297,11 +1370,17 @@ impl PhysicalOperator for PhysicalMerge {
                         Some(chunk) => Some(chunk),
                         None => break,
                     }
-                } else if standalone { None } else { break };
+                } else if standalone {
+                    None
+                } else {
+                    break;
+                };
                 let num_rows = chunk_opt.as_ref().map(|c| c.num_rows()).unwrap_or(1);
                 let batch_ref = chunk_opt.as_ref().map(|c| &c.batch);
 
-                let prop_arrays: Vec<arrow::array::ArrayRef> = self.pattern.properties
+                let prop_arrays: Vec<arrow::array::ArrayRef> = self
+                    .pattern
+                    .properties
                     .iter()
                     .map(|(_, expr)| {
                         ExpressionEvaluator::evaluate(
@@ -1321,7 +1400,9 @@ impl PhysicalOperator for PhysicalMerge {
                         for (i, (prop_idx, _)) in self.pattern.properties.iter().enumerate() {
                             if *prop_idx == pk_idx {
                                 let pk_val = Value::from_arrow(&prop_arrays[i], row_idx);
-                                if let Ok(Some(id)) = index.lookup(&self.buffer_manager, &pk_val, tx) {
+                                if let Ok(Some(id)) =
+                                    index.lookup(&self.buffer_manager, &pk_val, tx)
+                                {
                                     existing_id = Some(id);
                                     break;
                                 }
@@ -1445,9 +1526,19 @@ impl PhysicalOperator for PhysicalMerge {
                         {
                             let storage = database.storage_manager.read();
                             if let Some(canonical) = storage.get_table(&self.table_name) {
-                                canonical.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                                canonical.append_row(
+                                    &self.buffer_manager,
+                                    &row_data,
+                                    next_id,
+                                    tx,
+                                )?;
                             } else {
-                                self.table.append_row(&self.buffer_manager, &row_data, next_id, tx)?;
+                                self.table.append_row(
+                                    &self.buffer_manager,
+                                    &row_data,
+                                    next_id,
+                                    tx,
+                                )?;
                             }
                         }
 
@@ -1464,11 +1555,17 @@ impl PhysicalOperator for PhysicalMerge {
                         }
 
                         if let Some(ref _fts) = fts_opt {
-                            let col_name_to_idx: std::collections::HashMap<&str, usize> = self.table.columns.iter()
+                            let col_name_to_idx: std::collections::HashMap<&str, usize> = self
+                                .table
+                                .columns
+                                .iter()
                                 .enumerate()
                                 .map(|(i, c)| (c.name.as_str(), i))
                                 .collect();
-                            let text_fields: Vec<(String, String)> = self.table.columns.iter()
+                            let text_fields: Vec<(String, String)> = self
+                                .table
+                                .columns
+                                .iter()
                                 .filter_map(|col| {
                                     let idx = *col_name_to_idx.get(col.name.as_str())?;
                                     row_data.get(idx).and_then(|v| match v {
@@ -1482,7 +1579,10 @@ impl PhysicalOperator for PhysicalMerge {
                             }
                         }
 
-                        self.shared_state.affected_rows.write().push(row_data.clone());
+                        self.shared_state
+                            .affected_rows
+                            .write()
+                            .push(row_data.clone());
                         self.undo_buffer
                             .push(UndoRecord::DeleteNode(self.table_name.clone(), next_id));
                         self.shared_state

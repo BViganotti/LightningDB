@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crossbeam::channel::Receiver;
 use lightning_core::memory::{
-    ChangeEvent, ConsolidationReport, MemoryEntity, MemoryStore as CoreMemoryStore,
-    RagConfig, RagResult, SearchResult,
+    ChangeEvent, ConsolidationReport, MemoryEntity, MemoryStore as CoreMemoryStore, RagConfig,
+    RagResult, SearchResult,
 };
 
 use crate::connection::Connection;
@@ -107,7 +107,12 @@ impl MemoryStore {
     ///
     /// Pass an empty `embedding` slice to use FTS-only search.
     /// Pass an empty `query_text` to use vector-only search.
-    pub fn recall(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<Vec<SearchResult>> {
+    pub fn recall(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
         self.inner.recall(query_text, embedding, top_k)
     }
 
@@ -151,7 +156,12 @@ impl MemoryStore {
     /// Full RAG pipeline: hybrid search → graph expansion → reranking → context assembly.
     ///
     /// Returns a `RagResult` with assembled context ready for an LLM.
-    pub fn rag_query(&self, query_text: &str, embedding: &[f32], top_k: usize) -> Result<RagResult> {
+    pub fn rag_query(
+        &self,
+        query_text: &str,
+        embedding: &[f32],
+        top_k: usize,
+    ) -> Result<RagResult> {
         self.inner.rag_query(query_text, embedding, top_k)
     }
 
@@ -166,7 +176,8 @@ impl MemoryStore {
         top_k: usize,
         config: &RagConfig,
     ) -> Result<RagResult> {
-        self.inner.rag_query_with_config(query_text, embedding, top_k, config)
+        self.inner
+            .rag_query_with_config(query_text, embedding, top_k, config)
     }
 
     // ── Graph Operations ─────────────────────────────────────────────
@@ -185,13 +196,7 @@ impl MemoryStore {
     }
 
     /// Create a relationship between two entities.
-    pub fn associate(
-        &self,
-        src_id: &str,
-        dst_id: &str,
-        rel_type: &str,
-        weight: f64,
-    ) -> Result<()> {
+    pub fn associate(&self, src_id: &str, dst_id: &str, rel_type: &str, weight: f64) -> Result<()> {
         self.inner.associate(src_id, dst_id, rel_type, weight)
     }
 
@@ -209,17 +214,18 @@ impl MemoryStore {
     // ── Streaming Queries ────────────────────────────────────────────
 
     /// Execute a streaming Cypher query. Results arrive on a channel.
-    pub fn query_stream(
-        &self,
-        query: &str,
-    ) -> Result<Receiver<Result<DataChunk>>> {
+    pub fn query_stream(&self, query: &str) -> Result<Receiver<Result<DataChunk>>> {
         self.inner.query_stream(query)
     }
 
     // ── Time Travel ──────────────────────────────────────────────────
 
     /// Execute a Cypher query as of a specific MVCC timestamp.
-    pub fn execute_at(&self, query: &str, snapshot_micros: u64) -> Result<lightning_core::QueryResult> {
+    pub fn execute_at(
+        &self,
+        query: &str,
+        snapshot_micros: u64,
+    ) -> Result<lightning_core::QueryResult> {
         self.inner.execute_at(query, snapshot_micros)
     }
 

@@ -20,7 +20,10 @@ fn setup() -> (tempfile::TempDir, Arc<Database>) {
 
 fn s(v: &str) -> HashMap<String, lightning_core::processor::Value> {
     let mut p = HashMap::new();
-    p.insert("p".into(), lightning_core::processor::Value::String(v.into()));
+    p.insert(
+        "p".into(),
+        lightning_core::processor::Value::String(v.into()),
+    );
     p
 }
 
@@ -52,13 +55,20 @@ fn null_empty_and_set_are_distinct() {
     conn.execute("CREATE (:T {id: 1})", None).unwrap();
     assert_eq!(get_s(&db, 1), None, "unset string must read as NULL");
 
-    conn.execute("MATCH (t:T {id: 1}) SET t.s = ''", None).unwrap();
-    assert_eq!(get_s(&db, 1).as_deref(), Some(""), "empty string must be stored");
+    conn.execute("MATCH (t:T {id: 1}) SET t.s = ''", None)
+        .unwrap();
+    assert_eq!(
+        get_s(&db, 1).as_deref(),
+        Some(""),
+        "empty string must be stored"
+    );
 
-    conn.execute("MATCH (t:T {id: 1}) SET t.s = 'x'", None).unwrap();
+    conn.execute("MATCH (t:T {id: 1}) SET t.s = 'x'", None)
+        .unwrap();
     assert_eq!(get_s(&db, 1).as_deref(), Some("x"));
 
-    conn.execute("MATCH (t:T {id: 1}) SET t.s = null", None).unwrap();
+    conn.execute("MATCH (t:T {id: 1}) SET t.s = null", None)
+        .unwrap();
     assert_eq!(get_s(&db, 1), None, "SET null must clear the value");
 }
 
@@ -88,9 +98,15 @@ fn values_survive_reopen() {
     {
         let db: Arc<Database> = Database::new(&path, SystemConfig::default()).unwrap();
         let conn = db.connect();
-        conn.execute("CREATE NODE TABLE T(id INT64, s STRING, n INT64, PRIMARY KEY (id))", None).unwrap();
-        conn.execute("CREATE (:T {id: 1, s: 'hello', n: 7})", None).unwrap();
-        conn.execute("CREATE (:T {id: 2, s: 'world'})", None).unwrap();
+        conn.execute(
+            "CREATE NODE TABLE T(id INT64, s STRING, n INT64, PRIMARY KEY (id))",
+            None,
+        )
+        .unwrap();
+        conn.execute("CREATE (:T {id: 1, s: 'hello', n: 7})", None)
+            .unwrap();
+        conn.execute("CREATE (:T {id: 2, s: 'world'})", None)
+            .unwrap();
         db.checkpoint().unwrap();
     }
     let db: Arc<Database> = Database::new(&path, SystemConfig::default()).unwrap();
@@ -104,10 +120,12 @@ fn multi_row_null_scan() {
     let (_d, db) = setup();
     let conn = db.connect();
     for id in 1..=6 {
-        conn.execute(&format!("CREATE (:T {{id: {id}}})"), None).unwrap();
+        conn.execute(&format!("CREATE (:T {{id: {id}}})"), None)
+            .unwrap();
     }
     for id in [1i64, 3, 5] {
-        conn.execute(&format!("MATCH (t:T {{id: {id}}}) SET t.s = 'v{id}'"), None).unwrap();
+        conn.execute(&format!("MATCH (t:T {{id: {id}}}) SET t.s = 'v{id}'"), None)
+            .unwrap();
     }
     let res = conn
         .execute("MATCH (t:T) RETURN t.id, t.s ORDER BY t.id", None)
@@ -138,11 +156,24 @@ fn multi_row_null_scan() {
 fn update_changes_length_cleanly() {
     let (_d, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE (:T {id: 1, s: 'averylonginitialvalue'})", None).unwrap();
-    conn.execute("MATCH (t:T {id: 1}) SET t.s = 'short'", None).unwrap();
-    assert_eq!(get_s(&db, 1).as_deref(), Some("short"), "shrink must not leave tail");
-    conn.execute("MATCH (t:T {id: 1}) SET t.s = 'this is much longer than before'", None).unwrap();
-    assert_eq!(get_s(&db, 1).as_deref(), Some("this is much longer than before"));
+    conn.execute("CREATE (:T {id: 1, s: 'averylonginitialvalue'})", None)
+        .unwrap();
+    conn.execute("MATCH (t:T {id: 1}) SET t.s = 'short'", None)
+        .unwrap();
+    assert_eq!(
+        get_s(&db, 1).as_deref(),
+        Some("short"),
+        "shrink must not leave tail"
+    );
+    conn.execute(
+        "MATCH (t:T {id: 1}) SET t.s = 'this is much longer than before'",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        get_s(&db, 1).as_deref(),
+        Some("this is much longer than before")
+    );
 }
 
 /// UPDATE must not affect other rows (row addressing correctness).
@@ -151,12 +182,22 @@ fn update_is_row_local() {
     let (_d, db) = setup();
     let conn = db.connect();
     for id in 1..=5 {
-        conn.execute(&format!("CREATE (:T {{id: {id}, s: 'orig{id}'}})"), None).unwrap();
+        conn.execute(&format!("CREATE (:T {{id: {id}, s: 'orig{id}'}})"), None)
+            .unwrap();
     }
-    conn.execute("MATCH (t:T {id: 3}) SET t.s = 'changed'", None).unwrap();
+    conn.execute("MATCH (t:T {id: 3}) SET t.s = 'changed'", None)
+        .unwrap();
     for id in 1..=5 {
-        let expected = if id == 3 { "changed".to_string() } else { format!("orig{id}") };
-        assert_eq!(get_s(&db, id).as_deref(), Some(expected.as_str()), "row {id}");
+        let expected = if id == 3 {
+            "changed".to_string()
+        } else {
+            format!("orig{id}")
+        };
+        assert_eq!(
+            get_s(&db, id).as_deref(),
+            Some(expected.as_str()),
+            "row {id}"
+        );
     }
 }
 

@@ -6,8 +6,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::new(dir.path(), SystemConfig::default())?;
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE A(id INT64, val INT64, PRIMARY KEY (id))", None)?;
-    conn.execute("CREATE NODE TABLE B(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE A(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
+    conn.execute(
+        "CREATE NODE TABLE B(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     conn.execute("CREATE (:A {id: 1, val: 10})", None)?;
     conn.execute("CREATE (:A {id: 2, val: 20})", None)?;
     conn.execute("CREATE (:B {id: 1, val: 100})", None)?;
@@ -35,7 +41,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     conn.execute("CREATE REL TABLE relx (FROM N TO N)", None)?;
     conn.execute("CREATE (:N {id: 1})", None)?;
     conn.execute("CREATE (:N {id: 2})", None)?;
-    conn.execute("MATCH (x:N {id: 1}), (y:N {id: 2}) CREATE (x)-[:relx]->(y)", None)?;
+    conn.execute(
+        "MATCH (x:N {id: 1}), (y:N {id: 2}) CREATE (x)-[:relx]->(y)",
+        None,
+    )?;
 
     for q in queries {
         match conn.execute(q, None) {
@@ -47,11 +56,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut row = Vec::new();
                         for c in 0..b.num_columns() {
                             let col = b.column(c);
-                            let v = if let Some(a) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                            let v = if let Some(a) =
+                                col.as_any().downcast_ref::<arrow::array::Int64Array>()
+                            {
                                 format!("{}", a.value(r))
-                            } else if let Some(a) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                            } else if let Some(a) =
+                                col.as_any().downcast_ref::<arrow::array::Float64Array>()
+                            {
                                 format!("{}", a.value(r))
-                            } else if let Some(a) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                            } else if let Some(a) =
+                                col.as_any().downcast_ref::<arrow::array::StringArray>()
+                            {
                                 a.value(r).to_string()
                             } else {
                                 format!("({:?})", col.data_type())

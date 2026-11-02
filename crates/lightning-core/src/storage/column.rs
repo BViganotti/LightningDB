@@ -190,14 +190,18 @@ impl Column {
                     let child = &self.child_columns[0];
                     // Atomically claim a contiguous range of row IDs so that two
                     // concurrent list appends do not write to the same child row.
-                    let num_vals = child.atomic_num_values.fetch_add(elements.len() as u64, Ordering::AcqRel);
+                    let num_vals = child
+                        .atomic_num_values
+                        .fetch_add(elements.len() as u64, Ordering::AcqRel);
                     for (i, el) in elements.iter().enumerate() {
                         child.append_value(bm, el, num_vals + i as u64, tx)?;
                     }
                     // Each child append also incremented `atomic_num_values`; undo
                     // those so the next row reserves a contiguous child range. The
                     // list's own end offset is the slot just past its elements.
-                    child.atomic_num_values.fetch_sub(elements.len() as u64, Ordering::AcqRel);
+                    child
+                        .atomic_num_values
+                        .fetch_sub(elements.len() as u64, Ordering::AcqRel);
                     let end_offset = num_vals + elements.len() as u64;
                     self.append_plain_value(bm, &Value::Number(end_offset as f64), row_id, tx)?;
                 }
@@ -462,10 +466,8 @@ impl Column {
                                 let of_page_idx =
                                     u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
                                 let of_len =
-                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?)
-                                        as usize;
-                                let of_frame =
-                                    bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
+                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?) as usize;
+                                let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
                                 let content =
                                     of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
                                 bm.unpin_page(ofh, of_page_idx, of_frame);
@@ -615,7 +617,10 @@ impl Column {
         if compression == CompressionType::Constant {
             if let Some(ref m) = analyzer_meta {
                 let vals = vec![m.min.clone(); num_values as usize];
-                return Ok(crate::processor::arrow_utils::values_to_array(&vals, &target_type));
+                return Ok(crate::processor::arrow_utils::values_to_array(
+                    &vals,
+                    &target_type,
+                ));
             }
         }
 
@@ -676,16 +681,25 @@ impl Column {
             let null_base_offset = (current_offset % 4096) as usize;
 
             // Cache null frame across sequential batches on the same null page
-            let null_frame = if cached_null_page.as_ref().map(|(idx, _)| *idx) == Some(null_page_idx) {
-                cached_null_page.as_ref().expect("null_page cache hit has value").1.clone()
-            } else {
-                if let Some((old_idx, ref old_frame)) = cached_null_page.take() {
-                    bm.unpin_page(&null_fh, old_idx, old_frame.clone());
-                }
-                let frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
-                cached_null_page = Some((null_page_idx, frame));
-                cached_null_page.as_ref().expect("null_page cache just populated").1.clone()
-            };
+            let null_frame =
+                if cached_null_page.as_ref().map(|(idx, _)| *idx) == Some(null_page_idx) {
+                    cached_null_page
+                        .as_ref()
+                        .expect("null_page cache hit has value")
+                        .1
+                        .clone()
+                } else {
+                    if let Some((old_idx, ref old_frame)) = cached_null_page.take() {
+                        bm.unpin_page(&null_fh, old_idx, old_frame.clone());
+                    }
+                    let frame = bm.pin_page(null_fh.clone(), null_page_idx, tx)?;
+                    cached_null_page = Some((null_page_idx, frame));
+                    cached_null_page
+                        .as_ref()
+                        .expect("null_page cache just populated")
+                        .1
+                        .clone()
+                };
 
             for i in 0..to_read as usize {
                 let is_null = null_frame.as_slice()[null_base_offset + i] != 0;
@@ -809,9 +823,11 @@ impl Column {
             let null_frame = &null_frames
                 .iter()
                 .find(|(idx, _)| *idx == null_page_idx)
-                .ok_or_else(|| crate::LightningError::Internal(format!(
-                    "Null page {null_page_idx} not found in pre-pinned frames"
-                )))?
+                .ok_or_else(|| {
+                    crate::LightningError::Internal(format!(
+                        "Null page {null_page_idx} not found in pre-pinned frames"
+                    ))
+                })?
                 .1;
             let null_base_offset = (current_offset % 4096) as usize;
             if skip_page {
@@ -941,7 +957,10 @@ impl Column {
         // Limit to a reasonable number of pages to prevent OOM on large files.
         const MAX_OVERFLOW_PAGES: usize = 1024; // 4MB max pre-read
         let overflow_data: Vec<u8> = if self.overflow_fh.is_some() {
-            let ofh = self.overflow_fh.as_ref().expect("overflow file handle required");
+            let ofh = self
+                .overflow_fh
+                .as_ref()
+                .expect("overflow file handle required");
             let num_of_pages = (ofh.get_num_pages() as usize).min(MAX_OVERFLOW_PAGES);
             if num_of_pages > 0 {
                 let mut buf = vec![0u8; num_of_pages * 4096];
@@ -979,16 +998,22 @@ impl Column {
                     &[]
                 } else {
                     let of_page = u64::from_le_bytes(
-                        data_buf[slot_offset + 1..slot_offset + 9].try_into().expect("infallible: fixed-size array conversion"),
+                        data_buf[slot_offset + 1..slot_offset + 9]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
                     ) as usize;
                     let of_offset = u64::from_le_bytes(
-                        data_buf[slot_offset + 9..slot_offset + 17].try_into().expect("infallible: fixed-size array conversion"),
+                        data_buf[slot_offset + 9..slot_offset + 17]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
                     ) as usize;
                     // Values may span multiple consecutive overflow pages, so
                     // do not cap the length at one page; cap only at the end
                     // of the pre-read overflow data.
                     let of_len = u32::from_le_bytes(
-                        data_buf[slot_offset + 17..slot_offset + 21].try_into().expect("infallible: fixed-size array conversion"),
+                        data_buf[slot_offset + 17..slot_offset + 21]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
                     ) as usize;
                     let of_start = of_page * 4096 + of_offset;
                     let of_end = std::cmp::min(of_start + of_len, overflow_data.len());
@@ -1046,7 +1071,13 @@ impl Column {
     ) -> Result<ArrayRef> {
         let values_per_page = self.layout().values_per_page;
         if !self.version_info.has_modifications() && zone_map.is_none() {
-            return self.scan_primitive_direct(offset, num_values, element_size, target_type, zone_map);
+            return self.scan_primitive_direct(
+                offset,
+                num_values,
+                element_size,
+                target_type,
+                zone_map,
+            );
         }
 
         if num_values == values_per_page && offset % values_per_page == 0 && zone_map.is_none() {
@@ -1130,7 +1161,11 @@ impl Column {
                 let null_src = &null_frame.as_slice()[null_base_offset..null_base_offset + to_read];
                 let mut j = 0;
                 while j + 8 <= to_read {
-                    let val = u64::from_le_bytes(null_src[j..j + 8].try_into().expect("infallible: fixed-size array conversion"));
+                    let val = u64::from_le_bytes(
+                        null_src[j..j + 8]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
+                    );
                     if val != 0 {
                         for k in 0..8 {
                             if null_src[j + k] != 0 {
@@ -1245,8 +1280,7 @@ impl Column {
             let mut pages_buf = vec![0u8; (num_pages as usize) * 4096];
             self.fh.read_pages(first_page, num_pages, &mut pages_buf)?;
             let start_in_page = (offset % values_per_page) as usize * element_size;
-            data_buffer
-                .extend_from_slice(&pages_buf[start_in_page..start_in_page + total_bytes]);
+            data_buffer.extend_from_slice(&pages_buf[start_in_page..start_in_page + total_bytes]);
         }
 
         let null_buf = if has_any_nulls {
@@ -1431,7 +1465,10 @@ impl Column {
         for (row_id, val) in &pending {
             let page_idx = *row_id as u64 / 4096;
             let offset_in_page = *row_id % 4096;
-            by_page.entry(page_idx).or_default().push((offset_in_page, *val));
+            by_page
+                .entry(page_idx)
+                .or_default()
+                .push((offset_in_page, *val));
         }
 
         // Record null-bit writes as page-row modifications so the commit merge
@@ -1527,8 +1564,7 @@ impl Column {
             let overflow_row_data = if stack_buf[0] == 255 {
                 self.overflow_fh.as_ref().and_then(|ofh| {
                     let of_page_idx = u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
-                    let of_len =
-                        u32::from_le_bytes(stack_buf[17..21].try_into().ok()?) as usize;
+                    let of_len = u32::from_le_bytes(stack_buf[17..21].try_into().ok()?) as usize;
                     let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
                     let content = of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
                     bm.unpin_page(ofh, of_page_idx, of_frame);
@@ -1600,7 +1636,6 @@ impl Column {
         if num_rows == 0 {
             return Ok(());
         }
-
 
         self.dirty.store(true, Ordering::Release);
 
@@ -1747,8 +1782,7 @@ impl Column {
                                 let of_page_idx =
                                     u64::from_le_bytes(stack_buf[1..9].try_into().ok()?);
                                 let of_len =
-                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?)
-                                        as usize;
+                                    u32::from_le_bytes(stack_buf[17..21].try_into().ok()?) as usize;
                                 let of_frame = bm.pin_page(ofh.clone(), of_page_idx, tx).ok()?;
                                 let content =
                                     of_frame.as_slice()[..std::cmp::min(of_len, 4096)].to_vec();
@@ -1767,7 +1801,7 @@ impl Column {
                                 values_per_page: self.layout().values_per_page,
                                 row_data,
                                 overflow_row_data,
-                            }
+                            },
                         );
                     }
 
@@ -1805,8 +1839,7 @@ impl Column {
             CompressionType::FixedFrameOfReference => {
                 Box::new(crate::storage::compression::delta::FixedFrameOfReferenceAlg)
             }
-            CompressionType::Uncompressed
-            | CompressionType::BooleanBitpacking => {
+            CompressionType::Uncompressed | CompressionType::BooleanBitpacking => {
                 Box::new(crate::storage::compression::Uncompressed { element_size })
             }
         }
@@ -1820,16 +1853,24 @@ impl Column {
     ) -> Result<Value> {
         match self.data_type {
             LogicalType::Int64 => Ok(Value::Number(i64::from_le_bytes(
-                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ) as f64)),
             LogicalType::Int32 => Ok(Value::Number(i32::from_le_bytes(
-                data[0..4].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..4]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ) as f64)),
             LogicalType::Uint64 | LogicalType::Node(_) => Ok(Value::Node(u64::from_le_bytes(
-                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Double | LogicalType::Float => Ok(Value::Number(f64::from_le_bytes(
-                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Bool => Ok(Value::Boolean(data[0] != 0)),
             LogicalType::String => {
@@ -1840,9 +1881,21 @@ impl Column {
                         // as string content (source of NUL/garbage corruption).
                         return Ok(Value::String(String::new()));
                     };
-                    let page_idx = u64::from_le_bytes(data[1..9].try_into().expect("infallible: fixed-size array conversion"));
-                    let offset = u64::from_le_bytes(data[9..17].try_into().expect("infallible: fixed-size array conversion")) as usize;
-                    let len = u32::from_le_bytes(data[17..21].try_into().expect("infallible: fixed-size array conversion")) as usize;
+                    let page_idx = u64::from_le_bytes(
+                        data[1..9]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
+                    );
+                    let offset = u64::from_le_bytes(
+                        data[9..17]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
+                    ) as usize;
+                    let len = u32::from_le_bytes(
+                        data[17..21]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
+                    ) as usize;
                     // The value may span multiple consecutive overflow pages.
                     // Stop at the end of the overflow file so a stale length
                     // from an older build cannot read out of bounds.
@@ -1886,17 +1939,21 @@ impl Column {
                 }
             }
             LogicalType::Date => Ok(Value::Date(i32::from_le_bytes(
-                data[0..4].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..4]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ))),
             LogicalType::Timestamp => Ok(Value::Timestamp(i64::from_le_bytes(
-                data[0..8].try_into().expect("infallible: fixed-size array conversion"),
+                data[0..8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
             ))),
             // List/Struct columns store their child end-offset as a Number.
-            LogicalType::List(_) | LogicalType::Struct(_) => Ok(Value::Number(
-                f64::from_le_bytes(
-                    data[0..8].try_into().expect("infallible: fixed-size array conversion"),
-                ),
-            )),
+            LogicalType::List(_) | LogicalType::Struct(_) => Ok(Value::Number(f64::from_le_bytes(
+                data[0..8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
+            ))),
             _ => Ok(Value::Null),
         }
     }
@@ -1930,7 +1987,8 @@ impl Column {
             (Value::Number(n), LogicalType::Double) => buf[..8].copy_from_slice(&n.to_le_bytes()),
             (Value::Number(n), LogicalType::Float) => buf[..8].copy_from_slice(&n.to_le_bytes()),
             // List/Struct columns store their child end-offset as a Number.
-            (Value::Number(n), LogicalType::List(_)) | (Value::Number(n), LogicalType::Struct(_)) => {
+            (Value::Number(n), LogicalType::List(_))
+            | (Value::Number(n), LogicalType::Struct(_)) => {
                 buf[..8].copy_from_slice(&n.to_le_bytes())
             }
             (Value::Node(id), LogicalType::Double) => {
@@ -2014,7 +2072,10 @@ impl Column {
             LogicalType::Bool => 1,
             LogicalType::String => 64,
             _ => {
-                tracing::warn!("Unknown logical type {:?}, defaulting to 8-byte element size", self.data_type);
+                tracing::warn!(
+                    "Unknown logical type {:?}, defaulting to 8-byte element size",
+                    self.data_type
+                );
                 8
             }
         }
@@ -2084,12 +2145,7 @@ impl Column {
         while written < num_values {
             let blk = std::cmp::min(32, num_values - written);
             for i in 0..blk {
-                self.serialize_value_into(
-                    &values[(written + i) as usize],
-                    bm,
-                    tx,
-                    &mut stack_buf,
-                )?;
+                self.serialize_value_into(&values[(written + i) as usize], bm, tx, &mut stack_buf)?;
                 let o = i as usize * element_size;
                 src[o..o + element_size].copy_from_slice(&stack_buf[..element_size]);
             }
@@ -2171,11 +2227,7 @@ impl Column {
                             &mut stack_buf,
                         )?;
                         let o = i as usize * element_size;
-                        std::ptr::copy_nonoverlapping(
-                            stack_buf.as_ptr(),
-                            ptr.add(o),
-                            element_size,
-                        );
+                        std::ptr::copy_nonoverlapping(stack_buf.as_ptr(), ptr.add(o), element_size);
                     }
                 }
                 bm.log_page_update(self.fh.file_id, page, frame.as_slice())?;
@@ -2327,14 +2379,23 @@ impl Column {
 
         let data_type = &self.data_type;
         let meta = match data_type {
-            LogicalType::Int64 | LogicalType::Int32 | LogicalType::Uint64 | LogicalType::Node(_) => {
-                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_integer_chunk(&values, data_type, None, None)
+            LogicalType::Int64
+            | LogicalType::Int32
+            | LogicalType::Uint64
+            | LogicalType::Node(_) => {
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_integer_chunk(
+                    &values, data_type, None, None,
+                )
             }
             LogicalType::Double | LogicalType::Float => {
-                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_float_chunk(&values)
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_float_chunk(
+                    &values,
+                )
             }
             LogicalType::String => {
-                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_string_chunk(&values)
+                crate::storage::compression::analyzer::CompressionAnalyzer::analyze_string_chunk(
+                    &values,
+                )
             }
             _ => return Ok(()),
         };
@@ -2363,7 +2424,15 @@ mod tests {
     use lightning_types::LogicalType;
     use std::sync::Arc;
 
-    fn setup_col(col_type: LogicalType, with_overflow: bool) -> (Column, Arc<BufferManager>, Arc<TransactionManager>, tempfile::TempDir) {
+    fn setup_col(
+        col_type: LogicalType,
+        with_overflow: bool,
+    ) -> (
+        Column,
+        Arc<BufferManager>,
+        Arc<TransactionManager>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let data_path = dir.path().join("data.ltng");
         let null_path = dir.path().join("null.ltng");
@@ -2393,7 +2462,9 @@ mod tests {
         (col, bm, tm, dir)
     }
 
-    fn begin_tx(tm: &TransactionManager) -> Arc<crate::transaction::transaction_manager::Transaction> {
+    fn begin_tx(
+        tm: &TransactionManager,
+    ) -> Arc<crate::transaction::transaction_manager::Transaction> {
         Arc::new(tm.begin(false).unwrap())
     }
 
@@ -2403,7 +2474,8 @@ mod tests {
     fn test_append_and_get_double() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
         let tx = begin_tx(&tm);
-        col.append_value(&bm, &Value::Number(3.14159), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Number(3.14159), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::Number(3.14159));
     }
@@ -2421,7 +2493,8 @@ mod tests {
     fn test_append_and_get_int32() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Int32, false);
         let tx = begin_tx(&tm);
-        col.append_value(&bm, &Value::Number(100.0), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Number(100.0), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::Number(100.0));
     }
@@ -2430,7 +2503,8 @@ mod tests {
     fn test_append_and_get_bool_true() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Bool, false);
         let tx = begin_tx(&tm);
-        col.append_value(&bm, &Value::Boolean(true), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Boolean(true), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::Boolean(true));
     }
@@ -2439,7 +2513,8 @@ mod tests {
     fn test_append_and_get_bool_false() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Bool, false);
         let tx = begin_tx(&tm);
-        col.append_value(&bm, &Value::Boolean(false), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Boolean(false), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::Boolean(false));
     }
@@ -2475,7 +2550,8 @@ mod tests {
     fn test_append_and_get_timestamp() {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Timestamp, false);
         let tx = begin_tx(&tm);
-        col.append_value(&bm, &Value::Timestamp(9876543210), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::Timestamp(9876543210), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::Timestamp(9876543210));
     }
@@ -2554,7 +2630,8 @@ mod tests {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
         let tx = begin_tx(&tm);
         for i in 0..10 {
-            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx)
+                .unwrap();
         }
         for i in 0..10 {
             let result = col.get_value(&bm, i, &tx).unwrap();
@@ -2569,7 +2646,8 @@ mod tests {
         let (col, bm, tm, _dir) = setup_col(LogicalType::String, true);
         let tx = begin_tx(&tm);
         let s = "hello world";
-        col.append_value(&bm, &Value::String(s.to_string()), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::String(s.to_string()), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::String(s.to_string()));
     }
@@ -2580,7 +2658,8 @@ mod tests {
         let tx = begin_tx(&tm);
         // String longer than 63 bytes should go to overflow
         let s = "a".repeat(200);
-        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::String(s));
     }
@@ -2593,7 +2672,10 @@ mod tests {
         // inline limit must fail rather than silently truncate (data corruption).
         let s = "b".repeat(200);
         let result = col.append_value(&bm, &Value::String(s), 0, &tx);
-        assert!(result.is_err(), "oversized string without overflow must error");
+        assert!(
+            result.is_err(),
+            "oversized string without overflow must error"
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(
             msg.contains("exceeds inline limit"),
@@ -2607,13 +2689,10 @@ mod tests {
         let tx = begin_tx(&tm);
         let medium = "medium".repeat(10);
         let long = "long".repeat(100);
-        let strings = vec![
-            "short".to_string(),
-            medium,
-            long,
-        ];
+        let strings = vec!["short".to_string(), medium, long];
         for (i, s) in strings.iter().enumerate() {
-            col.append_value(&bm, &Value::String(s.clone()), i as u64, &tx).unwrap();
+            col.append_value(&bm, &Value::String(s.clone()), i as u64, &tx)
+                .unwrap();
         }
         for (i, expected) in strings.iter().enumerate() {
             let result = col.get_value(&bm, i as u64, &tx).unwrap();
@@ -2628,7 +2707,8 @@ mod tests {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
         let tx = begin_tx(&tm);
         for i in 0..5 {
-            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx)
+                .unwrap();
         }
         let mut result = Vec::new();
         col.scan(&bm, 0, 5, &tx, &mut result).unwrap();
@@ -2643,7 +2723,8 @@ mod tests {
         let (col, bm, tm, _dir) = setup_col(LogicalType::Double, false);
         let tx = begin_tx(&tm);
         for i in 0..10 {
-            col.append_value(&bm, &Value::Number(i as f64), i, &tx).unwrap();
+            col.append_value(&bm, &Value::Number(i as f64), i, &tx)
+                .unwrap();
         }
         let mut result = Vec::new();
         col.scan(&bm, 3, 4, &tx, &mut result).unwrap();
@@ -2660,7 +2741,11 @@ mod tests {
         let tx = begin_tx(&tm);
         let vals: Vec<Value> = (0..10).map(|i| Value::Number(i as f64)).collect();
         let result = col.batch_append_values(&bm, &vals, 0, &tx).unwrap();
-        assert_eq!(result.len(), 10, "batch_append returns per-value commit info");
+        assert_eq!(
+            result.len(),
+            10,
+            "batch_append returns per-value commit info"
+        );
 
         // Verify all values can be read back
         for i in 0..10 {
@@ -2732,7 +2817,8 @@ mod tests {
         let tx = begin_tx(&tm);
         // 63 chars = fits inline (max inline is 63 bytes)
         let s = "c".repeat(63);
-        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::String(s));
     }
@@ -2743,7 +2829,8 @@ mod tests {
         let tx = begin_tx(&tm);
         // 64 chars = goes to overflow
         let s = "d".repeat(64);
-        col.append_value(&bm, &Value::String(s.clone()), 0, &tx).unwrap();
+        col.append_value(&bm, &Value::String(s.clone()), 0, &tx)
+            .unwrap();
         let result = col.get_value(&bm, 0, &tx).unwrap();
         assert_eq!(result, Value::String(s));
     }
@@ -2752,7 +2839,9 @@ mod tests {
 
     #[test]
     fn test_column_default_zone_map_eq() {
-        let zm = ZoneMapEq { value: Value::Number(42.0) };
+        let zm = ZoneMapEq {
+            value: Value::Number(42.0),
+        };
         assert_eq!(zm.value, Value::Number(42.0));
     }
 
@@ -2831,10 +2920,7 @@ mod tests {
         // --- Read path 1: pinned-frame scan (version_info has modifications) ---
         assert!(col.version_info.has_modifications());
         let n = strings.len();
-        let pinned = collect_strings(
-            &col.scan_to_array(&bm, 0, n as u64, &tx, None).unwrap(),
-            n,
-        );
+        let pinned = collect_strings(&col.scan_to_array(&bm, 0, n as u64, &tx, None).unwrap(), n);
         assert_eq!(pinned, strings, "pinned-path scan round-trip failed");
         assert_no_nul_bytes(&pinned, "pinned-path scan");
 
@@ -2870,7 +2956,11 @@ mod tests {
         // --- Per-row get_value after checkpoint (parse_value on flushed pages) ---
         for (i, s) in strings.iter().enumerate() {
             let v = reader.get_value(&bm, i as u64, &tx).unwrap();
-            assert_eq!(v, Value::String(s.clone()), "get_value row {i} after checkpoint");
+            assert_eq!(
+                v,
+                Value::String(s.clone()),
+                "get_value row {i} after checkpoint"
+            );
         }
     }
 
@@ -2960,5 +3050,4 @@ mod tests {
             }
         }
     }
-
 }

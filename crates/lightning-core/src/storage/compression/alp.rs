@@ -70,7 +70,8 @@ impl Alp {
                 Self::NEG_INF_SENTINEL
             };
         }
-        if (exp_idx as usize) >= Self::EXP_ARR.len() || (fac_idx as usize) >= Self::FACTOR_ARR.len() {
+        if (exp_idx as usize) >= Self::EXP_ARR.len() || (fac_idx as usize) >= Self::FACTOR_ARR.len()
+        {
             return 0;
         }
         let tmp = val * Self::EXP_ARR[exp_idx as usize] / Self::FACTOR_ARR[fac_idx as usize];
@@ -98,10 +99,14 @@ impl Alp {
             Self::POS_INF_SENTINEL => f64::INFINITY,
             Self::NEG_INF_SENTINEL => f64::NEG_INFINITY,
             _ => {
-                if (fac_idx as usize) >= Self::FACTOR_ARR.len() || (exp_idx as usize) >= Self::FRAC_ARR.len() {
+                if (fac_idx as usize) >= Self::FACTOR_ARR.len()
+                    || (exp_idx as usize) >= Self::FRAC_ARR.len()
+                {
                     return 0.0;
                 }
-                (encoded as f64) * Self::FACTOR_ARR[fac_idx as usize] * Self::FRAC_ARR[exp_idx as usize]
+                (encoded as f64)
+                    * Self::FACTOR_ARR[fac_idx as usize]
+                    * Self::FRAC_ARR[exp_idx as usize]
             }
         }
     }
@@ -144,7 +149,11 @@ impl CompressionAlg for AlpAlg {
             for fac_idx in 0..19u8 {
                 let mut cost: u64 = 0;
                 for i in 0..num_values as usize {
-                    let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
+                    let val = f64::from_le_bytes(
+                        src[i * 8..i * 8 + 8]
+                            .try_into()
+                            .expect("infallible: fixed-size array conversion"),
+                    );
                     let encoded = Alp::encode_value(val, fac_idx, exp_idx);
                     cost = cost.saturating_add(encoded.unsigned_abs());
                 }
@@ -165,7 +174,11 @@ impl CompressionAlg for AlpAlg {
         dst[0] = best_shared_exp;
         dst[1] = best_shared_fac;
         for i in 0..num_values as usize {
-            let val = f64::from_le_bytes(src[i * 8..i * 8 + 8].try_into().expect("infallible: fixed-size array conversion"));
+            let val = f64::from_le_bytes(
+                src[i * 8..i * 8 + 8]
+                    .try_into()
+                    .expect("infallible: fixed-size array conversion"),
+            );
             let encoded = Alp::encode_value(val, best_shared_fac, best_shared_exp);
             let dst_start = 2 + i * 8;
             dst[dst_start..dst_start + 8].copy_from_slice(&encoded.to_le_bytes());
@@ -184,7 +197,9 @@ impl CompressionAlg for AlpAlg {
         _metadata: &CompressionMetadata,
     ) -> Result<()> {
         if src.len() < 2 {
-            return Err(LightningError::Internal("ALP decompress: src too short for header".into()));
+            return Err(LightningError::Internal(
+                "ALP decompress: src too short for header".into(),
+            ));
         }
         let exp_idx = src[0];
         let fac_idx = src[1];

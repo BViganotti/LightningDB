@@ -112,7 +112,11 @@ fn validate_csr_header(buf: &[u8; PAGE_SIZE], expected_magic: [u8; 4]) -> Result
             "CSR header too short: expected at least 12 bytes".into(),
         ));
     }
-    let stored_crc = u32::from_le_bytes(buf[8..12].try_into().expect("infallible: checked buf.len() >= 12"));
+    let stored_crc = u32::from_le_bytes(
+        buf[8..12]
+            .try_into()
+            .expect("infallible: checked buf.len() >= 12"),
+    );
     let mut digest = CRC32C.digest();
     digest.update(&buf[..8]);
     if digest.finalize() != stored_crc {
@@ -163,9 +167,14 @@ impl CSRIndex {
     /// Recover `base_edge_count` from the base CSR files after restart.
     /// Called during `ensure_schema` so that `needs_compaction` makes correct
     /// decisions and `for_each_base_neighbor` reports existing edges.
-    pub fn recover_from_base(&self, bm: &BufferManager, tx: &crate::transaction::transaction_manager::Transaction) -> Result<()> {
+    pub fn recover_from_base(
+        &self,
+        bm: &BufferManager,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<()> {
         let edges = self.scan_edges_from_csr(bm, tx)?;
-        self.base_edge_count.store(edges.len() as u64, Ordering::Release);
+        self.base_edge_count
+            .store(edges.len() as u64, Ordering::Release);
         Ok(())
     }
 
@@ -233,11 +242,19 @@ impl CSRIndex {
         // (e.g. after forget+re-store) are not silently dropped.
         let num_nodes = all_edges.iter().map(|e| e.0).max().unwrap_or(0);
 
-        Self::build(bm, self.offset_fh.clone(), self.adj_node_fh.clone(), &all_edges, num_nodes, tx)?;
+        Self::build(
+            bm,
+            self.offset_fh.clone(),
+            self.adj_node_fh.clone(),
+            &all_edges,
+            num_nodes,
+            tx,
+        )?;
 
         self.pending_edges.write().clear();
         self.pending_deletions.write().clear();
-        self.base_edge_count.store(all_edges.len() as u64, Ordering::Relaxed);
+        self.base_edge_count
+            .store(all_edges.len() as u64, Ordering::Relaxed);
         self.deletion_count.store(0, Ordering::Relaxed);
         Ok(())
     }
@@ -266,7 +283,13 @@ impl CSRIndex {
     /// Read a u64 value at a specific byte offset within a file handle, handling
     /// page boundary crossing. Each call pins and unpins the required pages, so
     /// this is safe to call in loops without leaking buffer pool slots.
-    fn read_u64_at(&self, bm: &BufferManager, fh: &Arc<FileHandle>, byte_pos: u64, tx: &crate::transaction::transaction_manager::Transaction) -> Result<u64> {
+    fn read_u64_at(
+        &self,
+        bm: &BufferManager,
+        fh: &Arc<FileHandle>,
+        byte_pos: u64,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Result<u64> {
         let page_idx = byte_pos / PAGE_SIZE as u64;
         let offset_in_page = byte_pos as usize % PAGE_SIZE;
         if offset_in_page + 8 <= PAGE_SIZE {
@@ -334,7 +357,9 @@ impl CSRIndex {
             for k in 0..values_in_page {
                 let start = offset_in_page + k * 8;
                 result.push(u64::from_le_bytes(
-                    frame.as_slice()[start..start + 8].try_into().expect("infallible: u64 read"),
+                    frame.as_slice()[start..start + 8]
+                        .try_into()
+                        .expect("infallible: u64 read"),
                 ));
             }
             bm.unpin_page(fh, page_idx, frame);
@@ -367,9 +392,16 @@ impl CSRIndex {
             validate_csr_header(&adj_buf, CSR_ADJ_MAGIC)?
         }
 
-        let max_entries = ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
+        let max_entries =
+            ((num_offset_pages * PAGE_SIZE as u64).saturating_sub(CSR_HEADER_SIZE as u64)) / 8;
         let offset_end = csr_offset_byte(max_entries + 1);
-        let offsets = self.read_u64_batch(bm, &self.offset_fh, CSR_HEADER_SIZE as u64, offset_end.min(num_offset_pages * PAGE_SIZE as u64), tx)?;
+        let offsets = self.read_u64_batch(
+            bm,
+            &self.offset_fh,
+            CSR_HEADER_SIZE as u64,
+            offset_end.min(num_offset_pages * PAGE_SIZE as u64),
+            tx,
+        )?;
 
         if offsets.len() < 2 {
             return Ok(Vec::new());
@@ -570,11 +602,7 @@ impl CSRIndex {
         header_buf.copy_from_slice(header_frame.as_slice());
         write_csr_header(&mut header_buf, CSR_OFFSET_MAGIC);
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                header_buf.as_ptr(),
-                header_frame.as_ptr(),
-                PAGE_SIZE,
-            );
+            std::ptr::copy_nonoverlapping(header_buf.as_ptr(), header_frame.as_ptr(), PAGE_SIZE);
         }
         bm.unpin_page(&offset_fh, 0, header_frame);
 
@@ -584,7 +612,10 @@ impl CSRIndex {
         for (i, &val) in offsets.iter().enumerate() {
             let byte_pos = csr_offset_byte(i as u64);
             let page_idx = byte_pos / PAGE_SIZE as u64;
-            offset_page_entries.entry(page_idx).or_default().push((byte_pos, val));
+            offset_page_entries
+                .entry(page_idx)
+                .or_default()
+                .push((byte_pos, val));
         }
         for (&page_idx, entries) in &offset_page_entries {
             while offset_fh.get_num_pages() <= page_idx {
@@ -627,7 +658,10 @@ impl CSRIndex {
         for (i, &(_, dst)) in sorted_edges.iter().enumerate() {
             let adj_byte = (CSR_HEADER_SIZE as u64) + (i as u64 * 8);
             let page_idx = adj_byte / PAGE_SIZE as u64;
-            adj_page_entries.entry(page_idx).or_default().push((adj_byte, dst));
+            adj_page_entries
+                .entry(page_idx)
+                .or_default()
+                .push((adj_byte, dst));
         }
         for (&page_idx, entries) in &adj_page_entries {
             while adj_node_fh.get_num_pages() <= page_idx {
@@ -686,9 +720,15 @@ mod tests {
         let edges = vec![(0u64, 1u64)];
         // u64::MAX overflows; MAX_CSR_NODES exceeds the safety ceiling. Both
         // must return an error instead of attempting a huge allocation.
-        assert!(
-            CSRIndex::build(&bm, offset_fh.clone(), adj_fh.clone(), &edges, u64::MAX, &tx).is_err()
-        );
+        assert!(CSRIndex::build(
+            &bm,
+            offset_fh.clone(),
+            adj_fh.clone(),
+            &edges,
+            u64::MAX,
+            &tx
+        )
+        .is_err());
         assert!(CSRIndex::build(
             &bm,
             offset_fh.clone(),

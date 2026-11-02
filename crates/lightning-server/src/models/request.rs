@@ -35,7 +35,11 @@ fn default_timeout() -> u64 {
 
 impl QueryRequest {
     pub fn effective_timeout_ms(&self) -> u64 {
-        let requested = if self.timeout_ms > 0 { self.timeout_ms } else { default_timeout() };
+        let requested = if self.timeout_ms > 0 {
+            self.timeout_ms
+        } else {
+            default_timeout()
+        };
         requested.min(MAX_TIMEOUT_MS)
     }
 }
@@ -74,10 +78,18 @@ impl StoreRequest {
             return Err("id cannot be empty".into());
         }
         if self.id.len() > MAX_ID_LENGTH {
-            return Err(format!("id length ({}) exceeds maximum ({})", self.id.len(), MAX_ID_LENGTH));
+            return Err(format!(
+                "id length ({}) exceeds maximum ({})",
+                self.id.len(),
+                MAX_ID_LENGTH
+            ));
         }
         if self.content.len() > MAX_CONTENT_LENGTH {
-            return Err(format!("content length ({}) exceeds maximum ({})", self.content.len(), MAX_CONTENT_LENGTH));
+            return Err(format!(
+                "content length ({}) exceeds maximum ({})",
+                self.content.len(),
+                MAX_CONTENT_LENGTH
+            ));
         }
         Ok(())
     }

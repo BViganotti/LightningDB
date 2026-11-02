@@ -3,8 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 use lightning::memory::MemoryStore;
 use lightning::Database;
-use tracing_subscriber::EnvFilter;
 use rand::RngCore;
+use tracing_subscriber::EnvFilter;
 
 mod auth;
 mod config;
@@ -27,11 +27,10 @@ fn resolve_jwt_secret(args: &config::CliArgs) -> Vec<u8> {
     let secret = match &args.jwt_secret {
         Some(raw) => {
             if let Some(file_path) = raw.strip_prefix('@') {
-                let content = std::fs::read_to_string(file_path)
-                    .unwrap_or_else(|e| {
-                        eprintln!("Failed to read JWT secret file '{}': {}", file_path, e);
-                        std::process::exit(1);
-                    });
+                let content = std::fs::read_to_string(file_path).unwrap_or_else(|e| {
+                    eprintln!("Failed to read JWT secret file '{}': {}", file_path, e);
+                    std::process::exit(1);
+                });
                 let trimmed = content.trim().to_string();
                 trimmed.into_bytes()
             } else {
@@ -47,7 +46,10 @@ fn resolve_jwt_secret(args: &config::CliArgs) -> Vec<u8> {
         }
     };
     if secret.len() < 32 {
-        eprintln!("ERROR: JWT secret must be at least 32 bytes (got {})", secret.len());
+        eprintln!(
+            "ERROR: JWT secret must be at least 32 bytes (got {})",
+            secret.len()
+        );
         eprintln!("  Generate a secure secret with: openssl rand -base64 32");
         std::process::exit(1);
     }
@@ -69,7 +71,10 @@ async fn main() {
                 .with_default_directive(tracing::Level::INFO.into())
                 .parse(&log_filter)
                 .unwrap_or_else(|e| {
-                    eprintln!("Warning: invalid log filter '{}': {}. Using default.", log_filter, e);
+                    eprintln!(
+                        "Warning: invalid log filter '{}': {}. Using default.",
+                        log_filter, e
+                    );
                     EnvFilter::from_default_env()
                 }),
         )
@@ -101,11 +106,10 @@ async fn main() {
     );
 
     let db = Arc::new(
-        Database::open_with_config(&db_path, config.system_config())
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to open database at '{}': {}", db_path.display(), e);
-                std::process::exit(1);
-            }),
+        Database::open_with_config(&db_path, config.system_config()).unwrap_or_else(|e| {
+            eprintln!("Failed to open database at '{}': {}", db_path.display(), e);
+            std::process::exit(1);
+        }),
     );
 
     let jwt_secret = resolve_jwt_secret(&args);
@@ -137,12 +141,18 @@ async fn main() {
             Ok(user) => {
                 if args.admin_password.is_none() {
                     eprintln!();
-                    eprintln!("=====================================================================");
+                    eprintln!(
+                        "====================================================================="
+                    );
                     eprintln!("  LightningDB Admin Credentials (generated)");
                     eprintln!("  Username: {}", user.username);
                     eprintln!("  Password: {}", admin_password);
-                    eprintln!("  Set LIGHTNING_ADMIN_PASSWORD or --admin-password to suppress this.");
-                    eprintln!("=====================================================================");
+                    eprintln!(
+                        "  Set LIGHTNING_ADMIN_PASSWORD or --admin-password to suppress this."
+                    );
+                    eprintln!(
+                        "====================================================================="
+                    );
                     eprintln!();
                 }
                 tracing::info!(
@@ -154,29 +164,24 @@ async fn main() {
                 tracing::warn!("Admin bootstrap skipped: {}", e);
             }
         }
-
     }
 
     // Start background GC for expired tokens
     let gc_store = Arc::clone(&auth_store);
-    tokio::task::spawn_blocking(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(300));
-            if let Err(e) = gc_store.purge_expired() {
-                tracing::warn!("Token GC failed: {}", e);
-            }
+    tokio::task::spawn_blocking(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(300));
+        if let Err(e) = gc_store.purge_expired() {
+            tracing::warn!("Token GC failed: {}", e);
         }
     });
 
     let conn = db.connect();
     let store = MemoryStore::new(conn, config.embedding_dim);
 
-    store
-        .ensure_schema()
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to initialize memory schema: {}", e);
-            std::process::exit(1);
-        });
+    store.ensure_schema().unwrap_or_else(|e| {
+        eprintln!("Failed to initialize memory schema: {}", e);
+        std::process::exit(1);
+    });
 
     let state = server::AppState::new(db, store, config, auth_store);
 

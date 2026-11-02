@@ -108,7 +108,9 @@ impl PhysicalOperator for PhysicalPageRank {
         let mut pr_scores = vec![0.0f64; num_nodes];
 
         // Collect CSR references once, outside the per-node loop
-        let csrs: Vec<_> = self.rel_table_names.iter()
+        let csrs: Vec<_> = self
+            .rel_table_names
+            .iter()
             .filter_map(|r| storage.fwd_csr.get(r))
             .collect();
 
@@ -150,7 +152,11 @@ impl PhysicalOperator for PhysicalPageRank {
                             if let Err(e) = csr.for_each_neighbor(bm, nid, tx, |neighbor| {
                                 local_contribs.push((neighbor, contrib));
                             }) {
-                                tracing::warn!("PageRank: error traversing neighbors for node {}: {}", nid, e);
+                                tracing::warn!(
+                                    "PageRank: error traversing neighbors for node {}: {}",
+                                    nid,
+                                    e
+                                );
                             }
                         }
                     }

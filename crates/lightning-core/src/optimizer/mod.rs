@@ -41,32 +41,34 @@ impl Optimizer {
         let cat_ipd = Arc::clone(&catalog);
         let cat_crt = Arc::clone(&catalog);
         let bco = binder_column_offsets;
-            Self {
-                rules: vec![
-                    Box::new(subquery_unnesting::SubqueryUnnesting::new()),
-                    Box::new(filter_pushdown::FilterPushDown::new()),
-                    Box::new(index_pushdown::IndexPushDown::new(cat_ipd)),
-                    // JoinReordering disabled: it can reorder joins in ways that
-                    // break the physical planner's variable position computation.
-                    // Box::new(join_reordering::JoinReordering::new(cat_jr)),
-                    Box::new(topk_optimizer::TopKOptimizer::new()),
-                    Box::new(limit_pushdown::LimitPushDown::new()),
-                    Box::new(order_by_pushdown::OrderByPushDown::new()),
-                    Box::new(projection_pushdown::ProjectionPushDown::new(bco)),
-                    Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
-                    Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(cat_crt)),
-                    //
-                    // SemiJoinPushDown and AccHashJoinOptimizer disabled because they emit
-                    // SemiMasker/Accumulate nodes that create masks in a way that can break
-                    // existing query plans (masks reference variables not yet bound at the
-                    // point of the Scan). Future work: fix mask variable resolution so these
-                    // optimizers can apply correctly.
-                    // Box::new(semijoin_pushdown::SemiJoinPushDown::new()),
-                    // Box::new(acc_hash_join_optimizer::AccHashJoinOptimizer::new()),
-                    Box::new(factorization_rewriter::FactorizationRewriter::new()),
-                    Box::new(foreign_join_pushdown::ForeignJoinPushDown::new()),
-                ],
-            }
+        Self {
+            rules: vec![
+                Box::new(subquery_unnesting::SubqueryUnnesting::new()),
+                Box::new(filter_pushdown::FilterPushDown::new()),
+                Box::new(index_pushdown::IndexPushDown::new(cat_ipd)),
+                // JoinReordering disabled: it can reorder joins in ways that
+                // break the physical planner's variable position computation.
+                // Box::new(join_reordering::JoinReordering::new(cat_jr)),
+                Box::new(topk_optimizer::TopKOptimizer::new()),
+                Box::new(limit_pushdown::LimitPushDown::new()),
+                Box::new(order_by_pushdown::OrderByPushDown::new()),
+                Box::new(projection_pushdown::ProjectionPushDown::new(bco)),
+                Box::new(agg_key_dependency_optimizer::AggKeyDependencyOptimizer::new()),
+                Box::new(count_rel_table_optimizer::CountRelTableOptimizer::new(
+                    cat_crt,
+                )),
+                //
+                // SemiJoinPushDown and AccHashJoinOptimizer disabled because they emit
+                // SemiMasker/Accumulate nodes that create masks in a way that can break
+                // existing query plans (masks reference variables not yet bound at the
+                // point of the Scan). Future work: fix mask variable resolution so these
+                // optimizers can apply correctly.
+                // Box::new(semijoin_pushdown::SemiJoinPushDown::new()),
+                // Box::new(acc_hash_join_optimizer::AccHashJoinOptimizer::new()),
+                Box::new(factorization_rewriter::FactorizationRewriter::new()),
+                Box::new(foreign_join_pushdown::ForeignJoinPushDown::new()),
+            ],
+        }
     }
 
     pub fn optimize(&self, mut plan: LogicalOperator) -> Result<LogicalOperator> {

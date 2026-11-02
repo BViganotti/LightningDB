@@ -99,7 +99,9 @@ impl PrefetchTracker {
                 if let Some(min_pos) = entries
                     .iter()
                     .enumerate()
-                    .min_by(|(_, (_, a)), (_, (_, b))| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .min_by(|(_, (_, a)), (_, (_, b))| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .map(|(i, _)| i)
                 {
                     entries.remove(min_pos);
@@ -125,7 +127,9 @@ impl PrefetchTracker {
                 if let Some(min_pos) = entries
                     .iter()
                     .enumerate()
-                    .min_by(|(_, (_, a)), (_, (_, b))| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .min_by(|(_, (_, a)), (_, (_, b))| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .map(|(i, _)| i)
                 {
                     entries.remove(min_pos);
@@ -157,7 +161,13 @@ impl PrefetchTracker {
                 if window.len() >= 2 {
                     let prev_prev = window[window.len() - 2];
                     let mut trans2 = self.transitions_2nd.write();
-                    Self::record_transition_2nd(&mut trans2, (prev_prev, prev_key), key, decay, max_entries);
+                    Self::record_transition_2nd(
+                        &mut trans2,
+                        (prev_prev, prev_key),
+                        key,
+                        decay,
+                        max_entries,
+                    );
                 }
             }
         }
@@ -176,11 +186,17 @@ impl PrefetchTracker {
         // Atomically increment and check the made counter.
         // Use fetch_update to atomically check if we should tune,
         // preventing race conditions between concurrent callers.
-        let should_tune = self.predictions_made.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |v| if v >= 99 { Some(0) } else { Some(v + 1) },
-        ).unwrap_or(0) >= 99;
+        let should_tune = self
+            .predictions_made
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                if v >= 99 {
+                    Some(0)
+                } else {
+                    Some(v + 1)
+                }
+            })
+            .unwrap_or(0)
+            >= 99;
         if should_tune {
             let hit_total = self.predictions_hit.swap(0, Ordering::Release);
             // The made counter was already reset by fetch_update above.
@@ -223,11 +239,17 @@ impl PrefetchTracker {
                         .iter()
                         .filter_map(|(k, w)| {
                             let conf = *w / total;
-                            if conf >= min_confidence { Some((*k, conf)) } else { None }
+                            if conf >= min_confidence {
+                                Some((*k, conf))
+                            } else {
+                                None
+                            }
                         })
                         .collect();
                     if !scored.is_empty() {
-                        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                        scored.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
                         scored.truncate(top_k);
                         return scored.into_iter().map(|(k, _)| k).collect();
                     }
@@ -265,7 +287,16 @@ impl PrefetchTracker {
         pages
             .into_iter()
             .take(top_n)
-            .map(|(k, c)| (k, if total > 0 { c as f64 / total as f64 } else { 0.0 }))
+            .map(|(k, c)| {
+                (
+                    k,
+                    if total > 0 {
+                        c as f64 / total as f64
+                    } else {
+                        0.0
+                    },
+                )
+            })
             .collect()
     }
 
@@ -438,7 +469,10 @@ mod tests {
             pt.report_prediction_result(true);
         }
         let conf = pt.get_confidence_threshold();
-        assert!(conf >= 0.3, "confidence should not drop below min_confidence");
+        assert!(
+            conf >= 0.3,
+            "confidence should not drop below min_confidence"
+        );
     }
 
     #[test]
@@ -464,7 +498,10 @@ mod tests {
             pt2.report_prediction_result(false);
         }
         let conf_after_more_misses = pt2.get_confidence_threshold();
-        assert!(conf_after_more_misses <= conf_after_misses || true, "confidence should trend down");
+        assert!(
+            conf_after_more_misses <= conf_after_misses || true,
+            "confidence should trend down"
+        );
     }
 
     #[test]
@@ -486,7 +523,11 @@ mod tests {
         // After many accesses to page 3, it should dominate
         let pred = pt.predict_next(0, 1, 1, 0.4);
         assert!(!pred.is_empty());
-        assert_eq!(pred[0], (0, 3), "page 3 should dominate after pattern change with decay");
+        assert_eq!(
+            pred[0],
+            (0, 3),
+            "page 3 should dominate after pattern change with decay"
+        );
     }
 
     #[test]

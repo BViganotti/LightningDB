@@ -25,9 +25,9 @@ impl IndexPushDown {
                     let cat = self.catalog.read();
                     if let Some(table_entry) = cat.get_node_table(table_name) {
                         let pk_name_opt = table_entry.primary_key.clone();
-                        let pk_idx_opt = pk_name_opt
-                            .as_ref()
-                            .and_then(|pk| table_entry.properties.iter().position(|p| p.name == *pk));
+                        let pk_idx_opt = pk_name_opt.as_ref().and_then(|pk| {
+                            table_entry.properties.iter().position(|p| p.name == *pk)
+                        });
 
                         if let BoundExpression::Comparison(
                             left,
@@ -44,7 +44,10 @@ impl IndexPushDown {
                                         &**left
                                     {
                                         let is_pk = pk_idx_opt == Some(*lookup_idx);
-                                        let prop_name = table_entry.properties.get(*lookup_idx).map(|p| &p.name);
+                                        let prop_name = table_entry
+                                            .properties
+                                            .get(*lookup_idx)
+                                            .map(|p| &p.name);
                                         if is_pk {
                                             if !expr_has_outer_variables(right) {
                                                 return Ok(LogicalOperator::IndexScan(
@@ -56,7 +59,9 @@ impl IndexPushDown {
                                                 ));
                                             }
                                         } else if let Some(prop) = prop_name {
-                                            if let Some(secondary_name) = table_entry.secondary_indexes.get(prop) {
+                                            if let Some(secondary_name) =
+                                                table_entry.secondary_indexes.get(prop)
+                                            {
                                                 if !expr_has_outer_variables(right) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
@@ -78,7 +83,10 @@ impl IndexPushDown {
                                         &**right
                                     {
                                         let is_pk = pk_idx_opt == Some(*lookup_idx);
-                                        let prop_name = table_entry.properties.get(*lookup_idx).map(|p| &p.name);
+                                        let prop_name = table_entry
+                                            .properties
+                                            .get(*lookup_idx)
+                                            .map(|p| &p.name);
                                         if is_pk {
                                             if !expr_has_outer_variables(left) {
                                                 return Ok(LogicalOperator::IndexScan(
@@ -90,7 +98,9 @@ impl IndexPushDown {
                                                 ));
                                             }
                                         } else if let Some(prop) = prop_name {
-                                            if let Some(secondary_name) = table_entry.secondary_indexes.get(prop) {
+                                            if let Some(secondary_name) =
+                                                table_entry.secondary_indexes.get(prop)
+                                            {
                                                 if !expr_has_outer_variables(left) {
                                                     return Ok(LogicalOperator::IndexScan(
                                                         table_name.clone(),
@@ -276,12 +286,25 @@ fn expr_has_outer_variables(expr: &BoundExpression) -> bool {
         BoundExpression::Not(inner) => expr_has_outer_variables(inner),
         BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => true,
         BoundExpression::List(items, _) => items.iter().any(expr_has_outer_variables),
-        BoundExpression::Map(entries, _) => entries.iter().any(|(_, v)| expr_has_outer_variables(v)),
+        BoundExpression::Map(entries, _) => {
+            entries.iter().any(|(_, v)| expr_has_outer_variables(v))
+        }
         BoundExpression::Lambda(_, body) => expr_has_outer_variables(body),
-        BoundExpression::Case { expression, when_then, else_expression, .. } => {
-            expression.as_ref().is_some_and(|e| expr_has_outer_variables(e))
-                || when_then.iter().any(|(w, t)| expr_has_outer_variables(w) || expr_has_outer_variables(t))
-                || else_expression.as_ref().is_some_and(|e| expr_has_outer_variables(e))
+        BoundExpression::Case {
+            expression,
+            when_then,
+            else_expression,
+            ..
+        } => {
+            expression
+                .as_ref()
+                .is_some_and(|e| expr_has_outer_variables(e))
+                || when_then
+                    .iter()
+                    .any(|(w, t)| expr_has_outer_variables(w) || expr_has_outer_variables(t))
+                || else_expression
+                    .as_ref()
+                    .is_some_and(|e| expr_has_outer_variables(e))
         }
         _ => false,
     }

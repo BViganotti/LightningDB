@@ -29,7 +29,10 @@ impl OrderByPushDown {
                         // Check if all sort items are simple PropertyLookup that
                         // exist in the grandchild's output
                         let can_push = items.iter().all(|item| {
-                            matches!(&item.expression, crate::planner::binder::BoundExpression::PropertyLookup(..))
+                            matches!(
+                                &item.expression,
+                                crate::planner::binder::BoundExpression::PropertyLookup(..)
+                            )
                         });
                         if can_push {
                             // Push Sort below Projection

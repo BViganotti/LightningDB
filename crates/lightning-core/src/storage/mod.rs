@@ -1,11 +1,11 @@
 pub mod buffer_manager;
 pub mod column;
-pub mod prefetch;
 pub mod compression;
 pub mod database_header;
 pub mod file_handle;
 pub mod index;
 pub mod page_state;
+pub mod prefetch;
 pub mod row_version;
 pub mod stats;
 pub mod storage_manager;

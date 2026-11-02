@@ -1,5 +1,5 @@
-use crate::parser::ast::{ArithmeticOperator, ComparisonOperator, Literal};
 use crate::parser::ast::LogicalOperator as BoolOperator;
+use crate::parser::ast::{ArithmeticOperator, ComparisonOperator, Literal};
 use crate::planner::binder::BoundExpression;
 use crate::planner::logical_plan::LogicalOperator;
 use crate::processor::PhysicalOperator;
@@ -67,7 +67,10 @@ impl PhysicalPlanner {
                 // The catalog's num_rows is only updated during DDL and bulk_insert, but
                 // regular DML (CREATE) bypasses it. The storage manager always has the
                 // correct count via next_row_id and stats.cardinality.
-                let effective_num_rows = table.next_row_id.load(std::sync::atomic::Ordering::Acquire).max(num_rows);
+                let effective_num_rows = table
+                    .next_row_id
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    .max(num_rows);
                 let mut scan = crate::processor::operators::scan::PhysicalScan::new(
                     table,
                     var.clone(),
@@ -86,7 +89,8 @@ impl PhysicalPlanner {
                 if let Some(ref idxs) = projected_idxs {
                     scan = scan.with_projected_idxs(idxs.clone());
                 }
-                self.variable_projected_indices.insert(var.clone(), scan_proj);
+                self.variable_projected_indices
+                    .insert(var.clone(), scan_proj);
                 if let Some(filter) = pushdown_filter {
                     let mut planned_filter = self.plan_expression(
                         &LogicalOperator::Scan(table_name.clone(), var.clone(), None, None, None),
@@ -125,9 +129,15 @@ impl PhysicalPlanner {
                             scan = scan.with_mask(mask, None);
                         } else {
                             let mask_col = scan.mask_column_idx;
-                            let existing_mask = scan.mask.as_ref().ok_or_else(|| {
-                                crate::LightningError::Internal("Expected mask on semi-join scan".into())
-                            })?.clone();
+                            let existing_mask = scan
+                                .mask
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    crate::LightningError::Internal(
+                                        "Expected mask on semi-join scan".into(),
+                                    )
+                                })?
+                                .clone();
                             let mask = Arc::new(RwLock::new(
                                 crate::processor::operators::semi_mask::SemiMask::new(),
                             ));
@@ -148,7 +158,13 @@ impl PhysicalPlanner {
                 }
                 Ok(Box::new(scan))
             }
-            LogicalOperator::IndexScan(table_name, _var, index_key, pk_value_expr, projected_idxs) => {
+            LogicalOperator::IndexScan(
+                table_name,
+                _var,
+                index_key,
+                pk_value_expr,
+                projected_idxs,
+            ) => {
                 let table = {
                     let storage = self.db.storage_manager.read();
                     storage
@@ -180,14 +196,18 @@ impl PhysicalPlanner {
                 if let Some(ref idxs) = projected_idxs {
                     scan = scan.with_projected_idxs(idxs.clone());
                 }
-                self.variable_projected_indices.insert(_var.clone(), is_proj);
+                self.variable_projected_indices
+                    .insert(_var.clone(), is_proj);
                 Ok(Box::new(scan))
             }
             LogicalOperator::Filter(child, mut expr) => {
                 // Remap PropertyLookup indices in filter expressions to match
                 // the physical plan layout (same rationale as Projection).
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
-                Self::collect_logical_projected_indices(&child, &mut self.variable_projected_indices);
+                Self::collect_logical_projected_indices(
+                    &child,
+                    &mut self.variable_projected_indices,
+                );
                 Self::remap_property_lookup(
                     &mut expr,
                     &child_positions,
@@ -209,7 +229,10 @@ impl PhysicalPlanner {
                 // before consuming it. These are needed to remap PropertyLookup
                 // indices from binder-relative to physical-plan-relative offsets.
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
-                Self::collect_logical_projected_indices(&child, &mut self.variable_projected_indices);
+                Self::collect_logical_projected_indices(
+                    &child,
+                    &mut self.variable_projected_indices,
+                );
                 let planned_child = self.plan(*child)?;
 
                 let mut remapped = items;
@@ -249,8 +272,14 @@ impl PhysicalPlanner {
                     self.collect_variable_positions(&left, 0, &mut left_positions)?;
                     let mut right_positions = std::collections::HashMap::new();
                     self.collect_variable_positions(&right, 0, &mut right_positions)?;
-                    Self::collect_logical_projected_indices(&left, &mut self.variable_projected_indices);
-                    Self::collect_logical_projected_indices(&right, &mut self.variable_projected_indices);
+                    Self::collect_logical_projected_indices(
+                        &left,
+                        &mut self.variable_projected_indices,
+                    );
+                    Self::collect_logical_projected_indices(
+                        &right,
+                        &mut self.variable_projected_indices,
+                    );
 
                     // Collect all equality comparisons
                     let mut comparisons = Vec::new();
@@ -276,7 +305,8 @@ impl PhysicalPlanner {
                             let a_in_left = self.expr_belongs_to_side(left_expr, &left_positions);
                             let a_in_right = self.expr_belongs_to_side(left_expr, &right_positions);
                             let b_in_left = self.expr_belongs_to_side(right_expr, &left_positions);
-                            let b_in_right = self.expr_belongs_to_side(right_expr, &right_positions);
+                            let b_in_right =
+                                self.expr_belongs_to_side(right_expr, &right_positions);
                             if a_in_left && b_in_right {
                                 key_idx = Some(i);
                                 break;
@@ -294,14 +324,18 @@ impl PhysicalPlanner {
                         let planned_right = self.plan(*right)?;
                         return Ok(Box::new(
                             crate::processor::operators::hash_join::HashJoin::new_cross_join(
-                                planned_left, planned_right,
+                                planned_left,
+                                planned_right,
                             ),
                         ));
                     }
                     let key_i = key_idx.unwrap_or(0);
                     let (key_left_expr, key_right_expr) = &comparisons[key_i];
                     let (left_key, right_key) = self.resolve_join_key_pair(
-                        key_left_expr, key_right_expr, &left_positions, &right_positions,
+                        key_left_expr,
+                        key_right_expr,
+                        &left_positions,
+                        &right_positions,
                     )?;
 
                     // Build filter from remaining comparisons
@@ -314,7 +348,9 @@ impl PhysicalPlanner {
 
                     let mut filter_conds = Vec::new();
                     for (i, (l, r)) in comparisons.iter().enumerate() {
-                        if i == key_i { continue; }
+                        if i == key_i {
+                            continue;
+                        }
                         let mut cond = BoundExpression::Comparison(
                             Box::new((*l).clone()),
                             ComparisonOperator::Equal,
@@ -344,15 +380,25 @@ impl PhysicalPlanner {
                     if filter_conds.is_empty() {
                         Ok(Box::new(join_op))
                     } else {
-                        let filter = filter_conds.into_iter().reduce(|acc, cond| {
-                            BoundExpression::Logical(
-                                Box::new(acc),
-                                crate::parser::ast::LogicalOperator::And,
-                                Box::new(cond),
-                            )
-                        }).ok_or_else(|| crate::LightningError::Internal("Empty filter conditions in join".into()))?;
+                        let filter = filter_conds
+                            .into_iter()
+                            .reduce(|acc, cond| {
+                                BoundExpression::Logical(
+                                    Box::new(acc),
+                                    crate::parser::ast::LogicalOperator::And,
+                                    Box::new(cond),
+                                )
+                            })
+                            .ok_or_else(|| {
+                                crate::LightningError::Internal(
+                                    "Empty filter conditions in join".into(),
+                                )
+                            })?;
                         Ok(Box::new(
-                            crate::processor::operators::filter::PhysicalFilter::new(Box::new(join_op), filter),
+                            crate::processor::operators::filter::PhysicalFilter::new(
+                                Box::new(join_op),
+                                filter,
+                            ),
                         ))
                     }
                 }
@@ -360,10 +406,8 @@ impl PhysicalPlanner {
             LogicalOperator::SemiJoin(left, right, cond, is_anti) => {
                 // SemiJoin is a hash-based semi/anti-join. Reuse the same
                 // equality-comparison extraction and key-index logic as Join.
-                let left_positions = self.compute_variable_positions(&*left)
-                    .unwrap_or_default();
-                let right_positions = self.compute_variable_positions(&*right)
-                    .unwrap_or_default();
+                let left_positions = self.compute_variable_positions(&*left).unwrap_or_default();
+                let right_positions = self.compute_variable_positions(&*right).unwrap_or_default();
 
                 let mut comparisons = Vec::new();
                 self.collect_eq_comparisons(&cond, &mut comparisons);
@@ -398,13 +442,19 @@ impl PhysicalPlanner {
                 if is_anti {
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new_anti(
-                            planned_left, planned_right, l_key, r_key,
+                            planned_left,
+                            planned_right,
+                            l_key,
+                            r_key,
                         ),
                     ))
                 } else {
                     Ok(Box::new(
                         crate::processor::operators::hash_join::HashJoin::new_semi(
-                            planned_left, planned_right, l_key, r_key,
+                            planned_left,
+                            planned_right,
+                            l_key,
+                            r_key,
                         ),
                     ))
                 }
@@ -428,7 +478,12 @@ impl PhysicalPlanner {
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
                 for item in &mut items {
-                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets, &self.variable_projected_indices);
+                    Self::remap_property_lookup(
+                        &mut item.expression,
+                        &child_positions,
+                        &self.binder_column_offsets,
+                        &self.variable_projected_indices,
+                    );
                 }
                 Ok(Box::new(
                     crate::processor::operators::sort::PhysicalSort::new(planned_child, items),
@@ -438,11 +493,18 @@ impl PhysicalPlanner {
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let planned_child = self.plan(*child)?;
                 for item in &mut items {
-                    Self::remap_property_lookup(&mut item.expression, &child_positions, &self.binder_column_offsets, &self.variable_projected_indices);
+                    Self::remap_property_lookup(
+                        &mut item.expression,
+                        &child_positions,
+                        &self.binder_column_offsets,
+                        &self.variable_projected_indices,
+                    );
                 }
                 Ok(Box::new(
                     crate::processor::operators::topk::PhysicalTopK::new(
-                        planned_child, items, limit as u64,
+                        planned_child,
+                        items,
+                        limit as u64,
                     ),
                 ))
             }
@@ -483,9 +545,15 @@ impl PhysicalPlanner {
             LogicalOperator::CreateNode(child, pat) => {
                 let planned_child = child.map(|c| self.plan(*c)).transpose()?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pat.table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table '{}' not found for CREATE", pat.table_name))
-                })?.clone();
+                let table = storage
+                    .get_table(&pat.table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Table '{}' not found for CREATE",
+                            pat.table_name
+                        ))
+                    })?
+                    .clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalCreate::new(
                         pat.table_name,
@@ -511,13 +579,21 @@ impl PhysicalPlanner {
                 };
                 let planned_child = child.map(|c| self.plan(*c)).transpose()?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pat.table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table '{}' not found for CREATE REL", pat.table_name))
-                })?.clone();
+                let table = storage
+                    .get_table(&pat.table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Table '{}' not found for CREATE REL",
+                            pat.table_name
+                        ))
+                    })?
+                    .clone();
                 let rel_cat = self.db.catalog.read();
-                let from_table = rel_cat.get_rel_table(&pat.table_name)
+                let from_table = rel_cat
+                    .get_rel_table(&pat.table_name)
                     .map(|r| r.from_table.clone());
-                let to_table = rel_cat.get_rel_table(&pat.table_name)
+                let to_table = rel_cat
+                    .get_rel_table(&pat.table_name)
                     .map(|r| r.to_table.clone());
                 drop(rel_cat);
                 Ok(Box::new(
@@ -541,9 +617,14 @@ impl PhysicalPlanner {
                 let planned_child = self.plan(*child)?;
                 let table_name = &vars[0].1;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table '{table_name}' not found for DELETE"))
-                })?.clone();
+                let table = storage
+                    .get_table(table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Table '{table_name}' not found for DELETE"
+                        ))
+                    })?
+                    .clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalDelete::new(
                         planned_child,
@@ -577,9 +658,14 @@ impl PhysicalPlanner {
                 let planned_child = self.plan(*child)?;
                 let table_name = &assignments[0].table_name;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table '{table_name}' not found for SET"))
-                })?.clone();
+                let table = storage
+                    .get_table(table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Table '{table_name}' not found for SET"
+                        ))
+                    })?
+                    .clone();
                 Ok(Box::new(
                     crate::processor::operators::dml::PhysicalSet::new(
                         planned_child,
@@ -616,12 +702,20 @@ impl PhysicalPlanner {
             } => {
                 let planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
-                let rel_table = storage.get_table(&rel_table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Rel table {rel_table_name} not found"))
-                })?.clone();
-                let dst_table = storage.get_table(&dst_node_table).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table {dst_node_table} not found"))
-                })?.clone();
+                let rel_table = storage
+                    .get_table(&rel_table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Rel table {rel_table_name} not found"
+                        ))
+                    })?
+                    .clone();
+                let dst_table = storage
+                    .get_table(&dst_node_table)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!("Table {dst_node_table} not found"))
+                    })?
+                    .clone();
                 drop(storage);
 
                 let src_idx = 0;
@@ -695,53 +789,50 @@ impl PhysicalPlanner {
                     self.undo_buffer.clone(),
                 ),
             )),
-            LogicalOperator::AlterTable { name, operation } => {
-                match operation {
-                    crate::parser::ast::AlterOperation::AddColumn { name: col_name, data_type } => {
-                        let data_type = crate::parser::ast::data_type_to_logical(&data_type);
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_add_column(
-                                name,
-                                col_name,
-                                data_type,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::DropColumn { name: col_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_drop_column(
-                                name,
-                                col_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::RenameTable { new_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_table(
-                                name,
-                                new_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
-                    crate::parser::ast::AlterOperation::RenameColumn { old_name, new_name } => {
-                        Ok(Box::new(
-                            crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_column(
-                                name,
-                                old_name,
-                                new_name,
-                                self.db.clone(),
-                                self.undo_buffer.clone(),
-                            ),
-                        ))
-                    }
+            LogicalOperator::AlterTable { name, operation } => match operation {
+                crate::parser::ast::AlterOperation::AddColumn {
+                    name: col_name,
+                    data_type,
+                } => {
+                    let data_type = crate::parser::ast::data_type_to_logical(&data_type);
+                    Ok(Box::new(
+                        crate::processor::operators::ddl::PhysicalDDL::new_alter_add_column(
+                            name,
+                            col_name,
+                            data_type,
+                            self.db.clone(),
+                            self.undo_buffer.clone(),
+                        ),
+                    ))
                 }
-            }
+                crate::parser::ast::AlterOperation::DropColumn { name: col_name } => Ok(Box::new(
+                    crate::processor::operators::ddl::PhysicalDDL::new_alter_drop_column(
+                        name,
+                        col_name,
+                        self.db.clone(),
+                        self.undo_buffer.clone(),
+                    ),
+                )),
+                crate::parser::ast::AlterOperation::RenameTable { new_name } => Ok(Box::new(
+                    crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_table(
+                        name,
+                        new_name,
+                        self.db.clone(),
+                        self.undo_buffer.clone(),
+                    ),
+                )),
+                crate::parser::ast::AlterOperation::RenameColumn { old_name, new_name } => {
+                    Ok(Box::new(
+                        crate::processor::operators::ddl::PhysicalDDL::new_alter_rename_column(
+                            name,
+                            old_name,
+                            new_name,
+                            self.db.clone(),
+                            self.undo_buffer.clone(),
+                        ),
+                    ))
+                }
+            },
             LogicalOperator::CreateTableNode {
                 name,
                 columns,
@@ -842,7 +933,8 @@ impl PhysicalPlanner {
                 let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let inner_positions = self.compute_variable_positions(&inner).unwrap_or_default();
                 // Find the shared variable (same name in both outer and inner plans)
-                let shared_var = child_positions.keys()
+                let shared_var = child_positions
+                    .keys()
                     .find(|v| inner_positions.contains_key(*v))
                     .cloned();
                 let (left_key, right_key, is_cross) = if let Some(ref sv) = shared_var {
@@ -856,7 +948,11 @@ impl PhysicalPlanner {
                 let planned_inner: Box<dyn PhysicalOperator> = self.plan(*inner)?;
                 let join: Box<dyn PhysicalOperator> = Box::new(
                     crate::processor::operators::hash_join::HashJoin::new_left_outer(
-                        planned_child, planned_inner, left_key, right_key, is_cross,
+                        planned_child,
+                        planned_inner,
+                        left_key,
+                        right_key,
+                        is_cross,
                     ),
                 );
                 Ok(join)
@@ -869,14 +965,25 @@ impl PhysicalPlanner {
             } => {
                 let planned_child = self.plan(*child)?;
                 let storage = self.db.storage_manager.read();
-                let table = storage.get_table(&pattern.table_name).ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Table '{}' not found for MERGE", pattern.table_name))
-                })?.clone();
+                let table = storage
+                    .get_table(&pattern.table_name)
+                    .ok_or_else(|| {
+                        crate::LightningError::Internal(format!(
+                            "Table '{}' not found for MERGE",
+                            pattern.table_name
+                        ))
+                    })?
+                    .clone();
                 let num_rows = {
                     let cat = self.db.catalog.read();
-                    cat.get_node_table(&pattern.table_name).ok_or_else(|| {
-                        crate::LightningError::Internal(format!("Table '{}' not found in catalog for MERGE", pattern.table_name))
-                    })?.num_rows
+                    cat.get_node_table(&pattern.table_name)
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal(format!(
+                                "Table '{}' not found in catalog for MERGE",
+                                pattern.table_name
+                            ))
+                        })?
+                        .num_rows
                 };
                 let effective_num_rows = num_rows;
                 let table_name = pattern.table_name.clone();
@@ -901,8 +1008,7 @@ impl PhysicalPlanner {
                     crate::processor::operators::semi_mask::SemiMask::new(),
                 ));
                 self.masks.insert(mask_id.clone(), mask.clone());
-                let child_positions =
-                    self.compute_variable_positions(&child).unwrap_or_default();
+                let child_positions = self.compute_variable_positions(&child).unwrap_or_default();
                 let column_idx = child_positions.get(&var).copied().unwrap_or(0);
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(
@@ -916,19 +1022,16 @@ impl PhysicalPlanner {
             LogicalOperator::Accumulate(child) => {
                 let planned_child = self.plan(*child)?;
                 Ok(Box::new(
-                    crate::processor::operators::accumulate::PhysicalAccumulate::new(
-                        planned_child,
-                    ),
+                    crate::processor::operators::accumulate::PhysicalAccumulate::new(planned_child),
                 ))
             }
-            LogicalOperator::CountRelTable {
-                rel_table,
-                ..
-            } => {
+            LogicalOperator::CountRelTable { rel_table, .. } => {
                 let storage = self.db.storage_manager.read();
-                let table = storage
-                    .get_table(&rel_table)
-                    .ok_or_else(|| LightningError::Internal(format!("Table {rel_table} not found for CountRelTable")))?;
+                let table = storage.get_table(&rel_table).ok_or_else(|| {
+                    LightningError::Internal(format!(
+                        "Table {rel_table} not found for CountRelTable"
+                    ))
+                })?;
                 let metadata_count = table
                     .next_row_id
                     .load(std::sync::atomic::Ordering::Acquire)
@@ -937,8 +1040,14 @@ impl PhysicalPlanner {
                     let col = &table.columns[0];
                     let fsize = col.fh.get_file_size();
                     let esize = col.element_size();
-                    if esize > 0 { fsize / esize as u64 } else { 0 }
-                } else { 0 };
+                    if esize > 0 {
+                        fsize / esize as u64
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 let count = if file_derived_count > 0 && metadata_count > file_derived_count * 2 {
                     tracing::warn!(
                         "CountRelTable: metadata count ({metadata_count}) is >2x file-derived count ({file_derived_count}) for table {rel_table}; using file-derived count"
@@ -1004,7 +1113,8 @@ impl PhysicalPlanner {
             }
             LogicalOperator::Join(left, right, ..) => {
                 let left_cols = self.collect_variable_positions(left, start_col, positions)?;
-                let right_cols = self.collect_variable_positions(right, start_col + left_cols, positions)?;
+                let right_cols =
+                    self.collect_variable_positions(right, start_col + left_cols, positions)?;
                 Ok(left_cols + right_cols)
             }
             LogicalOperator::RecursiveJoin {
@@ -1088,7 +1198,12 @@ impl PhysicalPlanner {
                 }
                 Ok(col_offset - start_col)
             }
-            LogicalOperator::AllShortestPaths { src_var_name, dst_var_name, path_var_name, .. } => {
+            LogicalOperator::AllShortestPaths {
+                src_var_name,
+                dst_var_name,
+                path_var_name,
+                ..
+            } => {
                 positions.insert(src_var_name.clone(), start_col);
                 positions.insert(dst_var_name.clone(), start_col + 1);
                 positions.insert(path_var_name.clone(), start_col + 2);
@@ -1135,12 +1250,12 @@ impl PhysicalPlanner {
             | LogicalOperator::CreateSequence { .. }
             | LogicalOperator::CreateMacro { .. }
             | LogicalOperator::CreateConstraint { .. }
-             | LogicalOperator::DropConstraint(..)
-              | LogicalOperator::CreateIndex { .. }
-              | LogicalOperator::CreateVectorIndex { .. }
-              | LogicalOperator::CreateFtsIndex { .. }
-              | LogicalOperator::DropIndex(..)
-             | LogicalOperator::CreateTableNode { .. }
+            | LogicalOperator::DropConstraint(..)
+            | LogicalOperator::CreateIndex { .. }
+            | LogicalOperator::CreateVectorIndex { .. }
+            | LogicalOperator::CreateFtsIndex { .. }
+            | LogicalOperator::DropIndex(..)
+            | LogicalOperator::CreateTableNode { .. }
             | LogicalOperator::CreateTableRel { .. }
             | LogicalOperator::DropTable(..)
             | LogicalOperator::AlterTable { .. }
@@ -1192,12 +1307,16 @@ impl PhysicalPlanner {
             | LogicalOperator::Accumulate(child)
             | LogicalOperator::Profile(child)
             | LogicalOperator::Explain(child) => self.compute_subtree_num_cols(child),
-            LogicalOperator::RecursiveJoin { child, dst_node_table, .. } => {
-                self.compute_subtree_num_cols(child) + self.get_table_num_columns(dst_node_table)
-            }
+            LogicalOperator::RecursiveJoin {
+                child,
+                dst_node_table,
+                ..
+            } => self.compute_subtree_num_cols(child) + self.get_table_num_columns(dst_node_table),
             LogicalOperator::AllShortestPaths { .. } => 3,
             LogicalOperator::Union(left, ..) => self.compute_subtree_num_cols(left),
-            LogicalOperator::Intersect { probe_child, .. } => self.compute_subtree_num_cols(probe_child),
+            LogicalOperator::Intersect { probe_child, .. } => {
+                self.compute_subtree_num_cols(probe_child)
+            }
             _ => 0,
         }
     }
@@ -1364,7 +1483,8 @@ impl PhysicalPlanner {
                     Self::collect_logical_projected_indices(build, out);
                 }
             }
-            LogicalOperator::CreateNode(child_opt, _) | LogicalOperator::CreateRel(child_opt, _) => {
+            LogicalOperator::CreateNode(child_opt, _)
+            | LogicalOperator::CreateRel(child_opt, _) => {
                 if let Some(child) = child_opt {
                     Self::collect_logical_projected_indices(child, out);
                 }
@@ -1395,8 +1515,15 @@ impl PhysicalPlanner {
         match expr {
             BoundExpression::PropertyLookup(var, idx, _) => {
                 let binder_base = binder_column_offsets.get(var).copied().unwrap_or(0);
-                let phys_base = child_phys_positions.get(var).copied().unwrap_or(binder_base);
-                let prop_index = if *idx >= binder_base { *idx - binder_base } else { *idx };
+                let phys_base = child_phys_positions
+                    .get(var)
+                    .copied()
+                    .unwrap_or(binder_base);
+                let prop_index = if *idx >= binder_base {
+                    *idx - binder_base
+                } else {
+                    *idx
+                };
                 // Handle projection pushdown: if the child subsetted the variable's
                 // columns, find the position of prop_index within the projected set.
                 if let Some(Some(proj)) = variable_projected_indices.get(var) {
@@ -1415,17 +1542,37 @@ impl PhysicalPlanner {
             | BoundExpression::NextVal(_)
             | BoundExpression::UnwindProperty(..) => {}
             BoundExpression::Not(inner) => {
-                Self::remap_property_lookup(inner, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                Self::remap_property_lookup(
+                    inner,
+                    child_phys_positions,
+                    binder_column_offsets,
+                    variable_projected_indices,
+                );
             }
             BoundExpression::Arithmetic(left, _, right)
             | BoundExpression::Comparison(left, _, right)
             | BoundExpression::Logical(left, _, right) => {
-                Self::remap_property_lookup(left, child_phys_positions, binder_column_offsets, variable_projected_indices);
-                Self::remap_property_lookup(right, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                Self::remap_property_lookup(
+                    left,
+                    child_phys_positions,
+                    binder_column_offsets,
+                    variable_projected_indices,
+                );
+                Self::remap_property_lookup(
+                    right,
+                    child_phys_positions,
+                    binder_column_offsets,
+                    variable_projected_indices,
+                );
             }
             BoundExpression::Function(_, args, _) | BoundExpression::List(args, _) => {
                 for arg in args {
-                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        arg,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
             }
             BoundExpression::Case {
@@ -1435,30 +1582,65 @@ impl PhysicalPlanner {
                 ..
             } => {
                 if let Some(e) = expression {
-                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        e,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
                 for (w, t) in when_then {
-                    Self::remap_property_lookup(w, child_phys_positions, binder_column_offsets, variable_projected_indices);
-                    Self::remap_property_lookup(t, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        w,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
+                    Self::remap_property_lookup(
+                        t,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
                 if let Some(e) = else_expression {
-                    Self::remap_property_lookup(e, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        e,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
             }
             BoundExpression::Aggregate(_, args, _) => {
                 for arg in args {
-                    Self::remap_property_lookup(arg, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        arg,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
             }
             BoundExpression::Lambda(_, body) => {
-                Self::remap_property_lookup(body, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                Self::remap_property_lookup(
+                    body,
+                    child_phys_positions,
+                    binder_column_offsets,
+                    variable_projected_indices,
+                );
             }
             BoundExpression::Exists(_) | BoundExpression::CountSubquery(_) => {
                 // These contain match clauses, not expressions — nothing to remap
             }
             BoundExpression::Map(items, _) => {
                 for (_, val) in items {
-                    Self::remap_property_lookup(val, child_phys_positions, binder_column_offsets, variable_projected_indices);
+                    Self::remap_property_lookup(
+                        val,
+                        child_phys_positions,
+                        binder_column_offsets,
+                        variable_projected_indices,
+                    );
                 }
             }
         }
@@ -1485,8 +1667,10 @@ impl PhysicalPlanner {
             BoundExpression::Arithmetic(left, arith_op, right) => {
                 let l = self.plan_expression(op, left)?;
                 let r = self.plan_expression(op, right)?;
-                if let (BoundExpression::Literal(Literal::Integer(a)),
-                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                if let (
+                    BoundExpression::Literal(Literal::Integer(a)),
+                    BoundExpression::Literal(Literal::Integer(b)),
+                ) = (&l, &r)
                 {
                     let result = match arith_op {
                         ArithmeticOperator::Add => (*a + *b) as f64,
@@ -1503,8 +1687,10 @@ impl PhysicalPlanner {
                         ArithmeticOperator::Modulo => (*a % *b) as f64,
                     };
                     return Ok(BoundExpression::Literal(Literal::Number(result)));
-                } else if let (BoundExpression::Literal(Literal::Number(a)),
-                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                } else if let (
+                    BoundExpression::Literal(Literal::Number(a)),
+                    BoundExpression::Literal(Literal::Number(b)),
+                ) = (&l, &r)
                 {
                     let result = match arith_op {
                         ArithmeticOperator::Add => a + b,
@@ -1521,8 +1707,10 @@ impl PhysicalPlanner {
                         ArithmeticOperator::Modulo => a % b,
                     };
                     return Ok(BoundExpression::Literal(Literal::Number(result)));
-                } else if let (BoundExpression::Literal(Literal::Integer(a)),
-                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                } else if let (
+                    BoundExpression::Literal(Literal::Integer(a)),
+                    BoundExpression::Literal(Literal::Number(b)),
+                ) = (&l, &r)
                 {
                     let result = match arith_op {
                         ArithmeticOperator::Add => *a as f64 + b,
@@ -1539,8 +1727,10 @@ impl PhysicalPlanner {
                         ArithmeticOperator::Modulo => *a as f64 % b,
                     };
                     return Ok(BoundExpression::Literal(Literal::Number(result)));
-                } else if let (BoundExpression::Literal(Literal::Number(a)),
-                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                } else if let (
+                    BoundExpression::Literal(Literal::Number(a)),
+                    BoundExpression::Literal(Literal::Integer(b)),
+                ) = (&l, &r)
                 {
                     let result = match arith_op {
                         ArithmeticOperator::Add => a + *b as f64,
@@ -1558,13 +1748,19 @@ impl PhysicalPlanner {
                     };
                     return Ok(BoundExpression::Literal(Literal::Number(result)));
                 }
-                Ok(BoundExpression::Arithmetic(Box::new(l), *arith_op, Box::new(r)))
+                Ok(BoundExpression::Arithmetic(
+                    Box::new(l),
+                    *arith_op,
+                    Box::new(r),
+                ))
             }
             BoundExpression::Comparison(left, cmp_op, right) => {
                 let l = self.plan_expression(op, left)?;
                 let r = self.plan_expression(op, right)?;
-                if let (BoundExpression::Literal(Literal::Integer(a)),
-                        BoundExpression::Literal(Literal::Integer(b))) = (&l, &r)
+                if let (
+                    BoundExpression::Literal(Literal::Integer(a)),
+                    BoundExpression::Literal(Literal::Integer(b)),
+                ) = (&l, &r)
                 {
                     let result = match cmp_op {
                         ComparisonOperator::Equal => a == b,
@@ -1576,8 +1772,10 @@ impl PhysicalPlanner {
                     };
                     return Ok(BoundExpression::Literal(Literal::Boolean(result)));
                 }
-                if let (BoundExpression::Literal(Literal::Number(a)),
-                        BoundExpression::Literal(Literal::Number(b))) = (&l, &r)
+                if let (
+                    BoundExpression::Literal(Literal::Number(a)),
+                    BoundExpression::Literal(Literal::Number(b)),
+                ) = (&l, &r)
                 {
                     let result = match cmp_op {
                         ComparisonOperator::Equal => a == b,
@@ -1589,8 +1787,10 @@ impl PhysicalPlanner {
                     };
                     return Ok(BoundExpression::Literal(Literal::Boolean(result)));
                 }
-                if let (BoundExpression::Literal(Literal::String(a)),
-                        BoundExpression::Literal(Literal::String(b))) = (&l, &r)
+                if let (
+                    BoundExpression::Literal(Literal::String(a)),
+                    BoundExpression::Literal(Literal::String(b)),
+                ) = (&l, &r)
                 {
                     let result = match cmp_op {
                         ComparisonOperator::Equal => a == b,
@@ -1599,13 +1799,19 @@ impl PhysicalPlanner {
                     };
                     return Ok(BoundExpression::Literal(Literal::Boolean(result)));
                 }
-                Ok(BoundExpression::Comparison(Box::new(l), *cmp_op, Box::new(r)))
+                Ok(BoundExpression::Comparison(
+                    Box::new(l),
+                    *cmp_op,
+                    Box::new(r),
+                ))
             }
             BoundExpression::Logical(left, log_op, right) => {
                 let l = self.plan_expression(op, left)?;
                 let r = self.plan_expression(op, right)?;
-                if let (BoundExpression::Literal(Literal::Boolean(a)),
-                        BoundExpression::Literal(Literal::Boolean(b))) = (&l, &r)
+                if let (
+                    BoundExpression::Literal(Literal::Boolean(a)),
+                    BoundExpression::Literal(Literal::Boolean(b)),
+                ) = (&l, &r)
                 {
                     let result = match log_op {
                         BoolOperator::And => *a && *b,
@@ -1632,7 +1838,11 @@ impl PhysicalPlanner {
                 for arg in args {
                     planned_args.push(self.plan_expression(op, arg)?);
                 }
-                Ok(BoundExpression::Function(name.clone(), planned_args, return_type.clone()))
+                Ok(BoundExpression::Function(
+                    name.clone(),
+                    planned_args,
+                    return_type.clone(),
+                ))
             }
             BoundExpression::List(items, t) => {
                 let mut planned = Vec::with_capacity(items.len());
@@ -1641,7 +1851,12 @@ impl PhysicalPlanner {
                 }
                 Ok(BoundExpression::List(planned, t.clone()))
             }
-            BoundExpression::Case { expression, when_then, else_expression, return_type } => {
+            BoundExpression::Case {
+                expression,
+                when_then,
+                else_expression,
+                return_type,
+            } => {
                 let expr = expression
                     .as_ref()
                     .map(|e| self.plan_expression(op, e))
@@ -1675,7 +1890,11 @@ impl PhysicalPlanner {
                 for arg in args {
                     planned.push(self.plan_expression(op, arg)?);
                 }
-                Ok(BoundExpression::Aggregate(name.clone(), planned, filter.clone()))
+                Ok(BoundExpression::Aggregate(
+                    name.clone(),
+                    planned,
+                    filter.clone(),
+                ))
             }
             BoundExpression::Lambda(var, body) => {
                 let body = self.plan_expression(op, body)?;
@@ -1753,7 +1972,10 @@ impl PhysicalPlanner {
                 BoundExpression::Comparison(Box::new(l), op, Box::new(r))
             }
             BoundExpression::Function(name, args, return_type) => {
-                let args: Vec<_> = args.into_iter().map(|a| self.simplify_expression(a)).collect();
+                let args: Vec<_> = args
+                    .into_iter()
+                    .map(|a| self.simplify_expression(a))
+                    .collect();
                 BoundExpression::Function(name, args, return_type)
             }
             other => other,
@@ -1847,10 +2069,7 @@ impl PhysicalPlanner {
                         use std::collections::HashSet;
                         let l_set: HashSet<u64> = l.into_iter().collect();
                         let r_set: HashSet<u64> = r.into_iter().collect();
-                        let xor: Vec<u64> = l_set
-                            .symmetric_difference(&r_set)
-                            .copied()
-                            .collect();
+                        let xor: Vec<u64> = l_set.symmetric_difference(&r_set).copied().collect();
                         Some(xor)
                     } else {
                         None

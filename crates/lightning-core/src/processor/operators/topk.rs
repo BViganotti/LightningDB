@@ -79,7 +79,8 @@ impl PhysicalOperator for PhysicalTopK {
                 let _num_sort_keys = sort_arrays.len();
                 let mut rows: Vec<(Vec<Value>, u64)> = Vec::with_capacity(n);
                 for i in 0..n {
-                    let keys: Vec<Value> = sort_arrays.iter()
+                    let keys: Vec<Value> = sort_arrays
+                        .iter()
                         .map(|arr| Value::from_arrow(arr, i))
                         .collect();
                     rows.push((keys, i as u64));

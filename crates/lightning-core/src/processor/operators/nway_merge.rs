@@ -58,7 +58,10 @@ pub struct NWayMerge {
 }
 
 impl NWayMerge {
-    pub fn new(children: Vec<Box<dyn PhysicalOperator + Send + Sync>>, order_by: Vec<BoundOrderByItem>) -> Self {
+    pub fn new(
+        children: Vec<Box<dyn PhysicalOperator + Send + Sync>>,
+        order_by: Vec<BoundOrderByItem>,
+    ) -> Self {
         Self {
             children,
             order_by,
@@ -99,9 +102,9 @@ impl PhysicalOperator for NWayMerge {
         let mut total_rows = 0usize;
         for batches in &child_batches {
             if batches.is_empty() {
-                child_data.push(RecordBatch::new_empty(
-                    Arc::new(arrow::datatypes::Schema::empty()),
-                ));
+                child_data.push(RecordBatch::new_empty(Arc::new(
+                    arrow::datatypes::Schema::empty(),
+                )));
                 continue;
             }
             if batches.len() == 1 {
@@ -115,11 +118,13 @@ impl PhysicalOperator for NWayMerge {
                 for col_idx in 0..num_cols {
                     let refs: Vec<&dyn arrow::array::Array> =
                         batches.iter().map(|b| b.column(col_idx).as_ref()).collect();
-                    cols.push(arrow::compute::concat(&refs)
-                        .map_err(|e| crate::LightningError::Internal(format!("NWayMerge concat child: {e}")))?);
+                    cols.push(arrow::compute::concat(&refs).map_err(|e| {
+                        crate::LightningError::Internal(format!("NWayMerge concat child: {e}"))
+                    })?);
                 }
-                let b = RecordBatch::try_new(schema, cols)
-                    .map_err(|e| crate::LightningError::Internal(format!("NWayMerge child batch: {e}")))?;
+                let b = RecordBatch::try_new(schema, cols).map_err(|e| {
+                    crate::LightningError::Internal(format!("NWayMerge child batch: {e}"))
+                })?;
                 total_rows += b.num_rows();
                 child_data.push(b);
             }
@@ -129,7 +134,9 @@ impl PhysicalOperator for NWayMerge {
             return Ok(None);
         }
 
-        let schema = child_data.iter().find(|b| b.num_rows() > 0)
+        let schema = child_data
+            .iter()
+            .find(|b| b.num_rows() > 0)
             .map(|b| b.schema())
             .or_else(|| child_batches.iter().flatten().next().map(|b| b.schema()))
             .unwrap_or_else(|| Arc::new(arrow::datatypes::Schema::empty()));
@@ -142,7 +149,8 @@ impl PhysicalOperator for NWayMerge {
         let mut out_arrays: Vec<Vec<Value>> = vec![Vec::with_capacity(total_rows); num_cols];
 
         // Pre-compute sort key arrays once per child (columnar, not row-by-row)
-        let mut child_key_arrays: Vec<Vec<Option<(ArrayRef, &BoundOrderByItem)>>> = Vec::with_capacity(num_children);
+        let mut child_key_arrays: Vec<Vec<Option<(ArrayRef, &BoundOrderByItem)>>> =
+            Vec::with_capacity(num_children);
         for batch in child_data.iter() {
             let mut key_arrays = Vec::with_capacity(self.order_by.len());
             if batch.num_rows() > 0 {
@@ -166,7 +174,11 @@ impl PhysicalOperator for NWayMerge {
             if cursors[child_idx] < child_data[child_idx].num_rows() {
                 let keys: Vec<Value> = child_key_arrays[child_idx]
                     .iter()
-                    .map(|opt| opt.as_ref().map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx])).unwrap_or(Value::Null))
+                    .map(|opt| {
+                        opt.as_ref()
+                            .map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx]))
+                            .unwrap_or(Value::Null)
+                    })
                     .collect();
                 heap.push(HeapEntry { keys, child_idx });
             }
@@ -175,20 +187,29 @@ impl PhysicalOperator for NWayMerge {
         while let Some(HeapEntry { child_idx, .. }) = heap.pop() {
             let row = cursors[child_idx];
             for (col_idx, out_col) in out_arrays.iter_mut().enumerate() {
-                out_col.push(Value::from_arrow(child_data[child_idx].column(col_idx), row));
+                out_col.push(Value::from_arrow(
+                    child_data[child_idx].column(col_idx),
+                    row,
+                ));
             }
             cursors[child_idx] += 1;
             if cursors[child_idx] < child_data[child_idx].num_rows() {
                 let keys: Vec<Value> = child_key_arrays[child_idx]
                     .iter()
-                    .map(|opt| opt.as_ref().map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx])).unwrap_or(Value::Null))
+                    .map(|opt| {
+                        opt.as_ref()
+                            .map(|(arr, _)| Value::from_arrow(arr, cursors[child_idx]))
+                            .unwrap_or(Value::Null)
+                    })
                     .collect();
                 heap.push(HeapEntry { keys, child_idx });
             }
         }
 
         // Convert output columns to arrow arrays
-        let arrow_cols: Vec<ArrayRef> = out_arrays.iter().enumerate()
+        let arrow_cols: Vec<ArrayRef> = out_arrays
+            .iter()
+            .enumerate()
             .map(|(col_idx, vals)| {
                 let dt = schema.field(col_idx).data_type();
                 crate::processor::arrow_utils::values_to_array(vals, dt)
@@ -198,7 +219,9 @@ impl PhysicalOperator for NWayMerge {
         let result_batch = RecordBatch::try_new(schema, arrow_cols)
             .map_err(|e| crate::LightningError::Internal(format!("NWayMerge result batch: {e}")))?;
 
-        Ok(Some(DataChunk { batch: result_batch }))
+        Ok(Some(DataChunk {
+            batch: result_batch,
+        }))
     }
 
     fn clone_box(&self) -> Box<dyn PhysicalOperator + Send + Sync> {

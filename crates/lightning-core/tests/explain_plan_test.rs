@@ -5,15 +5,23 @@ use std::sync::Arc;
 fn setup() -> Arc<Database> {
     let db = Database::new(
         tempfile::tempdir().unwrap().into_path(),
-        SystemConfig { sync_mode: SyncMode::Off, ..Default::default() },
+        SystemConfig {
+            sync_mode: SyncMode::Off,
+            ..Default::default()
+        },
     )
     .unwrap();
     let c = db.connect();
-    c.execute("CREATE NODE TABLE P(id INT64, PRIMARY KEY(id))", None).unwrap();
-    c.execute("CREATE NODE TABLE M(id INT64, PRIMARY KEY(id))", None).unwrap();
-    c.execute("CREATE NODE TABLE T(id INT64, PRIMARY KEY(id))", None).unwrap();
-    c.execute("CREATE REL TABLE LIKES(FROM P TO M)", None).unwrap();
-    c.execute("CREATE REL TABLE TAGGED(FROM M TO T)", None).unwrap();
+    c.execute("CREATE NODE TABLE P(id INT64, PRIMARY KEY(id))", None)
+        .unwrap();
+    c.execute("CREATE NODE TABLE M(id INT64, PRIMARY KEY(id))", None)
+        .unwrap();
+    c.execute("CREATE NODE TABLE T(id INT64, PRIMARY KEY(id))", None)
+        .unwrap();
+    c.execute("CREATE REL TABLE LIKES(FROM P TO M)", None)
+        .unwrap();
+    c.execute("CREATE REL TABLE TAGGED(FROM M TO T)", None)
+        .unwrap();
     db
 }
 
@@ -37,7 +45,10 @@ fn explain(db: &Arc<Database>, q: &str) -> String {
 #[test]
 fn multi_hop_match_has_no_cartesian_product() {
     let db = setup();
-    let plan = explain(&db, "MATCH (p:P)-[:LIKES]->(m), (m)-[:TAGGED]->(t) RETURN p");
+    let plan = explain(
+        &db,
+        "MATCH (p:P)-[:LIKES]->(m), (m)-[:TAGGED]->(t) RETURN p",
+    );
     println!("{plan}");
     assert!(
         !plan.contains("CrossJoin"),
@@ -59,7 +70,10 @@ fn exists_subquery_has_no_cartesian_product() {
         "MATCH (p:P) WHERE EXISTS { MATCH (p)-[:LIKES]->(m), (m)-[:TAGGED]->(t) } RETURN p",
     );
     println!("{plan}");
-    assert!(!plan.contains("CrossJoin"), "EXISTS subquery must not cartesian:\n{plan}");
+    assert!(
+        !plan.contains("CrossJoin"),
+        "EXISTS subquery must not cartesian:\n{plan}"
+    );
 }
 
 /// Genuinely disconnected patterns are still a (legitimate) cross product.
@@ -68,7 +82,10 @@ fn disconnected_pattern_is_cartesian() {
     let db = setup();
     let plan = explain(&db, "MATCH (p:P), (m:M) RETURN p, m");
     println!("{plan}");
-    assert!(plan.contains("CrossJoin"), "disconnected pattern should cross join:\n{plan}");
+    assert!(
+        plan.contains("CrossJoin"),
+        "disconnected pattern should cross join:\n{plan}"
+    );
 }
 
 /// EXPLAIN dumps the plan without executing (empty tables still yield a plan).
@@ -76,7 +93,10 @@ fn disconnected_pattern_is_cartesian() {
 fn explain_returns_plan_without_executing() {
     let db = setup();
     let plan = explain(&db, "MATCH (t:T) RETURN t");
-    assert!(plan.contains("Scan T"), "expected to see the scan in:\n{plan}");
+    assert!(
+        plan.contains("Scan T"),
+        "expected to see the scan in:\n{plan}"
+    );
 }
 
 fn rows(db: &Arc<Database>, q: &str) -> Vec<Vec<i64>> {
@@ -104,12 +124,22 @@ fn multi_hop_returns_correct_rows() {
     c.execute("CREATE (:P {id: 1})", None).unwrap();
     c.execute("CREATE (:M {id: 10})", None).unwrap();
     c.execute("CREATE (:T {id: 100})", None).unwrap();
-    c.execute("MATCH (p:P {id: 1}), (m:M {id: 10}) CREATE (p)-[:LIKES]->(m)", None).unwrap();
-    c.execute("MATCH (m:M {id: 10}), (t:T {id: 100}) CREATE (m)-[:TAGGED]->(t)", None).unwrap();
+    c.execute(
+        "MATCH (p:P {id: 1}), (m:M {id: 10}) CREATE (p)-[:LIKES]->(m)",
+        None,
+    )
+    .unwrap();
+    c.execute(
+        "MATCH (m:M {id: 10}), (t:T {id: 100}) CREATE (m)-[:TAGGED]->(t)",
+        None,
+    )
+    .unwrap();
 
-    let r = rows(&db, "MATCH (p:P)-[:LIKES]->(m), (m)-[:TAGGED]->(t) RETURN p.id, m.id, t.id");
+    let r = rows(
+        &db,
+        "MATCH (p:P)-[:LIKES]->(m), (m)-[:TAGGED]->(t) RETURN p.id, m.id, t.id",
+    );
     assert_eq!(r, vec![vec![1, 10, 100]], "multi-hop result wrong: {r:?}");
-
 }
 
 /// Pre-existing bug (not introduced here): a correlated `EXISTS` semi-join
@@ -123,8 +153,19 @@ fn exists_semi_join_returns_rows() {
     c.execute("CREATE (:P {id: 1})", None).unwrap();
     c.execute("CREATE (:M {id: 10})", None).unwrap();
     c.execute("CREATE (:T {id: 100})", None).unwrap();
-    c.execute("MATCH (p:P {id: 1}), (m:M {id: 10}) CREATE (p)-[:LIKES]->(m)", None).unwrap();
-    c.execute("MATCH (m:M {id: 10}), (t:T {id: 100}) CREATE (m)-[:TAGGED]->(t)", None).unwrap();
-    let r2 = rows(&db, "MATCH (p:P) WHERE EXISTS { MATCH (p)-[:LIKES]->(m), (m)-[:TAGGED]->(t) } RETURN p.id");
+    c.execute(
+        "MATCH (p:P {id: 1}), (m:M {id: 10}) CREATE (p)-[:LIKES]->(m)",
+        None,
+    )
+    .unwrap();
+    c.execute(
+        "MATCH (m:M {id: 10}), (t:T {id: 100}) CREATE (m)-[:TAGGED]->(t)",
+        None,
+    )
+    .unwrap();
+    let r2 = rows(
+        &db,
+        "MATCH (p:P) WHERE EXISTS { MATCH (p)-[:LIKES]->(m), (m)-[:TAGGED]->(t) } RETURN p.id",
+    );
     assert_eq!(r2, vec![vec![1]], "EXISTS result wrong: {r2:?}");
 }

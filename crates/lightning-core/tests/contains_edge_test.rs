@@ -27,7 +27,10 @@ fn contains_edge_double_quote_in_pattern() -> TestResult {
     conn.execute(r#"CREATE (:Test {sig: 'fn bar() -> i32'})"#, None)?;
 
     // Pattern with & inside - common in Rust signatures
-    let res = conn.execute("MATCH (t:Test) WHERE CONTAINS(t.sig, '&str') RETURN t.sig", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE CONTAINS(t.sig, '&str') RETURN t.sig",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find signature with &str");
     Ok(())
@@ -48,7 +51,10 @@ fn contains_edge_parenthesized_infix() -> TestResult {
         "MATCH (t:Test) WHERE (t.name CONTAINS 'world') RETURN t.name",
         None,
     );
-    eprintln!("contains_edge_parenthesized_infix result: {:?}", res.is_ok());
+    eprintln!(
+        "contains_edge_parenthesized_infix result: {:?}",
+        res.is_ok()
+    );
     let res = res?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Parenthesized infix CONTAINS should work");
@@ -61,10 +67,22 @@ fn contains_edge_parenthesized_infix() -> TestResult {
 fn contains_edge_infix_or_parens() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'test_func', file_path: '/src/main.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'other', file_path: '/tests/test.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'unrelated', file_path: '/src/lib.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'test_func', file_path: '/src/main.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'other', file_path: '/tests/test.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'unrelated', file_path: '/src/lib.rs'})",
+        None,
+    )?;
 
     // Infix CONTAINS inside parenthesized OR - this might break the regex
     let res = conn.execute(
@@ -74,7 +92,10 @@ fn contains_edge_infix_or_parens() -> TestResult {
     eprintln!("contains_edge_infix_or_parens result: {:?}", res.is_ok());
     let res = res?;
     let total = row_count!(res);
-    assert_eq!(total, 2, "Should find 2 nodes with 'test' in name or file_path");
+    assert_eq!(
+        total, 2,
+        "Should find 2 nodes with 'test' in name or file_path"
+    );
     Ok(())
 }
 
@@ -88,7 +109,10 @@ fn contains_edge_infix_dot_pattern() -> TestResult {
     conn.execute("CREATE (:Test {path: 'src/main.rs'})", None)?;
     conn.execute("CREATE (:Test {path: 'src/lib.py'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.path CONTAINS '.rs' RETURN t.path", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.path CONTAINS '.rs' RETURN t.path",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1);
     Ok(())
@@ -104,7 +128,10 @@ fn contains_edge_escaped_quote() -> TestResult {
     conn.execute("CREATE (:Test {name: 'it is great'})", None)?;
 
     // Function-call with empty search should still work
-    let res = conn.execute("MATCH (t:Test) WHERE CONTAINS(t.name, 'is') RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE CONTAINS(t.name, 'is') RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1);
     Ok(())
@@ -124,7 +151,10 @@ fn contains_edge_double_contains_and() -> TestResult {
         "MATCH (t:Test) WHERE t.name CONTAINS 'hello' AND t.name CONTAINS 'foo' RETURN t.name",
         None,
     );
-    eprintln!("contains_edge_double_contains_and result: {:?}", res.is_ok());
+    eprintln!(
+        "contains_edge_double_contains_and result: {:?}",
+        res.is_ok()
+    );
     let res = res?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should only match 'hello_world_foo'");
@@ -165,7 +195,10 @@ fn contains_edge_nonexistent_property() -> TestResult {
         None,
     );
     // Should either return 0 rows or error gracefully, not panic
-    eprintln!("contains_edge_nonexistent_property result: {:?}", res.is_ok());
+    eprintln!(
+        "contains_edge_nonexistent_property result: {:?}",
+        res.is_ok()
+    );
     Ok(())
 }
 
@@ -199,10 +232,7 @@ fn contains_in_return() -> TestResult {
     conn.execute("CREATE NODE TABLE Test(name STRING)", None)?;
     conn.execute("CREATE (:Test {name: 'hello_world'})", None)?;
 
-    let res = conn.execute(
-        "MATCH (t:Test) RETURN CONTAINS(t.name, 'world')",
-        None,
-    );
+    let res = conn.execute("MATCH (t:Test) RETURN CONTAINS(t.name, 'world')", None);
     eprintln!("contains_in_return result: {:?}", res.is_ok());
     let res = res?;
     let total = row_count!(res);

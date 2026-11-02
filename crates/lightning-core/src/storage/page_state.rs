@@ -73,7 +73,10 @@ impl PageState {
             let old_val = self.state_and_version.load(Ordering::Acquire);
             let new_val = self.update_state_and_increment_version(old_val, Self::UNLOCKED);
             match self.state_and_version.compare_exchange_weak(
-                old_val, new_val, Ordering::Release, Ordering::Acquire
+                old_val,
+                new_val,
+                Ordering::Release,
+                Ordering::Acquire,
             ) {
                 Ok(_) => break,
                 Err(_) => continue, // Retry if another thread modified state
@@ -283,7 +286,10 @@ mod tests {
         // This is a valid concrete state but new() always starts as EVICTED.
         let ps = PageState::new();
         let raw = ps.get_state_and_version();
-        assert_ne!(raw, 0, "new() must not produce zero (zero means UNLOCKED|v0)");
+        assert_ne!(
+            raw, 0,
+            "new() must not produce zero (zero means UNLOCKED|v0)"
+        );
     }
 
     #[test]

@@ -14,8 +14,7 @@
 ///   8. WASM-defined scoring function
 ///   9. Streaming queries
 ///  10. PageRank importance scoring
-
-use lightning_core::memory::{DEFAULT_EMBEDDING_DIM, MemoryEntity, MemoryStore, RagResult};
+use lightning_core::memory::{MemoryEntity, MemoryStore, RagResult, DEFAULT_EMBEDDING_DIM};
 use lightning_core::{Database, SystemConfig};
 
 fn now_micros() -> i64 {
@@ -63,19 +62,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Session 1: User asks about Rust
-    memory.store(entity("conv-1", "User asked: What's the best way to learn Rust?", "conversation", now_micros()))?;
+    memory.store(entity(
+        "conv-1",
+        "User asked: What's the best way to learn Rust?",
+        "conversation",
+        now_micros(),
+    ))?;
     std::thread::sleep(std::time::Duration::from_millis(2));
-    memory.store(entity("conv-2", "Assistant recommended starting with 'The Book' and building small CLI tools", "conversation", now_micros()))?;
+    memory.store(entity(
+        "conv-2",
+        "Assistant recommended starting with 'The Book' and building small CLI tools",
+        "conversation",
+        now_micros(),
+    ))?;
 
     // Session 2: User expresses preferences
     let session2_ts = now_micros();
-    memory.store(entity("pref-1", "User prefers Python for data science and Rust for systems programming", "preference", session2_ts))?;
-    memory.store(entity("pref-2", "User likes functional programming patterns", "preference", session2_ts))?;
+    memory.store(entity(
+        "pref-1",
+        "User prefers Python for data science and Rust for systems programming",
+        "preference",
+        session2_ts,
+    ))?;
+    memory.store(entity(
+        "pref-2",
+        "User likes functional programming patterns",
+        "preference",
+        session2_ts,
+    ))?;
 
     // Session 3: Facts extracted from conversation
     let session3_ts = now_micros();
-    memory.store(entity("fact-1", "User has 5 years of Python experience and 1 year of Rust experience", "fact", session3_ts))?;
-    memory.store(entity("fact-2", "User works at a fintech company building trading systems", "fact", session3_ts))?;
+    memory.store(entity(
+        "fact-1",
+        "User has 5 years of Python experience and 1 year of Rust experience",
+        "fact",
+        session3_ts,
+    ))?;
+    memory.store(entity(
+        "fact-2",
+        "User works at a fintech company building trading systems",
+        "fact",
+        session3_ts,
+    ))?;
 
     // A document memory
     memory.store(entity("doc-1", "Rust ownership model ensures memory safety without a garbage collector. The borrow checker enforces rules at compile time.", "document", now_micros()))?;
@@ -94,7 +123,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("▶ HYBRID SEARCH: 'what does the user know about Rust?'");
     let results = memory.recall("Rust programming experience", &[], 5)?;
     for r in &results {
-        println!("  [{:.3}] ({}): {}", r.score, r.entity.entity_type, r.entity.content);
+        println!(
+            "  [{:.3}] ({}): {}",
+            r.score, r.entity.entity_type, r.entity.content
+        );
     }
     println!();
 
@@ -114,7 +146,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("▶ TEMPORAL: what did the agent know after sessions 1 and 2?");
     let snapshot_t = session2_ts + 1000; // right after session 2
     let snapshot = memory.recall_at_time(snapshot_t, 10)?;
-    println!("  Memories visible at time T+5ms: {} memories", snapshot.len());
+    println!(
+        "  Memories visible at time T+5ms: {} memories",
+        snapshot.len()
+    );
     for s in &snapshot {
         println!("  [{}] {}", s.entity_type, s.content);
     }
@@ -150,7 +185,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let events: Vec<_> = rx.try_iter().collect();
     println!("  CDC events received: {}", events.len());
     if let Some(ev) = events.first() {
-        println!("  Last event: +{} bytes written (total WAL: {} bytes)", ev.bytes_written, ev.total_wal_bytes);
+        println!(
+            "  Last event: +{} bytes written (total WAL: {} bytes)",
+            ev.bytes_written, ev.total_wal_bytes
+        );
     }
     println!();
 
@@ -162,7 +200,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream_count = 0u64;
     while let Ok(Ok(r)) = rx.recv() {
         stream_count += 1;
-        println!("  [stream] id={} score={:.3} type={}", r.entity.id, r.score, r.entity.entity_type);
+        println!(
+            "  [stream] id={} score={:.3} type={}",
+            r.entity.id, r.score, r.entity.entity_type
+        );
     }
     println!("  Stream delivered {} results\n", stream_count);
 
@@ -170,7 +211,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 10. REGISTER A WASM FUNCTION
     // ================================================================
     println!("▶ WASM: register a user-defined scoring function");
-    let wasm_path = std::env::temp_dir().join("lightning_agent_demo").join("score.wasm");
+    let wasm_path = std::env::temp_dir()
+        .join("lightning_agent_demo")
+        .join("score.wasm");
     // We don't generate WASM here — see test_wasm_function_double for an example
     if wasm_path.exists() {
         match db.register_wasm_function(&wasm_path, "score") {

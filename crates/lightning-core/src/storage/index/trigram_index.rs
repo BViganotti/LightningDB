@@ -252,8 +252,10 @@ impl TrigramIndex {
         // query planning (total_rows-based ratios) stays accurate when rows are
         // inserted outside of batches.
         self.total_rows.fetch_add(1, Ordering::Relaxed);
-        self.total_trigrams
-            .fetch_add(Self::extract_trigrams(value).len() as u64, Ordering::Relaxed);
+        self.total_trigrams.fetch_add(
+            Self::extract_trigrams(value).len() as u64,
+            Ordering::Relaxed,
+        );
     }
 
     /// Update posting-list statistics by the delta of a single list mutation.
@@ -582,11 +584,7 @@ impl TrigramIndex {
 
     /// Returns the total number of postings across all trigrams.
     pub fn total_postings(&self) -> usize {
-        self.trigrams
-            .read()
-            .values()
-            .map(|v| v.len())
-            .sum()
+        self.trigrams.read().values().map(|v| v.len()).sum()
     }
 }
 
@@ -750,11 +748,7 @@ mod tests {
     fn test_batch_short_pattern_queries() {
         // Bigram and unigram posting lists written by insert_batch must be queryable.
         let idx = TrigramIndex::new("name".to_string());
-        idx.insert_batch(&[
-            (0, "hello"),
-            (1, "world"),
-            (2, "help"),
-        ]);
+        idx.insert_batch(&[(0, "hello"), (1, "world"), (2, "help")]);
 
         let candidates = idx.query("he").expect("internal invariant violated");
         assert_eq!(candidates, vec![0, 2]);
@@ -776,6 +770,9 @@ mod tests {
         let actual_total: usize = idx.trigrams.read().values().map(|v| v.len()).sum();
         let tracked_sum = idx.posting_size_sum.load(Ordering::Relaxed);
         assert_eq!(tracked_sum, actual_total as u64);
-        assert_eq!(stats.avg_posting_list_size, actual_total as f64 / idx.trigram_count() as f64);
+        assert_eq!(
+            stats.avg_posting_list_size,
+            actual_total as f64 / idx.trigram_count() as f64
+        );
     }
 }

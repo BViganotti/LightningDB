@@ -77,7 +77,8 @@ impl CompressionAlg for Uncompressed {
         if size_to_copy > src.len() {
             return Err(crate::LightningError::Internal(format!(
                 "Uncompressed copy: src too short (need {} bytes, have {})",
-                size_to_copy, src.len()
+                size_to_copy,
+                src.len()
             )));
         }
         dst[0..size_to_copy].copy_from_slice(&src[0..size_to_copy]);
@@ -99,13 +100,17 @@ impl CompressionAlg for Uncompressed {
         if src_start + size > src.len() {
             return Err(crate::LightningError::Internal(format!(
                 "Uncompressed decompress: src too short (need {}..{}, have {})",
-                src_start, src_start + size, src.len()
+                src_start,
+                src_start + size,
+                src.len()
             )));
         }
         if dst_start + size > dst.len() {
             return Err(crate::LightningError::Internal(format!(
                 "Uncompressed decompress: dst too short (need {}..{}, have {})",
-                dst_start, dst_start + size, dst.len()
+                dst_start,
+                dst_start + size,
+                dst.len()
             )));
         }
         dst[dst_start..dst_start + size].copy_from_slice(&src[src_start..src_start + size]);
@@ -176,27 +181,23 @@ mod roundtrip_tests {
     use super::*;
     use crate::processor::Value;
 
-    fn enc8(v: u64) -> [u8; 8] { v.to_le_bytes() }
+    fn enc8(v: u64) -> [u8; 8] {
+        v.to_le_bytes()
+    }
 
     fn roundtrip(alg: &dyn CompressionAlg, values: &[[u8; 8]], label: &str) {
         let mut src = Vec::new();
         for v in values {
             src.extend_from_slice(v);
         }
-        let meta = CompressionMetadata::new(Value::Null, Value::Null, alg.get_compression_type(), 0);
+        let meta =
+            CompressionMetadata::new(Value::Null, Value::Null, alg.get_compression_type(), 0);
         let mut dst = vec![0u8; 4096];
         let (size, processed) = alg
             .compress_next_page(&src, values.len() as u64, &mut dst, &meta)
             .unwrap_or_else(|e| panic!("{label}: compress failed: {e}"));
         let mut out = vec![0u8; values.len() * 8];
-        let res = alg.decompress_from_page(
-            &dst[..size as usize],
-            0,
-            &mut out,
-            0,
-            processed,
-            &meta,
-        );
+        let res = alg.decompress_from_page(&dst[..size as usize], 0, &mut out, 0, processed, &meta);
         match res {
             Ok(()) => {
                 let ok = out[..processed as usize * 8] == src[..processed as usize * 8];
@@ -230,7 +231,11 @@ mod roundtrip_tests {
             .decompress_from_page(&dst[..size as usize], 17, &mut out, 0, 10, &meta_bp)
             .unwrap();
         for i in 0..10usize {
-            assert_eq!(&out[i * 8..i * 8 + 8], &bp_vals[17 + i][..], "bitpacking offset wrong at {i}");
+            assert_eq!(
+                &out[i * 8..i * 8 + 8],
+                &bp_vals[17 + i][..],
+                "bitpacking offset wrong at {i}"
+            );
         }
 
         // Delta packs (value - min), so bit_width covers (max - min).
@@ -254,7 +259,11 @@ mod roundtrip_tests {
             .decompress_from_page(&dst2[..size2 as usize], 17, &mut out2, 0, 10, &meta_d)
             .unwrap();
         for i in 0..10usize {
-            assert_eq!(&out2[i * 8..i * 8 + 8], &d_vals[17 + i][..], "delta offset wrong at {i}");
+            assert_eq!(
+                &out2[i * 8..i * 8 + 8],
+                &d_vals[17 + i][..],
+                "delta offset wrong at {i}"
+            );
         }
     }
 
@@ -306,14 +315,26 @@ mod roundtrip_tests {
         let bp: Vec<[u8; 8]> = (0..64).map(|i| enc8(i % 32)).collect();
         {
             let mut src = Vec::new();
-            for v in &bp { src.extend_from_slice(v); }
+            for v in &bp {
+                src.extend_from_slice(v);
+            }
             let mut dst = vec![0u8; 4096];
             let (size, processed) = IntegerBitpacking
                 .compress_next_page(&src, bp.len() as u64, &mut dst, &meta)
                 .unwrap();
             let mut out = vec![0u8; bp.len() * 8];
-            let r = IntegerBitpacking.decompress_from_page(&dst[..size as usize], 0, &mut out, 0, processed, &meta);
-            println!("bitpacking: processed={processed} r={r:?} match={}", out[..processed as usize * 8] == src[..processed as usize * 8]);
+            let r = IntegerBitpacking.decompress_from_page(
+                &dst[..size as usize],
+                0,
+                &mut out,
+                0,
+                processed,
+                &meta,
+            );
+            println!(
+                "bitpacking: processed={processed} r={r:?} match={}",
+                out[..processed as usize * 8] == src[..processed as usize * 8]
+            );
         }
     }
 }

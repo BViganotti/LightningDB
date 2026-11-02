@@ -53,7 +53,10 @@ impl Eq for ScoredNode {}
 
 impl Ord for ScoredNode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.score.partial_cmp(&self.score).unwrap_or(std::cmp::Ordering::Equal)
+        other
+            .score
+            .partial_cmp(&self.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
@@ -108,11 +111,7 @@ impl VectorIndex {
             let take = (bytes.len() - written).min(4096);
             // SAFETY: `take <= 4096`, destination frame is a pinned CoW page.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bytes[written..].as_ptr(),
-                    frame.as_ptr(),
-                    take,
-                );
+                std::ptr::copy_nonoverlapping(bytes[written..].as_ptr(), frame.as_ptr(), take);
             }
             bm.log_page_update(self.file_handle.file_id, page, frame.as_slice())?;
             bm.unpin_page(&self.file_handle, page, frame);
@@ -160,7 +159,11 @@ impl VectorIndex {
                 bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
             // SAFETY: freshly created CoW page owned by this transaction.
             unsafe { header_frame.as_ptr().write_bytes(0, 4096) };
-            bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+            bm.log_page_update(
+                self.file_handle.file_id,
+                VI_HEADER_PAGE,
+                header_frame.as_slice(),
+            )?;
             bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         }
         Ok(())
@@ -178,7 +181,11 @@ impl VectorIndex {
         unsafe {
             std::ptr::copy_nonoverlapping(count.to_le_bytes().as_ptr(), header_frame.as_ptr(), 8);
         }
-        bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+        bm.log_page_update(
+            self.file_handle.file_id,
+            VI_HEADER_PAGE,
+            header_frame.as_slice(),
+        )?;
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         Ok(())
     }
@@ -284,8 +291,7 @@ impl VectorIndex {
                     a
                 },
             );
-        let mut results: Vec<(u64, f32)> =
-            heap.into_iter().map(|n| (n.id, n.score)).collect();
+        let mut results: Vec<(u64, f32)> = heap.into_iter().map(|n| (n.id, n.score)).collect();
         results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         Ok(results)
     }
@@ -361,7 +367,8 @@ impl VectorIndex {
                 Some(buf) if buf.len() == 12 => {
                     let stored_id = u64::from_le_bytes(buf[0..8].try_into().expect("8 bytes"));
                     if stored_id == node_id {
-                        let entry = Self::serialize_entry(node_id, inv_norm, embedding, entry_bytes);
+                        let entry =
+                            Self::serialize_entry(node_id, inv_norm, embedding, entry_bytes);
                         self.write_large_entry(bm, tx, entry_idx, &entry)?;
                         return Ok(true);
                     }
@@ -642,15 +649,16 @@ impl VectorIndex {
 
         // Ensure header page exists
         if self.file_handle.get_num_pages() == 0 {
-            let header_frame = bm.create_new_version(
-                Arc::clone(&self.file_handle),
-                VI_HEADER_PAGE,
-                tx,
-            )?;
+            let header_frame =
+                bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
             let ptr = header_frame.as_ptr();
             // SAFETY: SAFETY: Writing to a freshly created CoW page via create_new_version. The page is owned exclusively by this transaction.
             unsafe { ptr.write_bytes(0, bps) };
-            bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+            bm.log_page_update(
+                self.file_handle.file_id,
+                VI_HEADER_PAGE,
+                header_frame.as_slice(),
+            )?;
             bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         }
 
@@ -687,11 +695,7 @@ impl VectorIndex {
                 self.file_handle.add_new_page()?;
             }
 
-            let frame = bm.create_new_version(
-                Arc::clone(&self.file_handle),
-                page_idx,
-                tx,
-            )?;
+            let frame = bm.create_new_version(Arc::clone(&self.file_handle), page_idx, tx)?;
             let ptr = frame.as_ptr();
             let offset = slot_in_page * entry_bytes;
             let write_end = offset + 12 + dim * 4;
@@ -706,11 +710,7 @@ impl VectorIndex {
             // SAFETY: Bounds checked above. Copying data into a CoW page frame.
             // Frame is pinned, within pin-unpin lifecycle.
             unsafe {
-                std::ptr::copy_nonoverlapping(
-                    node_id.to_le_bytes().as_ptr(),
-                    ptr.add(offset),
-                    8,
-                );
+                std::ptr::copy_nonoverlapping(node_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
                 std::ptr::copy_nonoverlapping(
                     inv_norm.to_le_bytes().as_ptr(),
                     ptr.add(offset + 8),
@@ -718,11 +718,7 @@ impl VectorIndex {
                 );
                 for (j, elem) in vec.iter().enumerate() {
                     let val = elem.to_le_bytes();
-                    std::ptr::copy_nonoverlapping(
-                        val.as_ptr(),
-                        ptr.add(offset + 12 + j * 4),
-                        4,
-                    );
+                    std::ptr::copy_nonoverlapping(val.as_ptr(), ptr.add(offset + 12 + j * 4), 4);
                 }
             }
 
@@ -732,11 +728,8 @@ impl VectorIndex {
         drop(idx);
 
         // Update header entry count
-        let header_frame = bm.create_new_version(
-            Arc::clone(&self.file_handle),
-            VI_HEADER_PAGE,
-            tx,
-        )?;
+        let header_frame =
+            bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
         // `next_entry_idx` is the total number of allocated slots (existing
         // overwrites keep their slot), i.e. the new header entry count.
         let new_count = next_entry_idx as u64;
@@ -748,7 +741,11 @@ impl VectorIndex {
                 8,
             );
         }
-        bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+        bm.log_page_update(
+            self.file_handle.file_id,
+            VI_HEADER_PAGE,
+            header_frame.as_slice(),
+        )?;
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
 
         Ok(())
@@ -812,22 +809,24 @@ impl VectorIndex {
                         return heap;
                     }
 
-                    let node_id_bytes: [u8; 8] = match frame.as_slice()[offset..offset + 8].try_into() {
-                        Ok(b) => b,
-                        Err(_) => {
-                            bm.unpin_page(&self.file_handle, page_idx, frame);
-                            return heap;
-                        }
-                    };
+                    let node_id_bytes: [u8; 8] =
+                        match frame.as_slice()[offset..offset + 8].try_into() {
+                            Ok(b) => b,
+                            Err(_) => {
+                                bm.unpin_page(&self.file_handle, page_idx, frame);
+                                return heap;
+                            }
+                        };
                     let node_id = u64::from_le_bytes(node_id_bytes);
 
-                    let inv_norm_bytes: [u8; 4] = match frame.as_slice()[offset + 8..offset + 12].try_into() {
-                        Ok(b) => b,
-                        Err(_) => {
-                            bm.unpin_page(&self.file_handle, page_idx, frame);
-                            return heap;
-                        }
-                    };
+                    let inv_norm_bytes: [u8; 4] =
+                        match frame.as_slice()[offset + 8..offset + 12].try_into() {
+                            Ok(b) => b,
+                            Err(_) => {
+                                bm.unpin_page(&self.file_handle, page_idx, frame);
+                                return heap;
+                            }
+                        };
                     let inv_norm = f32::from_le_bytes(inv_norm_bytes);
 
                     let emb_offset = offset + 12;
@@ -836,19 +835,21 @@ impl VectorIndex {
 
                     // SAFETY: emb_bytes may not be aligned to 4 bytes (f32 alignment).
                     // We check alignment and fall back to byte-by-byte conversion if needed.
-                    let emb_f32: Vec<f32> = if emb_bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0 {
-                        // Aligned: can use direct slice cast
-                        let raw = unsafe {
-                            std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)
+                    let emb_f32: Vec<f32> =
+                        if emb_bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0 {
+                            // Aligned: can use direct slice cast
+                            let raw = unsafe {
+                                std::slice::from_raw_parts(emb_bytes.as_ptr() as *const f32, dim)
+                            };
+                            raw.to_vec()
+                        } else {
+                            // Unaligned: convert byte-by-byte
+                            emb_bytes
+                                .chunks_exact(4)
+                                .take(dim)
+                                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                                .collect()
                         };
-                        raw.to_vec()
-                    } else {
-                        // Unaligned: convert byte-by-byte
-                        emb_bytes.chunks_exact(4)
-                            .take(dim)
-                            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                            .collect()
-                    };
                     let dot = Self::dot_product(&emb_f32, &query_normed);
 
                     bm.unpin_page(&self.file_handle, page_idx, frame);
@@ -876,10 +877,8 @@ impl VectorIndex {
                 },
             );
 
-        let mut results: Vec<(u64, f32)> = heap
-            .into_iter()
-            .map(|node| (node.id, node.score))
-            .collect();
+        let mut results: Vec<(u64, f32)> =
+            heap.into_iter().map(|node| (node.id, node.score)).collect();
         results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
         Ok(results)
     }
@@ -893,7 +892,11 @@ impl VectorIndex {
             return Ok(0);
         }
         let header_frame = bm.pin_page(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
-        let num_entries = u64::from_le_bytes(header_frame.as_slice()[0..8].try_into()                .expect("header entry count is 8 bytes"));
+        let num_entries = u64::from_le_bytes(
+            header_frame.as_slice()[0..8]
+                .try_into()
+                .expect("header entry count is 8 bytes"),
+        );
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
         // Bound the reported count by the data pages actually present.
         let eps = vi_entries_per_page(self.dimension);
@@ -945,7 +948,9 @@ impl VectorIndex {
                     let stored_id = u64::from_le_bytes(
                         frame.as_slice()[offset..offset + 8]
                             .try_into()
-                            .map_err(|_| crate::LightningError::Internal("invalid node_id bytes".into()))?,
+                            .map_err(|_| {
+                                crate::LightningError::Internal("invalid node_id bytes".into())
+                            })?,
                     );
                     bm.unpin_page(&self.file_handle, page_idx, frame);
                     index.insert(stored_id, entry_idx);
@@ -956,7 +961,7 @@ impl VectorIndex {
                 None => return Ok(false),
             }
         }; // drop index lock
-        
+
         if found_idx + 1 < num_entries {
             let last_idx = num_entries - 1;
             let src_page = VI_DATA_START_PAGE + (last_idx / eps) as u64;
@@ -975,38 +980,61 @@ impl VectorIndex {
                 let frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
                 let ptr = frame.as_ptr();
                 unsafe {
-                    std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), ptr.add(dst_slot * entry_bytes), entry_bytes);
+                    std::ptr::copy_nonoverlapping(
+                        entry_vec.as_ptr(),
+                        ptr.add(dst_slot * entry_bytes),
+                        entry_bytes,
+                    );
                     std::ptr::write_bytes(ptr.add(src_slot * entry_bytes), 0, entry_bytes);
                 }
                 bm.log_page_update(self.file_handle.file_id, dst_page, frame.as_slice())?;
                 bm.unpin_page(&self.file_handle, dst_page, frame);
             } else {
-                let dst_frame = bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
+                let dst_frame =
+                    bm.create_new_version(Arc::clone(&self.file_handle), dst_page, tx)?;
                 let dst_ptr = dst_frame.as_ptr();
                 // SAFETY: SAFETY: Copying last entry to deleted slot in newly created version.
                 unsafe {
-                    std::ptr::copy_nonoverlapping(entry_vec.as_ptr(), dst_ptr.add(dst_offset), entry_bytes);
+                    std::ptr::copy_nonoverlapping(
+                        entry_vec.as_ptr(),
+                        dst_ptr.add(dst_offset),
+                        entry_bytes,
+                    );
                 }
                 bm.log_page_update(self.file_handle.file_id, dst_page, dst_frame.as_slice())?;
                 bm.unpin_page(&self.file_handle, dst_page, dst_frame);
 
-                let last_frame = bm.create_new_version(Arc::clone(&self.file_handle), src_page, tx)?;
+                let last_frame =
+                    bm.create_new_version(Arc::clone(&self.file_handle), src_page, tx)?;
                 // SAFETY: SAFETY: Zeroing out the old last slot in newly created version.
                 unsafe {
-                    std::ptr::write_bytes(last_frame.as_ptr().add(src_slot * entry_bytes), 0, entry_bytes);
+                    std::ptr::write_bytes(
+                        last_frame.as_ptr().add(src_slot * entry_bytes),
+                        0,
+                        entry_bytes,
+                    );
                 }
                 bm.log_page_update(self.file_handle.file_id, src_page, last_frame.as_slice())?;
                 bm.unpin_page(&self.file_handle, src_page, last_frame);
             }
         }
 
-        let header_frame = bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
+        let header_frame =
+            bm.create_new_version(Arc::clone(&self.file_handle), VI_HEADER_PAGE, tx)?;
         let new_count = (num_entries - 1) as u64;
         // SAFETY: SAFETY: Writing updated embedding data into CoW page frame.
         unsafe {
-            std::ptr::copy_nonoverlapping(new_count.to_le_bytes().as_ptr(), header_frame.as_ptr(), 8);
+            std::ptr::copy_nonoverlapping(
+                new_count.to_le_bytes().as_ptr(),
+                header_frame.as_ptr(),
+                8,
+            );
         }
-        bm.log_page_update(self.file_handle.file_id, VI_HEADER_PAGE, header_frame.as_slice())?;
+        bm.log_page_update(
+            self.file_handle.file_id,
+            VI_HEADER_PAGE,
+            header_frame.as_slice(),
+        )?;
         bm.unpin_page(&self.file_handle, VI_HEADER_PAGE, header_frame);
 
         Ok(true)
@@ -1059,11 +1087,23 @@ impl VectorIndex {
                 let ptr = frame.as_ptr();
                 // SAFETY: SAFETY: Reading from pinned frame in search hot path.
                 unsafe {
-                    std::ptr::copy_nonoverlapping(node_id.to_le_bytes().as_ptr(), ptr.add(offset), 8);
-                    std::ptr::copy_nonoverlapping(inv_norm.to_le_bytes().as_ptr(), ptr.add(offset + 8), 4);
+                    std::ptr::copy_nonoverlapping(
+                        node_id.to_le_bytes().as_ptr(),
+                        ptr.add(offset),
+                        8,
+                    );
+                    std::ptr::copy_nonoverlapping(
+                        inv_norm.to_le_bytes().as_ptr(),
+                        ptr.add(offset + 8),
+                        4,
+                    );
                     for (j, elem) in embedding.iter().enumerate() {
                         let val = elem.to_le_bytes();
-                        std::ptr::copy_nonoverlapping(val.as_ptr(), ptr.add(offset + 12 + j * 4), 4);
+                        std::ptr::copy_nonoverlapping(
+                            val.as_ptr(),
+                            ptr.add(offset + 12 + j * 4),
+                            4,
+                        );
                     }
                 }
                 bm.log_page_update(self.file_handle.file_id, page_idx, frame.as_slice())?;

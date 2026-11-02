@@ -151,7 +151,11 @@ impl PhysicalASP {
         }
     }
 
-    fn get_csr(&self, database: &Database, tx: &crate::transaction::transaction_manager::Transaction) -> Option<Arc<CSRIndex>> {
+    fn get_csr(
+        &self,
+        database: &Database,
+        tx: &crate::transaction::transaction_manager::Transaction,
+    ) -> Option<Arc<CSRIndex>> {
         let sm = database.storage_manager.read();
         let _ = sm.ensure_csr_fresh(&self.rel_table_name, &database.buffer_manager, tx);
         sm.fwd_csr.get(&self.rel_table_name).cloned()
@@ -176,7 +180,7 @@ impl PhysicalASP {
             path_values.push(Value::List(nodes));
         }
 
-        use arrow::array::{UInt64Array, StringArray};
+        use arrow::array::{StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use std::sync::Arc;
@@ -265,7 +269,8 @@ impl PhysicalOperator for PhysicalASP {
                             }
                             let csr = self.cached_csr.clone();
                             if let Some(csr) = csr {
-                                self.found_paths = self.find_all_shortest_paths(&csr, src_id, dst_id, bm, tx)?;
+                                self.found_paths =
+                                    self.find_all_shortest_paths(&csr, src_id, dst_id, bm, tx)?;
                                 if !self.found_paths.is_empty() {
                                     let result_chunk = self.build_chunk_for_source(src_id, dst_id);
                                     self.results.push_back(result_chunk);

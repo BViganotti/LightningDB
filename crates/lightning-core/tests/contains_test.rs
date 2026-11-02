@@ -1,7 +1,7 @@
+use arrow::array::{Array, BooleanArray, Int64Array, StringArray};
 use lightning_core::{Database, SystemConfig};
 use std::sync::Arc;
 use tempfile::tempdir;
-use arrow::array::{Array, StringArray, BooleanArray, Int64Array};
 
 type TestResult = lightning_core::Result<()>;
 
@@ -23,14 +23,32 @@ macro_rules! row_count {
 fn contains_infix_basic() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'compression_utils', file_path: '/src/compression.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'parser_module', file_path: '/src/parser.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'decompressor', file_path: '/src/decompress.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'compression_utils', file_path: '/src/compression.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'parser_module', file_path: '/src/parser.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'decompressor', file_path: '/src/decompress.rs'})",
+        None,
+    )?;
 
-    let res = conn.execute("MATCH (n:TestNode) WHERE n.name CONTAINS 'compress' RETURN n.name", None)?;
+    let res = conn.execute(
+        "MATCH (n:TestNode) WHERE n.name CONTAINS 'compress' RETURN n.name",
+        None,
+    )?;
     let total = row_count!(res);
-    assert_eq!(total, 2, "Should find 'compression_utils' and 'decompressor'");
+    assert_eq!(
+        total, 2,
+        "Should find 'compression_utils' and 'decompressor'"
+    );
     Ok(())
 }
 
@@ -39,11 +57,23 @@ fn contains_infix_basic() -> TestResult {
 fn contains_function_call_syntax() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'compression_utils', file_path: '/src/compression.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'parser_module', file_path: '/src/parser.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'compression_utils', file_path: '/src/compression.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'parser_module', file_path: '/src/parser.rs'})",
+        None,
+    )?;
 
-    let res = conn.execute("MATCH (n:TestNode) WHERE CONTAINS(n.name, 'compress') RETURN n.name", None)?;
+    let res = conn.execute(
+        "MATCH (n:TestNode) WHERE CONTAINS(n.name, 'compress') RETURN n.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find 'compression_utils'");
     Ok(())
@@ -54,10 +84,22 @@ fn contains_function_call_syntax() -> TestResult {
 fn contains_with_and() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(id STRING, name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {id: '1', name: 'test_parser', file_path: '/tests/parser_test.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {id: '2', name: 'main_parser', file_path: '/src/parser.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {id: '3', name: 'test_helper', file_path: '/tests/helper.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(id STRING, name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '1', name: 'test_parser', file_path: '/tests/parser_test.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '2', name: 'main_parser', file_path: '/src/parser.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '3', name: 'test_helper', file_path: '/tests/helper.rs'})",
+        None,
+    )?;
 
     let res = conn.execute(
         "MATCH (n:TestNode) WHERE CONTAINS(n.name, 'test') AND CONTAINS(n.file_path, 'test') RETURN n.name",
@@ -73,10 +115,22 @@ fn contains_with_and() -> TestResult {
 fn contains_with_or() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'test_parser', file_path: '/tests/parser_test.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'main_parser', file_path: '/src/parser.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'helper', file_path: '/tests/helper.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'test_parser', file_path: '/tests/parser_test.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'main_parser', file_path: '/src/parser.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'helper', file_path: '/tests/helper.rs'})",
+        None,
+    )?;
 
     let res = conn.execute(
         "MATCH (n:TestNode) WHERE CONTAINS(n.name, 'test') OR CONTAINS(n.file_path, 'test') RETURN n.name",
@@ -96,7 +150,10 @@ fn contains_special_chars() -> TestResult {
     conn.execute("CREATE (:Test {email: 'user@example.com'})", None)?;
     conn.execute("CREATE (:Test {email: 'invalid_email'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.email CONTAINS '@' RETURN t.email", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.email CONTAINS '@' RETURN t.email",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find email with @");
     Ok(())
@@ -111,7 +168,10 @@ fn contains_case_sensitive() -> TestResult {
     conn.execute("CREATE (:Test {name: 'HelloWorld'})", None)?;
     conn.execute("CREATE (:Test {name: 'helloworld'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.name CONTAINS 'Hello' RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.name CONTAINS 'Hello' RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "CONTAINS should be case-sensitive");
     Ok(())
@@ -127,7 +187,10 @@ fn contains_empty_pattern() -> TestResult {
     conn.execute("CREATE (:Test {name: 'world'})", None)?;
 
     // CONTAINS with empty string via function call syntax
-    let res = conn.execute("MATCH (t:Test) WHERE CONTAINS(t.name, '') RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE CONTAINS(t.name, '') RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     // Empty string contains should match all (Rust's str::contains("") returns true)
     assert_eq!(total, 2, "CONTAINS('', '') should match everything");
@@ -139,10 +202,22 @@ fn contains_empty_pattern() -> TestResult {
 fn contains_complex_where() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(id STRING, name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {id: '1', name: 'test_compress', file_path: '/tests/compress.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {id: '2', name: 'main_module', file_path: '/src/main.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {id: '3', name: 'utils', file_path: '/tests/utils_test.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(id STRING, name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '1', name: 'test_compress', file_path: '/tests/compress.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '2', name: 'main_module', file_path: '/src/main.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {id: '3', name: 'utils', file_path: '/tests/utils_test.rs'})",
+        None,
+    )?;
 
     // Pattern from search.rs - mixed function call CONTAINS with parenthesized OR
     let res = conn.execute(
@@ -150,7 +225,10 @@ fn contains_complex_where() -> TestResult {
         None,
     )?;
     let total = row_count!(res);
-    assert_eq!(total, 2, "Should find nodes with 'test' in name or file_path");
+    assert_eq!(
+        total, 2,
+        "Should find nodes with 'test' in name or file_path"
+    );
     Ok(())
 }
 
@@ -164,7 +242,10 @@ fn contains_not() -> TestResult {
     conn.execute("CREATE (:Test {name: 'goodbye'})", None)?;
     conn.execute("CREATE (:Test {name: 'worldwide'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE NOT t.name CONTAINS 'world' RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE NOT t.name CONTAINS 'world' RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find only 'goodbye'");
     Ok(())
@@ -177,7 +258,10 @@ fn contains_with_limit() -> TestResult {
     let conn = db.connect();
     conn.execute("CREATE NODE TABLE TestNode(name STRING)", None)?;
     for i in 0..20 {
-        conn.execute(&format!("CREATE (:TestNode {{name: 'test_func_{}'}})", i), None)?;
+        conn.execute(
+            &format!("CREATE (:TestNode {{name: 'test_func_{}'}})", i),
+            None,
+        )?;
     }
     conn.execute("CREATE (:TestNode {name: 'other_func'})", None)?;
 
@@ -195,11 +279,23 @@ fn contains_with_limit() -> TestResult {
 fn contains_infix_underscore_property() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, file_path STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'foo', file_path: '/src/test_module.rs'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'bar', file_path: '/src/main.rs'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, file_path STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'foo', file_path: '/src/test_module.rs'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'bar', file_path: '/src/main.rs'})",
+        None,
+    )?;
 
-    let res = conn.execute("MATCH (n:TestNode) WHERE n.file_path CONTAINS 'test' RETURN n.name", None)?;
+    let res = conn.execute(
+        "MATCH (n:TestNode) WHERE n.file_path CONTAINS 'test' RETURN n.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should match file_path containing 'test'");
     Ok(())
@@ -214,7 +310,10 @@ fn contains_pattern_with_spaces() -> TestResult {
     conn.execute("CREATE (:Test {desc: 'hello beautiful world'})", None)?;
     conn.execute("CREATE (:Test {desc: 'goodbye'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.desc CONTAINS 'beautiful world' RETURN t.desc", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.desc CONTAINS 'beautiful world' RETURN t.desc",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should match substring with spaces");
     Ok(())
@@ -228,7 +327,10 @@ fn contains_no_match() -> TestResult {
     conn.execute("CREATE NODE TABLE Test(name STRING)", None)?;
     conn.execute("CREATE (:Test {name: 'hello'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.name CONTAINS 'xyz' RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.name CONTAINS 'xyz' RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 0, "No matches expected");
     Ok(())
@@ -241,10 +343,16 @@ fn contains_with_nulls() -> TestResult {
     let conn = db.connect();
     conn.execute("CREATE NODE TABLE Test(name STRING, desc STRING)", None)?;
     conn.execute("CREATE (:Test {name: 'hello', desc: NULL})", None)?;
-    conn.execute("CREATE (:Test {name: 'world', desc: 'some description'})", None)?;
+    conn.execute(
+        "CREATE (:Test {name: 'world', desc: 'some description'})",
+        None,
+    )?;
 
     // CONTAINS on NULL should not crash, should return no match
-    let res = conn.execute("MATCH (t:Test) WHERE CONTAINS(t.desc, 'some') RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE CONTAINS(t.desc, 'some') RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should only match non-null desc");
     Ok(())
@@ -256,13 +364,22 @@ fn contains_with_variable_pattern() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
     conn.execute("CREATE NODE TABLE Test(name STRING, pattern STRING)", None)?;
-    conn.execute("CREATE (:Test {name: 'hello_world', pattern: 'world'})", None)?;
+    conn.execute(
+        "CREATE (:Test {name: 'hello_world', pattern: 'world'})",
+        None,
+    )?;
     conn.execute("CREATE (:Test {name: 'goodbye', pattern: 'bye'})", None)?;
 
     // This uses function-call syntax with a variable as the pattern
-    let res = conn.execute("MATCH (t:Test) WHERE CONTAINS(t.name, t.pattern) RETURN t.name", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE CONTAINS(t.name, t.pattern) RETURN t.name",
+        None,
+    )?;
     let total = row_count!(res);
-    assert_eq!(total, 2, "Should match when pattern is a property reference");
+    assert_eq!(
+        total, 2,
+        "Should match when pattern is a property reference"
+    );
     Ok(())
 }
 
@@ -275,7 +392,10 @@ fn contains_pattern_with_dots() -> TestResult {
     conn.execute("CREATE (:Test {path: '/src/main.rs'})", None)?;
     conn.execute("CREATE (:Test {path: '/src/librs'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.path CONTAINS '.rs' RETURN t.path", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.path CONTAINS '.rs' RETURN t.path",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find path with '.rs'");
     Ok(())
@@ -290,7 +410,10 @@ fn contains_pattern_with_slash() -> TestResult {
     conn.execute("CREATE (:Test {path: '/src/utils/helper.rs'})", None)?;
     conn.execute("CREATE (:Test {path: '/tests/main.rs'})", None)?;
 
-    let res = conn.execute("MATCH (t:Test) WHERE t.path CONTAINS '/utils/' RETURN t.path", None)?;
+    let res = conn.execute(
+        "MATCH (t:Test) WHERE t.path CONTAINS '/utils/' RETURN t.path",
+        None,
+    )?;
     let total = row_count!(res);
     assert_eq!(total, 1, "Should find path with '/utils/'");
     Ok(())
@@ -301,16 +424,31 @@ fn contains_pattern_with_slash() -> TestResult {
 fn contains_with_equality() -> TestResult {
     let (_dir, db) = setup_db()?;
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE TestNode(name STRING, node_type STRING)", None)?;
-    conn.execute("CREATE (:TestNode {name: 'test_parser', node_type: 'Function'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'TestStruct', node_type: 'Struct'})", None)?;
-    conn.execute("CREATE (:TestNode {name: 'main', node_type: 'Function'})", None)?;
+    conn.execute(
+        "CREATE NODE TABLE TestNode(name STRING, node_type STRING)",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'test_parser', node_type: 'Function'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'TestStruct', node_type: 'Struct'})",
+        None,
+    )?;
+    conn.execute(
+        "CREATE (:TestNode {name: 'main', node_type: 'Function'})",
+        None,
+    )?;
 
     let res = conn.execute(
         "MATCH (n:TestNode) WHERE n.node_type = 'Function' AND CONTAINS(n.name, 'test') RETURN n.name",
         None,
     )?;
     let total = row_count!(res);
-    assert_eq!(total, 1, "Should find test_parser (Function with 'test' in name)");
+    assert_eq!(
+        total, 1,
+        "Should find test_parser (Function with 'test' in name)"
+    );
     Ok(())
 }

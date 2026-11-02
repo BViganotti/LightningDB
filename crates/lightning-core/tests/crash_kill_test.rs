@@ -54,7 +54,10 @@ fn sigkill_preserves_all_committed_rows() {
     {
         let db = Database::new(&path, SystemConfig::default()).unwrap();
         db.connect()
-            .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+            .execute(
+                "CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))",
+                None,
+            )
             .unwrap();
     }
 
@@ -127,7 +130,10 @@ fn sigkill_repeated_cycles_preserve_committed() {
     {
         let db = Database::new(&path, SystemConfig::default()).unwrap();
         db.connect()
-            .execute("CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))", None)
+            .execute(
+                "CREATE NODE TABLE T(id INT64, v INT64, PRIMARY KEY(id))",
+                None,
+            )
             .unwrap();
     }
     let exe = std::env::current_exe().unwrap();

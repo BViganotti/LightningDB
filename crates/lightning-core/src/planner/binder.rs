@@ -64,7 +64,10 @@ pub enum BoundStatement {
     Transaction(BoundTransactionAction),
     Checkpoint,
     Vacuum,
-    AlterTable { name: String, operation: crate::parser::ast::AlterOperation },
+    AlterTable {
+        name: String,
+        operation: crate::parser::ast::AlterOperation,
+    },
     CreateConstraint {
         name: String,
         table_name: String,
@@ -339,10 +342,22 @@ impl BoundExpression {
             BoundExpression::Function(name, _, _) => {
                 matches!(
                     name.to_uppercase().as_str(),
-                    "COUNT" | "COUNT_DISTINCT" | "SUM" | "AVG" | "MIN" | "MAX"
-                        | "COLLECT" | "GROUP_CONCAT" | "MEDIAN" | "COLLECT_DISTINCT"
-                        | "STDDEV_POP" | "STDDEV" | "STDDEV_SAMP"
-                        | "VAR_POP" | "VAR" | "VAR_SAMP"
+                    "COUNT"
+                        | "COUNT_DISTINCT"
+                        | "SUM"
+                        | "AVG"
+                        | "MIN"
+                        | "MAX"
+                        | "COLLECT"
+                        | "GROUP_CONCAT"
+                        | "MEDIAN"
+                        | "COLLECT_DISTINCT"
+                        | "STDDEV_POP"
+                        | "STDDEV"
+                        | "STDDEV_SAMP"
+                        | "VAR_POP"
+                        | "VAR"
+                        | "VAR_SAMP"
                 )
             }
             BoundExpression::Variable(_, _) | BoundExpression::PropertyLookup(_, _, _) => false,
@@ -563,9 +578,7 @@ impl<'a> Binder<'a> {
                     property: property.clone(),
                 })
             }
-            Statement::DropConstraint(name) => {
-                Ok(BoundStatement::DropConstraint(name.clone()))
-            }
+            Statement::DropConstraint(name) => Ok(BoundStatement::DropConstraint(name.clone())),
             Statement::CreateIndex {
                 name,
                 table_label,
@@ -586,9 +599,7 @@ impl<'a> Binder<'a> {
                     property: property.clone(),
                 })
             }
-            Statement::DropIndex(name) => {
-                Ok(BoundStatement::DropIndex(name.clone()))
-            }
+            Statement::DropIndex(name) => Ok(BoundStatement::DropIndex(name.clone())),
             Statement::CreateVectorIndex {
                 table_name,
                 field,
@@ -602,19 +613,16 @@ impl<'a> Binder<'a> {
                 metric: metric.clone(),
                 dimension: *dimension,
             }),
-            Statement::CreateFtsIndex {
-                table_name,
-                fields,
-            } => Ok(BoundStatement::CreateFtsIndex {
-                table_name: table_name.clone(),
-                fields: fields.clone(),
-            }),
-            Statement::AlterTable { name, operation } => {
-                Ok(BoundStatement::AlterTable {
-                    name: name.clone(),
-                    operation: operation.clone(),
+            Statement::CreateFtsIndex { table_name, fields } => {
+                Ok(BoundStatement::CreateFtsIndex {
+                    table_name: table_name.clone(),
+                    fields: fields.clone(),
                 })
             }
+            Statement::AlterTable { name, operation } => Ok(BoundStatement::AlterTable {
+                name: name.clone(),
+                operation: operation.clone(),
+            }),
             Statement::CopyFrom {
                 table_name,
                 file_path,
@@ -702,7 +710,10 @@ impl<'a> Binder<'a> {
                             other => r.push(other),
                         }
                     }
-                    unwound = u.into_iter().map(|c| self.bind_clause(c)).collect::<Result<Vec<_>>>()?;
+                    unwound = u
+                        .into_iter()
+                        .map(|c| self.bind_clause(c))
+                        .collect::<Result<Vec<_>>>()?;
                     rest = r;
                 }
 
@@ -758,7 +769,7 @@ impl<'a> Binder<'a> {
                     start_with: *start_with,
                     increment_by: *increment_by,
                 })
-            },
+            }
             Statement::CreateMacro { name, params, body } => Ok(BoundStatement::CreateMacro {
                 name: name.clone(),
                 params: params.clone(),
@@ -772,7 +783,8 @@ impl<'a> Binder<'a> {
                     .clone()
                     .ok_or_else(|| LightningError::Query("MERGE must have a variable".into()))?;
                 let node_label = node_pat
-                    .labels.first()
+                    .labels
+                    .first()
                     .ok_or_else(|| LightningError::Query("MERGE must have a label".into()))?;
 
                 let node_table = self.catalog.get_node_table(node_label).ok_or_else(|| {
@@ -889,21 +901,32 @@ impl<'a> Binder<'a> {
                 let rel_table = if rel_pat.labels.is_empty() {
                     // No label specified — find the first rel table matching the source/dest tables
                     let src_label = self.require_single_label(
-                        &pattern.shortest_path_start.as_ref().ok_or_else(|| {
-                            LightningError::Query("Shortest path must have a start node".into())
-                        })?.labels,
+                        &pattern
+                            .shortest_path_start
+                            .as_ref()
+                            .ok_or_else(|| {
+                                LightningError::Query("Shortest path must have a start node".into())
+                            })?
+                            .labels,
                         "Shortest path start node",
                     )?;
                     let dst_label = self.require_single_label(
-                        &pattern.shortest_path_end.as_ref().ok_or_else(|| {
-                            LightningError::Query("Shortest path must have an end node".into())
-                        })?.labels,
+                        &pattern
+                            .shortest_path_end
+                            .as_ref()
+                            .ok_or_else(|| {
+                                LightningError::Query("Shortest path must have an end node".into())
+                            })?
+                            .labels,
                         "Shortest path end node",
                     )?;
                     self.catalog
                         .rel_tables
                         .iter()
-                        .find(|(_, rel)| rel.from_table.as_str() == src_label.as_str() && rel.to_table.as_str() == dst_label.as_str())
+                        .find(|(_, rel)| {
+                            rel.from_table.as_str() == src_label.as_str()
+                                && rel.to_table.as_str() == dst_label.as_str()
+                        })
                         .map(|(_, rel)| rel.clone())
                         .ok_or_else(|| {
                             LightningError::Query(format!(
@@ -913,9 +936,12 @@ impl<'a> Binder<'a> {
                 } else {
                     let rel_label =
                         self.require_single_label(&rel_pat.labels, "Shortest path relationship")?;
-                    self.catalog.get_rel_table(rel_label).ok_or_else(|| {
-                        LightningError::Query(format!("Rel Table {rel_label} not found"))
-                    })?.clone()
+                    self.catalog
+                        .get_rel_table(rel_label)
+                        .ok_or_else(|| {
+                            LightningError::Query(format!("Rel Table {rel_label} not found"))
+                        })?
+                        .clone()
                 };
 
                 let start_pat = pattern.shortest_path_start.as_ref().ok_or_else(|| {
@@ -925,7 +951,8 @@ impl<'a> Binder<'a> {
                     .variable
                     .clone()
                     .unwrap_or_else(|| format!("_n{}", self.variables.len()));
-                let start_label = self.require_single_label(&start_pat.labels, "Shortest path start node")?;
+                let start_label =
+                    self.require_single_label(&start_pat.labels, "Shortest path start node")?;
                 let start_table = self.catalog.get_node_table(start_label).ok_or_else(|| {
                     LightningError::Query(format!("Table {start_label} not found"))
                 })?;
@@ -938,11 +965,8 @@ impl<'a> Binder<'a> {
                 );
                 self.column_offsets.insert(start_var.clone(), column_offset);
                 column_offset += start_table.properties.len();
-                let start_props = self.bind_property_items(
-                    &start_pat.properties,
-                    &start_table.properties,
-                    0,
-                )?;
+                let start_props =
+                    self.bind_property_items(&start_pat.properties, &start_table.properties, 0)?;
                 elements.push(BoundMatchElement::Node(
                     start_table.name.clone(),
                     start_var.clone(),
@@ -956,10 +980,12 @@ impl<'a> Binder<'a> {
                     .variable
                     .clone()
                     .unwrap_or_else(|| format!("_n{}", self.variables.len()));
-                let end_label = self.require_single_label(&end_pat.labels, "Shortest path end node")?;
-                let end_table = self.catalog.get_node_table(end_label).ok_or_else(|| {
-                    LightningError::Query(format!("Table {end_label} not found"))
-                })?;
+                let end_label =
+                    self.require_single_label(&end_pat.labels, "Shortest path end node")?;
+                let end_table = self
+                    .catalog
+                    .get_node_table(end_label)
+                    .ok_or_else(|| LightningError::Query(format!("Table {end_label} not found")))?;
 
                 // Extract max_depth from variable-length bounds
                 let max_depth = rel_pat
@@ -1002,7 +1028,10 @@ impl<'a> Binder<'a> {
                 // subquery). Use the existing table name as the label.
                 bv.table_name.clone()
             } else if let Some(rel_chain) = pattern.relationship_chains.first() {
-                let rel_label = self.require_single_label(&rel_chain.relationship_pattern.labels, "MATCH relationship")?;
+                let rel_label = self.require_single_label(
+                    &rel_chain.relationship_pattern.labels,
+                    "MATCH relationship",
+                )?;
                 let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
                     LightningError::Query(format!("Rel Table {rel_label} not found"))
                 })?;
@@ -1087,9 +1116,15 @@ impl<'a> Binder<'a> {
                 // Check if the destination variable is already bound (self-referential)
                 let (dst_table_name, dst_properties) = if self.variables.contains_key(&dst_var) {
                     // Variable already exists, get its properties from the bound variable
-                    let bound_var = self.variables.get(&dst_var).ok_or_else(|| {
-                        crate::LightningError::Internal(format!("Variable '{dst_var}' not found in scope"))
-                    })?.clone();
+                    let bound_var = self
+                        .variables
+                        .get(&dst_var)
+                        .ok_or_else(|| {
+                            crate::LightningError::Internal(format!(
+                                "Variable '{dst_var}' not found in scope"
+                            ))
+                        })?
+                        .clone();
                     let src_table = self
                         .catalog
                         .get_node_table(&bound_var.table_name)
@@ -1267,13 +1302,13 @@ impl<'a> Binder<'a> {
                 let bound_match = self.bind_match_clause(pat)?;
                 Ok(BoundClause::OptionalMatch(bound_match))
             }
-             Clause::With(ret, bound_where) => {
+            Clause::With(ret, bound_where) => {
                 let bound_ret = self.bind_return_clause(ret, true)?;
                 let original_vars = self.variables.clone();
                 self.variables.clear(); // Re-scope according to WITH items
-                // First, re-insert any bare node/rel variables referenced in the WITH
-                // clause's original AST (before expansion). This is needed so that
-                // subsequent WHERE/RETURN clauses can resolve p.id when `WITH p` was used.
+                                        // First, re-insert any bare node/rel variables referenced in the WITH
+                                        // clause's original AST (before expansion). This is needed so that
+                                        // subsequent WHERE/RETURN clauses can resolve p.id when `WITH p` was used.
                 for item in &ret.items {
                     if let crate::parser::ast::ProjectionItem::Expression(expr, _) = item {
                         if let crate::parser::ast::Expression::Variable(v) = expr {
@@ -1286,7 +1321,8 @@ impl<'a> Binder<'a> {
                 for item in &bound_ret.items {
                     self.variables.entry(item.alias.clone()).or_insert_with(|| {
                         let table_name = if let BoundExpression::Variable(v, _) = &item.expression {
-                            original_vars.get(v)
+                            original_vars
+                                .get(v)
                                 .map(|bv| bv.table_name.clone())
                                 .unwrap_or_default()
                         } else {
@@ -1375,7 +1411,8 @@ impl<'a> Binder<'a> {
                     let rel = &rel_chain.relationship_pattern;
                     let src = &pattern.node_pattern;
                     let dst = &rel_chain.node_pattern;
-                    let rel_label = self.require_single_label(&rel.labels, "CREATE relationship")?;
+                    let rel_label =
+                        self.require_single_label(&rel.labels, "CREATE relationship")?;
                     let rel_table = self.catalog.get_rel_table(rel_label).ok_or_else(|| {
                         LightningError::Query(format!("Rel Table {rel_label} not found"))
                     })?;
@@ -1401,7 +1438,8 @@ impl<'a> Binder<'a> {
 
     fn bind_node_pattern(&mut self, pat: &NodePattern) -> Result<BoundNodePattern> {
         let label = pat
-            .labels.first()
+            .labels
+            .first()
             .ok_or_else(|| LightningError::Query("CREATE must have a label".into()))?;
         let table = self
             .catalog
@@ -1452,11 +1490,14 @@ impl<'a> Binder<'a> {
                     let mut sorted_vars: Vec<_> = self.variables.iter().collect();
                     sorted_vars.sort_by_key(|(name, _)| *name);
                     for (var_name, var_binding) in sorted_vars {
-                        let table_info = if let Some(t) =
-                            self.catalog.get_node_table(&var_binding.table_name)
-                        {
-                            Some((&t.properties, 0))
-                        } else { self.catalog.get_rel_table(&var_binding.table_name).map(|t| (&t.properties, 0)) };
+                        let table_info =
+                            if let Some(t) = self.catalog.get_node_table(&var_binding.table_name) {
+                                Some((&t.properties, 0))
+                            } else {
+                                self.catalog
+                                    .get_rel_table(&var_binding.table_name)
+                                    .map(|t| (&t.properties, 0))
+                            };
 
                         if let Some((properties, offset)) = table_info {
                             for (i, prop) in properties.iter().enumerate() {
@@ -1478,33 +1519,35 @@ impl<'a> Binder<'a> {
                     // WITH clauses skip expansion so the variable remains available for
                     // subsequent WHERE/RETURN clauses (e.g. `WITH p WHERE p.id > 1`).
                     if expand_variables {
-                    if let Expression::Variable(v) = expr {
-                        if let Some(bv) = self.variables.get(v) {
-                            let table_info = self.catalog
-                                .get_node_table(&bv.table_name)
-                                .map(|t| (&t.properties, 0))
-                                .or_else(|| {
-                                    self.catalog
-                                        .get_rel_table(&bv.table_name)
-                                        .map(|t| (&t.properties, 0))
-                                });
-                            if let Some((properties, offset)) = table_info {
-                                for (i, prop) in properties.iter().enumerate() {
-                                    let prop_alias = alias.clone()
-                                        .unwrap_or_else(|| format!("{}.{}", v, prop.name));
-                                    items.push(BoundProjectionItem {
-                                        expression: BoundExpression::PropertyLookup(
-                                            v.clone(),
-                                            i + offset,
-                                            prop.type_.clone(),
-                                        ),
-                                        alias: prop_alias,
+                        if let Expression::Variable(v) = expr {
+                            if let Some(bv) = self.variables.get(v) {
+                                let table_info = self
+                                    .catalog
+                                    .get_node_table(&bv.table_name)
+                                    .map(|t| (&t.properties, 0))
+                                    .or_else(|| {
+                                        self.catalog
+                                            .get_rel_table(&bv.table_name)
+                                            .map(|t| (&t.properties, 0))
                                     });
+                                if let Some((properties, offset)) = table_info {
+                                    for (i, prop) in properties.iter().enumerate() {
+                                        let prop_alias = alias
+                                            .clone()
+                                            .unwrap_or_else(|| format!("{}.{}", v, prop.name));
+                                        items.push(BoundProjectionItem {
+                                            expression: BoundExpression::PropertyLookup(
+                                                v.clone(),
+                                                i + offset,
+                                                prop.type_.clone(),
+                                            ),
+                                            alias: prop_alias,
+                                        });
+                                    }
+                                    continue;
                                 }
-                                continue;
                             }
                         }
-                    }
                     } // end expand_variables
 
                     let bound_expr = self.bind_expression(expr)?;
@@ -1526,10 +1569,13 @@ impl<'a> Binder<'a> {
         // (e.g., `RETURN sum(n.salary) AS total ORDER BY total DESC`)
         for item in &items {
             if !item.alias.is_empty() && !self.variables.contains_key(&item.alias) {
-                self.variables.insert(item.alias.clone(), BoundVariable {
-                    table_name: String::new(),
-                    type_: item.expression.get_type(),
-                });
+                self.variables.insert(
+                    item.alias.clone(),
+                    BoundVariable {
+                        table_name: String::new(),
+                        type_: item.expression.get_type(),
+                    },
+                );
             }
         }
 
@@ -1542,11 +1588,18 @@ impl<'a> Binder<'a> {
                 // it against its child (which may not have the alias column).
                 if let BoundExpression::Variable(var_name, _) = &expr {
                     if let Some(ret_item) = items.iter().find(|ri| &ri.alias == var_name) {
-                        tracing::debug!("ORDER BY alias '{}' -> {:?}", var_name, ret_item.expression);
+                        tracing::debug!(
+                            "ORDER BY alias '{}' -> {:?}",
+                            var_name,
+                            ret_item.expression
+                        );
                         expr = ret_item.expression.clone();
                     } else {
-                        tracing::debug!("ORDER BY variable '{}' not found in RETURN aliases. Aliases: {:?}",
-                            var_name, items.iter().map(|i| &i.alias).collect::<Vec<_>>());
+                        tracing::debug!(
+                            "ORDER BY variable '{}' not found in RETURN aliases. Aliases: {:?}",
+                            var_name,
+                            items.iter().map(|i| &i.alias).collect::<Vec<_>>()
+                        );
                     }
                 }
                 bound_items.push(BoundOrderByItem {
@@ -1572,16 +1625,19 @@ impl<'a> Binder<'a> {
         match expr {
             Expression::Literal(lit) => Ok(BoundExpression::Literal(lit.clone())),
             Expression::Variable(var) => {
-                tracing::debug!("bind_expression Variable('{}') — variables: {:?}", var,
-                    self.variables.keys().collect::<Vec<_>>());
-                let binding = self
-                    .variables
-                    .get(var)
-                    .ok_or_else(|| {
-                        tracing::error!("Variable '{}' not found in scope. Available: {:?}",
-                            var, self.variables.keys().collect::<Vec<_>>());
-                        LightningError::Query(format!("Variable {var} not found"))
-                    })?;
+                tracing::debug!(
+                    "bind_expression Variable('{}') — variables: {:?}",
+                    var,
+                    self.variables.keys().collect::<Vec<_>>()
+                );
+                let binding = self.variables.get(var).ok_or_else(|| {
+                    tracing::error!(
+                        "Variable '{}' not found in scope. Available: {:?}",
+                        var,
+                        self.variables.keys().collect::<Vec<_>>()
+                    );
+                    LightningError::Query(format!("Variable {var} not found"))
+                })?;
                 Ok(BoundExpression::Variable(
                     var.clone(),
                     binding.type_.clone(),
@@ -1608,7 +1664,8 @@ impl<'a> Binder<'a> {
                     }
                 }
 
-                let (properties, column_offset, table_name, _table_kind) = self.get_table_properties(var)?;
+                let (properties, column_offset, table_name, _table_kind) =
+                    self.get_table_properties(var)?;
 
                 for (i, prop) in properties.iter().enumerate() {
                     if &prop.name == prop_name {
@@ -1736,10 +1793,8 @@ impl<'a> Binder<'a> {
                             BoundExpression::PropertyLookup(end_var, _, _),
                         ) = (&bound_args[0], &bound_args[1])
                         {
-                            let src_table = self
-                                .variables
-                                .get(start_var)
-                                .map(|v| v.table_name.as_str());
+                            let src_table =
+                                self.variables.get(start_var).map(|v| v.table_name.as_str());
                             let dst_table =
                                 self.variables.get(end_var).map(|v| v.table_name.as_str());
                             if let (Some(src), Some(dst)) = (src_table, dst_table) {
@@ -2014,17 +2069,20 @@ impl<'a> Binder<'a> {
             .get(variable)
             .ok_or_else(|| LightningError::Query(format!("Variable {variable} not found")))?;
 
-        let (props, table_kind) = self.catalog.get_table_properties(&binding.table_name)
-            .ok_or_else(|| LightningError::Query(format!(
-                "Table {} not found for variable {}",
-                binding.table_name, variable
-            )))?;
+        let (props, table_kind) = self
+            .catalog
+            .get_table_properties(&binding.table_name)
+            .ok_or_else(|| {
+                LightningError::Query(format!(
+                    "Table {} not found for variable {}",
+                    binding.table_name, variable
+                ))
+            })?;
         let offset = self.column_offsets.get(variable).copied().unwrap_or(0);
         Ok((props, offset, binding.table_name.clone(), table_kind))
     }
 
     fn bind_data_type(&self, data_type: &crate::parser::ast::DataType) -> LogicalType {
-        
         match data_type {
             crate::parser::ast::DataType::Int64 => LogicalType::Int64,
             crate::parser::ast::DataType::Int32 => LogicalType::Int32,
@@ -2102,19 +2160,29 @@ impl<'a> Binder<'a> {
                     ret_type.clone(),
                 ))
             }
-            BoundExpression::Case { expression, when_then, else_expression, return_type } => {
-                let new_expr = expression.as_ref().map(|e| {
-                    self.substitute_macro_body(e, substitution).map(Box::new)
-                }).transpose()?;
-                let new_when_then = when_then.iter()
-                    .map(|(w, t)| Ok((
-                        self.substitute_macro_body(w, substitution)?,
-                        self.substitute_macro_body(t, substitution)?,
-                    )))
+            BoundExpression::Case {
+                expression,
+                when_then,
+                else_expression,
+                return_type,
+            } => {
+                let new_expr = expression
+                    .as_ref()
+                    .map(|e| self.substitute_macro_body(e, substitution).map(Box::new))
+                    .transpose()?;
+                let new_when_then = when_then
+                    .iter()
+                    .map(|(w, t)| {
+                        Ok((
+                            self.substitute_macro_body(w, substitution)?,
+                            self.substitute_macro_body(t, substitution)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let new_else = else_expression.as_ref().map(|e| {
-                    self.substitute_macro_body(e, substitution).map(Box::new)
-                }).transpose()?;
+                let new_else = else_expression
+                    .as_ref()
+                    .map(|e| self.substitute_macro_body(e, substitution).map(Box::new))
+                    .transpose()?;
                 Ok(BoundExpression::Case {
                     expression: new_expr,
                     when_then: new_when_then,
@@ -2123,17 +2191,16 @@ impl<'a> Binder<'a> {
                 })
             }
             BoundExpression::List(items, typ) => {
-                let new_items = items.iter()
+                let new_items = items
+                    .iter()
                     .map(|i| self.substitute_macro_body(i, substitution))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(BoundExpression::List(new_items, typ.clone()))
             }
             BoundExpression::Map(entries, typ) => {
-                let new_entries = entries.iter()
-                    .map(|(k, v)| Ok((
-                        k.clone(),
-                        self.substitute_macro_body(v, substitution)?,
-                    )))
+                let new_entries = entries
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), self.substitute_macro_body(v, substitution)?)))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(BoundExpression::Map(new_entries, typ.clone()))
             }
@@ -2197,9 +2264,9 @@ impl<'a> Binder<'a> {
                 "Multiple labels in {context} are not supported yet. Got: {labels:?}"
             )));
         }
-        labels.first().ok_or_else(|| {
-            LightningError::Query(format!("{context} must have a label"))
-        })
+        labels
+            .first()
+            .ok_or_else(|| LightningError::Query(format!("{context} must have a label")))
     }
 
     #[allow(dead_code)]

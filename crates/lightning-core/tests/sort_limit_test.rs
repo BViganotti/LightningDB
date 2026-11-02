@@ -12,9 +12,15 @@ fn setup() -> (tempfile::TempDir, Arc<Database>) {
 }
 
 fn setup_data(conn: &lightning_core::Connection) -> TestResult {
-    conn.execute("CREATE NODE TABLE T(id INT64, name STRING, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, name STRING, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     for i in 0..20 {
-        conn.execute(&format!("CREATE (:T {{id: {}, name: 'n{}', val: {}}})", i, i, i * 10), None)?;
+        conn.execute(
+            &format!("CREATE (:T {{id: {}, name: 'n{}', val: {}}})", i, i, i * 10),
+            None,
+        )?;
     }
     Ok(())
 }
@@ -69,7 +75,10 @@ fn test_limit_more_than_rows() -> TestResult {
 fn test_limit_empty_table() -> TestResult {
     let (_dir, db) = setup();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )?;
     let res = conn.execute("MATCH (t:T) RETURN t.id LIMIT 10", None)?;
     assert_eq!(count_rows(&res), 0);
     Ok(())
@@ -150,7 +159,11 @@ fn test_limit_column_projection() -> TestResult {
     setup_data(&conn)?;
     let res = conn.execute("MATCH (t:T) RETURN t.name LIMIT 2", None)?;
     assert_eq!(count_rows(&res), 2);
-    let names = res.batches[0].column(0).as_any().downcast_ref::<StringArray>().unwrap();
+    let names = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
     assert_eq!(names.value(0), "n0");
     assert_eq!(names.value(1), "n1");
     Ok(())

@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use crate::server::AppState;
 
-pub async fn health_handler(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     // Verify database connectivity by attempting a simple query
     let db_ok = state.db.connect().query("RETURN 1").is_ok();
 

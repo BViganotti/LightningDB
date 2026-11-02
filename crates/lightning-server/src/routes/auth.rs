@@ -8,7 +8,7 @@ use crate::auth::jwt;
 use crate::auth::models::AuthMode;
 use crate::error::AppError;
 use crate::extract::RequestId;
-use crate::models::request::{LoginRequest, RefreshTokenRequest, LogoutRequest};
+use crate::models::request::{LoginRequest, LogoutRequest, RefreshTokenRequest};
 use crate::models::response::{ApiResponse, LoginResponse, MeResponse, ResponseMeta};
 use crate::server::AppState;
 
@@ -25,16 +25,21 @@ pub async fn login_handler(
     }
 
     if req.username.is_empty() || req.password.is_empty() {
-        return Err(AppError::BadRequest("username and password are required".to_string()));
+        return Err(AppError::BadRequest(
+            "username and password are required".to_string(),
+        ));
     }
 
-    let user = state.auth_store.try_login(&req.username, &req.password, remote_addr.ip()).map_err(|e| {
-        if e.contains("locked") {
-            AppError::TooManyRequests(e)
-        } else {
-            AppError::Unauthorized(e)
-        }
-    })?;
+    let user = state
+        .auth_store
+        .try_login(&req.username, &req.password, remote_addr.ip())
+        .map_err(|e| {
+            if e.contains("locked") {
+                AppError::TooManyRequests(e)
+            } else {
+                AppError::Unauthorized(e)
+            }
+        })?;
 
     let access_token = jwt::create_access_token(
         &user.id,

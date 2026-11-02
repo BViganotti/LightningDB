@@ -134,9 +134,12 @@ impl HnswIndex {
                 let denom = norm_a.max(f32::EPSILON) * norm_b.max(f32::EPSILON);
                 1.0 - (dot / denom)
             }
-            DistanceMetric::L2 => {
-                a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
-            }
+            DistanceMetric::L2 => a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| (x - y) * (x - y))
+                .sum::<f32>()
+                .sqrt(),
             DistanceMetric::InnerProduct => {
                 let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
                 -dot
@@ -149,7 +152,9 @@ impl HnswIndex {
         const MAX_LEVEL: usize = 64;
         RNG_STATE.with(|state| {
             let mut rng = state.borrow_mut();
-            *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let bits = *rng >> 33;
             // Avoid log(0) = -infinity by ensuring u > 0
             let u = ((bits | 1) as f64) / (1u64 << 31) as f64;
@@ -159,13 +164,7 @@ impl HnswIndex {
 
     /// Greedy search on a single layer, starting from `entry`.
     /// Returns the ef closest candidates.
-    fn search_layer(
-        &self,
-        query: &[f32],
-        entry: u64,
-        ef: usize,
-        layer: usize,
-    ) -> Vec<Candidate> {
+    fn search_layer(&self, query: &[f32], entry: u64, ef: usize, layer: usize) -> Vec<Candidate> {
         let nodes = self.nodes.read();
         let embeddings = self.embeddings.read();
 
@@ -179,8 +178,14 @@ impl HnswIndex {
         let mut results = BinaryHeap::new();
 
         let dist = self.distance(query, &embeddings[entry as usize]);
-        candidates.push(Reverse(Candidate { node_id: entry, distance: dist }));
-        results.push(Candidate { node_id: entry, distance: dist });
+        candidates.push(Reverse(Candidate {
+            node_id: entry,
+            distance: dist,
+        }));
+        results.push(Candidate {
+            node_id: entry,
+            distance: dist,
+        });
 
         while let Some(Reverse(current)) = candidates.pop() {
             let furthest = results.peek().map(|c| c.distance).unwrap_or(f32::MAX);
@@ -193,10 +198,17 @@ impl HnswIndex {
                     for &neighbor in &node.neighbors[layer] {
                         if visited.insert(neighbor) {
                             let d = self.distance(query, &embeddings[neighbor as usize]);
-                            let furthest_in_results = results.peek().map(|c| c.distance).unwrap_or(f32::MAX);
+                            let furthest_in_results =
+                                results.peek().map(|c| c.distance).unwrap_or(f32::MAX);
                             if results.len() < ef || d < furthest_in_results {
-                                candidates.push(Reverse(Candidate { node_id: neighbor, distance: d }));
-                                results.push(Candidate { node_id: neighbor, distance: d });
+                                candidates.push(Reverse(Candidate {
+                                    node_id: neighbor,
+                                    distance: d,
+                                }));
+                                results.push(Candidate {
+                                    node_id: neighbor,
+                                    distance: d,
+                                });
                                 if results.len() > ef {
                                     results.pop();
                                 }
@@ -211,7 +223,11 @@ impl HnswIndex {
     }
 
     /// Select the M nearest neighbors using the simple heuristic.
-    fn select_neighbors_simple(&self, candidates: &[Candidate], #[allow(non_snake_case)] M: usize) -> Vec<Candidate> {
+    fn select_neighbors_simple(
+        &self,
+        candidates: &[Candidate],
+        #[allow(non_snake_case)] M: usize,
+    ) -> Vec<Candidate> {
         let mut sorted = candidates.to_vec();
         sorted.sort();
         sorted.truncate(M);
@@ -245,14 +261,17 @@ impl HnswIndex {
             let mut next_id = nodes.len() as u64;
             while nodes.len() <= id as usize {
                 nodes.push(HnswNode {
-                    id: next_id, level: 0, neighbors: Vec::new(),
+                    id: next_id,
+                    level: 0,
+                    neighbors: Vec::new(),
                 });
                 embeddings.push(vec![0.0; self.config.dimension]);
                 next_id += 1;
             }
 
             nodes[id as usize] = HnswNode {
-                id, level,
+                id,
+                level,
                 neighbors: vec![Vec::new(); level + 1],
             };
             embeddings[id as usize] = embedding;
@@ -263,7 +282,8 @@ impl HnswIndex {
                 return;
             }
 
-            let ep = entry_point.expect("HNSW entry_point is Some because is_none check returned early above");
+            let ep = entry_point
+                .expect("HNSW entry_point is Some because is_none check returned early above");
             if level > *max_level {
                 *max_level = level;
                 *entry_point = Some(id);
@@ -286,11 +306,19 @@ impl HnswIndex {
         // Phase C: Insert at each layer
         let max_insert_level = std::cmp::min(level, top_level);
         for lvl in (0..=max_insert_level).rev() {
-            let ef = if lvl == 0 { self.config.ef_construction } else { self.config.M };
+            let ef = if lvl == 0 {
+                self.config.ef_construction
+            } else {
+                self.config.M
+            };
             let candidates = self.search_layer(&new_embedding, curr_entry, ef, lvl);
 
             #[allow(non_snake_case)]
-            let M = if lvl == 0 { self.config.M_max0 } else { self.config.M_max };
+            let M = if lvl == 0 {
+                self.config.M_max0
+            } else {
+                self.config.M_max
+            };
             let neighbors = self.select_neighbors_simple(&candidates, M);
             let neighbor_ids: Vec<u64> = neighbors.iter().map(|c| c.node_id).collect();
 
@@ -308,14 +336,26 @@ impl HnswIndex {
                 if let Some(neighbor) = nodes.get_mut(neighbor_id as usize) {
                     if lvl < neighbor.neighbors.len() {
                         neighbor.neighbors[lvl].push(id);
-                        let max_for_layer = if lvl == 0 { self.config.M_max0 } else { self.config.M_max };
+                        let max_for_layer = if lvl == 0 {
+                            self.config.M_max0
+                        } else {
+                            self.config.M_max
+                        };
                         if neighbor.neighbors[lvl].len() > max_for_layer {
-                            let dists: Vec<Candidate> = neighbor.neighbors[lvl].iter().map(|&nid| {
-                                let d = self.distance(&emb[neighbor_id as usize], &emb[nid as usize]);
-                                Candidate { node_id: nid, distance: d }
-                            }).collect();
+                            let dists: Vec<Candidate> = neighbor.neighbors[lvl]
+                                .iter()
+                                .map(|&nid| {
+                                    let d = self
+                                        .distance(&emb[neighbor_id as usize], &emb[nid as usize]);
+                                    Candidate {
+                                        node_id: nid,
+                                        distance: d,
+                                    }
+                                })
+                                .collect();
                             let selected = self.select_neighbors_simple(&dists, max_for_layer);
-                            neighbor.neighbors[lvl] = selected.into_iter().map(|c| c.node_id).collect();
+                            neighbor.neighbors[lvl] =
+                                selected.into_iter().map(|c| c.node_id).collect();
                         }
                     }
                 }
@@ -328,11 +368,7 @@ impl HnswIndex {
     }
 
     /// Search the HNSW index for k approximate nearest neighbors.
-    pub fn search(
-        &self,
-        query: &[f32],
-        k: usize,
-    ) -> Vec<(u64, f32)> {
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         let entry_point = self.entry_point.read();
         let max_level = self.max_level.read();
         let nodes = self.nodes.read();
@@ -359,7 +395,8 @@ impl HnswIndex {
         // Phase 2: Search at layer 0 with ef_search
         let candidates = self.search_layer(query, curr_entry, self.config.ef_search, 0);
 
-        let mut results: Vec<(u64, f32)> = candidates.into_iter()
+        let mut results: Vec<(u64, f32)> = candidates
+            .into_iter()
             .map(|c| (c.node_id, c.distance))
             .collect();
         results.truncate(k);
@@ -390,7 +427,11 @@ pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// L2 (Euclidean) distance function.
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum::<f32>()
+        .sqrt()
 }
 
 /// Inner product distance (negative dot product, so larger = closer).

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use arrow::array::{Array, BooleanArray, Int64Array, StringArray};
-use lightning::Database;
 use lightning::Connection;
+use lightning::Database;
 use lightning_core::Value;
 use parking_lot::RwLock;
 use rand::RngCore;
@@ -12,9 +12,7 @@ use zeroize::Zeroize;
 
 use crate::auth::cache::{CacheResult, TokenCache};
 use crate::auth::jwt;
-use crate::auth::models::{
-    ApiKey, AuthenticatedUser, AuthMethod, Role, StoredRefreshToken, User,
-};
+use crate::auth::models::{ApiKey, AuthMethod, AuthenticatedUser, Role, StoredRefreshToken, User};
 use crate::auth::password;
 
 const AUTH_USERS_TABLE: &str = "auth_users";
@@ -253,7 +251,10 @@ impl AuthStore {
                         if r.is_empty() {
                             None
                         } else {
-                            Some(r.parse::<Role>().map_err(|e| format!("invalid role in api key: {e}"))?)
+                            Some(
+                                r.parse::<Role>()
+                                    .map_err(|e| format!("invalid role in api key: {e}"))?,
+                            )
                         }
                     },
                     expires_at: if exp == 0 { None } else { Some(exp) },
@@ -269,7 +270,12 @@ impl AuthStore {
     //  Login / Lockout
     // ------------------------------------------------------------------
 
-    pub fn try_login(&self, username: &str, password: &str, client_ip: std::net::IpAddr) -> Result<User, String> {
+    pub fn try_login(
+        &self,
+        username: &str,
+        password: &str,
+        client_ip: std::net::IpAddr,
+    ) -> Result<User, String> {
         // Check per-IP rate before per-username lockout to prevent IP-based brute force
         {
             let mut ip_attempts = self.login_ip_attempts.lock();
@@ -308,7 +314,7 @@ impl AuthStore {
             if let Some(locked_until) = record.locked_until {
                 if now < locked_until {
                     return Err(
-                        "account temporarily locked due to too many failed attempts".to_string(),
+                        "account temporarily locked due to too many failed attempts".to_string()
                     );
                 }
                 *record = LoginRecord {
@@ -324,7 +330,7 @@ impl AuthStore {
                 record.locked_until = Some(now + LOCKOUT_DURATION_SECS);
                 record.timestamps.clear();
                 return Err(
-                    "account temporarily locked due to too many failed attempts".to_string(),
+                    "account temporarily locked due to too many failed attempts".to_string()
                 );
             }
 
@@ -342,7 +348,7 @@ impl AuthStore {
                             .unwrap_or_else(|_| "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHlzYWx0eXNhbHR5c2FsdA$3m8P7YN5GpIgJxmQhSn3qJnNBVpqHsp+Lq/hbp7Epl4".to_string())
                     });
                     (None, dummy_hash.clone())
-                },
+                }
             };
             if !password::verify_password(password, &stored_hash)
                 .map_err(|_| "invalid username or password".to_string())?
@@ -369,9 +375,7 @@ impl AuthStore {
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(user_id.to_string()));
         params.insert("last_login".to_string(), Value::Number(now as f64));
-        let q = format!(
-            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.last_login = $last_login"
-        );
+        let q = format!("MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.last_login = $last_login");
         self.conn
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to record login: {e}"))?;
@@ -438,12 +442,7 @@ impl AuthStore {
         users
     }
 
-    pub fn create_user(
-        &self,
-        username: &str,
-        password: &str,
-        role: Role,
-    ) -> Result<User, String> {
+    pub fn create_user(&self, username: &str, password: &str, role: Role) -> Result<User, String> {
         {
             let users = self.users_cache.read();
             if users.values().any(|u| u.username == username) {
@@ -502,9 +501,11 @@ impl AuthStore {
             params.insert("enabled".to_string(), Value::Boolean(e));
         }
 
-        let sets: Vec<&str> = role.iter().map(|_| "u.role = $role").chain(
-            enabled.iter().map(|_| "u.enabled = $enabled"),
-        ).collect();
+        let sets: Vec<&str> = role
+            .iter()
+            .map(|_| "u.role = $role")
+            .chain(enabled.iter().map(|_| "u.enabled = $enabled"))
+            .collect();
         if !sets.is_empty() {
             let q = format!(
                 "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET {}",
@@ -525,22 +526,17 @@ impl AuthStore {
     pub fn delete_user(&self, user_id: &str) -> Result<(), String> {
         let user = {
             let users = self.users_cache.read();
-            users.get(user_id).cloned().ok_or_else(|| {
-                format!("user '{user_id}' not found")
-            })?
+            users
+                .get(user_id)
+                .cloned()
+                .ok_or_else(|| format!("user '{user_id}' not found"))?
         };
 
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(user_id.to_string()));
-        let delete_tokens = format!(
-            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
-        );
-        let delete_keys = format!(
-            "MATCH (k:{AUTH_API_KEYS_TABLE}) WHERE k.user_id = $id DELETE k"
-        );
-        let delete_user = format!(
-            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) DELETE u"
-        );
+        let delete_tokens = format!("MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t");
+        let delete_keys = format!("MATCH (k:{AUTH_API_KEYS_TABLE}) WHERE k.user_id = $id DELETE k");
+        let delete_user = format!("MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) DELETE u");
         self.conn
             .execute(&delete_tokens, Some(params.clone()))
             .map_err(|e| format!("failed to delete user tokens: {e}"))?;
@@ -574,16 +570,12 @@ impl AuthStore {
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(user_id.to_string()));
         params.insert("ph".to_string(), Value::String(password_hash.clone()));
-        let q = format!(
-            "MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.password_hash = $ph"
-        );
+        let q = format!("MATCH (u:{AUTH_USERS_TABLE} {{id: $id}}) SET u.password_hash = $ph");
         self.conn
             .execute(&q, Some(params.clone()))
             .map_err(|e| format!("failed to update password: {e}"))?;
 
-        let delete_tokens = format!(
-            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t"
-        );
+        let delete_tokens = format!("MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.user_id = $id DELETE t");
         self.conn
             .execute(&delete_tokens, Some(params))
             .map_err(|e| format!("failed to revoke user tokens: {e}"))?;
@@ -618,7 +610,10 @@ impl AuthStore {
         params.insert("ph".to_string(), Value::String(user.password_hash.clone()));
         params.insert("role".to_string(), Value::String(user.role.to_string()));
         params.insert("enabled".to_string(), Value::Boolean(user.enabled));
-        params.insert("created_at".to_string(), Value::Number(user.created_at as f64));
+        params.insert(
+            "created_at".to_string(),
+            Value::Number(user.created_at as f64),
+        );
         let q = format!(
             "CREATE (u:{AUTH_USERS_TABLE} {{id: $id, username: $username, \
              password_hash: $ph, role: $role, enabled: $enabled, \
@@ -671,10 +666,7 @@ impl AuthStore {
         Ok(id)
     }
 
-    pub fn validate_refresh_token(
-        &self,
-        raw_token: &str,
-    ) -> Result<(User, String), String> {
+    pub fn validate_refresh_token(&self, raw_token: &str) -> Result<(User, String), String> {
         let token_hash = jwt::hmac_hash(raw_token, &self.jwt_secret);
 
         match self.token_bloom.check(&token_hash) {
@@ -717,9 +709,7 @@ impl AuthStore {
 
         let mut params = HashMap::new();
         params.insert("hash".to_string(), Value::String(token_hash.clone()));
-        let q = format!(
-            "MATCH (t:{AUTH_TOKENS_TABLE} {{token_hash: $hash}}) DELETE t"
-        );
+        let q = format!("MATCH (t:{AUTH_TOKENS_TABLE} {{token_hash: $hash}}) DELETE t");
         self.conn
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to revoke refresh token: {e}"))?;
@@ -764,7 +754,10 @@ impl AuthStore {
 
         let mut params = HashMap::new();
         params.insert("id".to_string(), Value::String(api_key.id.clone()));
-        params.insert("user_id".to_string(), Value::String(api_key.user_id.clone()));
+        params.insert(
+            "user_id".to_string(),
+            Value::String(api_key.user_id.clone()),
+        );
         params.insert("hash".to_string(), Value::String(api_key.key_hash.clone()));
         params.insert("name".to_string(), Value::String(api_key.name.clone()));
         params.insert("prefix".to_string(), Value::String(api_key.prefix.clone()));
@@ -815,9 +808,7 @@ impl AuthStore {
 
         let mut params = HashMap::new();
         params.insert("hash".to_string(), Value::String(key_hash.clone()));
-        let q = format!(
-            "MATCH (k:{AUTH_API_KEYS_TABLE} {{key_hash: $hash}}) DELETE k"
-        );
+        let q = format!("MATCH (k:{AUTH_API_KEYS_TABLE} {{key_hash: $hash}}) DELETE k");
         self.conn
             .execute(&q, Some(params))
             .map_err(|e| format!("failed to revoke API key: {e}"))?;
@@ -876,9 +867,8 @@ impl AuthStore {
 
         let mut params = HashMap::new();
         params.insert("now".to_string(), Value::Number(now as f64));
-        let del_tokens = format!(
-            "MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.expires_at <= $now DELETE t"
-        );
+        let del_tokens =
+            format!("MATCH (t:{AUTH_TOKENS_TABLE}) WHERE t.expires_at <= $now DELETE t");
         let del_keys = format!(
             "MATCH (k:{AUTH_API_KEYS_TABLE}) WHERE k.expires_at > 0 AND k.expires_at <= $now DELETE k"
         );
@@ -895,9 +885,7 @@ impl AuthStore {
         }
         {
             let mut kcache = self.api_keys_cache.write();
-            kcache.retain(|_, k| {
-                k.expires_at.is_none_or(|exp| exp > now)
-            });
+            kcache.retain(|_, k| k.expires_at.is_none_or(|exp| exp > now));
         }
 
         self.rebuild_cache();

@@ -15,7 +15,7 @@ improvements.
 ### Setup
 
 ```bash
-git clone https://github.com/lightningDB/lightning.git
+git clone https://github.com/BViganotti/LightningDB.git
 cd lightning
 cargo build --workspace
 ```
@@ -23,16 +23,19 @@ cargo build --workspace
 ### Running Tests
 
 ```bash
+# Fast unit-test suite (also what CI runs)
+cargo test --workspace --lib --bins
+
+# Full suite, including integration and performance-gate tests.
+# Some performance gates are environment-sensitive and may fail on
+# slower machines; see "Known Limitations" in README.md.
 cargo test --workspace
 ```
-
-Some tests require additional setup. If a test fails, check the test
-documentation for any prerequisites.
 
 ### Linting
 
 ```bash
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --lib --bins
 cargo fmt --check
 ```
 
@@ -94,7 +97,7 @@ be tolerated.
 
 ## Reporting Issues
 
-Use the [GitHub Issues](https://github.com/lightningDB/lightning/issues)
+Use the [GitHub Issues](https://github.com/BViganotti/LightningDB/issues)
 tracker. Include:
 
 - A clear description of the problem.
@@ -107,3 +110,8 @@ tracker. Include:
 
 Please do not report security vulnerabilities via public issues. See
 [SECURITY.md](SECURITY.md) for the responsible disclosure process.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the
+[MIT License](LICENSE).

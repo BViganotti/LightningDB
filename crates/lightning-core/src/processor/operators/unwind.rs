@@ -62,7 +62,9 @@ impl PhysicalOperator for PhysicalUnwind {
                 }
             }
 
-            let chunk = self.current_chunk.as_ref()
+            let chunk = self
+                .current_chunk
+                .as_ref()
                 .expect("current_chunk should be Some when processing rows");
 
             if self.current_row_idx >= chunk.num_rows() {
@@ -82,14 +84,19 @@ impl PhysicalOperator for PhysicalUnwind {
                         database,
                     )?);
                 }
-                let eval_res = self.cached_eval.as_ref()
+                let eval_res = self
+                    .cached_eval
+                    .as_ref()
                     .expect("unwind: cached_eval was just populated");
                 // Check if it's a list
                 if let Some(lists) = eval_res.as_list_opt::<i32>() {
                     self.current_list = Some(lists.value(self.current_row_idx));
                 } else if let Some(lists) = eval_res.as_list_opt::<i64>() {
                     self.current_list = Some(lists.value(self.current_row_idx));
-                } else if let Some(large_lists) = eval_res.as_any().downcast_ref::<arrow::array::LargeListArray>() {
+                } else if let Some(large_lists) = eval_res
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeListArray>()
+                {
                     self.current_list = Some(large_lists.value(self.current_row_idx));
                 } else {
                     // Not a list: treat as single-element list containing the value itself
@@ -104,7 +111,9 @@ impl PhysicalOperator for PhysicalUnwind {
                 self.current_list_idx = 0;
             }
 
-            let list = self.current_list.as_ref()
+            let list = self
+                .current_list
+                .as_ref()
                 .expect("current_list should be Some when unwinding");
             if self.current_list_idx >= list.len() {
                 self.current_row_idx += 1;

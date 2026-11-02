@@ -136,10 +136,7 @@ impl InvertedIndex {
         Ok(())
     }
 
-    pub fn insert_multi_field_batch(
-        &self,
-        docs: &[(u64, Vec<(String, &str)>)],
-    ) -> Result<()> {
+    pub fn insert_multi_field_batch(&self, docs: &[(u64, Vec<(String, &str)>)]) -> Result<()> {
         for (node_id, fields) in docs {
             let mut doc = TantivyDocument::default();
             doc.add_u64(self.id_field, *node_id);
@@ -150,7 +147,8 @@ impl InvertedIndex {
                     }
                 }
             }
-            self.writer.write()
+            self.writer
+                .write()
                 .add_document(doc)
                 .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
         }
@@ -158,11 +156,7 @@ impl InvertedIndex {
         Ok(())
     }
 
-    pub fn insert_multi_field(
-        &self,
-        node_id: u64,
-        fields: &[(String, &str)],
-    ) -> Result<()> {
+    pub fn insert_multi_field(&self, node_id: u64, fields: &[(String, &str)]) -> Result<()> {
         let writer = self.writer.write();
         let mut doc = TantivyDocument::default();
         doc.add_u64(self.id_field, node_id);
@@ -242,20 +236,14 @@ impl InvertedIndex {
         })?;
         let searcher = self.reader.searcher();
         let search_fields: Vec<Field> = self.content_fields.values().copied().collect();
-        let query_parser = QueryParser::for_index(
-            &self.index,
-            search_fields,
-        );
+        let query_parser = QueryParser::for_index(&self.index, search_fields);
 
         let query = query_parser
             .parse_query(query_str)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let top_docs = searcher
-            .search(
-                &query,
-                &TopDocs::with_limit(limit).order_by_score(),
-            )
+            .search(&query, &TopDocs::with_limit(limit).order_by_score())
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let mut results = Vec::new();

@@ -54,9 +54,16 @@ impl PhysicalOperator for PhysicalProfile {
                 "EXPLAIN ANALYZE: total rows: {}, elapsed: {:?}",
                 self.total_rows, elapsed
             );
-            let schema = Arc::new(Schema::new(vec![Field::new("QUERY PLAN", DataType::Utf8, false)]));
-            let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![summary.as_str()]))])
-                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "QUERY PLAN",
+                DataType::Utf8,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(
+                schema,
+                vec![Arc::new(StringArray::from(vec![summary.as_str()]))],
+            )
+            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
             return Ok(Some(DataChunk { batch }));
         }
 
@@ -70,7 +77,8 @@ impl PhysicalOperator for PhysicalProfile {
                 let duration = self.start_time.elapsed();
                 tracing::info!(
                     "PROFILE: Execution took {:?} and produced {} rows",
-                    duration, self.total_rows
+                    duration,
+                    self.total_rows
                 );
                 Ok(None)
             }

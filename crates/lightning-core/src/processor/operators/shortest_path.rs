@@ -77,7 +77,8 @@ impl PhysicalShortestPath {
             // Expand from source (forward) — one level at a time
             if src_depth < self.max_depth && !q_src.is_empty() {
                 for _ in 0..q_src.len() {
-                    let curr = q_src.pop_front()
+                    let curr = q_src
+                        .pop_front()
                         .expect("BFS source queue should not be empty during iteration");
                     for csr in &csrs_fwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
@@ -91,7 +92,9 @@ impl PhysicalShortestPath {
                                         true,
                                     )));
                                 }
-                                if let std::collections::hash_map::Entry::Vacant(e) = visited_src.entry(n) {
+                                if let std::collections::hash_map::Entry::Vacant(e) =
+                                    visited_src.entry(n)
+                                {
                                     e.insert(Some(curr));
                                     q_src.push_back(n);
                                 }
@@ -109,7 +112,8 @@ impl PhysicalShortestPath {
             // Expand from destination (backward)
             if !q_dst.is_empty() {
                 for _ in 0..q_dst.len() {
-                    let curr = q_dst.pop_front()
+                    let curr = q_dst
+                        .pop_front()
                         .expect("BFS destination queue should not be empty during iteration");
                     for csr in &csrs_bwd {
                         if let Ok(neighbors) = csr.get_neighbors(bm, curr, tx) {
@@ -123,7 +127,9 @@ impl PhysicalShortestPath {
                                         false,
                                     )));
                                 }
-                                if let std::collections::hash_map::Entry::Vacant(e) = visited_dst.entry(n) {
+                                if let std::collections::hash_map::Entry::Vacant(e) =
+                                    visited_dst.entry(n)
+                                {
                                     e.insert(Some(curr));
                                     q_dst.push_back(n);
                                 }

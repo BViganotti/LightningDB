@@ -7,7 +7,11 @@ use lightning_core::SystemConfig;
 use crate::auth::models::AuthMode;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "lightning-server", version, about = "LightningDB HTTP server — graph+vector+RAG database for AI agent memory")]
+#[command(
+    name = "lightning-server",
+    version,
+    about = "LightningDB HTTP server — graph+vector database with Cypher, MVCC, and full-text search"
+)]
 pub struct CliArgs {
     /// Path to the database directory
     #[arg(long, default_value = "./lightning-data", env = "LIGHTNING_DB_PATH")]
@@ -236,7 +240,10 @@ impl ServerConfig {
         }
         const MAX_BUFFER_POOL: u64 = 1024 * 1024 * 1024 * 1024;
         if self.buffer_pool_size > MAX_BUFFER_POOL {
-            return Err(format!("buffer_pool_size cannot exceed {}TB", MAX_BUFFER_POOL / (1024 * 1024 * 1024 * 1024)));
+            return Err(format!(
+                "buffer_pool_size cannot exceed {}TB",
+                MAX_BUFFER_POOL / (1024 * 1024 * 1024 * 1024)
+            ));
         }
         if self.vacuum_interval_ms < 100 {
             return Err("vacuum_interval_ms must be at least 100ms".into());
@@ -263,7 +270,9 @@ impl ServerConfig {
         if self.auth_mode == AuthMode::Token {
             match &self.auth_token {
                 None => return Err("auth_token is required when auth_mode is 'token'".into()),
-                Some(t) if t.is_empty() => return Err("auth_token must not be empty when auth_mode is 'token'".into()),
+                Some(t) if t.is_empty() => {
+                    return Err("auth_token must not be empty when auth_mode is 'token'".into())
+                }
                 _ => {}
             }
         }
@@ -275,7 +284,9 @@ fn tls_version_rank(version: &str) -> Result<u8, String> {
     match version {
         "1.2" => Ok(2),
         "1.3" => Ok(3),
-        _ => Err(format!("unsupported TLS version '{version}'; supported: 1.2, 1.3")),
+        _ => Err(format!(
+            "unsupported TLS version '{version}'; supported: 1.2, 1.3"
+        )),
     }
 }
 

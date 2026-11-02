@@ -22,5 +22,8 @@ fn second_open_of_same_path_is_rejected() {
     // Releasing the first handle releases the lock.
     drop(first);
     let third = Database::new(&path, SystemConfig::default());
-    assert!(third.is_ok(), "the lock must be released when the DB is dropped");
+    assert!(
+        third.is_ok(),
+        "the lock must be released when the DB is dropped"
+    );
 }

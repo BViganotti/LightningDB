@@ -111,9 +111,7 @@ impl Aggregate {
                 AggregateFunction::GroupConcat => {
                     Box::new(GroupConcat::new()) as Box<dyn IAggregateFunction>
                 }
-                AggregateFunction::Median => {
-                    Box::new(Median::new()) as Box<dyn IAggregateFunction>
-                }
+                AggregateFunction::Median => Box::new(Median::new()) as Box<dyn IAggregateFunction>,
                 AggregateFunction::CollectDistinct => {
                     Box::new(CollectDistinct::new()) as Box<dyn IAggregateFunction>
                 }
@@ -123,9 +121,7 @@ impl Aggregate {
                 AggregateFunction::StdDevSamp => {
                     Box::new(StdDevSamp::new()) as Box<dyn IAggregateFunction>
                 }
-                AggregateFunction::VarPop => {
-                    Box::new(VarPop::new()) as Box<dyn IAggregateFunction>
-                }
+                AggregateFunction::VarPop => Box::new(VarPop::new()) as Box<dyn IAggregateFunction>,
                 AggregateFunction::VarSamp => {
                     Box::new(VarSamp::new()) as Box<dyn IAggregateFunction>
                 }
@@ -199,7 +195,10 @@ impl Aggregate {
                 let batch = &chunk.batch;
                 let num_rows = batch.num_rows();
 
-                if !use_sort_based && all_batches.iter().map(|b| b.num_rows()).sum::<usize>() + num_rows > SORT_AGGREGATION_THRESHOLD {
+                if !use_sort_based
+                    && all_batches.iter().map(|b| b.num_rows()).sum::<usize>() + num_rows
+                        > SORT_AGGREGATION_THRESHOLD
+                {
                     // Switch to sort-based approach — flush existing hash map first
                     use_sort_based = true;
                 }
@@ -259,15 +258,16 @@ impl Aggregate {
                 }
 
                 // Build SortColumn descriptors
-                let sort_cols: Vec<arrow::compute::SortColumn> = sort_columns.iter().map(|arr| {
-                    arrow::compute::SortColumn {
+                let sort_cols: Vec<arrow::compute::SortColumn> = sort_columns
+                    .iter()
+                    .map(|arr| arrow::compute::SortColumn {
                         values: arr.clone(),
                         options: Some(arrow::compute::SortOptions {
                             descending: false,
                             nulls_first: true,
                         }),
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 // O(N log N) lexsort on group keys
                 let indices = arrow::compute::lexsort_to_indices(&sort_cols, None)
@@ -296,22 +296,23 @@ impl Aggregate {
                                 break;
                             }
                         }
-                        if !same { break; }
+                        if !same {
+                            break;
+                        }
                         end += 1;
                     }
 
                     let group_len = end - start;
-                    let group_indices: Vec<u64> = (start..end).map(|i| indices.value(i) as u64).collect();
+                    let group_indices: Vec<u64> =
+                        (start..end).map(|i| indices.value(i) as u64).collect();
                     // Build the index array once and share it across all aggregate columns
                     let idx_arr = arrow::array::UInt64Array::from(group_indices);
 
                     let mut agg_funcs = self.create_agg_functions();
                     for (j, (_, col_idx)) in self.aggregates.iter().enumerate() {
-                        let gathered = arrow::compute::take(
-                            full_batch.column(*col_idx),
-                            &idx_arr,
-                            None,
-                        ).map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+                        let gathered =
+                            arrow::compute::take(full_batch.column(*col_idx), &idx_arr, None)
+                                .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
                         agg_funcs[j].update_vector(&gathered)?;
                     }
                     groups.insert(key, (agg_funcs, group_len));
@@ -415,9 +416,11 @@ impl Aggregate {
             }
 
             let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), final_columns)
-                .map_err(|e| crate::LightningError::Internal(format!(
-                    "Aggregate output schema mismatch: {e}"
-                )))?;
+                .map_err(|e| {
+                    crate::LightningError::Internal(format!(
+                        "Aggregate output schema mismatch: {e}"
+                    ))
+                })?;
             *self.shared_state.final_result.write() = Some(batch);
             self.shared_state.is_done.store(true, Ordering::SeqCst);
         }

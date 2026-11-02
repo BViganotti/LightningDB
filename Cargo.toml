@@ -12,8 +12,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = ["Benoit Viganotti"]
-license = "BUSL-1.1"
-repository = "https://github.com/lightningDB/lightning"
+license = "MIT"
+repository = "https://github.com/BViganotti/LightningDB"
 
 [workspace.dependencies]
 lightning-types = { path = "crates/lightning-types" }

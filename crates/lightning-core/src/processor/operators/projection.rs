@@ -37,7 +37,8 @@ impl PhysicalOperator for PhysicalProjection {
             // for common cases (PropertyLookup, Function) but may have false
             // positives for expressions with identical debug representations.
             // A production implementation would use structural equality.
-            let expr_debugs: Vec<String> = self.items
+            let expr_debugs: Vec<String> = self
+                .items
                 .iter()
                 .map(|item| format!("{:?}", item.expression))
                 .collect();
@@ -63,18 +64,28 @@ impl PhysicalOperator for PhysicalProjection {
 
             for (i, ev) in evaluated.iter().enumerate() {
                 let array = ev.clone().ok_or_else(|| {
-                    crate::LightningError::Internal(format!("Expression evaluation slot {i} was not populated"))
+                    crate::LightningError::Internal(format!(
+                        "Expression evaluation slot {i} was not populated"
+                    ))
                 })?;
-                fields.push(Field::new(&self.items[i].alias, array.data_type().clone(), true));
+                fields.push(Field::new(
+                    &self.items[i].alias,
+                    array.data_type().clone(),
+                    true,
+                ));
                 projected_columns.push(array);
             }
 
             let schema = Arc::new(Schema::new(fields));
-            let batch = RecordBatch::try_new(schema, projected_columns)
-                .map_err(|e| crate::LightningError::Internal(format!(
+            let batch = RecordBatch::try_new(schema, projected_columns).map_err(|e| {
+                crate::LightningError::Internal(format!(
                     "Projection::get_next: {} (items={}, chunk_cols={}, chunk_rows={})",
-                    e, self.items.len(), chunk.batch.num_columns(), chunk.batch.num_rows(),
-                )))?;
+                    e,
+                    self.items.len(),
+                    chunk.batch.num_columns(),
+                    chunk.batch.num_rows(),
+                ))
+            })?;
 
             return Ok(Some(DataChunk { batch }));
         }

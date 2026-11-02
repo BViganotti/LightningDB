@@ -23,7 +23,13 @@ impl TopKOptimizer {
     /// MUST stay above the Sort (because Sort's ORDER BY expressions reference
     /// entity-table column indices, not projected-output column indices).
     /// Returns (sort_items, child_below_sort) or None if no Sort found.
-    fn extract_sort_and_child(&self, plan: &LogicalOperator) -> Option<(Vec<crate::planner::binder::BoundOrderByItem>, Box<LogicalOperator>)> {
+    fn extract_sort_and_child(
+        &self,
+        plan: &LogicalOperator,
+    ) -> Option<(
+        Vec<crate::planner::binder::BoundOrderByItem>,
+        Box<LogicalOperator>,
+    )> {
         match plan {
             LogicalOperator::Sort(child, items) => {
                 Some((items.clone(), Box::new(child.as_ref().clone())))
@@ -74,20 +80,16 @@ impl TopKOptimizer {
                 dependent_group_by_cols,
                 aggregates,
             }),
-            LogicalOperator::Join(left, right, cond) => {
-                Ok(LogicalOperator::Join(
-                    Box::new(self.push_down(*left)?),
-                    Box::new(self.push_down(*right)?),
-                    cond,
-                ))
-            }
-            LogicalOperator::Union(left, right, is_all) => {
-                Ok(LogicalOperator::Union(
-                    Box::new(self.push_down(*left)?),
-                    Box::new(self.push_down(*right)?),
-                    is_all,
-                ))
-            }
+            LogicalOperator::Join(left, right, cond) => Ok(LogicalOperator::Join(
+                Box::new(self.push_down(*left)?),
+                Box::new(self.push_down(*right)?),
+                cond,
+            )),
+            LogicalOperator::Union(left, right, is_all) => Ok(LogicalOperator::Union(
+                Box::new(self.push_down(*left)?),
+                Box::new(self.push_down(*right)?),
+                is_all,
+            )),
             _ => {
                 let child_opt = plan.get_child().cloned();
                 if let Some(child) = child_opt {

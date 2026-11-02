@@ -20,6 +20,7 @@ target/
 
 # Runtime / session data
 .rivet_mcp.db/
+lightning-data/
 
 # Agentic / session files
 CLAUDE.md
@@ -27,24 +28,16 @@ CLAUDE.md
 # Build artifacts
 *.rlib
 
-# Audit / findings
-DEEP_AUDIT_FULL_2024.md
-ENGINE_ROADMAP.md
+# Internal audit / scratch notes
 findings.jsonl
 findings.md
 top20-findings.md
 AUDIT.md
 AUDIT_FULL_REPORT.md
 DEEP_AUDIT_REPORT.md
-FIX_PLAN_ENGINEERING.md
 LLM_REMEDIATION_PLAN.md
 PERFORMANCE_REMEDIATION_PLAN.md
 PERFORMANCE_TUNING.md
-PLAN_1_2_4.md
-PRODUCTION_READINESS.md
-RELATIONSHIP_TRAVERSAL_REMAINING_ISSUES.md
-ROADMAP.md
-USABILITY_AUDIT.md
 
 # Secrets
 .env*
@@ -59,12 +52,6 @@ lightning-external-app/certs/
 lightning-external-app/data/
 lightning-external-app/node_modules/
 lightning-external-app/dist/
-
-# Psychologist app
-lightning-psych-app/
-lightning-psych-app/certs/
-lightning-psych-app/data/
-lightning-psych-app/.env
 
 # Python
 __pycache__/

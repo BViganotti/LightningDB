@@ -170,15 +170,14 @@ impl PhysicalSort {
         let indices = lexsort_to_indices(&sort_columns, None)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
-        let sorted_columns_res: std::result::Result<Vec<_>, arrow::error::ArrowError> =
-            big_batch
-                .columns()
-                .iter()
-                .map(|col| take(col.as_ref(), &indices, None))
-                .collect();
+        let sorted_columns_res: std::result::Result<Vec<_>, arrow::error::ArrowError> = big_batch
+            .columns()
+            .iter()
+            .map(|col| take(col.as_ref(), &indices, None))
+            .collect();
 
-        let sorted_columns = sorted_columns_res
-            .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
+        let sorted_columns =
+            sorted_columns_res.map_err(|e| crate::LightningError::Internal(e.to_string()))?;
 
         let result = RecordBatch::try_new(schema, sorted_columns)
             .map_err(|e| crate::LightningError::Internal(e.to_string()))?;
@@ -275,13 +274,19 @@ impl PhysicalOperator for PhysicalSort {
                     results_returned: ::std::sync::atomic::AtomicUsize::new(0),
                     num_collected: ::std::sync::atomic::AtomicUsize::new(0),
                 })),
-                sort_done: Arc::new((::parking_lot::Mutex::new(false), ::parking_lot::Condvar::new())),
+                sort_done: Arc::new((
+                    ::parking_lot::Mutex::new(false),
+                    ::parking_lot::Condvar::new(),
+                )),
                 collected: false,
                 num_partitions: ::std::sync::atomic::AtomicUsize::new(1),
             });
             children.push(sort_clone as Box<dyn PhysicalOperator + Send + Sync>);
         }
-        let merge = Box::new(super::nway_merge::NWayMerge::new(children, self.order_by.clone()));
+        let merge = Box::new(super::nway_merge::NWayMerge::new(
+            children,
+            self.order_by.clone(),
+        ));
         Ok(Some(merge))
     }
 

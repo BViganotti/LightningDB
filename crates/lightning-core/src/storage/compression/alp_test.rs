@@ -71,7 +71,11 @@ fn test_alp_overflow_encoding() {
 fn test_alp_subnormal() {
     let val = f64::from_bits(1);
     let encoded = Alp::encode_value(val, 10, 10);
-    assert!(!encoded.is_negative() || encoded == 0, "subnormal encoded to {}", encoded);
+    assert!(
+        !encoded.is_negative() || encoded == 0,
+        "subnormal encoded to {}",
+        encoded
+    );
 
     let decoded = Alp::decode_value(encoded, 10, 10);
     assert!(!decoded.is_nan(), "subnormal decoded to NaN");
@@ -96,11 +100,21 @@ fn test_alp_i64_boundary() {
 fn test_alp_roundtrip() {
     for raw in &[0.0, -0.0, 1.0, -1.0, 3.14159, -2.71828, 1e10, -1e10] {
         let encoded = Alp::encode_value(*raw, 0, 0);
-        if encoded == Alp::POS_INF_SENTINEL || encoded == Alp::NEG_INF_SENTINEL || encoded == Alp::NAN_SENTINEL {
+        if encoded == Alp::POS_INF_SENTINEL
+            || encoded == Alp::NEG_INF_SENTINEL
+            || encoded == Alp::NAN_SENTINEL
+        {
             continue;
         }
         let decoded = Alp::decode_value(encoded, 0, 0);
         let diff = (decoded - raw).abs();
-        assert!(diff < 1.0, "mismatch for {}: encoded={} decoded={} diff={}", raw, encoded, decoded, diff);
+        assert!(
+            diff < 1.0,
+            "mismatch for {}: encoded={} decoded={} diff={}",
+            raw,
+            encoded,
+            decoded,
+            diff
+        );
     }
 }

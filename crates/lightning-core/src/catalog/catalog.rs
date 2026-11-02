@@ -112,7 +112,8 @@ impl Catalog {
         self.constraint_by_name.clear();
         for (table_name, table) in &self.node_tables {
             for (pos, c) in table.constraints.iter().enumerate() {
-                self.constraint_by_name.insert(c.name.clone(), (table_name.clone(), pos));
+                self.constraint_by_name
+                    .insert(c.name.clone(), (table_name.clone(), pos));
             }
         }
     }
@@ -121,7 +122,10 @@ impl Catalog {
         matches!(name, "_id" | "_src" | "_dst")
     }
 
-    fn get_table_mut(&mut self, table_name: &str) -> Result<&mut dyn TableLike, crate::LightningError> {
+    fn get_table_mut(
+        &mut self,
+        table_name: &str,
+    ) -> Result<&mut dyn TableLike, crate::LightningError> {
         if let Some(node) = self.node_tables.get_mut(table_name) {
             Ok(node as &mut dyn TableLike)
         } else if let Some(rel) = self.rel_tables.get_mut(table_name) {
@@ -186,7 +190,9 @@ impl Catalog {
         new_name: &str,
     ) -> Result<(), crate::LightningError> {
         if Self::is_builtin_column(old_name) || Self::is_builtin_column(new_name) {
-            return Err(crate::LightningError::Database("Cannot rename built-in column".to_string()));
+            return Err(crate::LightningError::Database(
+                "Cannot rename built-in column".to_string(),
+            ));
         }
         let props = self.get_table_mut(table_name)?.properties_mut();
         if props.iter().any(|p| p.name == new_name) {
@@ -217,8 +223,11 @@ impl Catalog {
             )));
         }
         if self.node_tables.contains_key(old_name) {
-            let mut entry = self.node_tables.remove(old_name)
-                .ok_or_else(|| crate::LightningError::Internal(format!("Catalog: node table '{old_name}' disappeared between contains_key and remove")))?;
+            let mut entry = self.node_tables.remove(old_name).ok_or_else(|| {
+                crate::LightningError::Internal(format!(
+                    "Catalog: node table '{old_name}' disappeared between contains_key and remove"
+                ))
+            })?;
             entry.name = new_name.to_string();
             self.node_tables.insert(new_name.to_string(), entry);
             // Update all relationship tables that reference the renamed node table
@@ -328,8 +337,8 @@ impl Catalog {
 
     pub fn save_to_disk(&self, path: &std::path::Path) -> crate::Result<()> {
         let shadow_path = path.with_extension("ltng.shadow");
-        let buf = serde_json::to_vec(self)
-            .map_err(|e| crate::LightningError::Database(e.to_string()))?;
+        let buf =
+            serde_json::to_vec(self).map_err(|e| crate::LightningError::Database(e.to_string()))?;
         std::fs::write(&shadow_path, buf)?;
         std::fs::rename(shadow_path, path)?;
         // Sync the parent directory to ensure the rename is durable
@@ -359,10 +368,7 @@ impl Catalog {
 
     /// Look up a table (node or rel) and return its properties, a type tag,
     /// and the entry version for cache invalidation.
-    pub fn get_table_properties(
-        &self,
-        name: &str,
-    ) -> Option<(&[super::PropertyDefinition], u8)> {
+    pub fn get_table_properties(&self, name: &str) -> Option<(&[super::PropertyDefinition], u8)> {
         if let Some(t) = self.node_tables.get(name) {
             Some((&t.properties, 0u8))
         } else if let Some(t) = self.rel_tables.get(name) {
@@ -384,7 +390,12 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn add_sequence(&mut self, name: String, start_val: u64, increment: i64) -> Result<(), crate::LightningError> {
+    pub fn add_sequence(
+        &mut self,
+        name: String,
+        start_val: u64,
+        increment: i64,
+    ) -> Result<(), crate::LightningError> {
         if self.sequences.contains_key(&name) {
             return Err(crate::LightningError::Database(format!(
                 "Sequence '{name}' already exists"
@@ -449,7 +460,11 @@ impl Catalog {
                 constraint.name, table_name
             )));
         }
-        if table.constraints.iter().any(|c| c.property == constraint.property) {
+        if table
+            .constraints
+            .iter()
+            .any(|c| c.property == constraint.property)
+        {
             return Err(crate::LightningError::Database(format!(
                 "A constraint on property '{}' already exists on table '{}'",
                 constraint.property, table_name
@@ -457,7 +472,8 @@ impl Catalog {
         }
         let pos = table.constraints.len();
         table.constraints.push(constraint.clone());
-        self.constraint_by_name.insert(constraint.name.clone(), (table_name.to_string(), pos));
+        self.constraint_by_name
+            .insert(constraint.name.clone(), (table_name.to_string(), pos));
         Ok(())
     }
 
@@ -480,10 +496,7 @@ impl Catalog {
         )))
     }
 
-    pub fn get_constraint(
-        &self,
-        constraint_name: &str,
-    ) -> Option<(&str, &NodeConstraint)> {
+    pub fn get_constraint(&self, constraint_name: &str) -> Option<(&str, &NodeConstraint)> {
         for (table_name, table) in self.node_tables.iter() {
             if let Some(c) = table.constraints.iter().find(|c| c.name == constraint_name) {
                 return Some((table_name.as_str(), c));

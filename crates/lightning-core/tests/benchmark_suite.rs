@@ -4,7 +4,6 @@
 /// Run with: cargo test --test benchmark_suite -- --nocapture
 ///
 /// Results are printed to stdout in a structured format.
-
 use arrow::array::{Float64Array, Int64Array, StringArray, UInt64Array};
 use lightning_core::{Database, SystemConfig};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,7 +42,12 @@ where
     f();
     let duration = start.elapsed();
     let throughput = ops as f64 / duration.as_secs_f64();
-    let r = BenchResult { name, ops, duration, throughput };
+    let r = BenchResult {
+        name,
+        ops,
+        duration,
+        throughput,
+    };
     r.print();
     r
 }
@@ -57,7 +61,11 @@ fn bench_insert_10k() {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Item(id INT64, val STRING, PRIMARY KEY (id))", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Item(id INT64, val STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
 
     bench("insert_10k_lightning_bulk", 10_000, || {
         let ids: Int64Array = (0..10_000).map(Some).collect();
@@ -65,7 +73,8 @@ fn bench_insert_10k() {
         let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
             ("id", Arc::new(ids) as _),
             ("val", Arc::new(vals) as _),
-        ]).unwrap();
+        ])
+        .unwrap();
         conn.bulk_insert_batch("Item", &batch).unwrap();
     });
 }
@@ -75,7 +84,11 @@ fn bench_insert_100k() {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Item(id INT64, val STRING, category INT64, PRIMARY KEY (id))", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Item(id INT64, val STRING, category INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
 
     bench("insert_100k_lightning_bulk", 100_000, || {
         let ids: Int64Array = (0..100_000).map(Some).collect();
@@ -85,7 +98,8 @@ fn bench_insert_100k() {
             ("id", Arc::new(ids) as _),
             ("val", Arc::new(vals) as _),
             ("category", Arc::new(cats) as _),
-        ]).unwrap();
+        ])
+        .unwrap();
         conn.bulk_insert_batch("Item", &batch).unwrap();
     });
 }
@@ -98,7 +112,11 @@ fn setup_20k() -> (tempfile::TempDir, Arc<Database>) {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Item(id INT64, val STRING, age INT64, PRIMARY KEY (id))", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Item(id INT64, val STRING, age INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
     let ids: Int64Array = (0..20_000).map(Some).collect();
     let vals: StringArray = (0..20_000).map(|i| Some(format!("val_{}", i))).collect();
     let ages: Int64Array = (0..20_000).map(|i| Some(((i % 80) + 18) as i64)).collect();
@@ -106,7 +124,8 @@ fn setup_20k() -> (tempfile::TempDir, Arc<Database>) {
         ("id", Arc::new(ids) as _),
         ("val", Arc::new(vals) as _),
         ("age", Arc::new(ages) as _),
-    ]).unwrap();
+    ])
+    .unwrap();
     conn.bulk_insert_batch("Item", &batch).unwrap();
     (dir, db)
 }
@@ -116,9 +135,12 @@ fn bench_full_scan_20k() {
     let (_dir, db) = setup_20k();
     let conn = db.connect();
     // Warm up
-    conn.execute("MATCH (i:Item) RETURN i.id LIMIT 1", None).unwrap();
+    conn.execute("MATCH (i:Item) RETURN i.id LIMIT 1", None)
+        .unwrap();
     bench("full_scan_20k", 20_000, || {
-        let res = conn.execute("MATCH (i:Item) RETURN i.id, i.val, i.age", None).unwrap();
+        let res = conn
+            .execute("MATCH (i:Item) RETURN i.id, i.val, i.age", None)
+            .unwrap();
         let rows: usize = res.batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 20_000);
     });
@@ -129,7 +151,12 @@ fn bench_filtered_scan_20k() {
     let (_dir, db) = setup_20k();
     let conn = db.connect();
     bench("filtered_scan_20k", 20_000, || {
-        let res = conn.execute("MATCH (i:Item) WHERE i.age >= 50 RETURN i.id, i.val, i.age", None).unwrap();
+        let res = conn
+            .execute(
+                "MATCH (i:Item) WHERE i.age >= 50 RETURN i.id, i.val, i.age",
+                None,
+            )
+            .unwrap();
         let _rows: usize = res.batches.iter().map(|b| b.num_rows()).sum();
     });
 }
@@ -139,8 +166,18 @@ fn bench_aggregate_count_20k() {
     let (_dir, db) = setup_20k();
     let conn = db.connect();
     bench("aggregate_count_20k", 1, || {
-        let res = conn.execute("MATCH (i:Item) RETURN count(*), avg(i.age), max(i.age)", None).unwrap();
-        let _count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+        let res = conn
+            .execute(
+                "MATCH (i:Item) RETURN count(*), avg(i.age), max(i.age)",
+                None,
+            )
+            .unwrap();
+        let _count = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
     });
 }
 
@@ -153,8 +190,13 @@ fn bench_graph_traversal() {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
-    conn.execute("CREATE REL TABLE Knows(FROM Person TO Person)", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Person(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    conn.execute("CREATE REL TABLE Knows(FROM Person TO Person)", None)
+        .unwrap();
 
     // Create 1K persons in a chain graph (each knows the next)
     let ids: Int64Array = (0..1000).map(Some).collect();
@@ -162,21 +204,35 @@ fn bench_graph_traversal() {
     let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
         ("id", Arc::new(ids) as _),
         ("name", Arc::new(names) as _),
-    ]).unwrap();
+    ])
+    .unwrap();
     conn.bulk_insert_batch("Person", &batch).unwrap();
 
     // Create edges
     for i in 0..999 {
         conn.execute(
-            &format!("MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:Knows]->(b)", i, i + 1),
+            &format!(
+                "MATCH (a:Person {{id: {}}}), (b:Person {{id: {}}}) CREATE (a)-[:Knows]->(b)",
+                i,
+                i + 1
+            ),
             None,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // Single-hop neighbor traversal
-    let _warmup = conn.execute("MATCH (a:Person {{id: 0}})-[:Knows]->(b:Person) RETURN b.id", None);
+    let _warmup = conn.execute(
+        "MATCH (a:Person {{id: 0}})-[:Knows]->(b:Person) RETURN b.id",
+        None,
+    );
     bench("graph_1hop_neighbor", 1, || {
-        let _res = conn.execute("MATCH (a:Person {id: 500})-[:Knows]->(b:Person) RETURN b.id", None).unwrap();
+        let _res = conn
+            .execute(
+                "MATCH (a:Person {id: 500})-[:Knows]->(b:Person) RETURN b.id",
+                None,
+            )
+            .unwrap();
     });
 }
 
@@ -193,8 +249,13 @@ fn stress_concurrent_read_write() {
     let conn = db.connect();
 
     // Single-node table for counter
-    conn.execute("CREATE NODE TABLE Counter(id INT64, val INT64, PRIMARY KEY (id))", None).unwrap();
-    conn.execute("CREATE (:Counter {id: 1, val: 0})", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Counter(id INT64, val INT64, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    conn.execute("CREATE (:Counter {id: 1, val: 0})", None)
+        .unwrap();
 
     let db = Arc::new(db);
     let num_threads = 8;
@@ -204,40 +265,43 @@ fn stress_concurrent_read_write() {
 
     let start = Instant::now();
 
-    let handles: Vec<_> = (0..num_threads).map(|_| {
-        let db = Arc::clone(&db);
-        let errs = Arc::clone(&errors);
-        let done = Arc::clone(&completed);
-        thread::spawn(move || {
-            for _ in 0..ops_per_thread {
-                let c = db.connect();
-                // Read-only queries — no write-write conflicts
-                // Write queries separated to avoid MVCC conflicts under stress
-                let r = match rand() % 4 {
-                    0 => {
-                        c.execute("MATCH (c:Counter) WHERE c.id = 1 RETURN c.val", None)
-                    }
-                    1 => {
-                        c.execute("MATCH (c:Counter) WHERE c.id = 1 SET c.val = c.val + 1", None)
-                    }
-                    2 => {
-                        // Count all nodes (cheap)
-                        c.execute("MATCH (c:Counter) RETURN count(*)", None)
-                    }
-                    _ => {
-                        // Read + verify
-                        c.execute("MATCH (c:Counter) RETURN c.val, c.id", None)
-                    }
-                };
-                match r {
-                    Ok(_) => { done.fetch_add(1, Ordering::SeqCst); }
-                    Err(e) => {
-                        errs.fetch_add(1, Ordering::SeqCst);
+    let handles: Vec<_> = (0..num_threads)
+        .map(|_| {
+            let db = Arc::clone(&db);
+            let errs = Arc::clone(&errors);
+            let done = Arc::clone(&completed);
+            thread::spawn(move || {
+                for _ in 0..ops_per_thread {
+                    let c = db.connect();
+                    // Read-only queries — no write-write conflicts
+                    // Write queries separated to avoid MVCC conflicts under stress
+                    let r = match rand() % 4 {
+                        0 => c.execute("MATCH (c:Counter) WHERE c.id = 1 RETURN c.val", None),
+                        1 => c.execute(
+                            "MATCH (c:Counter) WHERE c.id = 1 SET c.val = c.val + 1",
+                            None,
+                        ),
+                        2 => {
+                            // Count all nodes (cheap)
+                            c.execute("MATCH (c:Counter) RETURN count(*)", None)
+                        }
+                        _ => {
+                            // Read + verify
+                            c.execute("MATCH (c:Counter) RETURN c.val, c.id", None)
+                        }
+                    };
+                    match r {
+                        Ok(_) => {
+                            done.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            errs.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
                 }
-            }
+            })
         })
-    }).collect();
+        .collect();
 
     for h in handles {
         h.join().unwrap();
@@ -256,17 +320,28 @@ fn stress_concurrent_read_write() {
     );
 
     // Verify final value
-    let res = db.connect().execute("MATCH (c:Counter) WHERE c.id = 1 RETURN c.val", None).unwrap();
+    let res = db
+        .connect()
+        .execute("MATCH (c:Counter) WHERE c.id = 1 RETURN c.val", None)
+        .unwrap();
     if res.batches.is_empty() || res.batches[0].num_rows() == 0 {
         println!("STRESS|WARN|counter_not_found_after_concurrent_ops");
     } else {
-        let final_val = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+        let final_val = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
         println!("STRESS|final_counter_value|{}", final_val);
     }
 
     // Print error info but accept some write-write conflicts (expected under concurrency)
     if err_cnt > 0 {
-        println!("STRESS|WARN|{} concurrent errors (expected write-write conflicts)", err_cnt);
+        println!(
+            "STRESS|WARN|{} concurrent errors (expected write-write conflicts)",
+            err_cnt
+        );
     }
     assert!(ops_total > 0, "Concurrent stress test did 0 ops");
 }
@@ -276,7 +351,8 @@ fn rand() -> u64 {
     use std::sync::atomic::AtomicU64;
     static SEED: AtomicU64 = AtomicU64::new(42);
     let old = SEED.fetch_add(1, Ordering::SeqCst);
-    old.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+    old.wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407)
 }
 
 // ============================================================
@@ -306,31 +382,64 @@ fn bench_large_100k() {
             ("name", Arc::new(names) as _),
             ("value", Arc::new(vals) as _),
             ("category", Arc::new(cats) as _),
-        ]).unwrap();
+        ])
+        .unwrap();
         conn.bulk_insert_batch("Entity", &batch).unwrap();
     });
 
     // Verify count
-    let res = conn.execute("MATCH (e:Entity) RETURN count(*)", None).unwrap();
-    let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let res = conn
+        .execute("MATCH (e:Entity) RETURN count(*)", None)
+        .unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count as u64, n);
     println!("  Verified: {} entities in database", count);
 
     // Query benchmarks on the large dataset
     let _warmup = conn.execute("MATCH (e:Entity) WHERE e.id = 0 RETURN e.name", None);
     bench("query_100k_by_id", 1, || {
-        let res = conn.execute("MATCH (e:Entity) WHERE e.id = 50000 RETURN e.name, e.value", None).unwrap();
+        let res = conn
+            .execute(
+                "MATCH (e:Entity) WHERE e.id = 50000 RETURN e.name, e.value",
+                None,
+            )
+            .unwrap();
         let _rows: usize = res.batches.iter().map(|b| b.num_rows()).sum();
     });
 
     bench("query_100k_filter_category", 1, || {
-        let res = conn.execute("MATCH (e:Entity) WHERE e.category = 25 RETURN count(*)", None).unwrap();
-        let _cnt = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+        let res = conn
+            .execute(
+                "MATCH (e:Entity) WHERE e.category = 25 RETURN count(*)",
+                None,
+            )
+            .unwrap();
+        let _cnt = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
     });
 
     bench("query_100k_aggregate", 1, || {
-        let res = conn.execute("MATCH (e:Entity) RETURN avg(e.value), max(e.value), min(e.value)", None).unwrap();
-        let _avg = res.batches[0].column(0).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+        let res = conn
+            .execute(
+                "MATCH (e:Entity) RETURN avg(e.value), max(e.value), min(e.value)",
+                None,
+            )
+            .unwrap();
+        let _avg = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .value(0);
     });
 }
 
@@ -353,25 +462,35 @@ fn stress_crash_recovery() {
     {
         let db = Database::new(&db_path, SystemConfig::default()).unwrap();
         let conn = db.connect();
-        conn.execute("CREATE NODE TABLE Test(id INT64, val STRING, PRIMARY KEY (id))", None).unwrap();
+        conn.execute(
+            "CREATE NODE TABLE Test(id INT64, val STRING, PRIMARY KEY (id))",
+            None,
+        )
+        .unwrap();
 
         // Batch 1: 5K rows with checkpoint
         let ids: Int64Array = (0..5_000).map(Some).collect();
-        let vals: StringArray = (0..5_000).map(|i| Some(format!("pre_crash_{}", i))).collect();
+        let vals: StringArray = (0..5_000)
+            .map(|i| Some(format!("pre_crash_{}", i)))
+            .collect();
         let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
             ("id", Arc::new(ids) as _),
             ("val", Arc::new(vals) as _),
-        ]).unwrap();
+        ])
+        .unwrap();
         conn.bulk_insert_batch("Test", &batch).unwrap();
         db.checkpoint().unwrap();
 
         // Batch 2: 5K rows without checkpoint (simulating dirty pages at crash time)
         let ids2: Int64Array = (5_000..10_000).map(Some).collect();
-        let vals2: StringArray = (5_000..10_000).map(|i| Some(format!("post_crash_{}", i))).collect();
+        let vals2: StringArray = (5_000..10_000)
+            .map(|i| Some(format!("post_crash_{}", i)))
+            .collect();
         let batch2 = arrow::record_batch::RecordBatch::try_from_iter(vec![
             ("id", Arc::new(ids2) as _),
             ("val", Arc::new(vals2) as _),
-        ]).unwrap();
+        ])
+        .unwrap();
         conn.bulk_insert_batch("Test", &batch2).unwrap();
         // db drops here → shutdown() → checkpoint() which now saves the catalog
     }
@@ -381,14 +500,28 @@ fn stress_crash_recovery() {
         let db = Database::new(&db_path, SystemConfig::default()).unwrap();
         let conn = db.connect();
 
-        let res = conn.execute("MATCH (t:Test) RETURN count(*)", None).unwrap();
-        let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+        let res = conn
+            .execute("MATCH (t:Test) RETURN count(*)", None)
+            .unwrap();
+        let count = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
         println!("CRASH_RECOVERY|count_after_reopen|{}", count);
 
         // All 10K rows should survive the clean shutdown with catalog persistence
-        assert!(count >= 5000, "At least checkpointed data must survive (got {})", count);
+        assert!(
+            count >= 5000,
+            "At least checkpointed data must survive (got {})",
+            count
+        );
         if count < 10_000 {
-            println!("CRASH_RECOVERY|WARN|only {} rows survived (expected 10K)", count);
+            println!(
+                "CRASH_RECOVERY|WARN|only {} rows survived (expected 10K)",
+                count
+            );
         } else {
             println!("CRASH_RECOVERY|PASS|all_data_intact");
         }
@@ -409,18 +542,30 @@ fn bench_memory_usage() {
     let db = Database::new(dir.path(), config).unwrap();
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE BigRow(id INT64, data STRING, val DOUBLE, PRIMARY KEY (id))", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE BigRow(id INT64, data STRING, val DOUBLE, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
 
     // Insert 50K rows and measure
     let start = Instant::now();
     let ids: Int64Array = (0..50_000).map(Some).collect();
-    let data: StringArray = (0..50_000).map(|i| Some(format!("Some longer test data for row number {} to measure memory", i))).collect();
+    let data: StringArray = (0..50_000)
+        .map(|i| {
+            Some(format!(
+                "Some longer test data for row number {} to measure memory",
+                i
+            ))
+        })
+        .collect();
     let vals: Float64Array = (0..50_000).map(|i| Some(i as f64)).collect();
     let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
         ("id", Arc::new(ids) as _),
         ("data", Arc::new(data) as _),
         ("val", Arc::new(vals) as _),
-    ]).unwrap();
+    ])
+    .unwrap();
     conn.bulk_insert_batch("BigRow", &batch).unwrap();
     let elapsed = start.elapsed();
 
@@ -432,15 +577,26 @@ fn bench_memory_usage() {
         .map(|e| e.metadata().unwrap().len())
         .sum();
 
-    println!("MEMORY|50k_string_rows|insert_time={:?}|disk_usage={}MB|{}bytes/row",
+    println!(
+        "MEMORY|50k_string_rows|insert_time={:?}|disk_usage={}MB|{}bytes/row",
         elapsed,
         disk_used / 1024 / 1024,
         disk_used / 50_000
     );
 
     // Query speed
-    let res = conn.execute("MATCH (b:BigRow) WHERE b.val >= 25000.0 RETURN count(*)", None).unwrap();
-    let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    let res = conn
+        .execute(
+            "MATCH (b:BigRow) WHERE b.val >= 25000.0 RETURN count(*)",
+            None,
+        )
+        .unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count, 25_000);
 }
 
@@ -460,7 +616,11 @@ fn stress_repeated_crash_recovery() {
             let conn = db.connect();
 
             if cycle == 0 {
-                conn.execute("CREATE NODE TABLE Cycle(id INT64, cycle INT64, PRIMARY KEY (id))", None).unwrap();
+                conn.execute(
+                    "CREATE NODE TABLE Cycle(id INT64, cycle INT64, PRIMARY KEY (id))",
+                    None,
+                )
+                .unwrap();
             }
 
             // Insert 1000 rows each cycle
@@ -470,14 +630,27 @@ fn stress_repeated_crash_recovery() {
             let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![
                 ("id", Arc::new(ids) as _),
                 ("cycle", Arc::new(cycles) as _),
-            ]).unwrap();
+            ])
+            .unwrap();
             conn.bulk_insert_batch("Cycle", &batch).unwrap();
             db.checkpoint().unwrap();
 
             // Verify count so far
-            let res = conn.execute("MATCH (c:Cycle) RETURN count(*)", None).unwrap();
-            let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-            assert_eq!(count as i64, ((cycle + 1) * 1000) as i64, "Cycle {} count", cycle);
+            let res = conn
+                .execute("MATCH (c:Cycle) RETURN count(*)", None)
+                .unwrap();
+            let count = res.batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0);
+            assert_eq!(
+                count as i64,
+                ((cycle + 1) * 1000) as i64,
+                "Cycle {} count",
+                cycle
+            );
         }
         // db drops = clean shutdown/checkpoint
 
@@ -485,10 +658,22 @@ fn stress_repeated_crash_recovery() {
         {
             let db = Database::new(&db_path, SystemConfig::default()).unwrap();
             let conn = db.connect();
-            let res = conn.execute("MATCH (c:Cycle) RETURN count(*)", None).unwrap();
-            let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
-            assert_eq!(count, ((cycle + 1) * 1000) as i64,
-                "Cycle {}: expected {} rows, got {}", cycle + 1, (cycle + 1) * 1000, count
+            let res = conn
+                .execute("MATCH (c:Cycle) RETURN count(*)", None)
+                .unwrap();
+            let count = res.batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0);
+            assert_eq!(
+                count,
+                ((cycle + 1) * 1000) as i64,
+                "Cycle {}: expected {} rows, got {}",
+                cycle + 1,
+                (cycle + 1) * 1000,
+                count
             );
             println!("DURABILITY|cycle_{}|passed|count={}", cycle + 1, count);
         }
@@ -505,15 +690,34 @@ fn edge_empty_database() {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE Empty(id INT64, PRIMARY KEY (id))", None).unwrap();
-    let res = conn.execute("MATCH (e:Empty) RETURN count(*)", None).unwrap();
-    let count = res.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    conn.execute("CREATE NODE TABLE Empty(id INT64, PRIMARY KEY (id))", None)
+        .unwrap();
+    let res = conn
+        .execute("MATCH (e:Empty) RETURN count(*)", None)
+        .unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count, 0, "Empty table should have 0 rows");
     // Drop and recreate
     conn.execute("DROP TABLE Empty", None).unwrap();
-    conn.execute("CREATE NODE TABLE Empty(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
-    let res2 = conn.execute("MATCH (e:Empty) RETURN count(*)", None).unwrap();
-    let count2 = res2.batches[0].column(0).as_any().downcast_ref::<Int64Array>().unwrap().value(0);
+    conn.execute(
+        "CREATE NODE TABLE Empty(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    let res2 = conn
+        .execute("MATCH (e:Empty) RETURN count(*)", None)
+        .unwrap();
+    let count2 = res2.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
     assert_eq!(count2, 0);
     println!("EDGE|empty_database|PASS");
 }
@@ -528,12 +732,18 @@ fn bench_large_strings() {
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE Doc(id INT64, title STRING, body STRING, PRIMARY KEY (id))", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE Doc(id INT64, title STRING, body STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
 
     // Insert 10K documents with realistic content sizes
     let n = 10_000;
     let ids: Int64Array = (0..n).map(Some).collect();
-    let titles: StringArray = (0..n).map(|i| Some(format!("Document Number {}", i))).collect();
+    let titles: StringArray = (0..n)
+        .map(|i| Some(format!("Document Number {}", i)))
+        .collect();
     let bodies: Vec<String> = (0..n).map(|i| {
         format!("This is the body of document {}. It contains some meaningful text that simulates a realistic document storage scenario with varying content lengths for testing purposes. ", i).repeat(5)
     }).collect();
@@ -543,15 +753,26 @@ fn bench_large_strings() {
         ("id", Arc::new(ids) as _),
         ("title", Arc::new(titles) as _),
         ("body", Arc::new(bodies_arr) as _),
-    ]).unwrap();
+    ])
+    .unwrap();
 
     let r = bench("insert_10k_large_strings", n as u64, || {
         conn.bulk_insert_batch("Doc", &batch).unwrap();
     });
 
     // Verify content
-    let res = conn.execute("MATCH (d:Doc) WHERE d.id = 5000 RETURN d.title, d.body", None).unwrap();
-    let title = res.batches[0].column(0).as_any().downcast_ref::<StringArray>().unwrap().value(0);
+    let res = conn
+        .execute(
+            "MATCH (d:Doc) WHERE d.id = 5000 RETURN d.title, d.body",
+            None,
+        )
+        .unwrap();
+    let title = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .value(0);
     assert!(title.contains("5000"), "Title should contain '5000'");
 }
 
@@ -567,11 +788,13 @@ fn bench_concurrent_throughput() {
     let db = Arc::new(Database::new(dir.path(), SystemConfig::default()).unwrap());
     let conn = db.connect();
 
-    conn.execute("CREATE NODE TABLE T(id INT64, val INT64)", None).unwrap();
+    conn.execute("CREATE NODE TABLE T(id INT64, val INT64)", None)
+        .unwrap();
 
     // Seed initial data
     for i in 0..1000 {
-        conn.execute(&format!("CREATE (:T {{id: {}, val: {}}})", i, i), None).unwrap();
+        conn.execute(&format!("CREATE (:T {{id: {}, val: {}}})", i, i), None)
+            .unwrap();
     }
 
     // Config
@@ -596,14 +819,15 @@ fn bench_concurrent_throughput() {
                 if c.execute(
                     "MATCH (t:T) WHERE t.val > 500 RETURN count(*), avg(t.val)",
                     None,
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     rops.fetch_add(1, Ordering::Relaxed);
                 }
                 // Also do short range queries
-                if c.execute(
-                    "MATCH (t:T) WHERE t.id < 1000 RETURN max(t.id)",
-                    None,
-                ).is_ok() {
+                if c.execute("MATCH (t:T) WHERE t.id < 1000 RETURN max(t.id)", None)
+                    .is_ok()
+                {
                     rops.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -626,7 +850,9 @@ fn bench_concurrent_throughput() {
                     if c.execute(
                         &format!("CREATE (:T {{id: {}, val: {}}})", start + j, start + j),
                         None,
-                    ).is_err() {
+                    )
+                    .is_err()
+                    {
                         ok = false;
                         break;
                     }
@@ -654,13 +880,7 @@ fn bench_concurrent_throughput() {
 
     println!(
         "BENCH|concurrent|{} readers {} writers|{:.1}s|{}R {}W {}T ({:.0} ops/s)",
-        num_readers,
-        num_writers,
-        elapsed,
-        r_ops,
-        w_ops,
-        total_ops,
-        throughput,
+        num_readers, num_writers, elapsed, r_ops, w_ops, total_ops, throughput,
     );
 
     assert!(
@@ -676,7 +896,11 @@ fn bench_concurrent_throughput() {
 #[test]
 fn bench_summary() {
     println!("\n===== LIGHTNING BATTLE-TESTING REPORT =====");
-    println!("Platform: {} ({} cores)", std::env::consts::OS, num_cpus::get());
+    println!(
+        "Platform: {} ({} cores)",
+        std::env::consts::OS,
+        num_cpus::get()
+    );
     println!("Tests: insert, query, graph, concurrent, crash, memory, edge cases");
     println!("============================================\n");
 }

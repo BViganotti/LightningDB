@@ -48,11 +48,7 @@ impl CardinalityEstimator {
                 } else {
                     let product = left_card as f64 * right_card as f64;
                     let geom = product.sqrt();
-                    let join_op = LogicalOperator::Join(
-                        left.clone(),
-                        right.clone(),
-                        cond.clone(),
-                    );
+                    let join_op = LogicalOperator::Join(left.clone(), right.clone(), cond.clone());
                     let sel = self.estimate_selectivity(cond, &join_op);
                     (geom * sel).max(1.0) as u64
                 }
@@ -94,9 +90,7 @@ impl CardinalityEstimator {
                     let s2 = self.estimate_selectivity(right, child);
                     s1 + s2 - (s1 * s2)
                 }
-                AstLogicalOperator::Not => {
-                    1.0 - self.estimate_selectivity(right, child)
-                }
+                AstLogicalOperator::Not => 1.0 - self.estimate_selectivity(right, child),
                 AstLogicalOperator::Xor => {
                     let s1 = self.estimate_selectivity(left, child);
                     let s2 = self.estimate_selectivity(right, child);

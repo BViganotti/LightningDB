@@ -12,19 +12,52 @@ fn test_semijoin_pushdown_optimization() {
     .unwrap();
 
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
-    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+        .unwrap();
 
-    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
-    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 3}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 4}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None)
+        .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 2}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 3}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 4}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
 
     // Query: MATCH (a:User)-[e:Follows]->(b:User) RETURN a.name
     let query = "MATCH (a:User)-[e:Follows]->(b:User) RETURN a.name";
@@ -58,16 +91,41 @@ fn test_semijoin_no_results() {
     .unwrap();
 
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
-    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
-    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
-    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 999}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None)
+        .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 1}), (b:User {id: 3}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 1}), (b:User {id: 4}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 2}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 999}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
 
     let query = "MATCH (a:User)-[e:Follows]->(b:User) WHERE a.id = 999 RETURN a.name";
     let query_result = conn.execute(query, None);
@@ -87,20 +145,41 @@ fn test_semijoin_self_follow() {
     .unwrap();
 
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))", None).unwrap();
-    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None).unwrap();
-    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None).unwrap();
-    conn.execute("CREATE (:User {id: 4, name: 'David'})", None).unwrap();
-    conn.execute("MATCH (a:User {id: 1}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)", None).unwrap();
-    conn.execute("MATCH (a:User {id: 2}), (b:User {id: 2}) CREATE (a)-[:Follows]->(b)", None).unwrap();
+    conn.execute(
+        "CREATE NODE TABLE User(id INT64, name STRING, PRIMARY KEY (id))",
+        None,
+    )
+    .unwrap();
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User)", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 1, name: 'Alice'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 2, name: 'Bob'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 3, name: 'Charlie'})", None)
+        .unwrap();
+    conn.execute("CREATE (:User {id: 4, name: 'David'})", None)
+        .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 1}), (b:User {id: 1}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
+    conn.execute(
+        "MATCH (a:User {id: 2}), (b:User {id: 2}) CREATE (a)-[:Follows]->(b)",
+        None,
+    )
+    .unwrap();
 
     let query = "MATCH (a:User)-[e:Follows]->(b:User) RETURN count(*)";
     let query_result = conn.execute(query, None).unwrap();
     let total: usize = query_result.batches.iter().map(|b| b.num_rows()).sum();
     if total > 0 {
-        let count = query_result.batches[0].column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let count = query_result.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
         assert_eq!(count.value(0), 2);
     }
 }

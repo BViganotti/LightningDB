@@ -8,9 +8,12 @@ fn setup() -> (tempfile::TempDir, Arc<Database>) {
     let dir = tempdir().unwrap();
     let db = Database::new(dir.path(), SystemConfig::default()).unwrap();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(x INT64, y STRING)", None).unwrap();
-    conn.execute("CREATE (:T {x: 1, y: 'hello'})", None).unwrap();
-    conn.execute("CREATE (:T {x: 2, y: 'world'})", None).unwrap();
+    conn.execute("CREATE NODE TABLE T(x INT64, y STRING)", None)
+        .unwrap();
+    conn.execute("CREATE (:T {x: 1, y: 'hello'})", None)
+        .unwrap();
+    conn.execute("CREATE (:T {x: 2, y: 'world'})", None)
+        .unwrap();
     conn.execute("CREATE (:T {x: 3, y: 'test'})", None).unwrap();
     (dir, db)
 }
@@ -43,8 +46,11 @@ fn test_memory_store_update() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 SET t.y = 'updated'", None)?;
     let res = conn.execute("MATCH (t:T) WHERE t.x = 1 RETURN t.y", None)?;
-    let val = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+    let val = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .unwrap();
     assert_eq!(val.value(0), "updated");
     Ok(())
 }
@@ -55,8 +61,11 @@ fn test_memory_store_delete() -> TestResult {
     let conn = db.connect();
     conn.execute("MATCH (t:T) WHERE t.x = 1 DELETE t", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 2);
     Ok(())
 }

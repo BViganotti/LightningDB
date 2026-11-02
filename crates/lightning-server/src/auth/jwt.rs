@@ -47,18 +47,16 @@ pub fn validate_access_token(token: &str, secret: &[u8]) -> Result<JwtClaims, St
     validation.leeway = 0;
     validation.set_audience(&[&deployment_id]);
     validation.set_issuer(&[&deployment_id]);
-    let token_data = decode::<JwtClaims>(
-        token,
-        &DecodingKey::from_secret(secret),
-        &validation,
-    )
-    .map_err(|e| match e.kind() {
-        jsonwebtoken::errors::ErrorKind::ExpiredSignature => "token expired".to_string(),
-        jsonwebtoken::errors::ErrorKind::InvalidToken => "invalid token".to_string(),
-        jsonwebtoken::errors::ErrorKind::InvalidAudience => "token audience mismatch".to_string(),
-        jsonwebtoken::errors::ErrorKind::InvalidIssuer => "token issuer mismatch".to_string(),
-        _ => format!("token validation failed: {e}"),
-    })?;
+    let token_data = decode::<JwtClaims>(token, &DecodingKey::from_secret(secret), &validation)
+        .map_err(|e| match e.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => "token expired".to_string(),
+            jsonwebtoken::errors::ErrorKind::InvalidToken => "invalid token".to_string(),
+            jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                "token audience mismatch".to_string()
+            }
+            jsonwebtoken::errors::ErrorKind::InvalidIssuer => "token issuer mismatch".to_string(),
+            _ => format!("token validation failed: {e}"),
+        })?;
 
     Ok(token_data.claims)
 }
@@ -105,10 +103,7 @@ pub fn api_key_hash(key: &str, secret: &[u8]) -> String {
 }
 
 #[allow(dead_code)]
-pub fn create_authenticated_user_from_jwt(
-    claims: &JwtClaims,
-    username: &str,
-) -> AuthenticatedUser {
+pub fn create_authenticated_user_from_jwt(claims: &JwtClaims, username: &str) -> AuthenticatedUser {
     AuthenticatedUser {
         user_id: claims.sub.clone(),
         username: username.to_string(),
@@ -147,7 +142,12 @@ mod tests {
             aud: None,
             iss: None,
         };
-        let token = jwt_encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).unwrap();
+        let token = jwt_encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .unwrap();
         let result = validate_access_token(&token, secret);
         assert!(result.is_err());
     }

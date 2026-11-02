@@ -10,7 +10,9 @@ use std::path::Path;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let dir = args.get(1).expect("usage: crash_writer <db_dir> <prep|crash>");
+    let dir = args
+        .get(1)
+        .expect("usage: crash_writer <db_dir> <prep|crash>");
     let mode = args.get(2).map(String::as_str).unwrap_or("prep");
 
     std::fs::create_dir_all(dir)?;
@@ -25,20 +27,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match mode {
         "prep" => {
             for i in 0..200i64 {
-                conn.execute(
-                    &format!("CREATE (:T {{id: {i}, name: 'n{i}'}})"),
-                    None,
-                )?;
+                conn.execute(&format!("CREATE (:T {{id: {i}, name: 'n{i}'}})"), None)?;
             }
             db.checkpoint()?;
             Ok(())
         }
         "crash" => {
             for i in 1000..1200i64 {
-                conn.execute(
-                    &format!("CREATE (:T {{id: {i}, name: 'm{i}'}})"),
-                    None,
-                )?;
+                conn.execute(&format!("CREATE (:T {{id: {i}, name: 'm{i}'}})"), None)?;
             }
             // Simulate a crash: no checkpoint, no clean drop.
             std::process::abort();

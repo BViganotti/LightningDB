@@ -37,16 +37,22 @@ pub async fn query_handler(
     };
 
     // Acquire concurrency permit to prevent spawn_blocking pool exhaustion
-    let _permit = state.query_semaphore.acquire().await
+    let _permit = state
+        .query_semaphore
+        .acquire()
+        .await
         .map_err(|_| AppError::Internal("Query concurrency limit exceeded".into()))?;
 
-    let result = tokio::time::timeout(timeout_dur, tokio::task::spawn_blocking(move || {
-        if let Some(ts) = resolved_snapshot_ts {
-            conn.execute_at(&req.query, ts, params)
-        } else {
-            conn.execute(&req.query, params)
-        }
-    }))
+    let result = tokio::time::timeout(
+        timeout_dur,
+        tokio::task::spawn_blocking(move || {
+            if let Some(ts) = resolved_snapshot_ts {
+                conn.execute_at(&req.query, ts, params)
+            } else {
+                conn.execute(&req.query, params)
+            }
+        }),
+    )
     .await
     .map_err(|_| {
         tracing::warn!(%request_id, "Query timed out after {}ms", timeout_ms);
@@ -101,12 +107,14 @@ pub async fn query_stream_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<
-    axum::response::sse::Sse<impl futures::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
+    axum::response::sse::Sse<
+        impl futures::stream::Stream<
+            Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+        >,
+    >,
     AppError,
 > {
     use axum::response::sse::{Event, KeepAlive};
-    
-    
 
     let db = state.db.clone();
     let query = req.query.clone();
@@ -135,9 +143,8 @@ pub async fn query_stream_handler(
 
     let combined = sse_stream.chain(final_stream);
 
-    Ok(axum::response::sse::Sse::new(combined).keep_alive(
-        KeepAlive::new().interval(std::time::Duration::from_secs(15)),
-    ))
+    Ok(axum::response::sse::Sse::new(combined)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15))))
 }
 
 fn resolve_snapshot_selector(sel: &SnapshotSelector) -> Option<i64> {

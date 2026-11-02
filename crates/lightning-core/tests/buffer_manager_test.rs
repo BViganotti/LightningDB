@@ -34,8 +34,11 @@ fn test_buffer_manager_multiple_pages() -> TestResult {
         conn.execute(&format!("CREATE (:T {{x: {}}})", i), None)?;
     }
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 100);
     Ok(())
 }
@@ -53,8 +56,11 @@ fn test_buffer_manager_concurrent_reads() -> TestResult {
     }
     for _ in 0..5 {
         let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-        let count = res.batches[0].column(0)
-            .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let count = res.batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
         assert_eq!(count.value(0), 50);
     }
     Ok(())
@@ -69,8 +75,11 @@ fn test_buffer_manager_large_dataset() -> TestResult {
         conn.execute(&format!("CREATE (:T {{x: {}, y: 'value_{}'}})", i, i), None)?;
     }
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 200);
     Ok(())
 }
@@ -91,7 +100,10 @@ fn test_buffer_manager_string_columns() -> TestResult {
 fn test_buffer_manager_mixed_types() -> TestResult {
     let (_dir, db) = setup_db();
     let conn = db.connect();
-    conn.execute("CREATE NODE TABLE T(a INT64, b DOUBLE, c STRING, d BOOL)", None)?;
+    conn.execute(
+        "CREATE NODE TABLE T(a INT64, b DOUBLE, c STRING, d BOOL)",
+        None,
+    )?;
     conn.execute("CREATE (:T {a: 1, b: 2.5, c: 'hello', d: true})", None)?;
     let res = conn.execute("MATCH (t:T) RETURN t.a, t.b, t.c, t.d", None)?;
     assert_eq!(count_rows(&res), 1);
@@ -119,7 +131,10 @@ fn test_buffer_manager_relationship_table() -> TestResult {
     conn.execute("CREATE REL TABLE R(FROM N TO N, weight DOUBLE)", None)?;
     conn.execute("CREATE (:N {id: 'a'})", None)?;
     conn.execute("CREATE (:N {id: 'b'})", None)?;
-    conn.execute("MATCH (a:N {id: 'a'}), (b:N {id: 'b'}) CREATE (a)-[:R {weight: 1.0}]->(b)", None)?;
+    conn.execute(
+        "MATCH (a:N {id: 'a'}), (b:N {id: 'b'}) CREATE (a)-[:R {weight: 1.0}]->(b)",
+        None,
+    )?;
     let res = conn.execute("MATCH (a:N)-[r:R]->(b:N) RETURN r.weight", None)?;
     assert_eq!(count_rows(&res), 1);
     Ok(())
@@ -133,8 +148,11 @@ fn test_buffer_manager_update_values() -> TestResult {
     conn.execute("CREATE (:T {x: 1})", None)?;
     conn.execute("MATCH (t:T) SET t.x = 42", None)?;
     let res = conn.execute("MATCH (t:T) RETURN t.x", None)?;
-    let val = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let val = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(val.value(0), 42);
     Ok(())
 }
@@ -148,8 +166,11 @@ fn test_buffer_manager_delete_values() -> TestResult {
     conn.execute("CREATE (:T {x: 2})", None)?;
     conn.execute("MATCH (t:T) WHERE t.x = 1 DELETE t", None)?;
     let res = conn.execute("MATCH (t:T) RETURN count(t.x)", None)?;
-    let count = res.batches[0].column(0)
-        .as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let count = res.batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     assert_eq!(count.value(0), 1);
     Ok(())
 }

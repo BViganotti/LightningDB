@@ -17,7 +17,10 @@ pub enum ParserError {
     Internal(String),
 }
 
-fn required_pair<'i>(pair: Option<pest::iterators::Pair<'i, Rule>>, context: &str) -> Result<pest::iterators::Pair<'i, Rule>, ParserError> {
+fn required_pair<'i>(
+    pair: Option<pest::iterators::Pair<'i, Rule>>,
+    context: &str,
+) -> Result<pest::iterators::Pair<'i, Rule>, ParserError> {
     pair.ok_or_else(|| ParserError::Internal(format!("missing expected parser pair: {context}")))
 }
 
@@ -58,7 +61,11 @@ fn preprocess_distinct_functions(s: &str) -> String {
                 // Advance by a whole UTF-8 character (not a single byte) so
                 // `result[pos..]` never slices into the middle of a multi-byte
                 // character, which would panic.
-                pos += result[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                pos += result[pos..]
+                    .chars()
+                    .next()
+                    .map(|c| c.len_utf8())
+                    .unwrap_or(1);
             }
         }
     }
@@ -222,7 +229,9 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             });
                         }
                         Rule::primary_key_def => {
-                            pk = required_pair(j.into_inner().next(), "pair")?.as_str().to_string()
+                            pk = required_pair(j.into_inner().next(), "pair")?
+                                .as_str()
+                                .to_string()
                         }
                         _ => {}
                     }
@@ -302,16 +311,16 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             data_type: parse_data_type(required_pair(cd.next(), "pair")?)?,
                         }
                     }
-                    Rule::drop_column => {
-                        AlterOperation::DropColumn {
-                            name: required_pair(op_inner.into_inner().next(), "pair")?.as_str().to_string(),
-                        }
-                    }
-                    Rule::rename_table => {
-                        AlterOperation::RenameTable {
-                            new_name: required_pair(op_inner.into_inner().next(), "pair")?.as_str().to_string(),
-                        }
-                    }
+                    Rule::drop_column => AlterOperation::DropColumn {
+                        name: required_pair(op_inner.into_inner().next(), "pair")?
+                            .as_str()
+                            .to_string(),
+                    },
+                    Rule::rename_table => AlterOperation::RenameTable {
+                        new_name: required_pair(op_inner.into_inner().next(), "pair")?
+                            .as_str()
+                            .to_string(),
+                    },
                     Rule::rename_column => {
                         let mut c = op_inner.into_inner();
                         AlterOperation::RenameColumn {
@@ -319,7 +328,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             new_name: required_pair(c.next(), "pair")?.as_str().to_string(),
                         }
                     }
-                    _ => return Err(ParserError::Internal(format!("Unknown alter operation: {:?}", op_inner.as_rule()))),
+                    _ => {
+                        return Err(ParserError::Internal(format!(
+                            "Unknown alter operation: {:?}",
+                            op_inner.as_rule()
+                        )))
+                    }
                 };
                 return Ok(Statement::AlterTable { name, operation });
             }
@@ -338,7 +352,9 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::drop_constraint => {
                 return Ok(Statement::DropConstraint(
-                    required_pair(i.into_inner().next(), "pair")?.as_str().to_string(),
+                    required_pair(i.into_inner().next(), "pair")?
+                        .as_str()
+                        .to_string(),
                 ));
             }
             Rule::create_index => {
@@ -356,7 +372,9 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::drop_index => {
                 return Ok(Statement::DropIndex(
-                    required_pair(i.into_inner().next(), "pair")?.as_str().to_string(),
+                    required_pair(i.into_inner().next(), "pair")?
+                        .as_str()
+                        .to_string(),
                 ));
             }
             Rule::match_clause => {
@@ -389,7 +407,8 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                     Rule::star => items.push(ProjectionItem::Star),
                                     Rule::projection_item => {
                                         let mut it = j.into_inner();
-                                        let expr = parse_expression(required_pair(it.next(), "pair")?)?;
+                                        let expr =
+                                            parse_expression(required_pair(it.next(), "pair")?)?;
                                         let alias = it.next().map(|a| a.as_str().to_string());
                                         items.push(ProjectionItem::Expression(expr, alias));
                                     }
@@ -398,7 +417,10 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             }
                         }
                         Rule::where_clause => {
-                            let expr = parse_expression(required_pair(inner.into_inner().next(), "pair")?)?;
+                            let expr = parse_expression(required_pair(
+                                inner.into_inner().next(),
+                                "pair",
+                            )?)?;
                             where_expr = Some(WhereClause { expression: expr });
                         }
                         Rule::order_by_clause => {
@@ -406,12 +428,16 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             for j in inner.into_inner() {
                                 if j.as_rule() == Rule::sort_item {
                                     let mut sit = j.into_inner();
-                                    let expr = parse_expression(required_pair(sit.next(), "pair")?)?;
+                                    let expr =
+                                        parse_expression(required_pair(sit.next(), "pair")?)?;
                                     let desc = sit
                                         .next()
                                         .map(|d| d.as_str().to_uppercase().contains("DESC"))
                                         .unwrap_or(false);
-                                    obi.push(OrderByItem { expression: expr, descending: desc });
+                                    obi.push(OrderByItem {
+                                        expression: expr,
+                                        descending: desc,
+                                    });
                                 }
                             }
                             order_by = Some(obi);
@@ -420,26 +446,40 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                             let val = inner
                                 .into_inner()
                                 .next()
-                                .ok_or_else(|| ParserError::Internal("SKIP clause missing value".into()))?
+                                .ok_or_else(|| {
+                                    ParserError::Internal("SKIP clause missing value".into())
+                                })?
                                 .as_str()
                                 .parse::<f64>()
-                                .map_err(|e| ParserError::Internal(format!("Invalid SKIP value: {e}")))?;
+                                .map_err(|e| {
+                                    ParserError::Internal(format!("Invalid SKIP value: {e}"))
+                                })?;
                             skip = Some(val);
                         }
                         Rule::limit_clause => {
                             let val = inner
                                 .into_inner()
                                 .next()
-                                .ok_or_else(|| ParserError::Internal("LIMIT clause missing value".into()))?
+                                .ok_or_else(|| {
+                                    ParserError::Internal("LIMIT clause missing value".into())
+                                })?
                                 .as_str()
                                 .parse::<f64>()
-                                .map_err(|e| ParserError::Internal(format!("Invalid LIMIT value: {e}")))?;
+                                .map_err(|e| {
+                                    ParserError::Internal(format!("Invalid LIMIT value: {e}"))
+                                })?;
                             limit = Some(val);
                         }
                         _ => {}
                     }
                 }
-                let rc = ReturnClause { distinct, items, order_by, skip, limit };
+                let rc = ReturnClause {
+                    distinct,
+                    items,
+                    order_by,
+                    skip,
+                    limit,
+                };
                 clauses.push(Clause::With(rc, where_expr));
             }
             Rule::unwind_clause => {
@@ -456,10 +496,7 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                 // A WHERE directly after the leading MATCH is that match's
                 // predicate; otherwise it is a standalone filter on the
                 // current pipeline (preserving clause order).
-                if match_clause_opt.is_some()
-                    && clauses.is_empty()
-                    && where_clause_opt.is_none()
-                {
+                if match_clause_opt.is_some() && clauses.is_empty() && where_clause_opt.is_none() {
                     where_clause_opt = Some(WhereClause { expression: expr });
                 } else {
                     clauses.push(Clause::Where(WhereClause { expression: expr }));
@@ -492,7 +529,8 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::call_clause => {
                 let inner: Vec<_> = i.into_inner().collect();
-                let name = inner.first()
+                let name = inner
+                    .first()
                     .map(|p| p.as_str().to_string())
                     .unwrap_or_default();
                 let mut args = Vec::new();
@@ -516,8 +554,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                     let value = required_pair(parts.next(), "pair")?;
 
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
-                                    let property_key = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
+                                    let property_key = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
 
                                     assignments.push(PropertyAssignment {
                                         variable,
@@ -527,13 +569,18 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                 }
                                 Rule::map_assignment => {
                                     let mut parts = child.into_inner();
-                                    let variable = required_pair(parts.next(), "pair")?.as_str().to_string();
-                                    let _op = required_pair(parts.next(), "pair")?.as_str().to_string();
+                                    let variable =
+                                        required_pair(parts.next(), "pair")?.as_str().to_string();
+                                    let _op =
+                                        required_pair(parts.next(), "pair")?.as_str().to_string();
                                     for item in parts {
                                         if item.as_rule() == Rule::property_item {
                                             let mut item_parts = item.into_inner();
-                                            let key = required_pair(item_parts.next(), "pair")?.as_str().to_string();
-                                            let val_expr = required_pair(item_parts.next(), "pair")?;
+                                            let key = required_pair(item_parts.next(), "pair")?
+                                                .as_str()
+                                                .to_string();
+                                            let val_expr =
+                                                required_pair(item_parts.next(), "pair")?;
                                             assignments.push(PropertyAssignment {
                                                 variable: variable.clone(),
                                                 property_key: key,
@@ -557,7 +604,8 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                     if j.as_rule() == Rule::property_lookup {
                         let mut parts = j.into_inner();
                         let variable = required_pair(parts.next(), "pair")?.as_str().to_string();
-                        let property_key = required_pair(parts.next(), "pair")?.as_str().to_string();
+                        let property_key =
+                            required_pair(parts.next(), "pair")?.as_str().to_string();
                         properties.push((variable, property_key));
                     }
                 }
@@ -596,9 +644,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                     let prop_lookup = required_pair(parts.next(), "pair")?;
                                     let value = required_pair(parts.next(), "pair")?;
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
-                                    let property_key =
-                                        required_pair(prop_parts.next(), "pair")?.as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
+                                    let property_key = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
                                     on_match.push(PropertyAssignment {
                                         variable,
                                         property_key,
@@ -614,9 +665,12 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
                                     let prop_lookup = required_pair(parts.next(), "pair")?;
                                     let value = required_pair(parts.next(), "pair")?;
                                     let mut prop_parts = prop_lookup.into_inner();
-                                    let variable = required_pair(prop_parts.next(), "pair")?.as_str().to_string();
-                                    let property_key =
-                                        required_pair(prop_parts.next(), "pair")?.as_str().to_string();
+                                    let variable = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
+                                    let property_key = required_pair(prop_parts.next(), "pair")?
+                                        .as_str()
+                                        .to_string();
                                     on_create.push(PropertyAssignment {
                                         variable,
                                         property_key,
@@ -654,24 +708,39 @@ fn parse_statement(p: pest::iterators::Pair<Rule>) -> Result<Statement, ParserEr
             }
             Rule::copy_statement => {
                 let mut inner = i.into_inner();
-                let table_name = required_pair(inner.next(), "copy table_name")?.as_str().to_string();
+                let table_name = required_pair(inner.next(), "copy table_name")?
+                    .as_str()
+                    .to_string();
                 let sub = required_pair(inner.next(), "copy sub-rule")?;
                 let is_from = sub.as_rule() == Rule::copy_from;
                 let mut sub_inner = sub.into_inner();
-                let file_path = required_pair(sub_inner.next(), "copy file_path")?.as_str().to_string();
+                let file_path = required_pair(sub_inner.next(), "copy file_path")?
+                    .as_str()
+                    .to_string();
                 let mut options = std::collections::HashMap::new();
                 for opt in sub_inner {
                     if opt.as_rule() == Rule::copy_option {
                         let mut opt_parts = opt.into_inner();
-                        let key = required_pair(opt_parts.next(), "copy option key")?.as_str().to_string();
-                        let val = parse_literal(required_pair(opt_parts.next(), "copy option val")?)?;
+                        let key = required_pair(opt_parts.next(), "copy option key")?
+                            .as_str()
+                            .to_string();
+                        let val =
+                            parse_literal(required_pair(opt_parts.next(), "copy option val")?)?;
                         options.insert(key, val);
                     }
                 }
                 return if is_from {
-                    Ok(Statement::CopyFrom { table_name, file_path, options })
+                    Ok(Statement::CopyFrom {
+                        table_name,
+                        file_path,
+                        options,
+                    })
                 } else {
-                    Ok(Statement::CopyTo { table_name, file_path, options })
+                    Ok(Statement::CopyTo {
+                        table_name,
+                        file_path,
+                        options,
+                    })
                 };
             }
             _ => {}
@@ -820,7 +889,8 @@ fn parse_pattern(p: pest::iterators::Pair<Rule>) -> Result<Pattern, ParserError>
     let node = np.or_else(|| shortest_path_start.clone());
 
     Ok(Pattern {
-        node_pattern: node.ok_or_else(|| ParserError::Internal("Pattern must have a node".into()))?,
+        node_pattern: node
+            .ok_or_else(|| ParserError::Internal("Pattern must have a node".into()))?,
         relationship_chains: rcs,
         is_shortest_path,
         is_all_shortest_paths,
@@ -898,14 +968,12 @@ fn parse_relationship_pattern(
                     ps.push(parse_property_item(j)?);
                 }
             }
-            Rule::var_len_bounds => {
-                match parse_var_len(i) {
-                    Ok(bounds) => b = Some(bounds),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse variable-length bounds: {e}");
-                    }
+            Rule::var_len_bounds => match parse_var_len(i) {
+                Ok(bounds) => b = Some(bounds),
+                Err(e) => {
+                    tracing::warn!("Failed to parse variable-length bounds: {e}");
                 }
-            }
+            },
             _ => {}
         }
     }
@@ -1053,12 +1121,16 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
             Box::new(parse_term(ps[2].clone())?),
         ));
     } else if ps[1].as_rule() == Rule::string_predicate {
-        let op_pair = ps[1].clone().into_inner().next().ok_or_else(|| {
-            ParserError::Internal("string predicate missing operator".into())
-        })?;
-        let right_expr = op_pair.clone().into_inner().next().ok_or_else(|| {
-            ParserError::Internal("string predicate missing operand".into())
-        })?;
+        let op_pair = ps[1]
+            .clone()
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::Internal("string predicate missing operator".into()))?;
+        let right_expr = op_pair
+            .clone()
+            .into_inner()
+            .next()
+            .ok_or_else(|| ParserError::Internal("string predicate missing operand".into()))?;
 
         let func_name = match op_pair.as_rule() {
             Rule::contains_op => "CONTAINS",
@@ -1074,14 +1146,14 @@ fn parse_comparison(p: pest::iterators::Pair<Rule>) -> Result<Expression, Parser
 
         return Ok(Expression::Function(
             func_name.to_string(),
-            vec![
-                parse_term(ps[0].clone())?,
-                parse_term(right_expr)?,
-            ],
+            vec![parse_term(ps[0].clone())?, parse_term(right_expr)?],
             false,
         ));
     } else if ps[1].as_rule() == Rule::is_null_check {
-        let is_not = ps[1].clone().into_inner().any(|p| p.as_rule() == Rule::not_op);
+        let is_not = ps[1]
+            .clone()
+            .into_inner()
+            .any(|p| p.as_rule() == Rule::not_op);
         let func_name = if is_not { "IS_NOT_NULL" } else { "IS_NULL" };
         return Ok(Expression::Function(
             func_name.to_string(),
@@ -1254,37 +1326,58 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         }
         Rule::shortest_path_pattern | Rule::all_shortest_paths_pattern => {
             let is_all = i.as_rule() == Rule::all_shortest_paths_pattern;
-            let func_name = if is_all { "ALL_SHORTEST_PATHS" } else { "SHORTEST_PATH" };
+            let func_name = if is_all {
+                "ALL_SHORTEST_PATHS"
+            } else {
+                "SHORTEST_PATH"
+            };
             let mut it = i.into_inner();
             let start_node = required_pair(it.next(), "pair")?;
             let rel_chain = required_pair(it.next(), "pair")?;
             // Parse the start node to extract its variable name
-            let start_var_str = start_node.into_inner().find(|p| p.as_rule() == Rule::variable)
+            let start_var_str = start_node
+                .into_inner()
+                .find(|p| p.as_rule() == Rule::variable)
                 .map(|v| v.as_str().to_string())
                 .unwrap_or_default();
             // Parse the relationship chain for variable and bounds
             let rel_parts: Vec<_> = rel_chain.into_inner().collect();
-            let _rel_var = rel_parts.iter().find_map(|p| {
-                if p.as_rule() == Rule::variable {
-                    Some(p.as_str().to_string())
-                } else { None }
-            }).unwrap_or_default();
+            let _rel_var = rel_parts
+                .iter()
+                .find_map(|p| {
+                    if p.as_rule() == Rule::variable {
+                        Some(p.as_str().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
             // Get the end node variable
-            let end_var_str = rel_parts.iter().filter_map(|p| {
-                if p.as_rule() == Rule::node_pattern {
-                    p.clone().into_inner().find(|pp| pp.as_rule() == Rule::variable)
-                        .map(|v| v.as_str().to_string())
-                } else { None }
-            }).last().unwrap_or_default();
+            let end_var_str = rel_parts
+                .iter()
+                .filter_map(|p| {
+                    if p.as_rule() == Rule::node_pattern {
+                        p.clone()
+                            .into_inner()
+                            .find(|pp| pp.as_rule() == Rule::variable)
+                            .map(|v| v.as_str().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .last()
+                .unwrap_or_default();
             // Parse variable-length bounds from the relationship pattern
             let varlen = rel_parts.iter().find_map(|p| {
                 if p.as_rule() == Rule::relationship_pattern {
                     parse_relationship_pattern(p.clone()).ok()
-                } else { None }
+                } else {
+                    None
+                }
             });
-            let (min_depth, max_depth) = varlen.map(|rp| {
-                rp.var_len_bounds.unwrap_or((Some(1), None))
-            }).unwrap_or((Some(1), None));
+            let (min_depth, max_depth) = varlen
+                .map(|rp| rp.var_len_bounds.unwrap_or((Some(1), None)))
+                .unwrap_or((Some(1), None));
             let args = vec![
                 Expression::PropertyLookup(start_var_str.clone(), "_id".to_string()),
                 Expression::PropertyLookup(end_var_str.clone(), "_id".to_string()),
@@ -1322,7 +1415,12 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                 Rule::any_q => "LIST_ANY",
                 Rule::none_q => "LIST_NONE",
                 Rule::single_q => "LIST_SINGLE",
-                _ => return Err(ParserError::Internal(format!("Unknown quantifier: {:?}", inner.as_rule()))),
+                _ => {
+                    return Err(ParserError::Internal(format!(
+                        "Unknown quantifier: {:?}",
+                        inner.as_rule()
+                    )))
+                }
             };
             let mut parts = inner.into_inner();
             let var = required_pair(parts.next(), "pair")?.as_str().to_string();
@@ -1330,14 +1428,13 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             let pred_expr = parse_expression(required_pair(parts.next(), "pair")?)?;
             Ok(Expression::Function(
                 func_name.to_string(),
-                vec![
-                    list_expr,
-                    Expression::Lambda(var, Box::new(pred_expr)),
-                ],
+                vec![list_expr, Expression::Lambda(var, Box::new(pred_expr))],
                 false,
             ))
         }
-        Rule::parenthesized_expression => parse_expression(required_pair(i.into_inner().next(), "pair")?),
+        Rule::parenthesized_expression => {
+            parse_expression(required_pair(i.into_inner().next(), "pair")?)
+        }
         Rule::case_expression => {
             let mut case_expr: Option<Box<Expression>> = None;
             let mut when_then = Vec::new();
@@ -1351,18 +1448,12 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                     }
                     Rule::when_then_clause => {
                         let mut inner = child.into_inner();
-                        let when = parse_expression(
-                            required_pair(inner.next(), "CASE WHEN")?
-                        )?;
-                        let then = parse_expression(
-                            required_pair(inner.next(), "CASE THEN")?
-                        )?;
+                        let when = parse_expression(required_pair(inner.next(), "CASE WHEN")?)?;
+                        let then = parse_expression(required_pair(inner.next(), "CASE THEN")?)?;
                         when_then.push((when, then));
                     }
                     Rule::else_clause => {
-                        let inner_expr = required_pair(
-                            child.into_inner().next(), "CASE ELSE"
-                        )?;
+                        let inner_expr = required_pair(child.into_inner().next(), "CASE ELSE")?;
                         else_expr = Some(Box::new(parse_expression(inner_expr)?));
                     }
                     _ => {}
@@ -1385,7 +1476,10 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
                     }
                     Rule::where_clause => {
                         if let Some(last) = steps.last_mut() {
-                            let expr = parse_expression(required_pair(inner.into_inner().next(), "pair")?)?;
+                            let expr = parse_expression(required_pair(
+                                inner.into_inner().next(),
+                                "pair",
+                            )?)?;
                             *last = (last.0.clone(), Some(WhereClause { expression: expr }));
                         }
                     }
@@ -1401,9 +1495,11 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
         Rule::cast_expression => {
             let mut inner = i.into_inner();
             let expr = parse_expression(required_pair(inner.next(), "pair")?)?;
-            let type_literal = inner.last().ok_or_else(|| {
-                ParserError::Internal("CAST expression missing target type".into())
-            })?.as_str().to_uppercase();
+            let type_literal = inner
+                .last()
+                .ok_or_else(|| ParserError::Internal("CAST expression missing target type".into()))?
+                .as_str()
+                .to_uppercase();
             Ok(Expression::Function(
                 "CAST".to_string(),
                 vec![expr, Expression::Literal(Literal::String(type_literal))],
@@ -1418,10 +1514,7 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             let source = parse_expression(required_pair(inner.next(), "pair")?)?;
             Ok(Expression::Function(
                 "DATE_PART".to_string(),
-                vec![
-                    Expression::Literal(Literal::String(field)),
-                    source,
-                ],
+                vec![Expression::Literal(Literal::String(field)), source],
                 false,
             ))
         }
@@ -1433,7 +1526,9 @@ fn parse_atom(p: pest::iterators::Pair<Rule>) -> Result<Expression, ParserError>
             let variable = if tokens[0].as_rule() == Rule::variable {
                 tokens[0].as_str().to_string()
             } else {
-                return Err(ParserError::Internal("expected variable in subscript".into()));
+                return Err(ParserError::Internal(
+                    "expected variable in subscript".into(),
+                ));
             };
             let index_expr = if tokens.len() > 1 {
                 parse_expression(tokens[1].clone())?
@@ -1478,14 +1573,16 @@ fn parse_literal(p: pest::iterators::Pair<Rule>) -> Result<Literal, ParserError>
             } else {
                 Ok(Literal::Integer(s.parse().unwrap_or(0)))
             }
-        },
+        }
         Rule::boolean_literal => Ok(Literal::Boolean(i.as_str().to_uppercase() == "TRUE")),
         Rule::null_literal => Ok(Literal::Null),
         _ => Err(ParserError::Internal("bad lit".into())),
     }
 }
 
-fn parse_comparison_operator(p: pest::iterators::Pair<Rule>) -> Result<ComparisonOperator, ParserError> {
+fn parse_comparison_operator(
+    p: pest::iterators::Pair<Rule>,
+) -> Result<ComparisonOperator, ParserError> {
     match p.as_str() {
         "=" => Ok(ComparisonOperator::Equal),
         "!=" | "<>" => Ok(ComparisonOperator::NotEqual),
@@ -1499,7 +1596,9 @@ fn parse_comparison_operator(p: pest::iterators::Pair<Rule>) -> Result<Compariso
     }
 }
 
-fn parse_arithmetic_operator(p: pest::iterators::Pair<Rule>) -> Result<ArithmeticOperator, ParserError> {
+fn parse_arithmetic_operator(
+    p: pest::iterators::Pair<Rule>,
+) -> Result<ArithmeticOperator, ParserError> {
     match p.as_str() {
         "+" => Ok(ArithmeticOperator::Add),
         "-" => Ok(ArithmeticOperator::Subtract),
@@ -1681,14 +1780,23 @@ mod tests {
     fn test_parse_with_order_by_only() {
         // Minimal WITH + ORDER BY
         let result = parse("MATCH (p:Person) WITH p ORDER BY p.age RETURN p.name");
-        assert!(result.is_ok(), "Failed WITH+ORDER BY only: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed WITH+ORDER BY only: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_parse_with_where_order_by() {
         // WITH + WHERE + ORDER BY
-        let result = parse("MATCH (p:Person) WITH p WHERE p.age > 25 ORDER BY p.name RETURN p.name");
-        assert!(result.is_ok(), "Failed WITH+WHERE+ORDER: {:?}", result.err());
+        let result =
+            parse("MATCH (p:Person) WITH p WHERE p.age > 25 ORDER BY p.name RETURN p.name");
+        assert!(
+            result.is_ok(),
+            "Failed WITH+WHERE+ORDER: {:?}",
+            result.err()
+        );
     }
 
     #[test]

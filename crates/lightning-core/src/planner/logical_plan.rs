@@ -108,7 +108,10 @@ pub enum LogicalOperator {
     Transaction(BoundTransactionAction),
     Checkpoint,
     Vacuum,
-    AlterTable { name: String, operation: crate::parser::ast::AlterOperation },
+    AlterTable {
+        name: String,
+        operation: crate::parser::ast::AlterOperation,
+    },
     CreateConstraint {
         name: String,
         table_name: String,
@@ -200,12 +203,20 @@ impl LogicalOperator {
             SemiMasker(_, v, m) => format!("SemiMasker {v} mask={m}"),
             Unwind(_, _, a) => format!("Unwind {a}"),
             Join(_, _, c) => match c {
-                BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)) =>
-                    "CrossJoin (cartesian product)".to_string(),
+                BoundExpression::Literal(crate::parser::ast::Literal::Boolean(true)) => {
+                    "CrossJoin (cartesian product)".to_string()
+                }
                 _ => format!("Join {}", expr_summary(c)),
             },
-            Aggregate { group_by_cols, aggregates, .. } =>
-                format!("Aggregate group_by={} aggs={}", group_by_cols.len(), aggregates.len()),
+            Aggregate {
+                group_by_cols,
+                aggregates,
+                ..
+            } => format!(
+                "Aggregate group_by={} aggs={}",
+                group_by_cols.len(),
+                aggregates.len()
+            ),
             CreateNode(..) => "CreateNode".to_string(),
             CreateRel(..) => "CreateRel".to_string(),
             Delete(_, _, d) => format!("Delete detach={d}"),
@@ -254,16 +265,35 @@ impl LogicalOperator {
     fn explain_children(&self) -> Vec<&LogicalOperator> {
         use LogicalOperator::*;
         match self {
-            Filter(c, _) | Projection(c, _) | SemiMasker(c, _, _) | Unwind(c, _, _)
-            | Flatten(c) | UnwindDedup(c, _) | Delete(c, _, _) | Set(c, _) | Sort(c, _)
-            | Limit(c, _) | TopK(c, _, _) | Skip(c, _) | Subquery(c) | Accumulate(c)
-            | Distinct(c, _) | Profile(c) | Explain(c)
-            | Aggregate { child: c, .. } | RecursiveJoin { child: c, .. }
-            | AllShortestPaths { child: c, .. } | Merge { child: c, .. } => vec![c],
+            Filter(c, _)
+            | Projection(c, _)
+            | SemiMasker(c, _, _)
+            | Unwind(c, _, _)
+            | Flatten(c)
+            | UnwindDedup(c, _)
+            | Delete(c, _, _)
+            | Set(c, _)
+            | Sort(c, _)
+            | Limit(c, _)
+            | TopK(c, _, _)
+            | Skip(c, _)
+            | Subquery(c)
+            | Accumulate(c)
+            | Distinct(c, _)
+            | Profile(c)
+            | Explain(c)
+            | Aggregate { child: c, .. }
+            | RecursiveJoin { child: c, .. }
+            | AllShortestPaths { child: c, .. }
+            | Merge { child: c, .. } => vec![c],
             Join(l, r, _) | Union(l, r, _) | OptionalMatch(l, r) | SemiJoin(l, r, _, _) => {
                 vec![l, r]
             }
-            Intersect { probe_child, build_children, .. } => {
+            Intersect {
+                probe_child,
+                build_children,
+                ..
+            } => {
                 let mut v: Vec<&LogicalOperator> = vec![probe_child];
                 v.extend(build_children.iter());
                 v
@@ -379,8 +409,7 @@ impl LogicalOperator {
             | LogicalOperator::Set(child, _) => {
                 count += child.node_count();
             }
-            LogicalOperator::Join(left, right, _)
-            | LogicalOperator::Union(left, right, _) => {
+            LogicalOperator::Join(left, right, _) | LogicalOperator::Union(left, right, _) => {
                 count += left.node_count() + right.node_count();
             }
             LogicalOperator::OptionalMatch(child, inner) => {
@@ -389,14 +418,19 @@ impl LogicalOperator {
             LogicalOperator::Aggregate { child, .. } => {
                 count += child.node_count();
             }
-            LogicalOperator::CreateNode(Some(child), _) | LogicalOperator::CreateRel(Some(child), _) => {
+            LogicalOperator::CreateNode(Some(child), _)
+            | LogicalOperator::CreateRel(Some(child), _) => {
                 count += child.node_count();
             }
             LogicalOperator::CreateNode(None, _) | LogicalOperator::CreateRel(None, _) => {}
             LogicalOperator::RecursiveJoin { child, .. } => {
                 count += child.node_count();
             }
-            LogicalOperator::Intersect { probe_child, build_children, .. } => {
+            LogicalOperator::Intersect {
+                probe_child,
+                build_children,
+                ..
+            } => {
                 count += probe_child.node_count();
                 for bc in build_children {
                     count += bc.node_count();
@@ -470,9 +504,16 @@ impl LogicalPlanner {
                         if ri_var == var && ri_idx == idx {
                             let mut agg_offset = 0;
                             for prev_item in &ret_items[..ri] {
-                                if prev_item.expression.is_aggregate() || matches!(&prev_item.expression, BoundExpression::PropertyLookup(_, _, _)) {
+                                if prev_item.expression.is_aggregate()
+                                    || matches!(
+                                        &prev_item.expression,
+                                        BoundExpression::PropertyLookup(_, _, _)
+                                    )
+                                {
                                     let prev_var_idx = match &prev_item.expression {
-                                        BoundExpression::PropertyLookup(pv, pi, _) => Some((pv.as_str(), *pi)),
+                                        BoundExpression::PropertyLookup(pv, pi, _) => {
+                                            Some((pv.as_str(), *pi))
+                                        }
                                         _ => None,
                                     };
                                     let is_gb = group_by_exprs.iter().any(|gb| {
@@ -497,15 +538,15 @@ impl LogicalPlanner {
                 for (ri, item) in ret_items.iter().enumerate() {
                     if item.alias == *name {
                         // Determine if this is a group-by or aggregate column
-                        let is_gb = group_by_exprs.iter().any(|gb| {
-                            gb.alias == item.alias
-                        });
+                        let is_gb = group_by_exprs.iter().any(|gb| gb.alias == item.alias);
                         if is_gb {
                             // Find its position among group-by columns
                             for (gi, gb) in group_by_exprs.iter().enumerate() {
                                 if gb.alias == item.alias {
                                     *expr = BoundExpression::PropertyLookup(
-                                        String::new(), gi, item.expression.get_type(),
+                                        String::new(),
+                                        gi,
+                                        item.expression.get_type(),
                                     );
                                     return;
                                 }
@@ -515,15 +556,16 @@ impl LogicalPlanner {
                             // RETURN items precede this one
                             let mut agg_idx = 0;
                             for prev_item in &ret_items[..ri] {
-                                let prev_is_gb = group_by_exprs.iter().any(|gb| {
-                                    gb.alias == prev_item.alias
-                                });
+                                let prev_is_gb =
+                                    group_by_exprs.iter().any(|gb| gb.alias == prev_item.alias);
                                 if !prev_is_gb {
                                     agg_idx += 1;
                                 }
                             }
                             *expr = BoundExpression::PropertyLookup(
-                                String::new(), group_by_count + agg_idx, item.expression.get_type(),
+                                String::new(),
+                                group_by_count + agg_idx,
+                                item.expression.get_type(),
                             );
                             return;
                         }
@@ -547,14 +589,14 @@ impl LogicalPlanner {
                         _ => false,
                     };
                     if item_is_match || item.alias.eq_ignore_ascii_case(name) {
-                        let is_gb = group_by_exprs.iter().any(|gb| {
-                            gb.alias == item.alias
-                        });
+                        let is_gb = group_by_exprs.iter().any(|gb| gb.alias == item.alias);
                         if is_gb {
                             for (gi, gb) in group_by_exprs.iter().enumerate() {
                                 if gb.alias == item.alias {
                                     *expr = BoundExpression::PropertyLookup(
-                                        String::new(), gi, item.expression.get_type(),
+                                        String::new(),
+                                        gi,
+                                        item.expression.get_type(),
                                     );
                                     return;
                                 }
@@ -562,15 +604,16 @@ impl LogicalPlanner {
                         } else {
                             let mut agg_idx = 0;
                             for prev_item in &ret_items[..ri] {
-                                let prev_is_gb = group_by_exprs.iter().any(|gb| {
-                                    gb.alias == prev_item.alias
-                                });
+                                let prev_is_gb =
+                                    group_by_exprs.iter().any(|gb| gb.alias == prev_item.alias);
                                 if !prev_is_gb {
                                     agg_idx += 1;
                                 }
                             }
                             *expr = BoundExpression::PropertyLookup(
-                                String::new(), group_by_count + agg_idx, item.expression.get_type(),
+                                String::new(),
+                                group_by_count + agg_idx,
+                                item.expression.get_type(),
                             );
                             return;
                         }
@@ -678,9 +721,7 @@ impl LogicalPlanner {
                 table_name,
                 property,
             }),
-            BoundStatement::DropConstraint(name) => {
-                Ok(LogicalOperator::DropConstraint(name))
-            }
+            BoundStatement::DropConstraint(name) => Ok(LogicalOperator::DropConstraint(name)),
             BoundStatement::CreateIndex {
                 name,
                 table_name,
@@ -690,9 +731,7 @@ impl LogicalPlanner {
                 table_name,
                 property,
             }),
-            BoundStatement::DropIndex(name) => {
-                Ok(LogicalOperator::DropIndex(name))
-            }
+            BoundStatement::DropIndex(name) => Ok(LogicalOperator::DropIndex(name)),
             BoundStatement::CreateVectorIndex {
                 table_name,
                 field,
@@ -706,19 +745,12 @@ impl LogicalPlanner {
                 metric,
                 dimension,
             }),
-            BoundStatement::CreateFtsIndex {
-                table_name,
-                fields,
-            } => Ok(LogicalOperator::CreateFtsIndex {
-                table_name,
-                fields,
-            }),
+            BoundStatement::CreateFtsIndex { table_name, fields } => {
+                Ok(LogicalOperator::CreateFtsIndex { table_name, fields })
+            }
             BoundStatement::StandaloneCall(name, args) => Ok(LogicalOperator::Call(BoundCall {
                 procedure_name: name,
-                parameters: args
-                    .into_iter()
-                    .map(BoundExpression::Literal)
-                    .collect(),
+                parameters: args.into_iter().map(BoundExpression::Literal).collect(),
                 yield_items: None,
             })),
             BoundStatement::Create(pat) => Ok(LogicalOperator::CreateNode(None, pat)),
@@ -743,164 +775,96 @@ impl LogicalPlanner {
                         // query runs over all candidates.
                         let mut it = m.alternatives.into_iter();
                         let first = it.next().expect("alternatives non-empty");
-                        let mut p =
-                            Self::plan(BoundStatement::Query(Some(first), None, vec![]))?;
+                        let mut p = Self::plan(BoundStatement::Query(Some(first), None, vec![]))?;
                         for alt in it {
-                            let r =
-                                Self::plan(BoundStatement::Query(Some(alt), None, vec![]))?;
+                            let r = Self::plan(BoundStatement::Query(Some(alt), None, vec![]))?;
                             p = LogicalOperator::Union(Box::new(p), Box::new(r), true);
                         }
                         p
                     } else {
-                    let mut match_elements_iter = m.elements.into_iter();
-                    let first = match_elements_iter
-                        .next()
-                        .ok_or_else(|| crate::LightningError::Query("Empty MATCH clause".into()))?;
+                        let mut match_elements_iter = m.elements.into_iter();
+                        let first = match_elements_iter.next().ok_or_else(|| {
+                            crate::LightningError::Query("Empty MATCH clause".into())
+                        })?;
 
-                    let mut rel_vars: Vec<(String, String)> = Vec::new();
-                    // Variables already produced by earlier match elements. A
-                    // node re-referenced by a later pattern must join on the
-                    // existing binding, NOT be re-scanned (which would form a
-                    // cartesian product).
-                    let mut bound_vars: std::collections::HashSet<String> =
-                        std::collections::HashSet::new();
-                    let mut plan = match first {
-                        crate::planner::binder::BoundMatchElement::Node(table, var, properties) => {
-                            bound_vars.insert(var.clone());
-                            let mut op =
-                                LogicalOperator::Scan(table, var.clone(), None, None, None);
-                            for (idx, expr) in properties {
-                                let condition = BoundExpression::Comparison(
-                                    Box::new(BoundExpression::PropertyLookup(
-                                        var.clone(),
-                                        idx,
-                                        expr.get_type(),
-                                    )),
-                                    crate::parser::ast::ComparisonOperator::Equal,
-                                    Box::new(expr),
-                                );
-                                op = LogicalOperator::Filter(Box::new(op), condition);
-                            }
-                            op
-                        }
-                        crate::planner::binder::BoundMatchElement::AllShortestPaths { .. } => {
-                            return Err(crate::LightningError::Query(
-                                "MATCH must start with a node".into(),
-                            ));
-                        }
-                        crate::planner::binder::BoundMatchElement::Rel(_, _, _, _, _) => {
-                            return Err(crate::LightningError::Query(
-                                "MATCH must start with a node".into(),
-                            ));
-                        }
-                    };
-
-                    while let Some(element) = match_elements_iter.next() {
-                        match element {
-                            crate::planner::binder::BoundMatchElement::AllShortestPaths {
-                                rel_table_name,
-                                src_var,
-                                dst_var,
-                                path_var,
-                                max_depth,
-                            } => {
-                                bound_vars.insert(src_var.clone());
-                                bound_vars.insert(dst_var.clone());
-                                bound_vars.insert(path_var.clone());
-                                plan = LogicalOperator::AllShortestPaths {
-                                    child: Box::new(plan),
-                                    rel_table_name,
-                                    src_var_name: src_var,
-                                    dst_var_name: dst_var,
-                                    path_var_name: path_var,
-                                    max_depth,
-                                };
-                            }
+                        let mut rel_vars: Vec<(String, String)> = Vec::new();
+                        // Variables already produced by earlier match elements. A
+                        // node re-referenced by a later pattern must join on the
+                        // existing binding, NOT be re-scanned (which would form a
+                        // cartesian product).
+                        let mut bound_vars: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        let mut plan = match first {
                             crate::planner::binder::BoundMatchElement::Node(
                                 table,
                                 var,
                                 properties,
                             ) => {
-                                if bound_vars.contains(&var) {
-                                    // Already bound by an earlier pattern: this is
-                                    // the same node re-referenced, so constrain the
-                                    // existing binding instead of re-scanning.
-                                    for (idx, expr) in properties {
-                                        let condition = BoundExpression::Comparison(
-                                            Box::new(BoundExpression::PropertyLookup(
-                                                var.clone(),
-                                                idx,
-                                                expr.get_type(),
-                                            )),
-                                            crate::parser::ast::ComparisonOperator::Equal,
-                                            Box::new(expr),
-                                        );
-                                        plan = LogicalOperator::Filter(Box::new(plan), condition);
-                                    }
-                                } else {
-                                    let mut node_op =
-                                        LogicalOperator::Scan(table, var.clone(), None, None, None);
-                                    for (idx, expr) in properties {
-                                        let condition = BoundExpression::Comparison(
-                                            Box::new(BoundExpression::PropertyLookup(
-                                                var.clone(),
-                                                idx,
-                                                expr.get_type(),
-                                            )),
-                                            crate::parser::ast::ComparisonOperator::Equal,
-                                            Box::new(expr),
-                                        );
-                                        node_op =
-                                            LogicalOperator::Filter(Box::new(node_op), condition);
-                                    }
-                                    plan = LogicalOperator::Join(
-                                        Box::new(plan),
-                                        Box::new(node_op),
-                                        BoundExpression::Literal(
-                                            crate::parser::ast::Literal::Boolean(true),
-                                        ),
+                                bound_vars.insert(var.clone());
+                                let mut op =
+                                    LogicalOperator::Scan(table, var.clone(), None, None, None);
+                                for (idx, expr) in properties {
+                                    let condition = BoundExpression::Comparison(
+                                        Box::new(BoundExpression::PropertyLookup(
+                                            var.clone(),
+                                            idx,
+                                            expr.get_type(),
+                                        )),
+                                        crate::parser::ast::ComparisonOperator::Equal,
+                                        Box::new(expr),
                                     );
-                                    bound_vars.insert(var.clone());
+                                    op = LogicalOperator::Filter(Box::new(op), condition);
                                 }
+                                op
                             }
-                            crate::planner::binder::BoundMatchElement::Rel(
-                                rel_table,
-                                rel_var,
-                                src_var,
-                                dst_var,
-                                bounds,
-                            ) => {
-                                if let Some(b) = bounds {
-                                    // Recursive join requires knowing destination table
-                                    // For simplicity in this reconstruction, assume next is node
-                                    let next = match_elements_iter.next().ok_or_else(|| {
-                                        crate::LightningError::Query(
-                                            "Rel must be followed by node".into(),
-                                        )
-                                    })?;
-                                    if let crate::planner::binder::BoundMatchElement::Node(
-                                        dst_table,
-                                        _d_var,
-                                        properties,
-                                    ) = next
-                                    {
-                                        bound_vars.insert(src_var.clone());
-                                        bound_vars.insert(dst_var.clone());
-                                        bound_vars.insert(rel_var.clone());
-                                        plan = LogicalOperator::RecursiveJoin {
-                                            child: Box::new(plan),
-                                            rel_table,
-                                            rel_var: rel_var.clone(),
-                                            src_var,
-                                            dst_node_table: dst_table.clone(),
-                                            dst_var: dst_var.clone(),
-                                            bounds: Some(b),
-                                            mask_id: None,
-                                        };
+                            crate::planner::binder::BoundMatchElement::AllShortestPaths {
+                                ..
+                            } => {
+                                return Err(crate::LightningError::Query(
+                                    "MATCH must start with a node".into(),
+                                ));
+                            }
+                            crate::planner::binder::BoundMatchElement::Rel(_, _, _, _, _) => {
+                                return Err(crate::LightningError::Query(
+                                    "MATCH must start with a node".into(),
+                                ));
+                            }
+                        };
+
+                        while let Some(element) = match_elements_iter.next() {
+                            match element {
+                                crate::planner::binder::BoundMatchElement::AllShortestPaths {
+                                    rel_table_name,
+                                    src_var,
+                                    dst_var,
+                                    path_var,
+                                    max_depth,
+                                } => {
+                                    bound_vars.insert(src_var.clone());
+                                    bound_vars.insert(dst_var.clone());
+                                    bound_vars.insert(path_var.clone());
+                                    plan = LogicalOperator::AllShortestPaths {
+                                        child: Box::new(plan),
+                                        rel_table_name,
+                                        src_var_name: src_var,
+                                        dst_var_name: dst_var,
+                                        path_var_name: path_var,
+                                        max_depth,
+                                    };
+                                }
+                                crate::planner::binder::BoundMatchElement::Node(
+                                    table,
+                                    var,
+                                    properties,
+                                ) => {
+                                    if bound_vars.contains(&var) {
+                                        // Already bound by an earlier pattern: this is
+                                        // the same node re-referenced, so constrain the
+                                        // existing binding instead of re-scanning.
                                         for (idx, expr) in properties {
                                             let condition = BoundExpression::Comparison(
                                                 Box::new(BoundExpression::PropertyLookup(
-                                                    dst_var.clone(),
+                                                    var.clone(),
                                                     idx,
                                                     expr.get_type(),
                                                 )),
@@ -911,59 +875,9 @@ impl LogicalPlanner {
                                                 LogicalOperator::Filter(Box::new(plan), condition);
                                         }
                                     } else {
-                                        return Err(crate::LightningError::Query(
-                                            "Rel must be followed by node".into(),
-                                        ));
-                                    }
-                                } else {
-                                    bound_vars.insert(src_var.clone());
-                                    // Save rel table name before it's consumed by Scan
-                                    let rel_table_for_uniqueness = rel_table.clone();
-                                    let rel_scan = LogicalOperator::Scan(
-                                        rel_table,
-                                        rel_var.clone(),
-                                        None,
-                                        None,
-                                        None,
-                                    );
-                                    // Save rel var name before join conditions consume it
-                                    let cur_rel_var = rel_var;
-                                    let rel_var_for_uniqueness = cur_rel_var.clone();
-                                    bound_vars.insert(rel_var_for_uniqueness.clone());
-                                    let join_cond = BoundExpression::Comparison(
-                                        Box::new(BoundExpression::PropertyLookup(
-                                            src_var,
-                                            0,
-                                            LogicalType::Uint64,
-                                        )),
-                                        crate::parser::ast::ComparisonOperator::Equal,
-                                        Box::new(BoundExpression::PropertyLookup(
-                                            cur_rel_var.clone(),
-                                            0,
-                                            LogicalType::Uint64,
-                                        )),
-                                    );
-                                    plan = LogicalOperator::Join(
-                                        Box::new(plan),
-                                        Box::new(rel_scan),
-                                        join_cond,
-                                    );
-
-                                    let next = match_elements_iter.next().ok_or_else(|| {
-                                        crate::LightningError::Query(
-                                            "Rel must be followed by node".into(),
-                                        )
-                                    })?;
-                                    if let crate::planner::binder::BoundMatchElement::Node(
-                                        dst_table,
-                                        d_var,
-                                        properties,
-                                    ) = next
-                                    {
-                                        bound_vars.insert(d_var.clone());
-                                        let mut dst_op = LogicalOperator::Scan(
-                                            dst_table,
-                                            d_var.clone(),
+                                        let mut node_op = LogicalOperator::Scan(
+                                            table,
+                                            var.clone(),
                                             None,
                                             None,
                                             None,
@@ -971,47 +885,179 @@ impl LogicalPlanner {
                                         for (idx, expr) in properties {
                                             let condition = BoundExpression::Comparison(
                                                 Box::new(BoundExpression::PropertyLookup(
-                                                    d_var.clone(),
+                                                    var.clone(),
                                                     idx,
                                                     expr.get_type(),
                                                 )),
                                                 crate::parser::ast::ComparisonOperator::Equal,
                                                 Box::new(expr),
                                             );
-                                            dst_op = LogicalOperator::Filter(
-                                                Box::new(dst_op),
+                                            node_op = LogicalOperator::Filter(
+                                                Box::new(node_op),
                                                 condition,
                                             );
                                         }
-                                        let join_cond_dst = BoundExpression::Comparison(
+                                        plan = LogicalOperator::Join(
+                                            Box::new(plan),
+                                            Box::new(node_op),
+                                            BoundExpression::Literal(
+                                                crate::parser::ast::Literal::Boolean(true),
+                                            ),
+                                        );
+                                        bound_vars.insert(var.clone());
+                                    }
+                                }
+                                crate::planner::binder::BoundMatchElement::Rel(
+                                    rel_table,
+                                    rel_var,
+                                    src_var,
+                                    dst_var,
+                                    bounds,
+                                ) => {
+                                    if let Some(b) = bounds {
+                                        // Recursive join requires knowing destination table
+                                        // For simplicity in this reconstruction, assume next is node
+                                        let next = match_elements_iter.next().ok_or_else(|| {
+                                            crate::LightningError::Query(
+                                                "Rel must be followed by node".into(),
+                                            )
+                                        })?;
+                                        if let crate::planner::binder::BoundMatchElement::Node(
+                                            dst_table,
+                                            _d_var,
+                                            properties,
+                                        ) = next
+                                        {
+                                            bound_vars.insert(src_var.clone());
+                                            bound_vars.insert(dst_var.clone());
+                                            bound_vars.insert(rel_var.clone());
+                                            plan = LogicalOperator::RecursiveJoin {
+                                                child: Box::new(plan),
+                                                rel_table,
+                                                rel_var: rel_var.clone(),
+                                                src_var,
+                                                dst_node_table: dst_table.clone(),
+                                                dst_var: dst_var.clone(),
+                                                bounds: Some(b),
+                                                mask_id: None,
+                                            };
+                                            for (idx, expr) in properties {
+                                                let condition = BoundExpression::Comparison(
+                                                    Box::new(BoundExpression::PropertyLookup(
+                                                        dst_var.clone(),
+                                                        idx,
+                                                        expr.get_type(),
+                                                    )),
+                                                    crate::parser::ast::ComparisonOperator::Equal,
+                                                    Box::new(expr),
+                                                );
+                                                plan = LogicalOperator::Filter(
+                                                    Box::new(plan),
+                                                    condition,
+                                                );
+                                            }
+                                        } else {
+                                            return Err(crate::LightningError::Query(
+                                                "Rel must be followed by node".into(),
+                                            ));
+                                        }
+                                    } else {
+                                        bound_vars.insert(src_var.clone());
+                                        // Save rel table name before it's consumed by Scan
+                                        let rel_table_for_uniqueness = rel_table.clone();
+                                        let rel_scan = LogicalOperator::Scan(
+                                            rel_table,
+                                            rel_var.clone(),
+                                            None,
+                                            None,
+                                            None,
+                                        );
+                                        // Save rel var name before join conditions consume it
+                                        let cur_rel_var = rel_var;
+                                        let rel_var_for_uniqueness = cur_rel_var.clone();
+                                        bound_vars.insert(rel_var_for_uniqueness.clone());
+                                        let join_cond = BoundExpression::Comparison(
                                             Box::new(BoundExpression::PropertyLookup(
-                                                cur_rel_var,
-                                                1,
+                                                src_var,
+                                                0,
                                                 LogicalType::Uint64,
                                             )),
                                             crate::parser::ast::ComparisonOperator::Equal,
                                             Box::new(BoundExpression::PropertyLookup(
-                                            d_var,
-                                                    0,
-                                                    LogicalType::Uint64,
-                                                )),
+                                                cur_rel_var.clone(),
+                                                0,
+                                                LogicalType::Uint64,
+                                            )),
                                         );
                                         plan = LogicalOperator::Join(
                                             Box::new(plan),
-                                            Box::new(dst_op),
-                                            join_cond_dst,
+                                            Box::new(rel_scan),
+                                            join_cond,
                                         );
-                                        // Relationship uniqueness: each relationship in a path
-                                        // must be distinct from all previously traversed ones.
-                                        // Compare by (_src, _dst) since rel tables lack an _id column.
-                                        // Only compare rels from the same table (different tables
-                                        // can never share an edge).
-                                        for (prev_rel, prev_table) in &rel_vars {
-                                            if prev_table != &rel_table_for_uniqueness {
-                                                continue;
+
+                                        let next = match_elements_iter.next().ok_or_else(|| {
+                                            crate::LightningError::Query(
+                                                "Rel must be followed by node".into(),
+                                            )
+                                        })?;
+                                        if let crate::planner::binder::BoundMatchElement::Node(
+                                            dst_table,
+                                            d_var,
+                                            properties,
+                                        ) = next
+                                        {
+                                            bound_vars.insert(d_var.clone());
+                                            let mut dst_op = LogicalOperator::Scan(
+                                                dst_table,
+                                                d_var.clone(),
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                            for (idx, expr) in properties {
+                                                let condition = BoundExpression::Comparison(
+                                                    Box::new(BoundExpression::PropertyLookup(
+                                                        d_var.clone(),
+                                                        idx,
+                                                        expr.get_type(),
+                                                    )),
+                                                    crate::parser::ast::ComparisonOperator::Equal,
+                                                    Box::new(expr),
+                                                );
+                                                dst_op = LogicalOperator::Filter(
+                                                    Box::new(dst_op),
+                                                    condition,
+                                                );
                                             }
-                                            // NOT (prev._src == cur._src AND prev._dst == cur._dst)
-                                            let uniqueness_cond = BoundExpression::Not(
+                                            let join_cond_dst = BoundExpression::Comparison(
+                                                Box::new(BoundExpression::PropertyLookup(
+                                                    cur_rel_var,
+                                                    1,
+                                                    LogicalType::Uint64,
+                                                )),
+                                                crate::parser::ast::ComparisonOperator::Equal,
+                                                Box::new(BoundExpression::PropertyLookup(
+                                                    d_var,
+                                                    0,
+                                                    LogicalType::Uint64,
+                                                )),
+                                            );
+                                            plan = LogicalOperator::Join(
+                                                Box::new(plan),
+                                                Box::new(dst_op),
+                                                join_cond_dst,
+                                            );
+                                            // Relationship uniqueness: each relationship in a path
+                                            // must be distinct from all previously traversed ones.
+                                            // Compare by (_src, _dst) since rel tables lack an _id column.
+                                            // Only compare rels from the same table (different tables
+                                            // can never share an edge).
+                                            for (prev_rel, prev_table) in &rel_vars {
+                                                if prev_table != &rel_table_for_uniqueness {
+                                                    continue;
+                                                }
+                                                // NOT (prev._src == cur._src AND prev._dst == cur._dst)
+                                                let uniqueness_cond = BoundExpression::Not(
                                                 Box::new(BoundExpression::Logical(
                                                     Box::new(BoundExpression::Comparison(
                                                         Box::new(BoundExpression::PropertyLookup(
@@ -1042,22 +1088,25 @@ impl LogicalPlanner {
                                                     )),
                                                 )),
                                             );
-                                            plan = LogicalOperator::Filter(
-                                                Box::new(plan),
-                                                uniqueness_cond,
-                                            );
+                                                plan = LogicalOperator::Filter(
+                                                    Box::new(plan),
+                                                    uniqueness_cond,
+                                                );
+                                            }
+                                            rel_vars.push((
+                                                rel_var_for_uniqueness,
+                                                rel_table_for_uniqueness,
+                                            ));
+                                        } else {
+                                            return Err(crate::LightningError::Query(
+                                                "Rel must be followed by node".into(),
+                                            ));
                                         }
-                                        rel_vars.push((rel_var_for_uniqueness, rel_table_for_uniqueness));
-                                    } else {
-                                        return Err(crate::LightningError::Query(
-                                            "Rel must be followed by node".into(),
-                                        ));
                                     }
                                 }
                             }
                         }
-                    }
-                    plan
+                        plan
                     }
                 } else {
                     LogicalOperator::SingleRow
@@ -1179,16 +1228,19 @@ impl LogicalPlanner {
                                 //   aggregate ags  → indices group_by_exprs.len()..
                                 let group_by_count = group_by_exprs.len();
                                 let remapped_order_by = ret.order_by.as_ref().map(|items| {
-                                    items.iter().map(|item| {
-                                        let mut new_item = item.clone();
-                                        Self::remap_agg_order_by(
-                                            &mut new_item.expression,
-                                            &group_by_exprs,
-                                            group_by_count,
-                                            &ret.items,
-                                        );
-                                        new_item
-                                    }).collect::<Vec<_>>()
+                                    items
+                                        .iter()
+                                        .map(|item| {
+                                            let mut new_item = item.clone();
+                                            Self::remap_agg_order_by(
+                                                &mut new_item.expression,
+                                                &group_by_exprs,
+                                                group_by_count,
+                                                &ret.items,
+                                            );
+                                            new_item
+                                        })
+                                        .collect::<Vec<_>>()
                                 });
                                 if let Some(order_by) = &remapped_order_by {
                                     if !order_by.is_empty() {
@@ -1302,9 +1354,11 @@ impl LogicalPlanner {
                         BoundClause::Where(expr) => {
                             LogicalOperator::Filter(Box::new(plan), expr.clone())
                         }
-                        BoundClause::Delete(del) => {
-                            LogicalOperator::Delete(Box::new(plan), del.variables.clone(), del.detach)
-                        }
+                        BoundClause::Delete(del) => LogicalOperator::Delete(
+                            Box::new(plan),
+                            del.variables.clone(),
+                            del.detach,
+                        ),
                         BoundClause::Set(set) => {
                             LogicalOperator::Set(Box::new(plan), set.assignments.clone())
                         }
@@ -1350,10 +1404,8 @@ impl LogicalPlanner {
                             }
                             // Apply ORDER BY
                             if let Some(order_by) = &ret.order_by {
-                                current_plan = LogicalOperator::Sort(
-                                    Box::new(current_plan),
-                                    order_by.clone(),
-                                );
+                                current_plan =
+                                    LogicalOperator::Sort(Box::new(current_plan), order_by.clone());
                             }
                             // Apply projection
                             // WITH always projects (distinct or plain)
@@ -1364,15 +1416,13 @@ impl LogicalPlanner {
                             // Apply skip/limit
                             if let Some(skip) = ret.skip {
                                 let skip_val = if skip < 0.0 { 0u64 } else { skip as u64 };
-                                current_plan = LogicalOperator::Skip(
-                                    Box::new(current_plan), skip_val,
-                                );
+                                current_plan =
+                                    LogicalOperator::Skip(Box::new(current_plan), skip_val);
                             }
                             if let Some(limit) = ret.limit {
                                 let limit_val = if limit < 0.0 { 0u64 } else { limit as u64 };
-                                current_plan = LogicalOperator::Limit(
-                                    Box::new(current_plan), limit_val,
-                                );
+                                current_plan =
+                                    LogicalOperator::Limit(Box::new(current_plan), limit_val);
                             }
                             current_plan
                         }

@@ -65,7 +65,12 @@ impl CdcManager {
             let mut iter = wal.read_records_from(current_size)?;
             loop {
                 match iter.next_record() {
-                    Some(WALRecord::PageUpdate { tx_id, file_id, page_idx, .. }) => {
+                    Some(WALRecord::PageUpdate {
+                        tx_id,
+                        file_id,
+                        page_idx,
+                        ..
+                    }) => {
                         let event = CdcEvent {
                             timestamp: now_micros(),
                             tx_id,
@@ -121,7 +126,9 @@ impl CdcManager {
                             }
                         }
                     }
-                    subs.iter().map(|e| (e.tx.clone(), e.start_offset)).collect()
+                    subs.iter()
+                        .map(|e| (e.tx.clone(), e.start_offset))
+                        .collect()
                 };
 
                 for (i, (tx, _)) in snapshot.iter().enumerate() {
@@ -129,7 +136,12 @@ impl CdcManager {
                     if let Ok(mut iter) = wal.read_records_from(offset) {
                         loop {
                             match iter.next_record() {
-                                Some(WALRecord::PageUpdate { tx_id, file_id, page_idx, .. }) => {
+                                Some(WALRecord::PageUpdate {
+                                    tx_id,
+                                    file_id,
+                                    page_idx,
+                                    ..
+                                }) => {
                                     let event = CdcEvent {
                                         timestamp: now_micros(),
                                         tx_id,
@@ -137,7 +149,9 @@ impl CdcManager {
                                         page_idx,
                                     };
                                     if tx.try_send(event).is_err() {
-                                        tracing::warn!("CDC subscriber channel full, dropping event");
+                                        tracing::warn!(
+                                            "CDC subscriber channel full, dropping event"
+                                        );
                                     }
                                 }
                                 Some(WALRecord::Commit { .. }) => {}

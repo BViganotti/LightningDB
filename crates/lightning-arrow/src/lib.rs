@@ -1,6 +1,6 @@
 use arrow::array::{Array, StructArray};
-use arrow::record_batch::RecordBatch;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::record_batch::RecordBatch;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -39,7 +39,7 @@ impl ArrowResult {
         }
         let batch = &self.batches[self.current_batch];
         self.current_batch += 1;
-        
+
         // A RecordBatch is exported as a Struct array in the C Data Interface
         let struct_array: StructArray = batch.clone().into();
         let ffi_array = FFI_ArrowArray::new(&struct_array.to_data());

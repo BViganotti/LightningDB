@@ -12,10 +12,7 @@ pub struct PageBounds {
 impl PageBounds {
     pub fn value_can_be_in_page(&self, query: &Value, logical_type: &LogicalType) -> bool {
         match logical_type {
-            LogicalType::Int64
-            | LogicalType::Int32
-            | LogicalType::Int16
-            | LogicalType::Int8 => {
+            LogicalType::Int64 | LogicalType::Int32 | LogicalType::Int16 | LogicalType::Int8 => {
                 let q = query.as_number();
                 let lo = self.min.as_number();
                 let hi = self.max.as_number();

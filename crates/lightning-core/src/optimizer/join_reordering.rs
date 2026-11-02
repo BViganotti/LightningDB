@@ -111,7 +111,9 @@ impl JoinReordering {
         let n = relations.len();
         if n == 1 {
             return relations.into_iter().next().ok_or_else(|| {
-                crate::LightningError::Internal("Expected at least one relation in join reordering".into())
+                crate::LightningError::Internal(
+                    "Expected at least one relation in join reordering".into(),
+                )
             });
         }
         if n > 30 {
@@ -183,7 +185,9 @@ impl JoinReordering {
                         } else {
                             let mut it = bridge_conds.into_iter();
                             let mut res = it.next().ok_or_else(|| {
-                                crate::LightningError::Internal("Expected at least one bridge condition in join clique".into())
+                                crate::LightningError::Internal(
+                                    "Expected at least one bridge condition in join clique".into(),
+                                )
                             })?;
                             for next in it {
                                 res = BoundExpression::Logical(

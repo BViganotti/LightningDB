@@ -25,9 +25,11 @@ impl TrigramIndexWorker {
             .spawn(move || {
                 Self::worker_loop(index, task_rx);
             })
-            .map_err(|e| crate::LightningError::Internal(format!(
-                "Failed to spawn trigram index worker: {e}"
-            )))?;
+            .map_err(|e| {
+                crate::LightningError::Internal(format!(
+                    "Failed to spawn trigram index worker: {e}"
+                ))
+            })?;
 
         Ok(Self {
             task_tx,
@@ -84,13 +86,21 @@ impl TrigramIndexWorker {
     }
 
     pub fn insert(&self, row_id: u64, value: String) {
-        if self.task_tx.send(TrigramIndexTask::Insert(row_id, value)).is_err() {
+        if self
+            .task_tx
+            .send(TrigramIndexTask::Insert(row_id, value))
+            .is_err()
+        {
             tracing::warn!("TrigramIndex: lost insert task (channel closed)");
         }
     }
 
     pub fn insert_batch(&self, entries: Vec<(u64, String)>) {
-        if self.task_tx.send(TrigramIndexTask::InsertBatch(entries)).is_err() {
+        if self
+            .task_tx
+            .send(TrigramIndexTask::InsertBatch(entries))
+            .is_err()
+        {
             tracing::warn!("TrigramIndex: lost insert_batch task (channel closed)");
         }
     }

@@ -69,7 +69,9 @@ impl OverflowFile {
                 let page_data = page.as_slice();
                 if page_data.len() < PAGE_SIZE {
                     return Err(LightningError::Internal(format!(
-                        "read_string: page {} too short: {} bytes", current_page_idx, page_data.len()
+                        "read_string: page {} too short: {} bytes",
+                        current_page_idx,
+                        page_data.len()
                     )));
                 }
 
@@ -78,7 +80,9 @@ impl OverflowFile {
                 if end > page_data.len() {
                     return Err(LightningError::Internal(format!(
                         "read_string: slice end {} exceeds page size {} on page {}",
-                        end, page_data.len(), current_page_idx
+                        end,
+                        page_data.len(),
+                        current_page_idx
                     )));
                 }
 
@@ -94,8 +98,13 @@ impl OverflowFile {
                         )));
                     }
                     let next_page_idx = u32::from_le_bytes(
-                        page_data[USABLE_SIZE..next_ptr_end].try_into()
-                            .map_err(|_| LightningError::Internal("read_string: invalid next page pointer".into()))?
+                        page_data[USABLE_SIZE..next_ptr_end]
+                            .try_into()
+                            .map_err(|_| {
+                                LightningError::Internal(
+                                    "read_string: invalid next page pointer".into(),
+                                )
+                            })?,
                     );
                     Some(next_page_idx)
                 } else {
@@ -106,7 +115,8 @@ impl OverflowFile {
             })();
 
             // Unpin page regardless of success or failure
-            self.buffer_manager.unpin_page(&self.file_handle, current_page_idx as u64, page);
+            self.buffer_manager
+                .unpin_page(&self.file_handle, current_page_idx as u64, page);
 
             let (chunk, next_page_opt) = result_inner?;
 
@@ -136,7 +146,9 @@ impl OverflowFile {
         }
         if data_len > u32::MAX as usize {
             return Err(crate::LightningError::Internal(format!(
-                "String length {} exceeds maximum overflow size ({})", data_len, u32::MAX
+                "String length {} exceeds maximum overflow size ({})",
+                data_len,
+                u32::MAX
             )));
         }
 
@@ -171,7 +183,8 @@ impl OverflowFile {
                     current_page_idx as u64,
                     frame.as_slice(),
                 )?;
-                self.buffer_manager.unpin_page(&self.file_handle, current_page_idx as u64, frame);
+                self.buffer_manager
+                    .unpin_page(&self.file_handle, current_page_idx as u64, frame);
                 current_page_idx = next_page_idx;
             } else {
                 self.buffer_manager.log_page_update(
@@ -179,7 +192,8 @@ impl OverflowFile {
                     current_page_idx as u64,
                     frame.as_slice(),
                 )?;
-                self.buffer_manager.unpin_page(&self.file_handle, current_page_idx as u64, frame);
+                self.buffer_manager
+                    .unpin_page(&self.file_handle, current_page_idx as u64, frame);
             }
         }
 
@@ -199,7 +213,12 @@ mod tests {
     const PAGE_SIZE: usize = 4096;
     const USABLE_SIZE: usize = PAGE_SIZE - 4;
 
-    fn setup() -> (Arc<FileHandle>, Arc<BufferManager>, Arc<TransactionManager>, tempfile::TempDir) {
+    fn setup() -> (
+        Arc<FileHandle>,
+        Arc<BufferManager>,
+        Arc<TransactionManager>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("overflow_test.ltng");
         let fh = Arc::new(FileHandle::open(&path).unwrap());
@@ -221,7 +240,9 @@ mod tests {
         assert_eq!(page_idx, 0, "first allocated page should be 0");
         assert_eq!(offset, 0, "offset should be 0 for single-page writes");
 
-        let roundtrip = of.read_string(page_idx, offset, s.len() as u32, &tx).unwrap();
+        let roundtrip = of
+            .read_string(page_idx, offset, s.len() as u32, &tx)
+            .unwrap();
         assert_eq!(roundtrip, s);
     }
 
@@ -247,7 +268,9 @@ mod tests {
         assert_eq!(page_idx, 0);
         assert_eq!(offset, 0);
 
-        let roundtrip = of.read_string(page_idx, offset, s.len() as u32, &tx).unwrap();
+        let roundtrip = of
+            .read_string(page_idx, offset, s.len() as u32, &tx)
+            .unwrap();
         assert_eq!(roundtrip.len(), USABLE_SIZE);
         assert_eq!(roundtrip, s);
     }
@@ -263,7 +286,9 @@ mod tests {
         assert_eq!(page_idx, 0);
         assert_eq!(offset, 0);
 
-        let roundtrip = of.read_string(page_idx, offset, s.len() as u32, &tx).unwrap();
+        let roundtrip = of
+            .read_string(page_idx, offset, s.len() as u32, &tx)
+            .unwrap();
         assert_eq!(roundtrip.len(), s.len());
         assert_eq!(roundtrip, s);
     }
@@ -278,7 +303,9 @@ mod tests {
         let (page_idx, offset) = of.write_string(&s, &tx).unwrap();
         assert_eq!(page_idx, 0);
 
-        let roundtrip = of.read_string(page_idx, offset, s.len() as u32, &tx).unwrap();
+        let roundtrip = of
+            .read_string(page_idx, offset, s.len() as u32, &tx)
+            .unwrap();
         assert_eq!(roundtrip, s);
     }
 
@@ -292,7 +319,9 @@ mod tests {
         let (page_idx, offset) = of.write_string(s, &tx).unwrap();
         assert_eq!(page_idx, 0);
 
-        let roundtrip = of.read_string(page_idx, offset, s.len() as u32, &tx).unwrap();
+        let roundtrip = of
+            .read_string(page_idx, offset, s.len() as u32, &tx)
+            .unwrap();
         assert_eq!(roundtrip, s);
     }
 
@@ -322,7 +351,10 @@ mod tests {
 
         // BM returns zeroed pages for non-existent pages instead of erroring
         let result = of.read_string(9999, 0, 10, &tx);
-        assert!(result.is_ok(), "BM returns zeroed page for non-existent page");
+        assert!(
+            result.is_ok(),
+            "BM returns zeroed page for non-existent page"
+        );
         // A zeroed page reads as null bytes (valid UTF-8)
         assert_eq!(result.unwrap(), "\0\0\0\0\0\0\0\0\0\0");
     }
@@ -337,7 +369,10 @@ mod tests {
         // Requesting more bytes than the string has will read from the
         // next page or past the string — this is caller's responsibility.
         let result = of.read_string(0, 0, 100, &tx);
-        assert!(result.is_ok(), "read beyond string succeeds but produces garbage");
+        assert!(
+            result.is_ok(),
+            "read beyond string succeeds but produces garbage"
+        );
     }
 
     #[test]
