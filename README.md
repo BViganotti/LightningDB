@@ -373,4 +373,4 @@ LightningDB began as an independent Rust port of [KuzuDB](https://kuzudb.com/), 
 
 ## License
 
-MIT — see [LICENSE](LICENSE). KuzuDB's MIT copyright notice is included for the portions derived from its engine.
+MIT — see [LICENSE](LICENSE). Third-party notices, including KuzuDB's MIT copyright notice for the portions derived from its engine, are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
